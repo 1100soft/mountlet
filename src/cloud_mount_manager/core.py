@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import configparser
+import json
+import os
+import platform
+import shlex
+import shutil
+import subprocess
+import tempfile
+import time
+import re
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Tuple
+
+_ENV_CONFIG = os.environ.get("RCLONE_CONFIG")
+CONFIG_PATH = (
+    os.path.expanduser(_ENV_CONFIG)
+    if _ENV_CONFIG
+    else (os.path.expanduser("~/.config/rclone/rclone.conf") if platform.system() != "Windows" else os.path.expandvars("%APPDATA%\\rclone\\rclone.conf"))
+)
+IS_WINDOWS = platform.system() == "Windows"
+DEFAULT_HOME_MOUNT = os.path.expanduser("~/cloud_mounts")
+
+ENV_BASE_VARS = ("CLOUD_MOUNT_BASE", "GDRIVE_MOUNT_BASE")
+
+
+def _slugify(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return cleaned.strip("._") or "remote"
+
+
+def _resolve_base_mount_dir() -> Tuple[str, str | None]:
+    configured = None
+    for env in ENV_BASE_VARS:
+        val = os.environ.get(env)
+        if val:
+            configured = os.path.expanduser(val)
+            break
+
+    candidates: List[str] = []
+    if configured:
+        candidates.append(configured)
+    candidates.extend(
+        [
+            DEFAULT_HOME_MOUNT,
+            os.path.expanduser("~/gdrive"),
+            os.path.expanduser("~/GDrive"),
+            "/mnt/gdrive",
+        ]
+    )
+
+    for cand in candidates:
+        try:
+            os.makedirs(cand, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(cand, os.W_OK | os.X_OK):
+            note = f"[i] Using mount directory {cand}. Set CLOUD_MOUNT_BASE to override."
+            if configured and os.path.abspath(cand) == os.path.abspath(configured):
+                note = f"[i] Using configured mount directory {cand}."
+            elif cand == DEFAULT_HOME_MOUNT:
+                note = f"[i] Using default mount directory {cand}. Set CLOUD_MOUNT_BASE to override."
+            return cand, note
+
+    fallback = os.path.join(tempfile.gettempdir(), f"cloud-mount-{os.getuid()}")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback, f"[!] Using fallback mount directory {fallback}. Set CLOUD_MOUNT_BASE to choose a different location."
+
+
+BASE_MOUNT_DIR, BASE_DIR_NOTE = _resolve_base_mount_dir()
+
+
+@dataclass
+class RemoteInfo:
+    name: str
+    alias: str
+    provider: str
+    backend_type: str
+    mount_path: str
+    flags: List[str] = field(default_factory=list)
+    extra_info: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def display_name(self) -> str:
+        if self.provider:
+            return f"{self.alias} ({self.provider})"
+        return self.alias
+
+
+PIDS: Dict[str, int] = {}
+
+
+TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
+    "drive": [
+        "--vfs-cache-mode",
+        "full",
+        "--vfs-read-ahead",
+        "64M",
+        "--vfs-cache-max-size",
+        "2G",
+        "--buffer-size",
+        "32M",
+        "--dir-cache-time",
+        "72h",
+        "--poll-interval",
+        "30s",
+        "--attr-timeout",
+        "1s",
+        "--no-modtime",
+        "--vfs-fast-fingerprint",
+    ],
+    "dropbox": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+    ],
+    "s3": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "32M",
+        "--attr-timeout",
+        "1s",
+    ],
+    "webdav": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+    ],
+}
+
+DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
+
+
+def _parse_remote_name(name: str, backend_type: str) -> Tuple[str, str]:
+    alias = name
+    provider = backend_type or "misc"
+
+    if "@" in name:
+        alias, provider = name.split("@", 1)
+    elif "__" in name:
+        alias, provider = name.rsplit("__", 1)
+    else:
+        return alias.strip() or name, provider
+
+    alias = alias.strip() or name
+    provider = provider.strip() or backend_type or "misc"
+    return alias, provider
+
+
+def _build_mount_path(provider: str, alias: str) -> str:
+    provider_component = _slugify(provider.lower())
+    alias_component = _slugify(alias)
+    return os.path.join(BASE_MOUNT_DIR, provider_component, alias_component)
+
+
+def _cleanup_mount_dir(path: str) -> None:
+    try:
+        os.rmdir(path)
+    except OSError:
+        return
+
+    base_abs = os.path.abspath(BASE_MOUNT_DIR)
+    parent = os.path.abspath(os.path.dirname(path))
+    while parent.startswith(base_abs) and parent != base_abs:
+        try:
+            os.rmdir(parent)
+        except OSError:
+            break
+        parent = os.path.abspath(os.path.dirname(parent))
+
+
+def _load_config() -> configparser.ConfigParser:
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(CONFIG_PATH, encoding="utf-8")
+    return config
+
+
+def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
+    flags = list(TYPE_FLAG_PRESETS.get(backend_type, DEFAULT_FLAGS))
+    if backend_type == "drive" and "--links" not in flags:
+        flags.append("--links")
+    flags.extend(extra_flags)
+    return flags
+
+
+def load_remotes() -> List[RemoteInfo]:
+    config = _load_config()
+    remotes: List[RemoteInfo] = []
+    for name in config.sections():
+        section = config[name]
+        backend_type = section.get("type", "").lower()
+        alias, provider = _parse_remote_name(name, backend_type)
+        extra_flags_str = section.get("mount_flags", "").strip()
+        extra_flags = shlex.split(extra_flags_str) if extra_flags_str else []
+        mount_path = _build_mount_path(provider, alias)
+        info = RemoteInfo(
+            name=name,
+            alias=alias,
+            provider=provider,
+            backend_type=backend_type,
+            mount_path=mount_path,
+            flags=_build_flags(backend_type, extra_flags),
+            extra_info=dict(section.items()),
+        )
+        remotes.append(info)
+    return remotes
+
+
+def find_rclone() -> str | None:
+    env_path = os.environ.get("RCLONE_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    which = shutil.which("rclone.exe" if IS_WINDOWS else "rclone")
+    if which:
+        return which
+    if IS_WINDOWS:
+        candidate = r"C:\\Program Files\\rclone\\rclone.exe"
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def mount_path(remote: RemoteInfo) -> str:
+    return remote.mount_path
+
+
+def is_mounted_windows(path: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    try:
+        result = subprocess.run(
+            ["fsutil", "reparsepoint", "query", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return result.returncode == 0
+    except Exception:
+        return True
+
+
+def is_mounted(remote: RemoteInfo) -> bool:
+    path = mount_path(remote)
+    if IS_WINDOWS:
+        return is_mounted_windows(path)
+    return os.path.ismount(path)
+
+
+def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, interval: float = 0.2) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_mounted(remote) == want_mounted:
+            return True
+        time.sleep(interval)
+    return False
+
+
+def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
+    popen_kwargs: Dict[str, int] = {}
+    if IS_WINDOWS:
+        CREATE_NO_WINDOW = 0x08000000
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        WIN_FLAGS = CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        popen_kwargs["creationflags"] = WIN_FLAGS
+    else:
+        popen_kwargs["close_fds"] = True
+
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **popen_kwargs,
+        )
+    except Exception as exc:
+        return False, f"[!] Failed to mount {remote.name}: {exc}"
+
+    PIDS[remote.name] = proc.pid
+
+    if wait_for(remote, True, timeout=wait_timeout):
+        return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
+
+    exit_code = proc.poll()
+    if exit_code is None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+        exit_code = proc.poll()
+
+    PIDS.pop(remote.name, None)
+
+    if exit_code is None:
+        return False, f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
+
+    return False, f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
+
+
+def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception as exc:
+        return False, f"[!] Cannot create mount dir {path}: {exc}"
+    if not os.access(path, os.W_OK | os.X_OK):
+        return False, f"[!] Mount dir {path} is not writable."
+    return True, None
+
+
+def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
+    rclone_bin = find_rclone()
+    if not rclone_bin:
+        return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+
+    ok, err = _ensure_mount_dir(mount_path(remote))
+    if not ok:
+        return False, err or "[!] Unable to prepare mount directory."
+
+    args = [rclone_bin, "mount", f"{remote.name}:", remote.mount_path]
+    args.extend(remote.flags)
+
+    return _launch_mount_process(remote, args)
+
+
+def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
+    path = mount_path(remote)
+    if IS_WINDOWS:
+        pid = PIDS.get(remote.name)
+        if pid:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            PIDS.pop(remote.name, None)
+        if os.path.exists(path):
+            subprocess.run(
+                ["cmd", "/c", "rmdir", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return True, f"[*] unmounted {remote.name}."
+
+    pid = PIDS.get(remote.name)
+    subprocess.run(["fusermount", "-u", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if pid:
+        try:
+            os.kill(pid, 15)
+        except Exception:
+            pass
+        PIDS.pop(remote.name, None)
+    _cleanup_mount_dir(path)
+    return True, f"[*] unmounted {remote.name}."
+
+
+def refresh_remote(remote: RemoteInfo) -> Tuple[bool, str]:
+    if is_mounted(remote):
+        unmount_remote(remote)
+        wait_for(remote, False)
+        time.sleep(0.5)
+    return mount_remote(remote)
+
+
+def mount_all(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
+    mounted: List[str] = []
+    failures: List[str] = []
+    for remote in remotes:
+        if is_mounted(remote):
+            continue
+        success, message = mount_remote(remote)
+        if success:
+            mounted.append(remote.name)
+        else:
+            failures.append(message)
+    return mounted, failures
+
+
+def unmount_all(remotes: Iterable[RemoteInfo]) -> List[str]:
+    unmounted: List[str] = []
+    for remote in remotes:
+        if is_mounted(remote):
+            _, message = unmount_remote(remote)
+            wait_for(remote, False)
+            unmounted.append(remote.name)
+    return unmounted
+
+
+def get_storage_usage(remote: RemoteInfo) -> str:
+    try:
+        output = subprocess.check_output(
+            ["rclone", "about", f"{remote.name}:", "--json"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        data = json.loads(output)
+        used = int(data.get("used", 0))
+        total = int(data.get("total", 0))
+        used_gb = used / (1024 ** 3)
+        total_gb = total / (1024 ** 3) if total else 0
+        if total:
+            return f"{used_gb:.1f} / {total_gb:.1f} GB"
+        return f"{used_gb:.1f} GB used"
+    except Exception:
+        return "?"
+
+
+def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
+    rclone_bin = find_rclone()
+    if not rclone_bin:
+        return False, "[!] rclone not found."
+    try:
+        result = subprocess.run(
+            [rclone_bin, "about", f"{remote.name}:"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as exc:
+        return False, f"[!] Failed to verify {remote.name}: {exc}"
+
+    detail = result.stderr.strip() or result.stdout.strip()
+    summary = detail.splitlines()[0] if detail else ("OK" if result.returncode == 0 else f"exit code {result.returncode}")
+    if result.returncode == 0:
+        return True, f"[✓] {remote.name}: {summary}"
+    return False, f"[!] {remote.name}: {summary}"
+
+
+def verify_all(remotes: Iterable[RemoteInfo]) -> List[str]:
+    messages: List[str] = []
+    for remote in remotes:
+        ok, msg = verify_remote(remote)
+        messages.append(msg)
+    return messages
+
+
+__all__ = [
+    "RemoteInfo",
+    "BASE_MOUNT_DIR",
+    "BASE_DIR_NOTE",
+    "CONFIG_PATH",
+    "load_remotes",
+    "mount_remote",
+    "unmount_remote",
+    "refresh_remote",
+    "mount_all",
+    "unmount_all",
+    "is_mounted",
+    "get_storage_usage",
+    "verify_remote",
+    "verify_all",
+    "wait_for",
+]

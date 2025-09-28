@@ -1,0 +1,7 @@
+# Example rclone.conf snippet (do not commit real credentials)
+#
+# [MyRemote__Drive]
+# type = drive
+# client_id = your-client-id.apps.googleusercontent.com
+# client_secret = your-client-secret
+# token = {"access_token":"..."}

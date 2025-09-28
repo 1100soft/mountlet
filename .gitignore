@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.bak
+cloud_mounts/
+secrets/*
+!secrets/.gitkeep
+*.json
+.rclone.config*
