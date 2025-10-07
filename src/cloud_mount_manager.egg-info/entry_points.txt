@@ -1,0 +1,7 @@
+[console_scripts]
+cloud-config-export = cloud_mount_manager.config_tools.export_config:main
+cloud-config-import = cloud_mount_manager.config_tools.import_config:main
+cloud-config-path = cloud_mount_manager.config_tools.path_config:main
+cloud-config-reconnect = cloud_mount_manager.config_tools.reconnect_config:main
+cloud-config-verify = cloud_mount_manager.config_tools.verify_config:main
+cloud-mount-manager = cloud_mount_manager.tui:main
