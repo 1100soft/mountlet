@@ -4,7 +4,7 @@ A small toolkit for mounting rclone remotes, plus helper commands to manage rclo
 
 ## Layout
 
-```
+```         
 cloud_mount_manager/
 ├── src/cloud_mount_manager/
 │   ├── __init__.py
@@ -29,7 +29,7 @@ The `src` package contains the TUI (`python -m cloud_mount_manager.tui`) and the
 
 ## Running the TUI
 
-```bash
+``` bash
 PYTHONPATH=src python -m cloud_mount_manager.tui
 ```
 
@@ -39,25 +39,25 @@ By default remotes mount under `~/cloud_mounts/<provider>/<alias>`. Override wit
 
 Import a bundle (copies config + secrets from `secrets/`, then verifies remotes):
 
-```bash
+``` bash
 PYTHONPATH=src python -m cloud_mount_manager.config_tools.import_config --config secrets/rclone.conf
 ```
 
 Export the current configuration:
 
-```bash
+``` bash
 PYTHONPATH=src python -m cloud_mount_manager.config_tools.export_config backups/
 ```
 
 Verify/remount credentials:
 
-```bash
+``` bash
 PYTHONPATH=src python -m cloud_mount_manager.config_tools.verify_config
 PYTHONPATH=src python -m cloud_mount_manager.config_tools.reconnect_config --remote MyRemote
 ```
 
 ## Development
 
-- Dependencies are standard library only (no external requirements yet).
-- Add unit tests under `tests/`.
-- Secrets (`secrets/`, `*.json`, backup files) are excluded via `.gitignore`.
+-   Dependencies are standard library only (no external requirements yet).
+-   Add unit tests under `tests/`.
+-   Secrets (`secrets/`, `*.json`, backup files) are excluded via `.gitignore`.
