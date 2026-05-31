@@ -1,5 +1,5 @@
-"""Cloud mount manager package."""
+"""Cloud Mount Manager package."""
 
-from . import core
+__version__ = "0.1.0"
 
-__all__ = ["core"]
+__all__ = ["__version__"]

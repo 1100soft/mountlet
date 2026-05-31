@@ -10,7 +10,6 @@ from pathlib import Path
 from .shared import (
     copy_file,
     default_config_path,
-    default_script_directory,
     ensure_dir,
     find_client_secrets,
     print_remote_list,
@@ -72,7 +71,7 @@ def import_bundle(args: argparse.Namespace) -> int:
     print(f"[*] rclone check: {version_info}")
     if not remotes or args.skip_verify:
         if remotes and args.skip_verify:
-            print("[i] Verification skipped. Run 'config_verify.py' when ready.")
+            print("[i] Verification skipped. Run 'cloud-mount-manager verify' when ready.")
         elif remotes:
             print("[i] No remotes found to verify.")
         return 0
@@ -101,8 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Import an rclone configuration and credentials bundle.")
     parser.add_argument(
         "--config",
-        default=default_script_directory() / "secrets" / "rclone.conf",
-        help="Path to rclone.conf to import (default: secrets/rclone.conf).",
+        required=True,
+        help="Path to the rclone.conf file to import.",
     )
     parser.add_argument(
         "--client-secret",
@@ -134,10 +133,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip verification after import.",
     )
     parser.add_argument(
-        "--no-verify-auto-reconnect",
+        "--verify-auto-reconnect",
         dest="verify_auto_reconnect",
-        action="store_false",
-        help="When verifying, do not auto-reconnect failing remotes.",
+        action="store_true",
+        help="After import verification, run reconnect for failing remotes.",
     )
     parser.add_argument(
         "--no-reconnect-auto-confirm",
@@ -149,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
         auto_discover_secrets=True,
         backup=True,
         skip_verify=False,
-        verify_auto_reconnect=True,
+        verify_auto_reconnect=False,
         reconnect_auto_confirm=True,
     )
     return parser
