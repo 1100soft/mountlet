@@ -134,3 +134,5 @@ bundles as sensitive files.
 
 The current public target is Linux CLI use. The planned commercial product layer
 is a desktop tray app.
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.

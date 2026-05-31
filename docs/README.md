@@ -37,7 +37,6 @@ ignored by git and must not be part of the installed-user workflow.
 ## Release Checklist
 
 - Confirm support contact.
-- Add a changelog before tagging `v0.1.0`.
 - Add screenshots or terminal recordings for the package page.
 - Publish PyPI/pipx CLI installation instructions.
 - Publish `.deb` installation instructions for the later desktop package.
@@ -46,6 +45,7 @@ ignored by git and must not be part of the installed-user workflow.
 - Test on a fresh Ubuntu installation with `rclone` and `fuse3`.
 - Verify import/export flows with non-sensitive sample configs.
 - Confirm the built wheel and source distribution do not include local secrets.
+- Follow [RELEASE.md](RELEASE.md) when merging `wip` to `main`, tagging, and publishing.
 
 ## Release Strategy
 
