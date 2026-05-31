@@ -63,6 +63,13 @@ class ConfigToolTests(unittest.TestCase):
                 self.assertEqual(shared.app_state_dir(), Path(tempdir) / "state" / "cloud-mount-manager")
                 self.assertEqual(shared.app_cache_dir(), Path(tempdir) / "cache" / "cloud-mount-manager")
 
+    def test_default_rclone_config_honors_rclone_config_environment(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "custom" / "rclone.conf"
+
+            with mock.patch.dict("os.environ", {"RCLONE_CONFIG": str(config_path)}, clear=False):
+                self.assertEqual(shared.default_config_path(), config_path)
+
     def test_path_config_can_ensure_app_directories(self):
         with tempfile.TemporaryDirectory() as tempdir:
             env = {

@@ -17,7 +17,7 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(cli.main(["--version"]), 0)
 
-        self.assertIn("cloud-mount-manager 0.1.0", output.getvalue())
+        self.assertIn("cloud-mount-manager 0.1.1", output.getvalue())
 
     def test_no_args_opens_menu(self):
         with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=True):

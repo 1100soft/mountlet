@@ -89,9 +89,10 @@ def ensure_ready_for_menu() -> bool:
     print()
     print("Run:")
     print("  cloud-mount-manager setup")
-    print()
-    print("If you still need to connect cloud storage, run:")
-    print("  cloud-mount-manager setup --configure-rclone")
+    if find_rclone():
+        print()
+        print("If you still need to connect cloud storage, run:")
+        print("  cloud-mount-manager setup --configure-rclone")
     return False
 
 
@@ -100,6 +101,22 @@ def _run_rclone_config(rclone_bin: str) -> int:
     print("Opening rclone setup. Follow the prompts to add a cloud storage remote.")
     result = subprocess.run([rclone_bin, "config"])
     return result.returncode
+
+
+def _next_steps(rclone_bin: str | None, fuse_ok: bool, remotes: list[str], failures: list[str]) -> list[str]:
+    steps: list[str] = []
+    if not rclone_bin:
+        steps.append("Install rclone: sudo apt install rclone")
+    if not fuse_ok:
+        steps.append("Install FUSE: sudo apt install fuse3")
+    if not remotes:
+        if rclone_bin:
+            steps.append("Add cloud storage: cloud-mount-manager setup --configure-rclone")
+        else:
+            steps.append("After installing rclone, add cloud storage: cloud-mount-manager setup --configure-rclone")
+    if failures:
+        steps.append("Reconnect credentials: cloud-mount-manager reconnect --remote <name>")
+    return steps
 
 
 def setup_command(args: argparse.Namespace) -> int:
@@ -164,14 +181,8 @@ def setup_command(args: argparse.Namespace) -> int:
         return 0
 
     print("A few things still need attention before mounting.")
-    if not rclone_bin:
-        print("  1. Install rclone: sudo apt install rclone")
-    if not fuse_ok:
-        print("  2. Install FUSE: sudo apt install fuse3")
-    if not remotes:
-        print("  3. Add cloud storage: cloud-mount-manager setup --configure-rclone")
-    if failures:
-        print("  4. Reconnect credentials: cloud-mount-manager reconnect --remote <name>")
+    for number, step in enumerate(_next_steps(rclone_bin, fuse_ok, remotes, failures), start=1):
+        print(f"  {number}. {step}")
     return 1
 
 

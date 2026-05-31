@@ -12,11 +12,12 @@ Released versions are marked with git tags, not long-lived version branches.
 Create release branches only if a maintained older line needs fixes while
 `main` has moved ahead. That is not expected for `0.1.x`.
 
-## v0.1.0 Checklist
+## Release Checklist
 
 Run these from `wip` first:
 
 ```bash
+VERSION=0.1.1
 python -m unittest discover -s tests
 python -m compileall -q src tests
 python -m pip wheel . -w /tmp/cloud-mount-manager-release --no-deps --no-build-isolation
@@ -25,7 +26,8 @@ python -m pip wheel . -w /tmp/cloud-mount-manager-release --no-deps --no-build-i
 Confirm:
 
 - `README.md` describes the user flow.
-- `CHANGELOG.md` has a `0.1.0` section.
+- `CHANGELOG.md` has a section for the version being released.
+- `pyproject.toml` and `src/cloud_mount_manager/__init__.py` have the same version.
 - `SECURITY.md` has an active security reporting path or GitHub private vulnerability reporting is enabled.
 - Built distributions do not include `secrets/`, `rclone.conf`, or `client_secret*.json`.
 - The package exposes only the `cloud-mount-manager` console command.
@@ -35,7 +37,8 @@ Confirm:
 ```bash
 git checkout main
 git pull origin main
-git merge --no-ff wip
+git merge --squash wip
+git commit -m "Release v$VERSION"
 python -m unittest discover -s tests
 python -m compileall -q src tests
 ```
@@ -52,7 +55,7 @@ python -m twine check dist/*
 After the final release commit is on `main`:
 
 ```bash
-git tag -a v0.1.0 -m "Release v0.1.0"
+git tag -a "v$VERSION" -m "Release v$VERSION"
 git push origin main --tags
 ```
 
@@ -60,14 +63,21 @@ git push origin main --tags
 
 Publish from the tagged `main` commit, not from `wip`.
 
-Recommended first public upload:
+Publishing is handled by GitHub Actions through PyPI trusted publishing.
+The PyPI publisher must match:
+
+- Repository: `eric-holt/cloud-mount-manager`
+- Workflow: `python-publish.yml`
+- Environment: `pypi`
+
+Pushing a release tag starts the publish workflow:
+
+```bash
+git push origin main --tags
+```
+
+Manual PyPI uploads are only a fallback:
 
 ```bash
 python -m twine upload dist/*
-```
-
-For a trial run before production PyPI:
-
-```bash
-python -m twine upload --repository testpypi dist/*
 ```
