@@ -46,8 +46,15 @@ def run_import(argv: list[str] | None = None) -> int:
     return int(import_config.main(argv) or 0)
 
 
+def run_tray(argv: list[str] | None = None) -> int:
+    from . import tray
+
+    return int(tray.main(argv) or 0)
+
+
 COMMANDS: dict[str, tuple[str, Command]] = {
     "menu": ("Open the interactive mount menu.", run_menu),
+    "tray": ("Open the desktop tray app.", run_tray),
     "setup": ("Prepare the app for first use.", run_setup),
     "path": ("Show config, state, cache, and rclone paths.", run_path),
     "verify": ("Check whether configured remotes are reachable.", run_verify),

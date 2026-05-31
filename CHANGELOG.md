@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added an optional PySide6 desktop tray preview with mount, unmount, refresh, and open-folder actions.
+
 ## 0.1.1 - 2026-05-31
 
 - Improved setup guidance when `rclone` is not installed yet.

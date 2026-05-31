@@ -36,6 +36,12 @@ For isolated CLI use:
 pipx install cloud-mount-manager
 ```
 
+For the desktop tray preview:
+
+```bash
+pipx install "cloud-mount-manager[tray]"
+```
+
 For a local checkout:
 
 ```bash
@@ -75,6 +81,24 @@ cloud-mount-manager
 
 Quitting the menu leaves mounted remotes connected. Use `u` in the menu to
 unmount everything.
+
+## Desktop Tray Preview
+
+The tray app is optional and uses PySide6. Start it with:
+
+```bash
+cloud-mount-manager tray
+```
+
+If you installed the CLI without tray support, add PySide6 with:
+
+```bash
+pipx inject cloud-mount-manager PySide6
+```
+
+The tray app shows each remote with mount, unmount, refresh, and open-folder
+actions. If your desktop session does not expose a system tray, use the terminal
+menu instead.
 
 ## Extra Commands
 
@@ -132,8 +156,8 @@ bundles as sensitive files.
 
 ## Status
 
-The current public target is Linux CLI use. The planned commercial product layer
-is a desktop tray app.
+The current public target is Linux CLI use. The desktop tray is an early preview
+for the next product layer.
 
 See the [changelog](https://github.com/eric-holt/cloud-mount-manager/blob/main/CHANGELOG.md)
 for version history.

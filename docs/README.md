@@ -31,6 +31,13 @@ python -m pytest
 python -m build
 ```
 
+Install the optional tray dependencies when working on the desktop preview:
+
+```bash
+python -m pip install -e ".[dev,tray]"
+cloud-mount-manager tray
+```
+
 The repository-level `secrets/` directory is for local development only. It is
 ignored by git and must not be part of the installed-user workflow.
 
@@ -66,6 +73,7 @@ The first paid product direction is a desktop tray app.
 
 Initial desktop tray scope:
 
+- Basic mount, unmount, refresh, and open-folder actions.
 - Auto-mount at login.
 - Remote health checks and notifications.
 - One-click credential reconnect flows.

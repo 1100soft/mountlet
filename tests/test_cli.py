@@ -59,6 +59,14 @@ class CliTests(unittest.TestCase):
 
         setup.assert_called_once_with(["--skip-verify"])
 
+    def test_tray_subcommand_dispatches_to_tray_tool(self):
+        from cloud_mount_manager import tray
+
+        with mock.patch.object(tray, "main", return_value=0) as tray_main:
+            self.assertEqual(cli.main(["tray", "--skip-readiness-check"]), 0)
+
+        tray_main.assert_called_once_with(["--skip-readiness-check"])
+
     def test_paths_alias_dispatches_to_path_tool(self):
         with mock.patch.object(cli.path_config, "main", return_value=0) as path:
             self.assertEqual(cli.main(["paths", "--ensure"]), 0)
