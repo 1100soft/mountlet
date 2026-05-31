@@ -35,7 +35,8 @@ Confirm:
 ```bash
 git checkout main
 git pull origin main
-git merge --no-ff wip
+git merge --squash wip
+git commit -m "Release v0.1.0"
 python -m unittest discover -s tests
 python -m compileall -q src tests
 ```
@@ -60,14 +61,21 @@ git push origin main --tags
 
 Publish from the tagged `main` commit, not from `wip`.
 
-Recommended first public upload:
+Publishing is handled by GitHub Actions through PyPI trusted publishing.
+The PyPI publisher must match:
+
+- Repository: `eric-holt/cloud-mount-manager`
+- Workflow: `python-publish.yml`
+- Environment: `pypi`
+
+Pushing a release tag starts the publish workflow:
+
+```bash
+git push origin main --tags
+```
+
+Manual PyPI uploads are only a fallback:
 
 ```bash
 python -m twine upload dist/*
-```
-
-For a trial run before production PyPI:
-
-```bash
-python -m twine upload --repository testpypi dist/*
 ```
