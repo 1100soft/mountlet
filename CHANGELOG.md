@@ -2,9 +2,7 @@
 
 ## 0.1.0 - Unreleased
 
-Initial public CLI release target.
-
-### Added
+Initial public CLI release.
 
 - Single public command: `cloud-mount-manager`.
 - Fast readiness check before opening the menu.
@@ -15,16 +13,9 @@ Initial public CLI release target.
 - User-specific app directories for config, state, and cache.
 - Import/export helpers for rclone configuration bundles.
 - `--version` / `-V` version output.
+- The menu leaves mounted remotes connected when quitting.
+- User-facing documentation for install, setup, normal use, and credential handling.
 - CI workflow for tests and package build.
-
-### Changed
-
-- Quitting the menu now leaves mounted remotes connected.
-- Public package installs only one console script: `cloud-mount-manager`.
-- User-facing documentation now focuses on install, setup, and normal use.
-
-### Security
-
 - Real `rclone.conf` and `client_secret*.json` files are excluded from the package.
 - Installed users keep credentials in rclone/user config locations, not the app install directory.
 - Exported bundles are documented as sensitive credential backups.
