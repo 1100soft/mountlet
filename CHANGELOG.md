@@ -13,9 +13,5 @@ Initial public CLI release.
 - User-specific app directories for config, state, and cache.
 - Import/export helpers for rclone configuration bundles.
 - `--version` / `-V` version output.
-- The menu leaves mounted remotes connected when quitting.
-- User-facing documentation for install, setup, normal use, and credential handling.
 - CI workflow for tests and package build.
-- Real `rclone.conf` and `client_secret*.json` files are excluded from the package.
-- Installed users keep credentials in rclone/user config locations, not the app install directory.
 - Exported bundles are documented as sensitive credential backups.
