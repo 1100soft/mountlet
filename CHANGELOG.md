@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 - 2026-05-31
 
 - Improved setup guidance when `rclone` is not installed yet.
+- Honored `RCLONE_CONFIG` consistently in setup and config helper commands.
 
 ## 0.1.0 - 2026-05-31
 

@@ -17,6 +17,9 @@ APP_NAME = "cloud-mount-manager"
 
 
 def default_config_path() -> Path:
+    env_config = os.environ.get("RCLONE_CONFIG")
+    if env_config:
+        return Path(env_config).expanduser()
     if platform.system() == "Windows":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         return base / "rclone" / "rclone.conf"
