@@ -1,63 +1,139 @@
 # Cloud Mount Manager
 
-A small toolkit for mounting rclone remotes, plus helper commands to manage rclone configuration bundles.
+Cloud Mount Manager is a terminal app for mounting and unmounting `rclone`
+remotes from a simple menu. It uses your existing `rclone` configuration and
+does not store cloud credentials inside the application install directory.
 
-## Layout
+## How It Works
 
-```
-cloud_mount_manager/
-├── src/cloud_mount_manager/
-│   ├── __init__.py
-│   ├── core.py
-│   ├── tui.py
-│   └── config_tools/
-│       ├── shared.py
-│       ├── import_config.py
-│       ├── export_config.py
-│       ├── verify_config.py
-│       ├── reconnect_config.py
-│       └── path_config.py
-├── secrets/               # ignored – place real rclone.conf/client_secret here
-├── docs/
-├── examples/
-├── scripts/
-├── tests/
-└── README.md
-```
+Cloud Mount Manager is a friendly control panel for two standard tools:
 
-The `src` package contains the TUI (`python -m cloud_mount_manager.tui`) and the config helper commands (`python -m cloud_mount_manager.config_tools.import_config`, etc.). The `secrets/` folder is ignored by git; copy your `rclone.conf` and `client_secret*.json` into `secrets/` (or into `~/.config/rclone/`) after cloning.
+- `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
+  S3-compatible storage, and WebDAV.
+- FUSE lets Linux show a cloud remote as if it were a normal folder on your
+  computer.
 
-## Running the TUI
+This app reads your `rclone` remotes, creates local mount folders, and starts or
+stops `rclone mount` for you.
+
+## Requirements
+
+- Python 3.10 or newer.
+- `rclone`, which connects to your cloud storage.
+- FUSE, which lets Linux show mounted cloud storage as folders.
+
+On Ubuntu, install the system tools with:
 
 ```bash
-PYTHONPATH=src python -m cloud_mount_manager.tui
+sudo apt install rclone fuse3
 ```
 
-By default remotes mount under `~/cloud_mounts/<provider>/<alias>`. Override with `CLOUD_MOUNT_BASE=/path/to/mounts`.
+## Install
 
-## Config Helpers
-
-Import a bundle (copies config + secrets from `secrets/`, then verifies remotes):
+For isolated CLI use:
 
 ```bash
-PYTHONPATH=src python -m cloud_mount_manager.config_tools.import_config --config secrets/rclone.conf
+pipx install cloud-mount-manager
 ```
 
-Export the current configuration:
+For a local checkout:
 
 ```bash
-PYTHONPATH=src python -m cloud_mount_manager.config_tools.export_config backups/
+python -m pip install .
 ```
 
-Verify/remount credentials:
+## Use
+
+Open Cloud Mount Manager:
 
 ```bash
-PYTHONPATH=src python -m cloud_mount_manager.config_tools.verify_config
-PYTHONPATH=src python -m cloud_mount_manager.config_tools.reconnect_config --remote MyRemote
+cloud-mount-manager
 ```
 
-## Development
+The app checks whether your computer is ready before it opens the menu. If
+something is missing, it prints the next step instead of dropping you into an
+empty screen.
 
-- Dependencies are standard library only (no external requirements yet).
-- Add unit tests under `tests/`.
-- Secrets (`secrets/`, `*.json`, backup files) are excluded via `.gitignore`.
+For a guided setup check:
+
+```bash
+cloud-mount-manager setup
+```
+
+If you have not added any cloud storage to `rclone` yet, let setup open
+`rclone`'s connection flow:
+
+```bash
+cloud-mount-manager setup --configure-rclone
+```
+
+Normal use is:
+
+```bash
+cloud-mount-manager
+```
+
+Quitting the menu leaves mounted remotes connected. Use `u` in the menu to
+unmount everything.
+
+## Extra Commands
+
+These are useful for backup, troubleshooting, or moving to another computer:
+
+```bash
+cloud-mount-manager path
+cloud-mount-manager verify
+cloud-mount-manager verify --auto-reconnect
+cloud-mount-manager reconnect --remote MyRemote
+cloud-mount-manager export ~/cloud-mount-backup
+cloud-mount-manager import --config ~/cloud-mount-backup/rclone.conf
+```
+
+## File Locations
+
+Cloud Mount Manager keeps application data in user-specific locations and leaves
+`rclone` credentials in the standard `rclone` location.
+
+On Linux:
+
+- `~/.config/rclone/rclone.conf`: rclone remotes and credentials.
+- `~/.config/cloud-mount-manager/config.toml`: Cloud Mount Manager preferences.
+- `~/.local/state/cloud-mount-manager/`: runtime state.
+- `~/.cache/cloud-mount-manager/`: cache files.
+- `~/cloud_mounts/`: default mount root.
+
+Print the paths for your system:
+
+```bash
+cloud-mount-manager path
+```
+
+Create the Cloud Mount Manager user folders:
+
+```bash
+cloud-mount-manager path --ensure
+```
+
+Override the mount root for a shell session:
+
+```bash
+export CLOUD_MOUNT_BASE=/path/to/mounts
+```
+
+## Credentials
+
+`rclone.conf` can contain OAuth tokens and provider credentials. Treat exported
+bundles as sensitive files.
+
+- Do not share real `rclone.conf` files.
+- Do not share `client_secret*.json` files.
+- Store backups outside application install directories.
+- Review exported bundles before copying them to another machine.
+
+## Status
+
+The current public target is Linux CLI use. The planned commercial product layer
+is a desktop tray app.
+
+See the [changelog](https://github.com/eric-holt/cloud-mount-manager/blob/main/CHANGELOG.md)
+for version history.

@@ -66,10 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Specific remote to verify (repeatable). Defaults to all remotes in the config.",
     )
     parser.add_argument(
-        "--no-auto-reconnect",
+        "--auto-reconnect",
         dest="auto_reconnect",
-        action="store_false",
-        help="Do not attempt automatic reconnect for failing remotes.",
+        action="store_true",
+        help="Attempt reconnect for failing remotes after verification.",
     )
     parser.add_argument(
         "--no-reconnect-auto-confirm",
@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="When auto-reconnecting, do not pass --auto-confirm to rclone.",
     )
-    parser.set_defaults(auto_reconnect=True, reconnect_auto_confirm=True)
+    parser.set_defaults(auto_reconnect=False, reconnect_auto_confirm=True)
     return parser
 
 

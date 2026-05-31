@@ -32,14 +32,18 @@ def _slugify(value: str) -> str:
     return cleaned.strip("._") or "remote"
 
 
-def _resolve_base_mount_dir() -> Tuple[str, str | None]:
+def _configured_mount_dir() -> str | None:
     configured = None
     for env in ENV_BASE_VARS:
         val = os.environ.get(env)
         if val:
             configured = os.path.expanduser(val)
             break
+    return configured
 
+
+def _mount_dir_candidates() -> List[str]:
+    configured = _configured_mount_dir()
     candidates: List[str] = []
     if configured:
         candidates.append(configured)
@@ -51,13 +55,20 @@ def _resolve_base_mount_dir() -> Tuple[str, str | None]:
             "/mnt/gdrive",
         ]
     )
+    return candidates
+
+
+def _resolve_base_mount_dir(create: bool = False) -> Tuple[str, str | None]:
+    configured = _configured_mount_dir()
+    candidates = _mount_dir_candidates()
 
     for cand in candidates:
-        try:
-            os.makedirs(cand, exist_ok=True)
-        except OSError:
-            continue
-        if os.access(cand, os.W_OK | os.X_OK):
+        if create:
+            try:
+                os.makedirs(cand, exist_ok=True)
+            except OSError:
+                continue
+        if os.path.isdir(cand) and os.access(cand, os.W_OK | os.X_OK):
             note = f"[i] Using mount directory {cand}. Set CLOUD_MOUNT_BASE to override."
             if configured and os.path.abspath(cand) == os.path.abspath(configured):
                 note = f"[i] Using configured mount directory {cand}."
@@ -65,12 +76,20 @@ def _resolve_base_mount_dir() -> Tuple[str, str | None]:
                 note = f"[i] Using default mount directory {cand}. Set CLOUD_MOUNT_BASE to override."
             return cand, note
 
-    fallback = os.path.join(tempfile.gettempdir(), f"cloud-mount-{os.getuid()}")
-    os.makedirs(fallback, exist_ok=True)
+    fallback_user = os.getuid() if hasattr(os, "getuid") else "user"
+    fallback = os.path.join(tempfile.gettempdir(), f"cloud-mount-{fallback_user}")
+    if create:
+        os.makedirs(fallback, exist_ok=True)
     return fallback, f"[!] Using fallback mount directory {fallback}. Set CLOUD_MOUNT_BASE to choose a different location."
 
 
 BASE_MOUNT_DIR, BASE_DIR_NOTE = _resolve_base_mount_dir()
+
+
+def ensure_base_mount_dir() -> Tuple[str, str | None]:
+    global BASE_MOUNT_DIR, BASE_DIR_NOTE
+    BASE_MOUNT_DIR, BASE_DIR_NOTE = _resolve_base_mount_dir(create=True)
+    return BASE_MOUNT_DIR, BASE_DIR_NOTE
 
 
 @dataclass
@@ -167,7 +186,7 @@ def _cleanup_mount_dir(path: str) -> None:
 
     base_abs = os.path.abspath(BASE_MOUNT_DIR)
     parent = os.path.abspath(os.path.dirname(path))
-    while parent.startswith(base_abs) and parent != base_abs:
+    while os.path.commonpath([base_abs, parent]) == base_abs and parent != base_abs:
         try:
             os.rmdir(parent)
         except OSError:
@@ -311,6 +330,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
 
 
 def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
+    ensure_base_mount_dir()
     try:
         os.makedirs(path, exist_ok=True)
     except Exception as exc:
@@ -355,7 +375,13 @@ def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
         return True, f"[*] unmounted {remote.name}."
 
     pid = PIDS.get(remote.name)
-    subprocess.run(["fusermount", "-u", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    unmount_cmd = shutil.which("fusermount3") or shutil.which("fusermount") or shutil.which("umount")
+    if not unmount_cmd:
+        return False, "[!] No unmount command found. Install fuse3/fuse or unmount manually."
+    args = [unmount_cmd, "-u", path] if os.path.basename(unmount_cmd) != "umount" else [unmount_cmd, path]
+    result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if result.returncode != 0:
+        return False, f"[!] Failed to unmount {remote.name} from {path}."
     if pid:
         try:
             os.kill(pid, 15)
@@ -388,20 +414,26 @@ def mount_all(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
     return mounted, failures
 
 
-def unmount_all(remotes: Iterable[RemoteInfo]) -> List[str]:
+def unmount_all(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
     unmounted: List[str] = []
+    failures: List[str] = []
     for remote in remotes:
         if is_mounted(remote):
-            _, message = unmount_remote(remote)
-            wait_for(remote, False)
-            unmounted.append(remote.name)
-    return unmounted
+            success, message = unmount_remote(remote)
+            if success and wait_for(remote, False):
+                unmounted.append(remote.name)
+            else:
+                failures.append(message)
+    return unmounted, failures
 
 
 def get_storage_usage(remote: RemoteInfo) -> str:
+    rclone_bin = find_rclone()
+    if not rclone_bin:
+        return "?"
     try:
         output = subprocess.check_output(
-            ["rclone", "about", f"{remote.name}:", "--json"],
+            [rclone_bin, "about", f"{remote.name}:", "--json"],
             stderr=subprocess.DEVNULL,
             text=True,
         )
@@ -451,6 +483,7 @@ __all__ = [
     "BASE_MOUNT_DIR",
     "BASE_DIR_NOTE",
     "CONFIG_PATH",
+    "ensure_base_mount_dir",
     "load_remotes",
     "mount_remote",
     "unmount_remote",

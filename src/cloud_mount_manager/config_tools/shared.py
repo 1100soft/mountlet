@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+APP_NAME = "cloud-mount-manager"
+
 
 def default_config_path() -> Path:
     if platform.system() == "Windows":
@@ -21,8 +23,56 @@ def default_config_path() -> Path:
     return Path.home() / ".config" / "rclone" / "rclone.conf"
 
 
-def default_script_directory() -> Path:
-    return Path(__file__).resolve().parents[3]
+def _platform_user_dir(kind: str) -> Path:
+    system = platform.system()
+    if system == "Windows":
+        env_name = "APPDATA" if kind == "config" else "LOCALAPPDATA"
+        fallback = Path.home() / "AppData" / ("Roaming" if kind == "config" else "Local")
+        return Path(os.environ.get(env_name, fallback)) / APP_NAME
+    if system == "Darwin":
+        if kind == "cache":
+            return Path.home() / "Library" / "Caches" / APP_NAME
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+
+    env_names = {
+        "config": "XDG_CONFIG_HOME",
+        "state": "XDG_STATE_HOME",
+        "cache": "XDG_CACHE_HOME",
+    }
+    defaults = {
+        "config": Path.home() / ".config",
+        "state": Path.home() / ".local" / "state",
+        "cache": Path.home() / ".cache",
+    }
+    base = Path(os.environ.get(env_names[kind], defaults[kind])).expanduser()
+    return base / APP_NAME
+
+
+def app_config_dir() -> Path:
+    return _platform_user_dir("config")
+
+
+def app_state_dir() -> Path:
+    return _platform_user_dir("state")
+
+
+def app_cache_dir() -> Path:
+    return _platform_user_dir("cache")
+
+
+def app_config_file() -> Path:
+    return app_config_dir() / "config.toml"
+
+
+def ensure_app_directories() -> Dict[str, Path]:
+    paths = {
+        "config": app_config_dir(),
+        "state": app_state_dir(),
+        "cache": app_cache_dir(),
+    }
+    for path in paths.values():
+        ensure_dir(path)
+    return paths
 
 
 def ensure_dir(path: Path) -> None:
@@ -196,8 +246,13 @@ def reconnect_remotes(remotes: List[str], auto_confirm: bool) -> None:
 
 
 __all__ = [
+    "APP_NAME",
     "default_config_path",
-    "default_script_directory",
+    "app_config_dir",
+    "app_state_dir",
+    "app_cache_dir",
+    "app_config_file",
+    "ensure_app_directories",
     "ensure_dir",
     "copy_file",
     "find_client_secrets",

@@ -7,6 +7,7 @@ import time
 from typing import Dict, List
 
 from . import core
+from .config_tools.shared import ensure_app_directories
 
 USE_COLOR = True
 CACHE_USAGE: Dict[str, str] = {}
@@ -84,12 +85,16 @@ def refresh_all(remotes: List[core.RemoteInfo]) -> str:
 
 
 def unmount_all(remotes: List[core.RemoteInfo]) -> str:
-    unmounted = core.unmount_all(remotes)
+    unmounted, failures = core.unmount_all(remotes)
     for name in unmounted:
         CACHE_USAGE.pop(name, None)
-    if not unmounted:
+    messages: List[str] = []
+    if unmounted:
+        messages.append("[*] unmounted: " + ", ".join(unmounted))
+    messages.extend(failures)
+    if not messages:
         return "[*] nothing to unmount."
-    return "[*] unmounted: " + ", ".join(unmounted)
+    return " | ".join(messages)
 
 
 def verify_all(remotes: List[core.RemoteInfo]) -> str:
@@ -137,10 +142,14 @@ def display(remotes: List[core.RemoteInfo], status_line: str = "") -> None:
         normal_line = f"{marker} {remote.mount_path}"
         label = f"{remote.display_name:<30}"
         print_maybe_color(prefix, f"{label} {mount_line}", f"{label} {normal_line}", mounted)
-    print("\nnumber = mount/unmount,  'a' = mount all,  'u' = unmount all,  'r' = refresh,  'v' = verify,  'q' = quit")
+    print(
+        "\nnumber = mount/unmount,  'a' = mount all,  'u' = unmount all,  "
+        "'r' = refresh,  'v' = verify,  'q' = quit"
+    )
 
 
 def main() -> None:
+    ensure_app_directories()
     status = core.BASE_DIR_NOTE or ""
     try:
         while True:
@@ -155,7 +164,7 @@ def main() -> None:
                 continue
 
             if choice.lower() == "q":
-                status = unmount_all(remotes)
+                status = "[*] leaving mounted remotes as they are."
                 display(remotes, status)
                 break
             if choice.lower() == "a":
@@ -182,9 +191,9 @@ def main() -> None:
             except Exception as exc:
                 status = f"[!] invalid input: {exc}"
     except KeyboardInterrupt:
-        status = unmount_all(core.load_remotes())
-        display(core.load_remotes(), status)
-        sys.exit(0)
+        remotes = core.load_remotes()
+        display(remotes, "[*] leaving mounted remotes as they are.")
+        return
 
 
 if __name__ == "__main__":
