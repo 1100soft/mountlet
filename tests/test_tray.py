@@ -12,6 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cloud_mount_manager import core, tray
 
 
+class _FakeMenu:
+    def __init__(self) -> None:
+        self.popup_calls: list[object] = []
+
+    def popup(self, position: object) -> None:
+        self.popup_calls.append(position)
+
+
 class TrayTests(unittest.TestCase):
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
         with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
@@ -61,6 +69,28 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_title(remote, mounted=True), "Docs (drive) - Mounted")
         self.assertEqual(tray._remote_title(remote, mounted=False), "Docs (drive) - Unmounted")
+
+    def test_left_click_activation_opens_menu(self):
+        fake_menu = _FakeMenu()
+        fake_qt = mock.Mock()
+        fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
+        fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick = "double"
+        fake_qt.QCursor.pos.return_value = "cursor-position"
+        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app.qt = fake_qt
+        tray_app.menu = fake_menu
+
+        with mock.patch.object(tray_app, "rebuild_menu") as rebuild:
+            tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
+
+        rebuild.assert_called_once_with()
+        self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
+
+        with mock.patch.object(tray_app, "rebuild_menu") as rebuild:
+            tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
+
+        rebuild.assert_not_called()
+        self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
 
 
 if __name__ == "__main__":

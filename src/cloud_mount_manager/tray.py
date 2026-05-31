@@ -22,7 +22,7 @@ class TrayDependencyError(RuntimeError):
 def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import QTimer, QUrl
-        from PySide6.QtGui import QAction, QDesktopServices, QIcon
+        from PySide6.QtGui import QAction, QCursor, QDesktopServices, QIcon
         from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
     except ImportError as exc:
         raise TrayDependencyError(
@@ -35,6 +35,7 @@ def _load_qt_bindings() -> SimpleNamespace:
     return SimpleNamespace(
         QAction=QAction,
         QApplication=QApplication,
+        QCursor=QCursor,
         QDesktopServices=QDesktopServices,
         QIcon=QIcon,
         QMenu=QMenu,
@@ -101,6 +102,7 @@ class CloudMountTray:
         self.tray = qt.QSystemTrayIcon(self._icon(), self.app)
         self.tray.setToolTip("Cloud Mount Manager")
         self.tray.setContextMenu(self.menu)
+        self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self.rebuild_menu)
 
@@ -120,6 +122,12 @@ class CloudMountTray:
         self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
         return int(self.app.exec() or 0)
+
+    def _handle_activation(self, reason: Any) -> None:
+        if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
+            return
+        self.rebuild_menu()
+        self.menu.popup(self.qt.QCursor.pos())
 
     def rebuild_menu(self) -> None:
         self.menu.clear()
