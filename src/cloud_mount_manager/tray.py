@@ -55,6 +55,20 @@ def _remote_title(remote: core.RemoteInfo, mounted: bool) -> str:
     return f"{remote.display_name} - {marker}"
 
 
+def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
+    if not remotes:
+        return "Cloud Mount Manager - no rclone remotes"
+
+    unmounted_count = len(remotes) - len(mounted_names)
+    if not mounted_names:
+        return f"Cloud Mount Manager - 0 mounted, {unmounted_count} unmounted"
+
+    names = ", ".join(mounted_names[:3])
+    if len(mounted_names) > 3:
+        names += f", +{len(mounted_names) - 3} more"
+    return f"Cloud Mount Manager - mounted: {names}"
+
+
 def _can_connect_unix_socket(path: str) -> bool:
     client = socket.socket(socket.AF_UNIX)
     try:
@@ -98,13 +112,14 @@ class CloudMountTray:
         self.refresh_interval = max(refresh_interval, 2)
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setQuitOnLastWindowClosed(False)
-        self.menu = qt.QMenu()
+        self.remote_menu = qt.QMenu()
+        self.app_menu = qt.QMenu()
         self.tray = qt.QSystemTrayIcon(self._icon(), self.app)
         self.tray.setToolTip("Cloud Mount Manager")
-        self.tray.setContextMenu(self.menu)
+        self.tray.setContextMenu(self.app_menu)
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
-        self.timer.timeout.connect(self.rebuild_menu)
+        self.timer.timeout.connect(self.rebuild_menus)
 
     def _icon(self) -> Any:
         try:
@@ -118,7 +133,7 @@ class CloudMountTray:
             print("    Use the terminal menu instead: cloud-mount-manager", file=sys.stderr)
             return 1
 
-        self.rebuild_menu()
+        self.rebuild_menus()
         self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
         return int(self.app.exec() or 0)
@@ -126,30 +141,35 @@ class CloudMountTray:
     def _handle_activation(self, reason: Any) -> None:
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return
-        self.rebuild_menu()
-        self.menu.popup(self.qt.QCursor.pos())
+        self.rebuild_menus()
+        self.remote_menu.popup(self.qt.QCursor.pos())
 
-    def rebuild_menu(self) -> None:
-        self.menu.clear()
+    def rebuild_menus(self) -> None:
+        self.remote_menu.clear()
+        self.app_menu.clear()
         remotes = core.load_remotes()
+        mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
+        self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
         if remotes:
             for remote in remotes:
-                self._add_remote_menu(remote)
+                self._add_remote_menu(remote, self.remote_menu)
         else:
-            action = self.menu.addAction("No rclone remotes found")
+            action = self.remote_menu.addAction("No rclone remotes found")
             action.setEnabled(False)
 
-        self.menu.addSeparator()
-        self._add_action(self.menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
-        self._add_action(self.menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
-        self._add_action(self.menu, "Refresh menu", self.rebuild_menu)
-        self.menu.addSeparator()
-        self._add_action(self.menu, "Quit", self.app.quit)
+        status = self.app_menu.addAction(_status_tooltip(remotes, mounted_names).replace("Cloud Mount Manager - ", ""))
+        status.setEnabled(False)
+        self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
+        self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
+        self._add_action(self.app_menu, "Refresh status", self.rebuild_menus)
+        self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "Quit", self.app.quit)
 
-    def _add_remote_menu(self, remote: core.RemoteInfo) -> None:
+    def _add_remote_menu(self, remote: core.RemoteInfo, menu: Any) -> None:
         mounted = core.is_mounted(remote)
-        submenu = self.menu.addMenu(_remote_title(remote, mounted))
+        submenu = menu.addMenu(_remote_title(remote, mounted))
 
         status = submenu.addAction(f"Path: {remote.mount_path}")
         status.setEnabled(False)
@@ -171,7 +191,7 @@ class CloudMountTray:
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
         success, message = action(remote)
         self._notify("Cloud Mount Manager", _clean_message(message), success=success)
-        self.rebuild_menu()
+        self.rebuild_menus()
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
         mounted, failures = core.mount_all(remotes)
@@ -181,7 +201,7 @@ class CloudMountTray:
             self._notify("Mount all", "Mounted: " + ", ".join(mounted), success=True)
         else:
             self._notify("Mount all", "Nothing to mount.", success=True)
-        self.rebuild_menu()
+        self.rebuild_menus()
 
     def _unmount_all(self, remotes: list[core.RemoteInfo]) -> None:
         unmounted, failures = core.unmount_all(remotes)
@@ -191,7 +211,7 @@ class CloudMountTray:
             self._notify("Unmount all", "Unmounted: " + ", ".join(unmounted), success=True)
         else:
             self._notify("Unmount all", "Nothing to unmount.", success=True)
-        self.rebuild_menu()
+        self.rebuild_menus()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         if not os.path.isdir(remote.mount_path):

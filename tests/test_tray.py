@@ -70,7 +70,35 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._remote_title(remote, mounted=True), "Docs (drive) - Mounted")
         self.assertEqual(tray._remote_title(remote, mounted=False), "Docs (drive) - Unmounted")
 
-    def test_left_click_activation_opens_menu(self):
+    def test_status_tooltip_summarizes_mounts(self):
+        remotes = [
+            core.RemoteInfo(
+                name="Docs",
+                alias="Docs",
+                provider="drive",
+                backend_type="drive",
+                mount_path="/tmp/docs",
+            ),
+            core.RemoteInfo(
+                name="Photos",
+                alias="Photos",
+                provider="dropbox",
+                backend_type="dropbox",
+                mount_path="/tmp/photos",
+            ),
+        ]
+
+        self.assertEqual(tray._status_tooltip([], []), "Cloud Mount Manager - no rclone remotes")
+        self.assertEqual(
+            tray._status_tooltip(remotes, []),
+            "Cloud Mount Manager - 0 mounted, 2 unmounted",
+        )
+        self.assertEqual(
+            tray._status_tooltip(remotes, ["Docs"]),
+            "Cloud Mount Manager - mounted: Docs",
+        )
+
+    def test_left_click_activation_opens_remote_menu(self):
         fake_menu = _FakeMenu()
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
@@ -78,15 +106,15 @@ class TrayTests(unittest.TestCase):
         fake_qt.QCursor.pos.return_value = "cursor-position"
         tray_app = object.__new__(tray.CloudMountTray)
         tray_app.qt = fake_qt
-        tray_app.menu = fake_menu
+        tray_app.remote_menu = fake_menu
 
-        with mock.patch.object(tray_app, "rebuild_menu") as rebuild:
+        with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
         rebuild.assert_called_once_with()
         self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
 
-        with mock.patch.object(tray_app, "rebuild_menu") as rebuild:
+        with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
         rebuild.assert_not_called()
