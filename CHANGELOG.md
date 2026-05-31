@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Improved setup guidance when `rclone` is not installed yet.
+
 ## 0.1.0 - 2026-05-31
 
 Initial public CLI release.
