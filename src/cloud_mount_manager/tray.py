@@ -198,6 +198,18 @@ def _qdbus_lines(args: list[str]) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _qt_dbus_session() -> SimpleNamespace | None:
+    try:
+        from PySide6.QtDBus import QDBusConnection, QDBusInterface
+    except ImportError:
+        return None
+
+    bus = QDBusConnection.sessionBus()
+    if not bus.isConnected():
+        return None
+    return SimpleNamespace(QDBusInterface=QDBusInterface, bus=bus)
+
+
 def _dolphin_service_sort_key(service: str) -> int:
     suffix = service.rsplit("-", 1)[-1]
     if not suffix.isdigit():
@@ -205,12 +217,20 @@ def _dolphin_service_sort_key(service: str) -> int:
     return int(suffix)
 
 
-def _dolphin_dbus_services() -> list[str]:
+def _sort_dolphin_services(services: list[str]) -> list[str]:
     return sorted(
-        (service for service in _qdbus_lines([]) if service.startswith("org.kde.dolphin-")),
+        (service for service in services if service.startswith("org.kde.dolphin-")),
         key=_dolphin_service_sort_key,
         reverse=True,
     )
+
+
+def _dolphin_dbus_services(dbus: SimpleNamespace | None = None) -> list[str]:
+    if dbus:
+        reply = dbus.bus.interface().registeredServiceNames()
+        if reply.isValid():
+            return _sort_dolphin_services(reply.value())
+    return _sort_dolphin_services(_qdbus_lines([]))
 
 
 def _dolphin_dbus_windows() -> list[tuple[str, str]]:
@@ -248,7 +268,31 @@ def _ordered_dolphin_dbus_windows(qdbus: str) -> list[tuple[str, str]]:
     return [*active, *inactive]
 
 
-def _open_folder_in_dolphin_window(qdbus: str, service: str, object_path: str, uri: str) -> bool:
+def _open_folder_in_dolphin_window_with_qtdbus(
+    dbus: SimpleNamespace,
+    service: str,
+    object_path: str,
+    uri: str,
+) -> bool:
+    interface = dbus.QDBusInterface(service, object_path, "org.kde.dolphin.MainWindow", dbus.bus)
+    if not interface.isValid():
+        return False
+    reply = interface.call("openDirectories", [uri], False)
+    return not reply.errorName()
+
+
+def _open_folder_in_dolphin_window(
+    dbus: SimpleNamespace | None,
+    qdbus: str | None,
+    service: str,
+    object_path: str,
+    uri: str,
+) -> bool:
+    if dbus and _open_folder_in_dolphin_window_with_qtdbus(dbus, service, object_path, uri):
+        return True
+    if not qdbus:
+        return False
+
     try:
         result = subprocess.run(
             [
@@ -268,8 +312,8 @@ def _open_folder_in_dolphin_window(qdbus: str, service: str, object_path: str, u
     return result.returncode == 0
 
 
-def _dolphin_fast_tab_targets() -> list[tuple[str, str]]:
-    return [(service, _DOLPHIN_MAIN_WINDOW_PATH) for service in _dolphin_dbus_services()]
+def _dolphin_fast_tab_targets(dbus: SimpleNamespace | None = None) -> list[tuple[str, str]]:
+    return [(service, _DOLPHIN_MAIN_WINDOW_PATH) for service in _dolphin_dbus_services(dbus)]
 
 
 def _dolphin_slow_tab_targets(qdbus: str, tried: set[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -280,29 +324,33 @@ def _open_folder_in_dolphin_tab(path: str) -> bool:
     global _dolphin_tab_target_cache
 
     uri = _folder_uri(path)
-    qdbus = _qdbus_binary()
-    if not qdbus:
+    dbus = _qt_dbus_session()
+    qdbus = None if dbus else _qdbus_binary()
+    if not dbus and not qdbus:
         return False
 
     tried: set[tuple[str, str]] = set()
     if _dolphin_tab_target_cache:
         service, object_path = _dolphin_tab_target_cache
         tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(qdbus, service, object_path, uri):
+        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
             return True
         _dolphin_tab_target_cache = None
 
-    for service, object_path in _dolphin_fast_tab_targets():
+    for service, object_path in _dolphin_fast_tab_targets(dbus):
         if (service, object_path) in tried:
             continue
         tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(qdbus, service, object_path, uri):
+        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
             _dolphin_tab_target_cache = (service, object_path)
             return True
 
+    qdbus = qdbus or _qdbus_binary()
+    if not qdbus:
+        return False
     for service, object_path in _dolphin_slow_tab_targets(qdbus, tried):
         tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(qdbus, service, object_path, uri):
+        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
             _dolphin_tab_target_cache = (service, object_path)
             return True
 

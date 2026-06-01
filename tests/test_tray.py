@@ -276,6 +276,48 @@ class TrayTests(unittest.TestCase):
                 ],
             )
 
+    def test_dolphin_dbus_services_can_use_qtdbus_without_qdbus_subprocess(self):
+        reply = mock.Mock()
+        reply.isValid.return_value = True
+        reply.value.return_value = [
+            "org.example.Other",
+            "org.kde.dolphin-1234",
+            "org.kde.dolphin-5678",
+        ]
+        bus = mock.Mock()
+        bus.interface.return_value.registeredServiceNames.return_value = reply
+        dbus = SimpleNamespace(bus=bus)
+
+        with mock.patch.object(tray, "_qdbus_lines") as qdbus_lines:
+            self.assertEqual(
+                tray._dolphin_dbus_services(dbus),
+                ["org.kde.dolphin-5678", "org.kde.dolphin-1234"],
+            )
+
+        qdbus_lines.assert_not_called()
+
+    def test_open_folder_in_dolphin_window_can_use_qtdbus_without_subprocess(self):
+        reply = mock.Mock()
+        reply.errorName.return_value = ""
+        interface = mock.Mock()
+        interface.isValid.return_value = True
+        interface.call.return_value = reply
+        dbus = SimpleNamespace(QDBusInterface=mock.Mock(return_value=interface), bus=mock.Mock())
+
+        with mock.patch.object(tray.subprocess, "run") as run:
+            self.assertTrue(
+                tray._open_folder_in_dolphin_window(
+                    dbus,
+                    None,
+                    "org.kde.dolphin-1234",
+                    "/dolphin/Dolphin_1",
+                    "file:///tmp/docs",
+                )
+            )
+
+        interface.call.assert_called_once_with("openDirectories", ["file:///tmp/docs"], False)
+        run.assert_not_called()
+
     def test_ordered_dolphin_dbus_windows_puts_active_window_first(self):
         windows = [
             ("org.kde.dolphin-5678", "/dolphin/Dolphin_2"),
