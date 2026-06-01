@@ -33,6 +33,18 @@ from .settings import (
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
 _dolphin_tab_target_cache: tuple[str, str] | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
+OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
+    ("current_desktop", "Current desktop window"),
+    ("existing_window", "Any existing file manager window"),
+    ("new_window", "New file manager window"),
+    ("file-manager-service", "Desktop file manager service"),
+    ("default", "System default"),
+)
+MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
+    ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
+    ("Allow non-empty folder", "Permit mounting over a folder that already contains files.", ("--allow-non-empty",)),
+)
 
 
 class TrayDependencyError(RuntimeError):
@@ -46,6 +58,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         from PySide6.QtWidgets import (
             QApplication,
             QCheckBox,
+            QComboBox,
             QDialog,
             QDialogButtonBox,
             QFrame,
@@ -55,6 +68,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QLineEdit,
             QMainWindow,
             QMenu,
+            QMessageBox,
             QPushButton,
             QScrollArea,
             QSizePolicy,
@@ -75,6 +89,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QAction=QAction,
         QApplication=QApplication,
         QCheckBox=QCheckBox,
+        QComboBox=QComboBox,
         QCursor=QCursor,
         QDialog=QDialog,
         QDialogButtonBox=QDialogButtonBox,
@@ -87,6 +102,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QLineEdit=QLineEdit,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
+        QMessageBox=QMessageBox,
         QObject=QObject,
         QPushButton=QPushButton,
         QScrollArea=QScrollArea,
@@ -603,9 +619,12 @@ class _ConfigDialogBase:
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
 
-    def _line(self, text: str) -> Any:
+    def _line(self, text: str | None, *, default: str | None = None) -> Any:
         field = self.qt.QLineEdit()
-        field.setText(text)
+        field.setText(text or "")
+        if default:
+            field.setPlaceholderText(default)
+            field.setToolTip(f"Leave blank to use the default: {default}")
         return field
 
     def _check(self, checked: bool) -> Any:
@@ -613,14 +632,15 @@ class _ConfigDialogBase:
         field.setChecked(checked)
         return field
 
-    def _mount_flags(self, field: Any) -> list[str]:
-        text = field.text().strip()
-        if not text:
-            return []
-        try:
-            return shlex.split(text)
-        except ValueError:
-            return text.split()
+    def _combo(self, options: tuple[tuple[str, str], ...], current: str) -> Any:
+        field = self.qt.QComboBox()
+        selected_index = 0
+        for index, (value, label) in enumerate(options):
+            field.addItem(label, value)
+            if value == current:
+                selected_index = index
+        field.setCurrentIndex(selected_index)
+        return field
 
     def _buttons(self) -> Any:
         buttons = self.qt.QDialogButtonBox(
@@ -653,10 +673,10 @@ class AppConfigDialog(_ConfigDialogBase):
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
         self.fields = {
-            "mount_base": self._line(app_settings.mount_base or core.DEFAULT_HOME_MOUNT),
+            "mount_base": self._line(app_settings.mount_base, default=core.DEFAULT_HOME_MOUNT),
             "auto_mount": self._check(app_settings.auto_mount),
             "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
-            "open_folder_behavior": self._line(app_settings.open_folder_behavior),
+            "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
         }
         form.addRow("Mount base", self.fields["mount_base"])
@@ -675,10 +695,10 @@ class AppConfigDialog(_ConfigDialogBase):
 
         save_app_settings(
             AppSettings(
-                mount_base=self.fields["mount_base"].text().strip() or core.DEFAULT_HOME_MOUNT,
+                mount_base=self.fields["mount_base"].text().strip() or None,
                 auto_mount=self.fields["auto_mount"].isChecked(),
                 auto_mount_delay=max(delay, 0.0),
-                open_folder_behavior=self.fields["open_folder_behavior"].text().strip() or "current_desktop",
+                open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
             )
         )
@@ -702,7 +722,6 @@ class MountConfigDialog(_ConfigDialogBase):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        title = self.qt.QLabel(self.remote.display_name)
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
@@ -712,27 +731,53 @@ class MountConfigDialog(_ConfigDialogBase):
             if mount_settings and mount_settings.auto_mount is not None
             else app_settings.auto_mount
         )
+        mount_flags = mount_settings.mount_flags if mount_settings else []
+        option_tokens = {token for _label, _tooltip, tokens in MOUNT_FLAG_OPTIONS for token in tokens}
+        self._preserved_mount_flags = [flag for flag in mount_flags if flag not in option_tokens]
+        self.flag_fields: list[tuple[Any, tuple[str, ...]]] = []
         self.fields = {
             "enabled": self._check(enabled),
             "auto_mount": self._check(bool(auto_mount)),
             "mount_path": self._line(
-                mount_settings.mount_path if mount_settings and mount_settings.mount_path else self.remote.mount_path
+                mount_settings.mount_path if mount_settings else None,
+                default=self.remote.mount_path,
             ),
-            "mount_flags": self._line(" ".join(mount_settings.mount_flags) if mount_settings else ""),
         }
         form.addRow("Enabled", self.fields["enabled"])
         form.addRow("Auto-mount", self.fields["auto_mount"])
         form.addRow("Mount path", self.fields["mount_path"])
-        form.addRow("Mount flags", self.fields["mount_flags"])
-        root.addWidget(title)
+
+        flags_frame = self.qt.QFrame()
+        flags_layout = self.qt.QVBoxLayout(flags_frame)
+        flags_layout.setContentsMargins(0, 0, 0, 0)
+        flags_layout.setSpacing(4)
+        for label, tooltip, tokens in MOUNT_FLAG_OPTIONS:
+            field = self._check(all(token in mount_flags for token in tokens))
+            field.setText(label)
+            field.setToolTip(tooltip)
+            self.flag_fields.append((field, tokens))
+            flags_layout.addWidget(field)
+        if self._preserved_mount_flags:
+            custom = self.qt.QLabel("Additional existing rclone flags will be preserved.")
+            custom.setToolTip("Preserved flags: " + shlex.join(self._preserved_mount_flags))
+            custom.setStyleSheet("color: palette(mid);")
+            flags_layout.addWidget(custom)
+        form.addRow("Mount flags", flags_frame)
+
         root.addWidget(frame)
         root.addWidget(self._buttons())
 
     def _save(self) -> None:
         settings = load_mount_settings()
         settings[self.remote.name] = MountSettings(
-            mount_path=self.fields["mount_path"].text().strip() or self.remote.mount_path,
-            mount_flags=self._mount_flags(self.fields["mount_flags"]),
+            mount_path=self.fields["mount_path"].text().strip() or None,
+            mount_flags=[
+                flag
+                for field, tokens in self.flag_fields
+                if field.isChecked()
+                for flag in tokens
+            ]
+            + self._preserved_mount_flags,
             auto_mount=self.fields["auto_mount"].isChecked(),
             enabled=self.fields["enabled"].isChecked(),
         )
@@ -957,20 +1002,88 @@ class MountletWindow:
         self.tray_app._open_folder(remote)
 
     def _show_app_config_editor(self) -> None:
+        old_remotes = core.load_remotes()
         dialog = AppConfigDialog(self.qt, self.window)
         if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
             core.ensure_base_mount_dir()
+            changes = self._path_changes(old_remotes)
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._ask_remount_for_path_changes(changes)
 
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
+        old_remotes = core.load_remotes()
         dialog = MountConfigDialog(self.qt, remote, self.window)
         if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
             core.ensure_base_mount_dir()
+            changes = self._path_changes(old_remotes)
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._ask_remount_for_path_changes(changes)
+
+    def _path_changes(self, old_remotes: list[core.RemoteInfo]) -> list[tuple[core.RemoteInfo, core.RemoteInfo]]:
+        old_by_name = {remote.name: remote for remote in old_remotes}
+        changes: list[tuple[core.RemoteInfo, core.RemoteInfo]] = []
+        for new_remote in core.load_remotes():
+            old_remote = old_by_name.get(new_remote.name)
+            if not old_remote:
+                continue
+            old_path = os.path.abspath(os.path.expanduser(old_remote.mount_path))
+            new_path = os.path.abspath(os.path.expanduser(new_remote.mount_path))
+            if old_path != new_path:
+                changes.append((old_remote, new_remote))
+        return changes
+
+    def _ask_remount_for_path_changes(self, changes: list[tuple[core.RemoteInfo, core.RemoteInfo]]) -> None:
+        if not changes:
+            return
+        names = ", ".join(new_remote.display_name for _old_remote, new_remote in changes[:3])
+        if len(changes) > 3:
+            names += f", and {len(changes) - 3} more"
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Remount now?",
+            "Mount paths changed for "
+            f"{names}.\n\nRemount now and remove the old empty mount folders?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        if reply == self.qt.QMessageBox.StandardButton.Yes:
+            self._remount_changed_paths(changes)
+
+    def _remount_changed_paths(self, changes: list[tuple[core.RemoteInfo, core.RemoteInfo]]) -> None:
+        if not changes:
+            return
+        for _old_remote, new_remote in changes:
+            self._action_pending.add(new_remote.name)
+        self.refresh()
+
+        def worker() -> None:
+            completed: list[str] = []
+            failures: list[str] = []
+            for old_remote, new_remote in changes:
+                if core.is_mounted(old_remote):
+                    success, message = core.unmount_remote(old_remote)
+                    if not success or not core.wait_for(old_remote, False):
+                        failures.append(message)
+                        continue
+                self._remove_empty_mount_folder(old_remote.mount_path)
+                success, message = core.mount_remote(new_remote)
+                if success:
+                    completed.append(new_remote.name)
+                else:
+                    failures.append(message)
+            self._bridge.bulk_action_finished.emit("Remount", completed, failures)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _remove_empty_mount_folder(self, path: str) -> None:
+        try:
+            os.rmdir(os.path.expanduser(path))
+        except OSError:
+            return
 
     def _open_text_config(self, path: Path) -> None:
         ensure_default_config_files()
