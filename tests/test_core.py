@@ -12,19 +12,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 class CoreTests(unittest.TestCase):
-    def load_core(self, tempdir: str, config_text: str = ""):
+    def load_core(self, tempdir: str, config_text: str = "", *, set_mount_base: bool = True):
         config_path = Path(tempdir) / "rclone.conf"
         config_path.write_text(config_text, encoding="utf-8")
         mount_base = Path(tempdir) / "mounts"
+        env = {
+            "RCLONE_CONFIG": str(config_path),
+            "XDG_CONFIG_HOME": str(Path(tempdir) / "config"),
+        }
+        if set_mount_base:
+            env["MOUNTLET_MOUNT_BASE"] = str(mount_base)
+        else:
+            env["MOUNTLET_MOUNT_BASE"] = ""
+            env["CLOUD_MOUNT_BASE"] = ""
+            env["GDRIVE_MOUNT_BASE"] = ""
 
-        with mock.patch.dict(
-            os.environ,
-            {"RCLONE_CONFIG": str(config_path), "CLOUD_MOUNT_BASE": str(mount_base)},
-            clear=False,
-        ):
-            import cloud_mount_manager.core as core
+        patcher = mock.patch.dict(os.environ, env, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-            return importlib.reload(core)
+        import mountlet.core as core
+
+        return importlib.reload(core)
 
     def test_load_remotes_parses_provider_alias_and_mount_flags(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -78,6 +87,45 @@ type = dropbox
             self.assertEqual(args[3], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
 
+    def test_load_remotes_applies_app_and_mount_settings(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config" / "mountlet"
+            config_dir.mkdir(parents=True)
+            (config_dir / "config.toml").write_text(
+                "[app]\nmount_base = \"~/ignored\"\nauto_mount = true\n",
+                encoding="utf-8",
+            )
+            (config_dir / "mounts.toml").write_text(
+                """
+[remotes."Docs"]
+mount_path = "~/custom-docs"
+mount_flags = "--read-only"
+auto_mount = false
+
+[remotes."Hidden"]
+enabled = false
+""".strip(),
+                encoding="utf-8",
+            )
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+
+[Hidden]
+type = dropbox
+""".strip(),
+                set_mount_base=False,
+            )
+
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.name for remote in remotes], ["Docs"])
+        self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertFalse(remotes[0].auto_mount)
+        self.assertIn("--read-only", remotes[0].flags)
+
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
@@ -99,7 +147,10 @@ type = dropbox
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
             remote = core.load_remotes()[0]
 
-            with mock.patch.object(core.shutil, "which", side_effect=lambda name: "/usr/bin/fusermount3" if name == "fusermount3" else None):
+            def which(name: str) -> str | None:
+                return "/usr/bin/fusermount3" if name == "fusermount3" else None
+
+            with mock.patch.object(core.shutil, "which", side_effect=which):
                 with mock.patch.object(core.subprocess, "run") as run:
                     run.return_value.returncode = 0
                     success, _ = core.unmount_remote(remote)

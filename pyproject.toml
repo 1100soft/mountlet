@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cloud-mount-manager"
-version = "0.1.1"
-description = "TUI and tools for mounting rclone remotes"
+name = "mountlet"
+version = "0.2.0"
+description = "CLI and tray tools for mounting rclone remotes"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -27,6 +27,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+tray = [
+  "PySide6>=6.7",
+]
 dev = [
   "build>=1.2",
   "pytest>=8",
@@ -35,11 +38,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/eric-holt/cloud-mount-manager"
-Issues = "https://github.com/eric-holt/cloud-mount-manager/issues"
+Homepage = "https://github.com/eric-holt/mountlet"
+Issues = "https://github.com/eric-holt/mountlet/issues"
 
 [project.scripts]
-cloud-mount-manager = "cloud_mount_manager.cli:main"
+mountlet = "mountlet.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

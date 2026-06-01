@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import core
+from ..settings import ensure_default_config_files
 from .shared import (
     app_cache_dir,
     app_config_dir,
     app_config_file,
+    app_mounts_file,
     app_state_dir,
     default_config_path,
     ensure_app_directories,
@@ -46,6 +48,7 @@ def _fuse_available() -> bool:
 def _print_paths() -> None:
     print("App files:")
     print(f"  Settings: {app_config_file()}")
+    print(f"  Mount settings: {app_mounts_file()}")
     print(f"  State:    {app_state_dir()}")
     print(f"  Cache:    {app_cache_dir()}")
     print(f"  Mounts:   {core.BASE_MOUNT_DIR}")
@@ -55,6 +58,7 @@ def _print_paths() -> None:
 def check_readiness() -> Readiness:
     messages: list[str] = []
     ensure_app_directories()
+    ensure_default_config_files()
     core.ensure_base_mount_dir()
     Path(core.BASE_MOUNT_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -82,17 +86,17 @@ def ensure_ready_for_menu() -> bool:
     if readiness.ready:
         return True
 
-    print("Cloud Mount Manager needs a little setup first.")
+    print("Mountlet needs a little setup first.")
     print()
     for message in readiness.messages:
         print(f"- {message}")
     print()
     print("Run:")
-    print("  cloud-mount-manager setup")
+    print("  mountlet setup")
     if find_rclone():
         print()
         print("If you still need to connect cloud storage, run:")
-        print("  cloud-mount-manager setup --configure-rclone")
+        print("  mountlet setup --configure-rclone")
     return False
 
 
@@ -111,19 +115,20 @@ def _next_steps(rclone_bin: str | None, fuse_ok: bool, remotes: list[str], failu
         steps.append("Install FUSE: sudo apt install fuse3")
     if not remotes:
         if rclone_bin:
-            steps.append("Add cloud storage: cloud-mount-manager setup --configure-rclone")
+            steps.append("Add cloud storage: mountlet setup --configure-rclone")
         else:
-            steps.append("After installing rclone, add cloud storage: cloud-mount-manager setup --configure-rclone")
+            steps.append("After installing rclone, add cloud storage: mountlet setup --configure-rclone")
     if failures:
-        steps.append("Reconnect credentials: cloud-mount-manager reconnect --remote <name>")
+        steps.append("Reconnect credentials: mountlet reconnect --remote <name>")
     return steps
 
 
 def setup_command(args: argparse.Namespace) -> int:
-    print("Cloud Mount Manager setup")
+    print("Mountlet setup")
     print()
 
     dirs = ensure_app_directories()
+    ensure_default_config_files()
     core.ensure_base_mount_dir()
     mount_dir = Path(core.BASE_MOUNT_DIR)
     mount_dir.mkdir(parents=True, exist_ok=True)
@@ -134,10 +139,20 @@ def setup_command(args: argparse.Namespace) -> int:
     print(_status(mount_dir.exists(), f"Prepared mount folder: {mount_dir}"))
 
     rclone_bin = find_rclone()
-    print(_status(bool(rclone_bin), f"Found rclone: {rclone_bin}" if rclone_bin else "Install rclone. On Ubuntu: sudo apt install rclone"))
+    print(
+        _status(
+            bool(rclone_bin),
+            f"Found rclone: {rclone_bin}" if rclone_bin else "Install rclone. On Ubuntu: sudo apt install rclone",
+        )
+    )
 
     fuse_ok = _fuse_available()
-    print(_status(fuse_ok, "Found FUSE mount support." if fuse_ok else "Install FUSE. On Ubuntu: sudo apt install fuse3"))
+    print(
+        _status(
+            fuse_ok,
+            "Found FUSE mount support." if fuse_ok else "Install FUSE. On Ubuntu: sudo apt install fuse3",
+        )
+    )
 
     config_path = default_config_path()
     config_exists = config_path.exists()
@@ -177,7 +192,7 @@ def setup_command(args: argparse.Namespace) -> int:
     ready = bool(rclone_bin and fuse_ok and remotes and not failures)
     if ready:
         print("Ready. Open the menu with:")
-        print("  cloud-mount-manager")
+        print("  mountlet")
         return 0
 
     print("A few things still need attention before mounting.")
@@ -187,7 +202,7 @@ def setup_command(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Prepare Cloud Mount Manager for first use.")
+    parser = argparse.ArgumentParser(description="Prepare Mountlet for first use.")
     parser.add_argument(
         "--configure-rclone",
         action="store_true",

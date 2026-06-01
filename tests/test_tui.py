@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloud_mount_manager import tui
+from mountlet import tui
 
 
 class TuiTests(unittest.TestCase):

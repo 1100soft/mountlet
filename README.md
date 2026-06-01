@@ -1,12 +1,12 @@
-# Cloud Mount Manager
+# Mountlet
 
-Cloud Mount Manager is a terminal app for mounting and unmounting `rclone`
+Mountlet is a terminal app for mounting and unmounting `rclone`
 remotes from a simple menu. It uses your existing `rclone` configuration and
 does not store cloud credentials inside the application install directory.
 
 ## How It Works
 
-Cloud Mount Manager is a friendly control panel for two standard tools:
+Mountlet is a friendly control panel for two standard tools:
 
 - `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
   S3-compatible storage, and WebDAV.
@@ -33,7 +33,13 @@ sudo apt install rclone fuse3
 For isolated CLI use:
 
 ```bash
-pipx install cloud-mount-manager
+pipx install mountlet
+```
+
+For the desktop tray preview:
+
+```bash
+pipx install "mountlet[tray]"
 ```
 
 For a local checkout:
@@ -44,10 +50,10 @@ python -m pip install .
 
 ## Use
 
-Open Cloud Mount Manager:
+Open Mountlet:
 
 ```bash
-cloud-mount-manager
+mountlet
 ```
 
 The app checks whether your computer is ready before it opens the menu. If
@@ -57,68 +63,123 @@ empty screen.
 For a guided setup check:
 
 ```bash
-cloud-mount-manager setup
+mountlet setup
 ```
 
 If you have not added any cloud storage to `rclone` yet, let setup open
 `rclone`'s connection flow:
 
 ```bash
-cloud-mount-manager setup --configure-rclone
+mountlet setup --configure-rclone
 ```
 
 Normal use is:
 
 ```bash
-cloud-mount-manager
+mountlet
 ```
 
 Quitting the menu leaves mounted remotes connected. Use `u` in the menu to
 unmount everything.
+
+## Desktop Tray Preview
+
+The tray app is optional and uses PySide6. Start it with:
+
+```bash
+mountlet tray
+```
+
+If you installed the CLI without tray support, add PySide6 with:
+
+```bash
+pipx inject mountlet PySide6
+```
+
+The tray app uses the tray icon this way:
+
+- Hover shows a short mounted/unmounted summary.
+- Left-click shows each remote with mount, unmount, restart-mount, and open-folder actions.
+- Right-click shows app-level actions such as mount all, unmount all, update status, and quit.
+
+If your desktop session does not expose a system tray, use the terminal menu
+instead.
 
 ## Extra Commands
 
 These are useful for backup, troubleshooting, or moving to another computer:
 
 ```bash
-cloud-mount-manager path
-cloud-mount-manager verify
-cloud-mount-manager verify --auto-reconnect
-cloud-mount-manager reconnect --remote MyRemote
-cloud-mount-manager export ~/cloud-mount-backup
-cloud-mount-manager import --config ~/cloud-mount-backup/rclone.conf
+mountlet path
+mountlet verify
+mountlet verify --auto-reconnect
+mountlet reconnect --remote MyRemote
+mountlet export ~/mountlet-backup
+mountlet import --config ~/mountlet-backup/rclone.conf
 ```
 
 ## File Locations
 
-Cloud Mount Manager keeps application data in user-specific locations and leaves
+Mountlet keeps application data in user-specific locations and leaves
 `rclone` credentials in the standard `rclone` location.
 
 On Linux:
 
 - `~/.config/rclone/rclone.conf`: rclone remotes and credentials.
-- `~/.config/cloud-mount-manager/config.toml`: Cloud Mount Manager preferences.
-- `~/.local/state/cloud-mount-manager/`: runtime state.
-- `~/.cache/cloud-mount-manager/`: cache files.
+- `~/.config/mountlet/config.toml`: Mountlet preferences.
+- `~/.config/mountlet/mounts.toml`: per-remote mount preferences.
+- `~/.local/state/mountlet/`: runtime state.
+- `~/.cache/mountlet/`: cache files.
 - `~/cloud_mounts/`: default mount root.
 
 Print the paths for your system:
 
 ```bash
-cloud-mount-manager path
+mountlet path
 ```
 
-Create the Cloud Mount Manager user folders:
+Create the Mountlet user folders:
 
 ```bash
-cloud-mount-manager path --ensure
+mountlet path --ensure
 ```
+
+That command also creates starter `config.toml` and `mounts.toml` files if they
+do not exist yet.
 
 Override the mount root for a shell session:
 
 ```bash
-export CLOUD_MOUNT_BASE=/path/to/mounts
+export MOUNTLET_MOUNT_BASE=/path/to/mounts
 ```
+
+### App Settings
+
+Use `config.toml` for app-wide behavior:
+
+```toml
+[app]
+mount_base = ""
+auto_mount = false
+auto_mount_delay = 2.0
+
+[tray]
+open_folder_behavior = "current_desktop"
+focus_file_manager = true
+```
+
+Use `mounts.toml` for per-remote behavior. Remote names must match the names in
+`rclone`.
+
+```toml
+[remotes."Work__Drive"]
+auto_mount = true
+mount_path = "~/cloud_mounts/drive/Work"
+mount_flags = "--read-only --dir-cache-time 10m"
+```
+
+Keep cloud account details in `rclone.conf`; use these files only for Mountlet
+behavior.
 
 ## Credentials
 
@@ -132,8 +193,8 @@ bundles as sensitive files.
 
 ## Status
 
-The current public target is Linux CLI use. The planned commercial product layer
-is a desktop tray app.
+The current public target is Linux CLI use. The desktop tray is an early preview
+for the next product layer.
 
-See the [changelog](https://github.com/eric-holt/cloud-mount-manager/blob/main/CHANGELOG.md)
+See the [changelog](https://github.com/eric-holt/mountlet/blob/main/CHANGELOG.md)
 for version history.

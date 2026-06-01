@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-APP_NAME = "cloud-mount-manager"
+APP_NAME = "mountlet"
+LEGACY_APP_NAMES = ("cloud-mount-manager",)
 
 
 def default_config_path() -> Path:
@@ -26,16 +27,16 @@ def default_config_path() -> Path:
     return Path.home() / ".config" / "rclone" / "rclone.conf"
 
 
-def _platform_user_dir(kind: str) -> Path:
+def _platform_user_dir_for(kind: str, app_name: str) -> Path:
     system = platform.system()
     if system == "Windows":
         env_name = "APPDATA" if kind == "config" else "LOCALAPPDATA"
         fallback = Path.home() / "AppData" / ("Roaming" if kind == "config" else "Local")
-        return Path(os.environ.get(env_name, fallback)) / APP_NAME
+        return Path(os.environ.get(env_name, fallback)) / app_name
     if system == "Darwin":
         if kind == "cache":
-            return Path.home() / "Library" / "Caches" / APP_NAME
-        return Path.home() / "Library" / "Application Support" / APP_NAME
+            return Path.home() / "Library" / "Caches" / app_name
+        return Path.home() / "Library" / "Application Support" / app_name
 
     env_names = {
         "config": "XDG_CONFIG_HOME",
@@ -48,7 +49,11 @@ def _platform_user_dir(kind: str) -> Path:
         "cache": Path.home() / ".cache",
     }
     base = Path(os.environ.get(env_names[kind], defaults[kind])).expanduser()
-    return base / APP_NAME
+    return base / app_name
+
+
+def _platform_user_dir(kind: str) -> Path:
+    return _platform_user_dir_for(kind, APP_NAME)
 
 
 def app_config_dir() -> Path:
@@ -65,6 +70,14 @@ def app_cache_dir() -> Path:
 
 def app_config_file() -> Path:
     return app_config_dir() / "config.toml"
+
+
+def app_mounts_file() -> Path:
+    return app_config_dir() / "mounts.toml"
+
+
+def legacy_app_config_dirs() -> List[Path]:
+    return [_platform_user_dir_for("config", name) for name in LEGACY_APP_NAMES]
 
 
 def ensure_app_directories() -> Dict[str, Path]:
@@ -212,7 +225,11 @@ def verify_remotes(remotes: List[str]) -> Dict[str, Tuple[bool, str]]:
         )
         detail = result.stderr.strip() or result.stdout.strip()
         success = result.returncode == 0
-        summary = detail.splitlines()[0] if detail else ("credentials accepted" if success else f"exit code {result.returncode}")
+        summary = (
+            detail.splitlines()[0]
+            if detail
+            else ("credentials accepted" if success else f"exit code {result.returncode}")
+        )
         if success:
             print(f"[✓] {remote}: {summary}")
         else:
@@ -250,11 +267,14 @@ def reconnect_remotes(remotes: List[str], auto_confirm: bool) -> None:
 
 __all__ = [
     "APP_NAME",
+    "LEGACY_APP_NAMES",
     "default_config_path",
     "app_config_dir",
     "app_state_dir",
     "app_cache_dir",
     "app_config_file",
+    "app_mounts_file",
+    "legacy_app_config_dirs",
     "ensure_app_directories",
     "ensure_dir",
     "copy_file",
