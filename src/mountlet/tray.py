@@ -32,17 +32,16 @@ class TrayDependencyError(RuntimeError):
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+        from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
         from PySide6.QtGui import QAction, QCursor, QDesktopServices, QIcon
         from PySide6.QtWidgets import (
             QApplication,
+            QCheckBox,
             QFrame,
             QGridLayout,
-            QHBoxLayout,
             QLabel,
             QMainWindow,
             QMenu,
-            QProgressBar,
             QPushButton,
             QScrollArea,
             QSizePolicy,
@@ -62,23 +61,23 @@ def _load_qt_bindings() -> SimpleNamespace:
     return SimpleNamespace(
         QAction=QAction,
         QApplication=QApplication,
+        QCheckBox=QCheckBox,
         QCursor=QCursor,
         QDesktopServices=QDesktopServices,
         QFrame=QFrame,
         QGridLayout=QGridLayout,
-        QHBoxLayout=QHBoxLayout,
         QIcon=QIcon,
         QLabel=QLabel,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QObject=QObject,
-        QProgressBar=QProgressBar,
         QPushButton=QPushButton,
         QScrollArea=QScrollArea,
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
         QSystemTrayIcon=QSystemTrayIcon,
         QTimer=QTimer,
+        Qt=Qt,
         QUrl=QUrl,
         Signal=Signal,
         QVBoxLayout=QVBoxLayout,
@@ -592,7 +591,7 @@ class MountletWindow:
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self.window = self.qt.QMainWindow()
         self.window.setWindowTitle("Mountlet")
-        self.window.resize(760, 420)
+        self.window.resize(720, 260)
         self._build_app_menu()
 
     def _make_bridge(self) -> Any:
@@ -606,15 +605,18 @@ class MountletWindow:
         return Bridge()
 
     def _build_app_menu(self) -> None:
-        menu = self.window.menuBar().addMenu("Mountlet")
-        self.tray_app._add_action(menu, "Mount all", lambda: self._mount_all())
-        self.tray_app._add_action(menu, "Unmount all", lambda: self._unmount_all())
-        self.tray_app._add_action(menu, "Update status", self.refresh)
-        menu.addSeparator()
-        self.tray_app._add_action(menu, "Open app config", lambda: self._open_config(app_config_file()))
-        self.tray_app._add_action(menu, "Open mount config", lambda: self._open_config(app_mounts_file()))
-        menu.addSeparator()
-        self.tray_app._add_action(menu, "Quit", self.tray_app.app.quit)
+        app_menu = self.window.menuBar().addMenu("App")
+        self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        app_menu.addSeparator()
+        self.tray_app._add_action(app_menu, "Quit", self.tray_app.app.quit)
+
+        mount_menu = self.window.menuBar().addMenu("Mount")
+        self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
+        self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
+
+        config_menu = self.window.menuBar().addMenu("Config")
+        self.tray_app._add_action(config_menu, "Open app config", lambda: self._open_config(app_config_file()))
+        self.tray_app._add_action(config_menu, "Open mount config", lambda: self._open_config(app_mounts_file()))
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -628,24 +630,18 @@ class MountletWindow:
     def refresh(self) -> None:
         remotes = core.load_remotes()
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
-        mounted_names = [remote.display_name for remote in remotes if mounted_by_name[remote.name]]
 
         root = self.qt.QWidget()
         outer = self.qt.QVBoxLayout(root)
-
-        header = self.qt.QHBoxLayout()
-        title = self.qt.QLabel("Mountlet")
-        title.setObjectName("mountletTitle")
-        summary = self.qt.QLabel(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
-        summary.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
-        header.addWidget(title)
-        header.addWidget(summary)
-        outer.addLayout(header)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(6)
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
@@ -657,6 +653,7 @@ class MountletWindow:
         outer.addWidget(scroll)
 
         self.window.setCentralWidget(root)
+        self._fit_to_remote_count(len(remotes))
 
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._usage_cache.get(remote.name)
@@ -667,48 +664,71 @@ class MountletWindow:
 
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+        frame.mouseReleaseEvent = lambda event, selected=remote: self._open_folder(selected)
         layout = self.qt.QGridLayout(frame)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(2)
 
         title = self.qt.QLabel(remote.display_name)
-        status = self.qt.QLabel("Mounted" if mounted else "Unmounted")
+        title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
         path = self.qt.QLabel(remote.mount_path)
+        path.setStyleSheet("color: palette(mid);")
         path.setTextInteractionFlags(path.textInteractionFlags())
 
         usage_label = self.qt.QLabel(usage.text)
-        usage_bar = self.qt.QProgressBar()
-        usage_bar.setTextVisible(True)
-        if usage.percent is None:
-            if checking_usage:
-                usage_bar.setRange(0, 0)
-                usage_bar.setFormat("Checking...")
-            else:
-                usage_bar.setRange(0, 100)
-                usage_bar.setValue(0)
-                usage_bar.setFormat("Usage unavailable" if usage.text == "?" else usage.text)
-        else:
-            usage_bar.setRange(0, 100)
-            usage_bar.setValue(usage.percent)
-            usage_bar.setFormat(f"{usage.percent}%")
+        usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
 
-        toggle_label = "Working..." if action_pending else ("Unmount" if mounted else "Mount")
         toggle_action = core.unmount_remote if mounted else core.mount_remote
-        toggle_button = self._button(
-            toggle_label,
-            lambda: self._run_remote_action(remote, toggle_action),
-            enabled=not action_pending,
-        )
-        open_button = self._button("Open", lambda: self._open_folder(remote), enabled=mounted and not action_pending)
+        toggle = self.qt.QCheckBox("Mounted" if mounted else "Mount")
+        toggle.setChecked(mounted)
+        toggle.setEnabled(not action_pending)
+        toggle.stateChanged.connect(lambda state, selected=remote, action=toggle_action: self._run_remote_action(selected, action))
+        working = self.qt.QLabel("Working..." if action_pending else "")
         config_button = self._button("Config", lambda: self._open_config(app_mounts_file()), enabled=not action_pending)
 
-        layout.addWidget(title, 0, 0)
-        layout.addWidget(status, 0, 1)
-        layout.addWidget(usage_label, 0, 2)
-        layout.addWidget(path, 1, 0, 1, 3)
-        layout.addWidget(usage_bar, 2, 0, 1, 3)
-        layout.addWidget(toggle_button, 0, 3)
-        layout.addWidget(open_button, 1, 3)
-        layout.addWidget(config_button, 2, 3)
+        layout.addWidget(toggle, 0, 0, 2, 1)
+        layout.addWidget(title, 0, 1)
+        layout.addWidget(path, 1, 1)
+        layout.addWidget(usage_indicator, 0, 2)
+        layout.addWidget(usage_label, 1, 2)
+        layout.addWidget(working, 0, 3)
+        layout.addWidget(config_button, 0, 4, 2, 1)
         return frame
+
+    def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
+        indicator = self.qt.QFrame()
+        indicator.setFixedSize(116, 8)
+        if usage.percent is None:
+            color = "#9ca3af" if checking_usage else "#6b7280"
+            indicator.setStyleSheet(f"background: {color}; border-radius: 4px;")
+            return indicator
+
+        pct = max(0, min(usage.percent, 100))
+        if pct >= 90:
+            fill = "#dc2626"
+        elif pct >= 75:
+            fill = "#d97706"
+        else:
+            fill = "#2563eb"
+        stop = pct / 100
+        indicator.setStyleSheet(
+            "border-radius: 4px;"
+            "background: qlineargradient("
+            "x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 {fill}, stop:{stop:.3f} {fill}, "
+            f"stop:{stop:.3f} #d1d5db, stop:1 #d1d5db"
+            ");"
+        )
+        return indicator
+
+    def _fit_to_remote_count(self, remote_count: int) -> None:
+        screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+        available_height = screen.availableGeometry().height() if screen else 720
+        target_height = 92 + max(remote_count, 1) * 58
+        capped_height = min(max(target_height, 150), max(220, available_height - 96))
+        self.window.resize(self.window.width(), capped_height)
 
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)

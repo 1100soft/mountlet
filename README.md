@@ -99,8 +99,8 @@ pipx inject mountlet PySide6
 The tray app uses the tray icon this way:
 
 - Hover shows a short mounted/unmounted summary.
-- Left-click opens the Mountlet window with per-remote usage, mount/unmount,
-  open-folder, and config actions.
+- Left-click opens the Mountlet window with compact remote strips, storage
+  usage, mount-state toggles, click-to-open behavior, and config actions.
 - Right-click shows app-level actions such as mount all, unmount all, update
   status, config, and quit.
 
