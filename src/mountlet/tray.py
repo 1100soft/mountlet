@@ -71,6 +71,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QLabel=QLabel,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
+        QObject=QObject,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
         QScrollArea=QScrollArea,
@@ -582,10 +583,27 @@ class MountletWindow:
     def __init__(self, tray_app: "CloudMountTray") -> None:
         self.tray_app = tray_app
         self.qt = tray_app.qt
+        self._usage_cache: dict[str, core.StorageUsage] = {}
+        self._usage_pending: set[str] = set()
+        self._action_pending: set[str] = set()
+        self._bridge = self._make_bridge()
+        self._bridge.storage_ready.connect(self._handle_storage_ready)
+        self._bridge.action_finished.connect(self._handle_action_finished)
+        self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self.window = self.qt.QMainWindow()
         self.window.setWindowTitle("Mountlet")
         self.window.resize(760, 420)
         self._build_app_menu()
+
+    def _make_bridge(self) -> Any:
+        qt = self.qt
+
+        class Bridge(qt.QObject):
+            storage_ready = qt.Signal(str, object)
+            action_finished = qt.Signal(str, bool, str)
+            bulk_action_finished = qt.Signal(str, object, object)
+
+        return Bridge()
 
     def _build_app_menu(self) -> None:
         menu = self.window.menuBar().addMenu("Mountlet")
@@ -609,7 +627,8 @@ class MountletWindow:
 
     def refresh(self) -> None:
         remotes = core.load_remotes()
-        mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
+        mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
+        mounted_names = [remote.display_name for remote in remotes if mounted_by_name[remote.name]]
 
         root = self.qt.QWidget()
         outer = self.qt.QVBoxLayout(root)
@@ -629,7 +648,8 @@ class MountletWindow:
         rows = self.qt.QVBoxLayout(container)
         if remotes:
             for remote in remotes:
-                rows.addWidget(self._remote_row(remote))
+                rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
+                self._schedule_storage_load(remote)
             rows.addStretch(1)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
@@ -638,9 +658,12 @@ class MountletWindow:
 
         self.window.setCentralWidget(root)
 
-    def _remote_row(self, remote: core.RemoteInfo) -> Any:
-        mounted = core.is_mounted(remote)
-        usage = core.get_storage_usage_details(remote)
+    def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
+        usage = self._usage_cache.get(remote.name)
+        checking_usage = usage is None
+        if usage is None:
+            usage = core.StorageUsage("Checking...")
+        action_pending = remote.name in self._action_pending
 
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
@@ -655,19 +678,27 @@ class MountletWindow:
         usage_bar = self.qt.QProgressBar()
         usage_bar.setTextVisible(True)
         if usage.percent is None:
-            usage_bar.setRange(0, 100)
-            usage_bar.setValue(0)
-            usage_bar.setFormat("Usage unavailable" if usage.text == "?" else usage.text)
+            if checking_usage:
+                usage_bar.setRange(0, 0)
+                usage_bar.setFormat("Checking...")
+            else:
+                usage_bar.setRange(0, 100)
+                usage_bar.setValue(0)
+                usage_bar.setFormat("Usage unavailable" if usage.text == "?" else usage.text)
         else:
             usage_bar.setRange(0, 100)
             usage_bar.setValue(usage.percent)
             usage_bar.setFormat(f"{usage.percent}%")
 
-        toggle_label = "Unmount" if mounted else "Mount"
+        toggle_label = "Working..." if action_pending else ("Unmount" if mounted else "Mount")
         toggle_action = core.unmount_remote if mounted else core.mount_remote
-        toggle_button = self._button(toggle_label, lambda: self._run_remote_action(remote, toggle_action))
-        open_button = self._button("Open", lambda: self._open_folder(remote), enabled=mounted)
-        config_button = self._button("Config", lambda: self._open_config(app_mounts_file()))
+        toggle_button = self._button(
+            toggle_label,
+            lambda: self._run_remote_action(remote, toggle_action),
+            enabled=not action_pending,
+        )
+        open_button = self._button("Open", lambda: self._open_folder(remote), enabled=mounted and not action_pending)
+        config_button = self._button("Config", lambda: self._open_config(app_mounts_file()), enabled=not action_pending)
 
         layout.addWidget(title, 0, 0)
         layout.addWidget(status, 0, 1)
@@ -686,17 +717,56 @@ class MountletWindow:
         return button
 
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
-        success, message = action(remote)
+        if remote.name in self._action_pending:
+            return
+        self._action_pending.add(remote.name)
+        self.refresh()
+
+        def worker() -> None:
+            success, message = action(remote)
+            self._bridge.action_finished.emit(remote.name, success, message)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_action_finished(self, remote_name: str, success: bool, message: str) -> None:
+        self._action_pending.discard(remote_name)
+        self._usage_cache.pop(remote_name, None)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         self.tray_app.rebuild_menus()
         self.refresh()
 
     def _mount_all(self) -> None:
-        self.tray_app._mount_all(core.load_remotes())
-        self.refresh()
+        self._run_bulk_action("Mount all", core.mount_all)
 
     def _unmount_all(self) -> None:
-        self.tray_app._unmount_all(core.load_remotes())
+        self._run_bulk_action("Unmount all", core.unmount_all)
+
+    def _run_bulk_action(self, title: str, action: Any) -> None:
+        remotes = core.load_remotes()
+        if not remotes:
+            return
+        for remote in remotes:
+            self._action_pending.add(remote.name)
+        self.refresh()
+
+        def worker() -> None:
+            completed, failures = action(remotes)
+            self._bridge.bulk_action_finished.emit(title, completed, failures)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_bulk_action_finished(self, title: str, completed: object, failures: object) -> None:
+        self._action_pending.clear()
+        self._usage_cache.clear()
+        if isinstance(completed, list) and isinstance(failures, list):
+            if failures:
+                self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
+            elif completed:
+                verb = "Unmounted" if title == "Unmount all" else "Mounted"
+                self.tray_app._notify(title, f"{verb}: " + ", ".join(completed), success=True)
+            else:
+                self.tray_app._notify(title, "Nothing to do.", success=True)
+        self.tray_app.rebuild_menus()
         self.refresh()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
@@ -706,6 +776,23 @@ class MountletWindow:
         ensure_default_config_files()
         if not self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
             self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
+
+    def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
+        if remote.name in self._usage_cache or remote.name in self._usage_pending:
+            return
+        self._usage_pending.add(remote.name)
+
+        def worker() -> None:
+            usage = core.get_storage_usage_details(remote)
+            self._bridge.storage_ready.emit(remote.name, usage)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_storage_ready(self, remote_name: str, usage: core.StorageUsage) -> None:
+        self._usage_pending.discard(remote_name)
+        self._usage_cache[remote_name] = usage
+        if self.is_visible():
+            self.refresh()
 
 
 class CloudMountTray:
@@ -895,4 +982,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-        QObject=QObject,
