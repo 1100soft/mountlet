@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -20,6 +21,7 @@ from .config_tools.shared import ensure_app_directories
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
 _dolphin_tab_target_cache: tuple[str, str] | None = None
+_CARDINAL_RE = re.compile(r"=\s*(\d+)")
 
 
 class TrayDependencyError(RuntimeError):
@@ -268,6 +270,122 @@ def _ordered_dolphin_dbus_windows(qdbus: str) -> list[tuple[str, str]]:
     return [*active, *inactive]
 
 
+def _parse_xprop_cardinal(output: str) -> int | None:
+    match = _CARDINAL_RE.search(output)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _xprop_cardinal(args: list[str]) -> int | None:
+    xprop = shutil.which("xprop")
+    if not xprop:
+        return None
+    try:
+        result = subprocess.run(
+            [xprop, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_xprop_cardinal(result.stdout)
+
+
+def _x11_current_desktop() -> int | None:
+    if platform.system() != "Linux":
+        return None
+    if not os.environ.get("DISPLAY"):
+        return None
+    return _xprop_cardinal(["-root", "_NET_CURRENT_DESKTOP"])
+
+
+def _x11_window_desktop(window_id: int) -> int | None:
+    return _xprop_cardinal(["-id", str(window_id), "_NET_WM_DESKTOP"])
+
+
+def _dolphin_window_id_with_qtdbus(
+    dbus: SimpleNamespace,
+    service: str,
+    object_path: str,
+) -> int | None:
+    interface = dbus.QDBusInterface(service, object_path, "org.kde.KMainWindow", dbus.bus)
+    if not interface.isValid():
+        return None
+    reply = interface.call("winId")
+    if reply.errorName() or not reply.arguments():
+        return None
+    value = reply.arguments()[0]
+    if not isinstance(value, int):
+        return None
+    return value
+
+
+def _dolphin_window_id(
+    dbus: SimpleNamespace | None,
+    qdbus: str | None,
+    service: str,
+    object_path: str,
+) -> int | None:
+    if dbus:
+        window_id = _dolphin_window_id_with_qtdbus(dbus, service, object_path)
+        if window_id is not None:
+            return window_id
+    if not qdbus:
+        return None
+    try:
+        result = subprocess.run(
+            [qdbus, service, object_path, "org.kde.KMainWindow.winId"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _dolphin_window_is_on_desktop(
+    dbus: SimpleNamespace | None,
+    qdbus: str | None,
+    service: str,
+    object_path: str,
+    desktop: int,
+) -> bool:
+    window_id = _dolphin_window_id(dbus, qdbus, service, object_path)
+    if window_id is None:
+        return False
+    return _x11_window_desktop(window_id) == desktop
+
+
+def _dolphin_current_desktop_targets(
+    dbus: SimpleNamespace | None,
+    qdbus: str | None,
+    tried: set[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    desktop = _x11_current_desktop()
+    if desktop is None:
+        return []
+
+    targets: list[tuple[str, str]] = []
+    for service, object_path in _dolphin_fast_tab_targets(dbus):
+        if (service, object_path) in tried:
+            continue
+        if _dolphin_window_is_on_desktop(dbus, qdbus, service, object_path, desktop):
+            targets.append((service, object_path))
+    return targets
+
+
 def _open_folder_in_dolphin_window_with_qtdbus(
     dbus: SimpleNamespace,
     service: str,
@@ -348,9 +466,26 @@ def _open_folder_in_dolphin_tab(path: str) -> bool:
     if _dolphin_tab_target_cache:
         service, object_path = _dolphin_tab_target_cache
         tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
+        desktop = _x11_current_desktop()
+        cache_is_usable = desktop is None or _dolphin_window_is_on_desktop(
+            dbus,
+            qdbus,
+            service,
+            object_path,
+            desktop,
+        )
+        if cache_is_usable and _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
             return True
         _dolphin_tab_target_cache = None
+
+    for service, object_path in _dolphin_current_desktop_targets(dbus, qdbus, tried):
+        tried.add((service, object_path))
+        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
+            _dolphin_tab_target_cache = (service, object_path)
+            return True
+
+    if _x11_current_desktop() is not None:
+        return False
 
     for service, object_path in _dolphin_fast_tab_targets(dbus):
         if (service, object_path) in tried:

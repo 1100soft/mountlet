@@ -180,10 +180,11 @@ class TrayTests(unittest.TestCase):
         completed = SimpleNamespace(returncode=0)
         windows = [("org.kde.dolphin-1234", "/dolphin/Dolphin_1")]
 
-        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
-                with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
-                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=None):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
+                    with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                        self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         self.assertEqual(run.call_count, 2)
         self.assertEqual(
@@ -199,11 +200,12 @@ class TrayTests(unittest.TestCase):
         )
 
     def test_open_folder_in_dolphin_tab_falls_back_when_no_window_is_available(self):
-        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=[]):
-                with mock.patch.object(tray, "_dolphin_slow_tab_targets", return_value=[]):
-                    with mock.patch.object(tray.subprocess, "run") as run:
-                        self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=None):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=[]):
+                    with mock.patch.object(tray, "_dolphin_slow_tab_targets", return_value=[]):
+                        with mock.patch.object(tray.subprocess, "run") as run:
+                            self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         run.assert_not_called()
 
@@ -217,10 +219,11 @@ class TrayTests(unittest.TestCase):
             ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
             ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"),
         ]
-        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
-                with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
-                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=None):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
+                    with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
+                        self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         self.assertEqual(run.call_count, 3)
 
@@ -228,10 +231,11 @@ class TrayTests(unittest.TestCase):
         completed = SimpleNamespace(returncode=0)
         tray._dolphin_tab_target_cache = ("org.kde.dolphin-1234", "/dolphin/Dolphin_1")
 
-        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_dolphin_fast_tab_targets") as fast_targets:
-                with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
-                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=None):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_fast_tab_targets") as fast_targets:
+                    with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                        self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         fast_targets.assert_not_called()
         self.assertEqual(run.call_count, 2)
@@ -245,10 +249,11 @@ class TrayTests(unittest.TestCase):
         tray._dolphin_tab_target_cache = ("org.kde.dolphin-1234", "/dolphin/Dolphin_1")
         windows = [("org.kde.dolphin-5678", "/dolphin/Dolphin_1")]
 
-        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
-                with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
-                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=None):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
+                    with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
+                        self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         self.assertEqual(run.call_count, 3)
         self.assertEqual(tray._dolphin_tab_target_cache, ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"))
@@ -275,6 +280,82 @@ class TrayTests(unittest.TestCase):
                     ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
                 ],
             )
+
+    def test_parse_xprop_cardinal_reads_desktop_number(self):
+        self.assertEqual(tray._parse_xprop_cardinal("_NET_CURRENT_DESKTOP(CARDINAL) = 3"), 3)
+        self.assertIsNone(tray._parse_xprop_cardinal("_NET_CURRENT_DESKTOP:  not found."))
+
+    def test_current_desktop_targets_filter_dolphin_windows_by_x11_desktop(self):
+        windows = [
+            ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
+            ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"),
+        ]
+
+        def is_on_desktop(
+            dbus: object,
+            qdbus: object,
+            service: str,
+            object_path: str,
+            desktop: int,
+        ) -> bool:
+            return service == "org.kde.dolphin-5678" and desktop == 3
+
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=3):
+            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
+                with mock.patch.object(tray, "_dolphin_window_is_on_desktop", side_effect=is_on_desktop):
+                    self.assertEqual(
+                        tray._dolphin_current_desktop_targets(None, "/usr/bin/qdbus6", set()),
+                        [("org.kde.dolphin-5678", "/dolphin/Dolphin_1")],
+                    )
+
+    def test_open_folder_in_dolphin_tab_uses_current_desktop_window(self):
+        windows = [("org.kde.dolphin-5678", "/dolphin/Dolphin_1")]
+
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=3):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_current_desktop_targets", return_value=windows):
+                    with mock.patch.object(tray, "_open_folder_in_dolphin_window", return_value=True) as open_window:
+                        self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        open_window.assert_called_once()
+        self.assertEqual(tray._dolphin_tab_target_cache, ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"))
+
+    def test_open_folder_in_dolphin_tab_ignores_cached_window_from_other_desktop(self):
+        tray._dolphin_tab_target_cache = ("org.kde.dolphin-1234", "/dolphin/Dolphin_1")
+        windows = [("org.kde.dolphin-5678", "/dolphin/Dolphin_1")]
+
+        def is_on_desktop(
+            dbus: object,
+            qdbus: object,
+            service: str,
+            object_path: str,
+            desktop: int,
+        ) -> bool:
+            return service == "org.kde.dolphin-5678"
+
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=3):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_window_is_on_desktop", side_effect=is_on_desktop):
+                    with mock.patch.object(tray, "_dolphin_current_desktop_targets", return_value=windows):
+                        with mock.patch.object(
+                            tray,
+                            "_open_folder_in_dolphin_window",
+                            return_value=True,
+                        ) as open_window:
+                            self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        open_window.assert_called_once()
+        self.assertEqual(open_window.call_args.args[2], "org.kde.dolphin-5678")
+        self.assertEqual(tray._dolphin_tab_target_cache, ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"))
+
+    def test_open_folder_in_dolphin_tab_returns_false_when_current_desktop_has_no_dolphin_window(self):
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=3):
+            with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+                with mock.patch.object(tray, "_dolphin_current_desktop_targets", return_value=[]):
+                    with mock.patch.object(tray, "_dolphin_fast_tab_targets") as fast_targets:
+                        self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        fast_targets.assert_not_called()
 
     def test_dolphin_dbus_services_can_use_qtdbus_without_qdbus_subprocess(self):
         reply = mock.Mock()
