@@ -6,7 +6,7 @@
 - Added an optional PySide6 desktop tray preview with mount, unmount, restart-mount, and open-folder actions.
 - Split tray interactions between hover status, a left-click Mountlet window, and right-click app actions.
 - Added compact remote strips with visual and numerical storage usage, mount toggles, and click-to-open behavior.
-- Added a GUI settings window for app-level and per-remote Mountlet config fields.
+- Added separate GUI settings dialogs for app-level and per-remote Mountlet config fields, with raw file access for technical users.
 - Added app-level and per-remote Mountlet config files.
 - Open-folder actions can use current-desktop Dolphin windows on X11 when available, with fallback open strategies elsewhere.
 

@@ -102,7 +102,7 @@ The tray app uses the tray icon this way:
 - Left-click opens the Mountlet window with compact remote strips, storage
   usage, mount-state toggles, click-to-open behavior, and config actions.
 - Right-click shows app-level actions such as mount all, unmount all, update
-  status, config, and quit.
+  status, app settings, raw config files, and quit.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.
@@ -157,9 +157,13 @@ export MOUNTLET_MOUNT_BASE=/path/to/mounts
 
 ### App Settings
 
-In the tray app, use `Config` > `Settings` to edit app-wide and per-remote
-behavior. The settings window shows the available fields with text boxes and
-checkboxes, then writes `config.toml` and `mounts.toml` for you.
+In the tray app, use `Config` > `App settings` to edit app-wide behavior. Use
+the `Config` button on a remote strip to edit only that mount. The settings
+windows show the available fields with text boxes and checkboxes, then write
+`config.toml` and `mounts.toml` for you.
+
+Technical users can still open the raw text files from the app-level config
+menu.
 
 Keep cloud account details in `rclone.conf`; Mountlet settings only control
 local app and mount behavior.

@@ -18,7 +18,7 @@ from typing import Any
 
 from . import core
 from .config_tools import setup_wizard
-from .config_tools.shared import ensure_app_directories
+from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .settings import (
     AppSettings,
     MountSettings,
@@ -595,115 +595,13 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
 
-class ConfigDialog:
+class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
         self.dialog = qt.QDialog(parent)
-        self.dialog.setWindowTitle("Mountlet config")
-        self.dialog.resize(640, 520)
-        self.app_fields: dict[str, Any] = {}
-        self.remote_fields: dict[str, dict[str, Any]] = {}
-        self._build()
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
-
-    def _build(self) -> None:
-        ensure_default_config_files()
-        app_settings = load_app_settings()
-        remote_settings = load_mount_settings()
-        remotes = core.load_remotes()
-        remote_names = sorted({remote.name for remote in remotes} | set(remote_settings))
-
-        root = self.qt.QVBoxLayout(self.dialog)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
-
-        scroll = self.qt.QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = self.qt.QWidget()
-        layout = self.qt.QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        layout.addWidget(self._section_label("App"))
-        layout.addWidget(self._app_section(app_settings))
-        layout.addWidget(self._section_label("Mounts"))
-        if remote_names:
-            for remote_name in remote_names:
-                layout.addWidget(self._remote_section(remote_name, remote_settings.get(remote_name), app_settings))
-        else:
-            layout.addWidget(self.qt.QLabel("No rclone remotes found"))
-        layout.addStretch(1)
-
-        scroll.setWidget(content)
-        root.addWidget(scroll)
-
-        buttons = self.qt.QDialogButtonBox(
-            self.qt.QDialogButtonBox.StandardButton.Save | self.qt.QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.dialog.reject)
-        root.addWidget(buttons)
-
-    def _section_label(self, text: str) -> Any:
-        label = self.qt.QLabel(text)
-        label.setObjectName("configSectionTitle")
-        return label
-
-    def _app_section(self, app_settings: AppSettings) -> Any:
-        frame = self.qt.QFrame()
-        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
-        form = self.qt.QFormLayout(frame)
-
-        self.app_fields = {
-            "mount_base": self._line(app_settings.mount_base or ""),
-            "auto_mount": self._check(app_settings.auto_mount),
-            "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
-            "open_folder_behavior": self._line(app_settings.open_folder_behavior),
-            "focus_file_manager": self._check(app_settings.focus_file_manager),
-        }
-        form.addRow("Mount base", self.app_fields["mount_base"])
-        form.addRow("Auto-mount by default", self.app_fields["auto_mount"])
-        form.addRow("Auto-mount delay", self.app_fields["auto_mount_delay"])
-        form.addRow("Open folder behavior", self.app_fields["open_folder_behavior"])
-        form.addRow("Focus file manager", self.app_fields["focus_file_manager"])
-        return frame
-
-    def _remote_section(
-        self,
-        remote_name: str,
-        mount_settings: MountSettings | None,
-        app_settings: AppSettings,
-    ) -> Any:
-        frame = self.qt.QFrame()
-        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
-        layout = self.qt.QVBoxLayout(frame)
-        layout.setContentsMargins(10, 8, 10, 8)
-
-        title = self.qt.QLabel(remote_name)
-        form = self.qt.QFormLayout()
-        enabled = mount_settings.enabled if mount_settings else True
-        auto_mount = (
-            mount_settings.auto_mount
-            if mount_settings and mount_settings.auto_mount is not None
-            else app_settings.auto_mount
-        )
-        fields = {
-            "enabled": self._check(enabled),
-            "auto_mount": self._check(bool(auto_mount)),
-            "mount_path": self._line(mount_settings.mount_path if mount_settings and mount_settings.mount_path else ""),
-            "mount_flags": self._line(" ".join(mount_settings.mount_flags) if mount_settings else ""),
-        }
-        self.remote_fields[remote_name] = fields
-
-        form.addRow("Enabled", fields["enabled"])
-        form.addRow("Auto-mount", fields["auto_mount"])
-        form.addRow("Mount path", fields["mount_path"])
-        form.addRow("Mount flags", fields["mount_flags"])
-        layout.addWidget(title)
-        layout.addLayout(form)
-        return frame
 
     def _line(self, text: str) -> Any:
         field = self.qt.QLineEdit()
@@ -724,32 +622,121 @@ class ConfigDialog:
         except ValueError:
             return text.split()
 
+    def _buttons(self) -> Any:
+        buttons = self.qt.QDialogButtonBox(
+            self.qt.QDialogButtonBox.StandardButton.Save | self.qt.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.dialog.reject)
+        return buttons
+
+    def _save(self) -> None:
+        raise NotImplementedError
+
+
+class AppConfigDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("App settings")
+        self.dialog.resize(520, 260)
+        self.fields: dict[str, Any] = {}
+        self._build()
+
+    def _build(self) -> None:
+        ensure_default_config_files()
+        app_settings = load_app_settings()
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
+
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        self.fields = {
+            "mount_base": self._line(app_settings.mount_base or core.DEFAULT_HOME_MOUNT),
+            "auto_mount": self._check(app_settings.auto_mount),
+            "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
+            "open_folder_behavior": self._line(app_settings.open_folder_behavior),
+            "focus_file_manager": self._check(app_settings.focus_file_manager),
+        }
+        form.addRow("Mount base", self.fields["mount_base"])
+        form.addRow("Auto-mount by default", self.fields["auto_mount"])
+        form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
+        form.addRow("Open folder behavior", self.fields["open_folder_behavior"])
+        form.addRow("Focus file manager", self.fields["focus_file_manager"])
+        root.addWidget(frame)
+        root.addWidget(self._buttons())
+
     def _save(self) -> None:
         try:
-            delay = float(self.app_fields["auto_mount_delay"].text().strip() or "0")
+            delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
         except ValueError:
             delay = 0.0
 
         save_app_settings(
             AppSettings(
-                mount_base=self.app_fields["mount_base"].text().strip() or None,
-                auto_mount=self.app_fields["auto_mount"].isChecked(),
+                mount_base=self.fields["mount_base"].text().strip() or core.DEFAULT_HOME_MOUNT,
+                auto_mount=self.fields["auto_mount"].isChecked(),
                 auto_mount_delay=max(delay, 0.0),
-                open_folder_behavior=self.app_fields["open_folder_behavior"].text().strip() or "current_desktop",
-                focus_file_manager=self.app_fields["focus_file_manager"].isChecked(),
+                open_folder_behavior=self.fields["open_folder_behavior"].text().strip() or "current_desktop",
+                focus_file_manager=self.fields["focus_file_manager"].isChecked(),
             )
         )
-        save_mount_settings(
-            {
-                remote_name: MountSettings(
-                    mount_path=fields["mount_path"].text().strip() or None,
-                    mount_flags=self._mount_flags(fields["mount_flags"]),
-                    auto_mount=fields["auto_mount"].isChecked(),
-                    enabled=fields["enabled"].isChecked(),
-                )
-                for remote_name, fields in self.remote_fields.items()
-            }
+        self.dialog.accept()
+
+
+class MountConfigDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, remote: core.RemoteInfo, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.remote = remote
+        self.dialog.setWindowTitle(f"{remote.display_name} settings")
+        self.dialog.resize(560, 260)
+        self.fields: dict[str, Any] = {}
+        self._build()
+
+    def _build(self) -> None:
+        ensure_default_config_files()
+        app_settings = load_app_settings()
+        mount_settings = load_mount_settings().get(self.remote.name)
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
+
+        title = self.qt.QLabel(self.remote.display_name)
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        enabled = mount_settings.enabled if mount_settings else True
+        auto_mount = (
+            mount_settings.auto_mount
+            if mount_settings and mount_settings.auto_mount is not None
+            else app_settings.auto_mount
         )
+        self.fields = {
+            "enabled": self._check(enabled),
+            "auto_mount": self._check(bool(auto_mount)),
+            "mount_path": self._line(
+                mount_settings.mount_path if mount_settings and mount_settings.mount_path else self.remote.mount_path
+            ),
+            "mount_flags": self._line(" ".join(mount_settings.mount_flags) if mount_settings else ""),
+        }
+        form.addRow("Enabled", self.fields["enabled"])
+        form.addRow("Auto-mount", self.fields["auto_mount"])
+        form.addRow("Mount path", self.fields["mount_path"])
+        form.addRow("Mount flags", self.fields["mount_flags"])
+        root.addWidget(title)
+        root.addWidget(frame)
+        root.addWidget(self._buttons())
+
+    def _save(self) -> None:
+        settings = load_mount_settings()
+        settings[self.remote.name] = MountSettings(
+            mount_path=self.fields["mount_path"].text().strip() or self.remote.mount_path,
+            mount_flags=self._mount_flags(self.fields["mount_flags"]),
+            auto_mount=self.fields["auto_mount"].isChecked(),
+            enabled=self.fields["enabled"].isChecked(),
+        )
+        save_mount_settings(settings)
         self.dialog.accept()
 
 
@@ -790,7 +777,10 @@ class MountletWindow:
         self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
 
         config_menu = self.window.menuBar().addMenu("Config")
-        self.tray_app._add_action(config_menu, "Settings", self._show_config_editor)
+        self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
+        config_menu.addSeparator()
+        self.tray_app._add_action(config_menu, "Open app config file", lambda: self._open_text_config(app_config_file()))
+        self.tray_app._add_action(config_menu, "Open mount config file", lambda: self._open_text_config(app_mounts_file()))
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -860,7 +850,7 @@ class MountletWindow:
         toggle.setEnabled(not action_pending)
         toggle.stateChanged.connect(lambda state, selected=remote, action=toggle_action: self._run_remote_action(selected, action))
         working = self.qt.QLabel("Working..." if action_pending else "")
-        config_button = self._button("Config", self._show_config_editor, enabled=not action_pending)
+        config_button = self._button("Config", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
 
         layout.addWidget(toggle, 0, 0, 2, 1)
         layout.addWidget(title, 0, 1)
@@ -966,13 +956,26 @@ class MountletWindow:
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         self.tray_app._open_folder(remote)
 
-    def _show_config_editor(self) -> None:
-        dialog = ConfigDialog(self.qt, self.window)
+    def _show_app_config_editor(self) -> None:
+        dialog = AppConfigDialog(self.qt, self.window)
         if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
             core.ensure_base_mount_dir()
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+
+    def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
+        dialog = MountConfigDialog(self.qt, remote, self.window)
+        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+            core.ensure_base_mount_dir()
+            self._usage_cache.clear()
+            self.tray_app.rebuild_menus()
+            self.refresh()
+
+    def _open_text_config(self, path: Path) -> None:
+        ensure_default_config_files()
+        if not self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
+            self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
 
     def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
         if remote.name in self._usage_cache or remote.name in self._usage_pending:
@@ -1052,7 +1055,9 @@ class CloudMountTray:
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
-        self._add_action(self.app_menu, "Settings", self.main_window._show_config_editor)
+        self._add_action(self.app_menu, "App settings", self.main_window._show_app_config_editor)
+        self._add_action(self.app_menu, "Open app config file", lambda: self.main_window._open_text_config(app_config_file()))
+        self._add_action(self.app_menu, "Open mount config file", lambda: self.main_window._open_text_config(app_mounts_file()))
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.app.quit)
 
@@ -1072,6 +1077,7 @@ class CloudMountTray:
             self._add_action(submenu, "Open folder", lambda: self._open_folder(remote))
         else:
             self._add_action(submenu, "Mount", lambda: self._run_remote_action(remote, core.mount_remote))
+        self._add_action(submenu, "Settings", lambda: self.main_window._show_mount_config_editor(remote))
 
     def _add_action(self, menu: Any, label: str, callback: Any, *, enabled: bool = True) -> Any:
         action = self.qt.QAction(label, menu)
