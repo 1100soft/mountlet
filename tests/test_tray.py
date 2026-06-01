@@ -185,9 +185,9 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
-        run.assert_called_once()
+        self.assertEqual(run.call_count, 2)
         self.assertEqual(
-            run.call_args.args[0],
+            run.call_args_list[0].args[0],
             [
                 "/usr/bin/qdbus6",
                 "org.kde.dolphin-1234",
@@ -222,7 +222,7 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 3)
 
     def test_open_folder_in_dolphin_tab_reuses_cached_window(self):
         completed = SimpleNamespace(returncode=0)
@@ -234,7 +234,7 @@ class TrayTests(unittest.TestCase):
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         fast_targets.assert_not_called()
-        run.assert_called_once()
+        self.assertEqual(run.call_count, 2)
 
     def test_open_folder_in_dolphin_tab_clears_stale_cache(self):
         def run_command(command: list[str], **kwargs: object) -> SimpleNamespace:
@@ -250,7 +250,7 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 3)
         self.assertEqual(tray._dolphin_tab_target_cache, ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"))
 
     def test_dolphin_dbus_windows_are_sorted_by_newest_service_suffix(self):
@@ -315,8 +315,91 @@ class TrayTests(unittest.TestCase):
                 )
             )
 
-        interface.call.assert_called_once_with("openDirectories", ["file:///tmp/docs"], False)
+        self.assertEqual(
+            interface.call.call_args_list,
+            [
+                mock.call("openDirectories", ["file:///tmp/docs"], False),
+                mock.call("activateWindow", ""),
+            ],
+        )
         run.assert_not_called()
+
+    def test_open_folder_in_dolphin_window_focuses_after_qdbus_fallback_open(self):
+        completed = SimpleNamespace(returncode=0)
+
+        with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(
+                tray._open_folder_in_dolphin_window(
+                    None,
+                    "/usr/bin/qdbus6",
+                    "org.kde.dolphin-1234",
+                    "/dolphin/Dolphin_1",
+                    "file:///tmp/docs",
+                )
+            )
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            run.call_args_list[1],
+            mock.call(
+                [
+                    "/usr/bin/qdbus6",
+                    "org.kde.dolphin-1234",
+                    "/dolphin/Dolphin_1",
+                    "org.kde.dolphin.MainWindow.activateWindow",
+                    "",
+                ],
+                stdout=tray.subprocess.DEVNULL,
+                stderr=tray.subprocess.DEVNULL,
+                timeout=1,
+            ),
+        )
+
+    def test_open_folder_in_dolphin_window_ignores_focus_failure(self):
+        open_completed = SimpleNamespace(returncode=0)
+
+        with mock.patch.object(
+            tray.subprocess,
+            "run",
+            side_effect=[open_completed, tray.subprocess.TimeoutExpired("qdbus6", 1)],
+        ):
+            self.assertTrue(
+                tray._open_folder_in_dolphin_window(
+                    None,
+                    "/usr/bin/qdbus6",
+                    "org.kde.dolphin-1234",
+                    "/dolphin/Dolphin_1",
+                    "file:///tmp/docs",
+                )
+            )
+
+    def test_open_folder_in_dolphin_window_does_not_focus_after_failed_open(self):
+        completed = SimpleNamespace(returncode=1)
+
+        with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+            self.assertFalse(
+                tray._open_folder_in_dolphin_window(
+                    None,
+                    "/usr/bin/qdbus6",
+                    "org.kde.dolphin-1234",
+                    "/dolphin/Dolphin_1",
+                    "file:///tmp/docs",
+                )
+            )
+
+        run.assert_called_once_with(
+            [
+                "/usr/bin/qdbus6",
+                "org.kde.dolphin-1234",
+                "/dolphin/Dolphin_1",
+                "org.kde.dolphin.MainWindow.openDirectories",
+                "file:///tmp/docs",
+                "false",
+            ],
+            stdout=tray.subprocess.DEVNULL,
+            stderr=tray.subprocess.DEVNULL,
+            timeout=1,
+        )
 
     def test_ordered_dolphin_dbus_windows_puts_active_window_first(self):
         windows = [

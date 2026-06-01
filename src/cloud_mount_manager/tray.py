@@ -278,7 +278,10 @@ def _open_folder_in_dolphin_window_with_qtdbus(
     if not interface.isValid():
         return False
     reply = interface.call("openDirectories", [uri], False)
-    return not reply.errorName()
+    if reply.errorName():
+        return False
+    interface.call("activateWindow", "")
+    return True
 
 
 def _open_folder_in_dolphin_window(
@@ -309,7 +312,19 @@ def _open_folder_in_dolphin_window(
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return result.returncode == 0
+    if result.returncode != 0:
+        return False
+
+    try:
+        subprocess.run(
+            [qdbus, service, object_path, "org.kde.dolphin.MainWindow.activateWindow", ""],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return True
 
 
 def _dolphin_fast_tab_targets(dbus: SimpleNamespace | None = None) -> list[tuple[str, str]]:
