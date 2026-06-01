@@ -174,17 +174,11 @@ class TrayTests(unittest.TestCase):
         qt.QDesktopServices.openUrl.assert_not_called()
 
     def test_open_folder_in_dolphin_tab_calls_running_dolphin_window(self):
-        def qdbus_lines(args: list[str]) -> list[str]:
-            if args == []:
-                return ["org.kde.dolphin-1234"]
-            if args == ["org.kde.dolphin-1234"]:
-                return ["/dolphin/Dolphin_1"]
-            return []
-
         completed = SimpleNamespace(returncode=0)
+        windows = [("org.kde.dolphin-1234", "/dolphin/Dolphin_1")]
 
         with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_qdbus_lines", side_effect=qdbus_lines):
+            with mock.patch.object(tray, "_ordered_dolphin_dbus_windows", return_value=windows):
                 with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
@@ -195,32 +189,78 @@ class TrayTests(unittest.TestCase):
                 "/usr/bin/qdbus6",
                 "org.kde.dolphin-1234",
                 "/dolphin/Dolphin_1",
-                "org.kde.dolphin.MainWindow.openNewActivatedTab",
+                "org.kde.dolphin.MainWindow.openDirectories",
                 "file:///tmp/docs",
+                "false",
             ],
         )
 
     def test_open_folder_in_dolphin_tab_falls_back_when_no_window_is_available(self):
         with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_qdbus_lines", return_value=[]):
+            with mock.patch.object(tray, "_ordered_dolphin_dbus_windows", return_value=[]):
                 with mock.patch.object(tray.subprocess, "run") as run:
                     self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         run.assert_not_called()
 
-    def test_open_folder_in_dolphin_tab_falls_back_to_short_method_name(self):
+    def test_open_folder_in_dolphin_tab_tries_next_window_after_failure(self):
         def run_command(command: list[str], **kwargs: object) -> SimpleNamespace:
-            if "org.kde.dolphin.MainWindow.openNewActivatedTab" in command:
+            if "org.kde.dolphin-1234" in command:
                 return SimpleNamespace(returncode=1)
             return SimpleNamespace(returncode=0)
 
-        windows = [("org.kde.dolphin-1234", "/dolphin/Dolphin_1")]
+        windows = [
+            ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
+            ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"),
+        ]
         with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_dolphin_dbus_windows", return_value=windows):
+            with mock.patch.object(tray, "_ordered_dolphin_dbus_windows", return_value=windows):
                 with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         self.assertEqual(run.call_count, 2)
+
+    def test_dolphin_dbus_windows_are_sorted_by_newest_service_suffix(self):
+        def qdbus_lines(args: list[str]) -> list[str]:
+            if args == []:
+                return [
+                    "org.kde.dolphin-1234",
+                    "org.kde.dolphin-5678",
+                    "org.example.Other",
+                ]
+            if args == ["org.kde.dolphin-1234"]:
+                return ["/dolphin/Dolphin_1"]
+            if args == ["org.kde.dolphin-5678"]:
+                return ["/dolphin/Dolphin_2"]
+            return []
+
+        with mock.patch.object(tray, "_qdbus_lines", side_effect=qdbus_lines):
+            self.assertEqual(
+                tray._dolphin_dbus_windows(),
+                [
+                    ("org.kde.dolphin-5678", "/dolphin/Dolphin_2"),
+                    ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
+                ],
+            )
+
+    def test_ordered_dolphin_dbus_windows_puts_active_window_first(self):
+        windows = [
+            ("org.kde.dolphin-5678", "/dolphin/Dolphin_2"),
+            ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
+        ]
+
+        def is_active(qdbus: str, service: str, object_path: str) -> bool:
+            return service == "org.kde.dolphin-1234"
+
+        with mock.patch.object(tray, "_dolphin_dbus_windows", return_value=windows):
+            with mock.patch.object(tray, "_dolphin_window_is_active", side_effect=is_active):
+                self.assertEqual(
+                    tray._ordered_dolphin_dbus_windows("/usr/bin/qdbus6"),
+                    [
+                        ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),
+                        ("org.kde.dolphin-5678", "/dolphin/Dolphin_2"),
+                    ],
+                )
 
     def test_open_folder_uses_dolphin_new_window_when_dbus_tab_fails(self):
         qt = mock.Mock()

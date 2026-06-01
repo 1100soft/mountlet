@@ -194,9 +194,20 @@ def _qdbus_lines(args: list[str]) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _dolphin_service_sort_key(service: str) -> int:
+    suffix = service.rsplit("-", 1)[-1]
+    if not suffix.isdigit():
+        return -1
+    return int(suffix)
+
+
 def _dolphin_dbus_windows() -> list[tuple[str, str]]:
     windows: list[tuple[str, str]] = []
-    services = [service for service in _qdbus_lines([]) if service.startswith("org.kde.dolphin-")]
+    services = sorted(
+        (service for service in _qdbus_lines([]) if service.startswith("org.kde.dolphin-")),
+        key=_dolphin_service_sort_key,
+        reverse=True,
+    )
     for service in services:
         paths = _qdbus_lines([service])
         for path in paths:
@@ -205,28 +216,56 @@ def _dolphin_dbus_windows() -> list[tuple[str, str]]:
     return windows
 
 
+def _dolphin_window_is_active(qdbus: str, service: str, object_path: str) -> bool:
+    try:
+        result = subprocess.run(
+            [qdbus, service, object_path, "org.kde.dolphin.MainWindow.isActiveWindow"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+
+def _ordered_dolphin_dbus_windows(qdbus: str) -> list[tuple[str, str]]:
+    active: list[tuple[str, str]] = []
+    inactive: list[tuple[str, str]] = []
+    for service, object_path in _dolphin_dbus_windows():
+        if _dolphin_window_is_active(qdbus, service, object_path):
+            active.append((service, object_path))
+        else:
+            inactive.append((service, object_path))
+    return [*active, *inactive]
+
+
 def _open_folder_in_dolphin_tab(path: str) -> bool:
     uri = _folder_uri(path)
     qdbus = _qdbus_binary()
     if not qdbus:
         return False
 
-    for service, object_path in _dolphin_dbus_windows():
-        for method in (
-            "org.kde.dolphin.MainWindow.openNewActivatedTab",
-            "openNewActivatedTab",
-        ):
-            try:
-                result = subprocess.run(
-                    [qdbus, service, object_path, method, uri],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=2,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            if result.returncode == 0:
-                return True
+    for service, object_path in _ordered_dolphin_dbus_windows(qdbus):
+        try:
+            result = subprocess.run(
+                [
+                    qdbus,
+                    service,
+                    object_path,
+                    "org.kde.dolphin.MainWindow.openDirectories",
+                    uri,
+                    "false",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return True
     return False
 
 
