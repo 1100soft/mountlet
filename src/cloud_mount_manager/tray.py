@@ -133,8 +133,8 @@ def _show_folder_with_file_manager(path: str) -> bool:
     return result.returncode == 0
 
 
-def _open_folder_default(qt: SimpleNamespace, path: str) -> bool:
-    if _show_folder_with_file_manager(path):
+def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "default") -> bool:
+    if strategy == "file-manager-service" and _show_folder_with_file_manager(path):
         return True
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 

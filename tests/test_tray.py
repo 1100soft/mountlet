@@ -135,16 +135,26 @@ class TrayTests(unittest.TestCase):
         self.assertIn("array:string:file:///tmp/docs", command)
         self.assertEqual(command[-1], "string:")
 
-    def test_open_folder_falls_back_to_qt_when_file_manager_service_is_unavailable(self):
+    def test_open_folder_uses_qt_default_opener_by_default(self):
         qt = mock.Mock()
         qt.QDesktopServices.openUrl.return_value = True
         qt.QUrl.fromLocalFile.return_value = "qt-url"
 
-        with mock.patch.object(tray, "_show_folder_with_file_manager", return_value=False):
+        with mock.patch.object(tray, "_show_folder_with_file_manager") as show_folder:
             self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
 
+        show_folder.assert_not_called()
         qt.QUrl.fromLocalFile.assert_called_once_with("/tmp/docs")
         qt.QDesktopServices.openUrl.assert_called_once_with("qt-url")
+
+    def test_open_folder_can_use_file_manager_service_strategy(self):
+        qt = mock.Mock()
+
+        with mock.patch.object(tray, "_show_folder_with_file_manager", return_value=True):
+            self.assertTrue(tray._open_folder_default(qt, "/tmp/docs", strategy="file-manager-service"))
+
+        qt.QUrl.fromLocalFile.assert_not_called()
+        qt.QDesktopServices.openUrl.assert_not_called()
 
     def test_open_folder_action_reports_failure_when_default_opener_fails(self):
         remote = core.RemoteInfo(
