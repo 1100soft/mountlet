@@ -186,6 +186,16 @@ def _optional_bool_value(value: Any) -> bool | None:
     return None
 
 
+def _toml_string(value: str | None) -> str:
+    text = value or ""
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _toml_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
 def load_app_settings(path: Path | None = None) -> AppSettings:
     source = path or app_config_file()
     data = _read_simple_toml(source)
@@ -228,10 +238,66 @@ def load_mount_settings(path: Path | None = None) -> dict[str, MountSettings]:
     return remotes
 
 
+def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
+    destination = path or app_config_file()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(
+        [
+            "# Mountlet app settings.",
+            "# rclone account credentials stay in rclone.conf.",
+            "",
+            "[app]",
+            "# Leave empty to use ~/cloud_mounts.",
+            f"mount_base = {_toml_string(settings.mount_base)}",
+            "",
+            "# Default for remotes without their own auto_mount setting.",
+            f"auto_mount = {_toml_bool(settings.auto_mount)}",
+            f"auto_mount_delay = {settings.auto_mount_delay:g}",
+            "",
+            "[tray]",
+            "# current_desktop uses an existing Dolphin window on the current X11 desktop when possible.",
+            "# default uses the desktop's normal folder opener.",
+            f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
+            f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
+            "",
+        ]
+    )
+    destination.write_text(content, encoding="utf-8")
+
+
+def _remote_section_name(remote_name: str) -> str:
+    return f'remotes.{_toml_string(remote_name)}'
+
+
+def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = None) -> None:
+    destination = path or app_mounts_file()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Per-remote Mountlet settings.",
+        "# Remote names must match the names shown by rclone.",
+        "",
+    ]
+    for remote_name in sorted(settings):
+        remote = settings[remote_name]
+        lines.extend(
+            [
+                f"[{_remote_section_name(remote_name)}]",
+                f"enabled = {_toml_bool(remote.enabled)}",
+                f"auto_mount = {_toml_bool(bool(remote.auto_mount))}",
+                f"mount_path = {_toml_string(remote.mount_path)}",
+                f"mount_flags = {_toml_string(' '.join(remote.mount_flags))}",
+                "",
+            ]
+        )
+    destination.write_text("\n".join(lines), encoding="utf-8")
+
+
 __all__ = [
     "AppSettings",
     "MountSettings",
     "ensure_default_config_files",
     "load_app_settings",
     "load_mount_settings",
+    "save_app_settings",
+    "save_mount_settings",
 ]

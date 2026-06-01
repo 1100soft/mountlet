@@ -98,6 +98,50 @@ enabled = false
             self.assertIn("auto_mount = true", app_config.read_text(encoding="utf-8"))
             self.assertIn('remotes."Docs"', mounts_config.read_text(encoding="utf-8"))
 
+    def test_save_app_settings_round_trips_values(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "config.toml"
+            settings.save_app_settings(
+                settings.AppSettings(
+                    mount_base="~/Mounts",
+                    auto_mount=True,
+                    auto_mount_delay=4.25,
+                    open_folder_behavior="new_window",
+                    focus_file_manager=False,
+                ),
+                path,
+            )
+
+            loaded = settings.load_app_settings(path)
+
+        self.assertTrue(loaded.mount_base.endswith("/Mounts"))
+        self.assertTrue(loaded.auto_mount)
+        self.assertEqual(loaded.auto_mount_delay, 4.25)
+        self.assertEqual(loaded.open_folder_behavior, "new_window")
+        self.assertFalse(loaded.focus_file_manager)
+
+    def test_save_mount_settings_round_trips_values(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "mounts.toml"
+            settings.save_mount_settings(
+                {
+                    "Docs": settings.MountSettings(
+                        mount_path="~/Docs",
+                        mount_flags=["--read-only", "--dir-cache-time", "10m"],
+                        auto_mount=True,
+                        enabled=False,
+                    )
+                },
+                path,
+            )
+
+            loaded = settings.load_mount_settings(path)["Docs"]
+
+        self.assertTrue(loaded.mount_path.endswith("/Docs"))
+        self.assertEqual(loaded.mount_flags, ["--read-only", "--dir-cache-time", "10m"])
+        self.assertTrue(loaded.auto_mount)
+        self.assertFalse(loaded.enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

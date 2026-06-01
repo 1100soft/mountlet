@@ -157,31 +157,12 @@ export MOUNTLET_MOUNT_BASE=/path/to/mounts
 
 ### App Settings
 
-Use `config.toml` for app-wide behavior:
+In the tray app, use `Config` > `Settings` to edit app-wide and per-remote
+behavior. The settings window shows the available fields with text boxes and
+checkboxes, then writes `config.toml` and `mounts.toml` for you.
 
-```toml
-[app]
-mount_base = ""
-auto_mount = false
-auto_mount_delay = 2.0
-
-[tray]
-open_folder_behavior = "current_desktop"
-focus_file_manager = true
-```
-
-Use `mounts.toml` for per-remote behavior. Remote names must match the names in
-`rclone`.
-
-```toml
-[remotes."Work__Drive"]
-auto_mount = true
-mount_path = "~/cloud_mounts/drive/Work"
-mount_flags = "--read-only --dir-cache-time 10m"
-```
-
-Keep cloud account details in `rclone.conf`; use these files only for Mountlet
-behavior.
+Keep cloud account details in `rclone.conf`; Mountlet settings only control
+local app and mount behavior.
 
 ## Credentials
 
