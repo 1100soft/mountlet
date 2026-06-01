@@ -153,6 +153,9 @@ def _default_directory_app() -> str:
 
 
 def _open_folder_with_dolphin(path: str) -> bool:
+    if _open_folder_in_dolphin_tab(path):
+        return True
+
     dolphin = shutil.which("dolphin")
     if not dolphin:
         return False
@@ -166,6 +169,65 @@ def _open_folder_with_dolphin(path: str) -> bool:
     except OSError:
         return False
     return True
+
+
+def _qdbus_binary() -> str | None:
+    return shutil.which("qdbus6") or shutil.which("qdbus")
+
+
+def _qdbus_lines(args: list[str]) -> list[str]:
+    qdbus = _qdbus_binary()
+    if not qdbus:
+        return []
+    try:
+        result = subprocess.run(
+            [qdbus, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _dolphin_dbus_windows() -> list[tuple[str, str]]:
+    windows: list[tuple[str, str]] = []
+    services = [service for service in _qdbus_lines([]) if service.startswith("org.kde.dolphin-")]
+    for service in services:
+        paths = _qdbus_lines([service])
+        for path in paths:
+            if path.startswith("/dolphin/Dolphin_"):
+                windows.append((service, path))
+    return windows
+
+
+def _open_folder_in_dolphin_tab(path: str) -> bool:
+    uri = _folder_uri(path)
+    qdbus = _qdbus_binary()
+    if not qdbus:
+        return False
+
+    for service, object_path in _dolphin_dbus_windows():
+        for method in (
+            "org.kde.dolphin.MainWindow.openNewActivatedTab",
+            "openNewActivatedTab",
+        ):
+            try:
+                result = subprocess.run(
+                    [qdbus, service, object_path, method, uri],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if result.returncode == 0:
+                return True
+    return False
 
 
 def _open_folder_with_known_file_manager(path: str) -> bool:

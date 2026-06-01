@@ -152,9 +152,84 @@ class TrayTests(unittest.TestCase):
         qt = mock.Mock()
 
         with mock.patch.object(tray, "_default_directory_app", return_value="org.kde.dolphin.desktop"):
+            with mock.patch.object(tray, "_open_folder_in_dolphin_tab", return_value=False):
+                with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/dolphin"):
+                    with mock.patch.object(tray.subprocess, "Popen") as popen:
+                        self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/dolphin", "--new-window", "/tmp/docs"])
+        qt.QUrl.fromLocalFile.assert_not_called()
+        qt.QDesktopServices.openUrl.assert_not_called()
+
+    def test_open_folder_prefers_dolphin_dbus_tab_when_available(self):
+        qt = mock.Mock()
+
+        with mock.patch.object(tray, "_default_directory_app", return_value="org.kde.dolphin.desktop"):
+            with mock.patch.object(tray, "_open_folder_in_dolphin_tab", return_value=True) as open_tab:
+                self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+
+        open_tab.assert_called_once_with("/tmp/docs")
+        qt.QUrl.fromLocalFile.assert_not_called()
+        qt.QDesktopServices.openUrl.assert_not_called()
+
+    def test_open_folder_in_dolphin_tab_calls_running_dolphin_window(self):
+        def qdbus_lines(args: list[str]) -> list[str]:
+            if args == []:
+                return ["org.kde.dolphin-1234"]
+            if args == ["org.kde.dolphin-1234"]:
+                return ["/dolphin/Dolphin_1"]
+            return []
+
+        completed = SimpleNamespace(returncode=0)
+
+        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+            with mock.patch.object(tray, "_qdbus_lines", side_effect=qdbus_lines):
+                with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/usr/bin/qdbus6",
+                "org.kde.dolphin-1234",
+                "/dolphin/Dolphin_1",
+                "org.kde.dolphin.MainWindow.openNewActivatedTab",
+                "file:///tmp/docs",
+            ],
+        )
+
+    def test_open_folder_in_dolphin_tab_falls_back_when_no_window_is_available(self):
+        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+            with mock.patch.object(tray, "_qdbus_lines", return_value=[]):
+                with mock.patch.object(tray.subprocess, "run") as run:
+                    self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        run.assert_not_called()
+
+    def test_open_folder_in_dolphin_tab_falls_back_to_short_method_name(self):
+        def run_command(command: list[str], **kwargs: object) -> SimpleNamespace:
+            if "org.kde.dolphin.MainWindow.openNewActivatedTab" in command:
+                return SimpleNamespace(returncode=1)
+            return SimpleNamespace(returncode=0)
+
+        windows = [("org.kde.dolphin-1234", "/dolphin/Dolphin_1")]
+        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+            with mock.patch.object(tray, "_dolphin_dbus_windows", return_value=windows):
+                with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
+                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        self.assertEqual(run.call_count, 2)
+
+    def test_open_folder_uses_dolphin_new_window_when_dbus_tab_fails(self):
+        qt = mock.Mock()
+
+        with mock.patch.object(tray, "_default_directory_app", return_value="org.kde.dolphin.desktop"):
             with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/dolphin"):
-                with mock.patch.object(tray.subprocess, "Popen") as popen:
-                    self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+                with mock.patch.object(tray, "_open_folder_in_dolphin_tab", return_value=False):
+                    with mock.patch.object(tray.subprocess, "Popen") as popen:
+                        self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
 
         popen.assert_called_once()
         self.assertEqual(popen.call_args.args[0], ["/usr/bin/dolphin", "--new-window", "/tmp/docs"])
