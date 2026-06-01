@@ -542,6 +542,20 @@ class TrayTests(unittest.TestCase):
 
         notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
 
+    def test_path_changes_match_remotes_by_name(self):
+        old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
+        unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")
+        new_remotes = [
+            core.RemoteInfo("Docs", "Docs", "drive", "drive", "/new/docs"),
+            core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos"),
+        ]
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=new_remotes):
+            changes = window._path_changes([old_remote, unchanged_remote])
+
+        self.assertEqual(changes, [(old_remote, new_remotes[0])])
+
     def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
         remotes = [
             core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True),
