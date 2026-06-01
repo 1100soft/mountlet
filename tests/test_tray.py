@@ -3,8 +3,10 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -119,6 +121,49 @@ class TrayTests(unittest.TestCase):
 
         rebuild.assert_not_called()
         self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
+
+    def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
+        completed = SimpleNamespace(returncode=0)
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                self.assertTrue(tray._show_folder_with_file_manager("/tmp/docs"))
+
+        command = run.call_args.args[0]
+        self.assertIn("--dest=org.freedesktop.FileManager1", command)
+        self.assertIn("org.freedesktop.FileManager1.ShowFolders", command)
+        self.assertIn("array:string:file:///tmp/docs", command)
+        self.assertEqual(command[-1], "string:")
+
+    def test_open_folder_falls_back_to_qt_when_file_manager_service_is_unavailable(self):
+        qt = mock.Mock()
+        qt.QDesktopServices.openUrl.return_value = True
+        qt.QUrl.fromLocalFile.return_value = "qt-url"
+
+        with mock.patch.object(tray, "_show_folder_with_file_manager", return_value=False):
+            self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+
+        qt.QUrl.fromLocalFile.assert_called_once_with("/tmp/docs")
+        qt.QDesktopServices.openUrl.assert_called_once_with("qt-url")
+
+    def test_open_folder_action_reports_failure_when_default_opener_fails(self):
+        remote = core.RemoteInfo(
+            name="Docs",
+            alias="Docs",
+            provider="drive",
+            backend_type="drive",
+            mount_path="/tmp/missing-docs",
+        )
+        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app.qt = mock.Mock()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            remote.mount_path = tempdir
+            with mock.patch.object(tray, "_open_folder_default", return_value=False):
+                with mock.patch.object(tray_app, "_notify") as notify:
+                    tray_app._open_folder(remote)
+
+        notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ import argparse
 import os
 import platform
 import socket
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -104,6 +106,37 @@ def _desktop_session_available() -> tuple[bool, str]:
         return False, f"Cannot connect to the X11 display at {display}."
 
     return True, ""
+
+
+def _folder_uri(path: str) -> str:
+    return Path(path).expanduser().resolve().as_uri()
+
+
+def _show_folder_with_file_manager(path: str) -> bool:
+    if platform.system() != "Linux":
+        return False
+
+    command = [
+        "dbus-send",
+        "--session",
+        "--type=method_call",
+        "--dest=org.freedesktop.FileManager1",
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1.ShowFolders",
+        f"array:string:{_folder_uri(path)}",
+        "string:",
+    ]
+    try:
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _open_folder_default(qt: SimpleNamespace, path: str) -> bool:
+    if _show_folder_with_file_manager(path):
+        return True
+    return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
 
 class CloudMountTray:
@@ -217,7 +250,8 @@ class CloudMountTray:
         if not os.path.isdir(remote.mount_path):
             self._notify("Open folder", "Mount the remote before opening its folder.", success=False)
             return
-        self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(remote.mount_path))
+        if not _open_folder_default(self.qt, remote.mount_path):
+            self._notify("Open folder", "Could not open the mount folder.", success=False)
 
     def _notify(self, title: str, message: str, *, success: bool) -> None:
         print(f"{title}: {message}")
