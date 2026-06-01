@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -31,7 +32,7 @@ class TrayDependencyError(RuntimeError):
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QTimer, QUrl
+        from PySide6.QtCore import QObject, QTimer, QUrl, Signal
         from PySide6.QtGui import QAction, QCursor, QDesktopServices, QIcon
         from PySide6.QtWidgets import (
             QApplication,
@@ -78,6 +79,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QSystemTrayIcon=QSystemTrayIcon,
         QTimer=QTimer,
         QUrl=QUrl,
+        Signal=Signal,
         QVBoxLayout=QVBoxLayout,
         QWidget=QWidget,
     )
@@ -893,3 +895,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+        QObject=QObject,
