@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Added an optional PySide6 desktop tray preview with mount, unmount, refresh, and open-folder actions.
+- Added an optional PySide6 desktop tray preview with mount, unmount, restart-mount, and open-folder actions.
 - Split tray interactions between hover status, left-click remote actions, and right-click app actions.
 
 ## 0.1.1 - 2026-05-31

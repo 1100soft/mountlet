@@ -163,7 +163,7 @@ class CloudMountTray:
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
-        self._add_action(self.app_menu, "Refresh status", self.rebuild_menus)
+        self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.app.quit)
 
@@ -176,7 +176,7 @@ class CloudMountTray:
 
         if mounted:
             self._add_action(submenu, "Unmount", lambda: self._run_remote_action(remote, core.unmount_remote))
-            self._add_action(submenu, "Refresh mount", lambda: self._run_remote_action(remote, core.refresh_remote))
+            self._add_action(submenu, "Restart mount", lambda: self._run_remote_action(remote, core.refresh_remote))
             self._add_action(submenu, "Open folder", lambda: self._open_folder(remote))
         else:
             self._add_action(submenu, "Mount", lambda: self._run_remote_action(remote, core.mount_remote))

@@ -99,8 +99,8 @@ pipx inject cloud-mount-manager PySide6
 The tray app uses the tray icon this way:
 
 - Hover shows a short mounted/unmounted summary.
-- Left-click shows each remote with mount, unmount, refresh, and open-folder actions.
-- Right-click shows app-level actions such as mount all, unmount all, refresh, and quit.
+- Left-click shows each remote with mount, unmount, restart-mount, and open-folder actions.
+- Right-click shows app-level actions such as mount all, unmount all, update status, and quit.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.

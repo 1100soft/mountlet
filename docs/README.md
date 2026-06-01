@@ -73,7 +73,7 @@ The first paid product direction is a desktop tray app.
 
 Initial desktop tray scope:
 
-- Basic mount, unmount, refresh, and open-folder actions.
+- Basic mount, unmount, restart-mount, and open-folder actions.
 - Auto-mount at login.
 - Remote health checks and notifications.
 - One-click credential reconnect flows.
