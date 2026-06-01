@@ -14,12 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mountlet import core, tray
 
 
-class _FakeMenu:
+class _FakeWindow:
     def __init__(self) -> None:
-        self.popup_calls: list[object] = []
+        self.show_calls = 0
 
-    def popup(self, position: object) -> None:
-        self.popup_calls.append(position)
+    def show(self) -> None:
+        self.show_calls += 1
 
 
 class TrayTests(unittest.TestCase):
@@ -103,27 +103,26 @@ class TrayTests(unittest.TestCase):
             "Mountlet - mounted: Docs",
         )
 
-    def test_left_click_activation_opens_remote_menu(self):
-        fake_menu = _FakeMenu()
+    def test_left_click_activation_opens_mountlet_window(self):
+        fake_window = _FakeWindow()
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
         fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick = "double"
-        fake_qt.QCursor.pos.return_value = "cursor-position"
         tray_app = object.__new__(tray.CloudMountTray)
         tray_app.qt = fake_qt
-        tray_app.remote_menu = fake_menu
+        tray_app.main_window = fake_window
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
         rebuild.assert_called_once_with()
-        self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
+        self.assertEqual(fake_window.show_calls, 1)
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
         rebuild.assert_not_called()
-        self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
+        self.assertEqual(fake_window.show_calls, 1)
 
     def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
         completed = SimpleNamespace(returncode=0)

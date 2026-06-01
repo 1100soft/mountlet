@@ -142,6 +142,24 @@ type = dropbox
             self.assertEqual(usage, "1.0 / 2.0 GB")
             self.assertEqual(check_output.call_args.args[0][0], "/custom/rclone")
 
+    def test_get_storage_usage_details_includes_numeric_percent(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/custom/rclone"):
+                with mock.patch.object(
+                    core.subprocess,
+                    "check_output",
+                    return_value='{"used": 1073741824, "total": 2147483648}',
+                ):
+                    usage = core.get_storage_usage_details(remote)
+
+            self.assertEqual(usage.text, "1.0 / 2.0 GB")
+            self.assertEqual(usage.used, 1073741824)
+            self.assertEqual(usage.total, 2147483648)
+            self.assertEqual(usage.percent, 50)
+
     def test_unmount_remote_uses_available_fuse_command(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")

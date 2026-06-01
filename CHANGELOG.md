@@ -4,7 +4,8 @@
 
 - Renamed the project, import package, installed command, and user config directory to Mountlet.
 - Added an optional PySide6 desktop tray preview with mount, unmount, restart-mount, and open-folder actions.
-- Split tray interactions between hover status, left-click remote actions, and right-click app actions.
+- Split tray interactions between hover status, a left-click Mountlet window, and right-click app actions.
+- Added visual and numerical storage usage to the Mountlet window.
 - Added app-level and per-remote Mountlet config files.
 - Open-folder actions can use current-desktop Dolphin windows on X11 when available, with fallback open strategies elsewhere.
 

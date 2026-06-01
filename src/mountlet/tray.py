@@ -16,7 +16,7 @@ from typing import Any
 
 from . import core
 from .config_tools import setup_wizard
-from .config_tools.shared import ensure_app_directories
+from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .settings import ensure_default_config_files, load_app_settings
 
 
@@ -33,7 +33,23 @@ def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import QTimer, QUrl
         from PySide6.QtGui import QAction, QCursor, QDesktopServices, QIcon
-        from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
+        from PySide6.QtWidgets import (
+            QApplication,
+            QFrame,
+            QGridLayout,
+            QHBoxLayout,
+            QLabel,
+            QMainWindow,
+            QMenu,
+            QProgressBar,
+            QPushButton,
+            QScrollArea,
+            QSizePolicy,
+            QStyle,
+            QSystemTrayIcon,
+            QVBoxLayout,
+            QWidget,
+        )
     except ImportError as exc:
         raise TrayDependencyError(
             "Tray support requires PySide6. Install it with:\n"
@@ -47,12 +63,23 @@ def _load_qt_bindings() -> SimpleNamespace:
         QApplication=QApplication,
         QCursor=QCursor,
         QDesktopServices=QDesktopServices,
+        QFrame=QFrame,
+        QGridLayout=QGridLayout,
+        QHBoxLayout=QHBoxLayout,
         QIcon=QIcon,
+        QLabel=QLabel,
+        QMainWindow=QMainWindow,
         QMenu=QMenu,
+        QProgressBar=QProgressBar,
+        QPushButton=QPushButton,
+        QScrollArea=QScrollArea,
+        QSizePolicy=QSizePolicy,
         QStyle=QStyle,
         QSystemTrayIcon=QSystemTrayIcon,
         QTimer=QTimer,
         QUrl=QUrl,
+        QVBoxLayout=QVBoxLayout,
+        QWidget=QWidget,
     )
 
 
@@ -469,7 +496,7 @@ def _open_folder_in_dolphin_tab(path: str, *, current_desktop: bool = True, focu
 
     uri = _folder_uri(path)
     dbus = _qt_dbus_session()
-    qdbus = None if dbus else _qdbus_binary()
+    qdbus = _qdbus_binary()
     if not dbus and not qdbus:
         return False
 
@@ -549,6 +576,136 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
 
+class MountletWindow:
+    def __init__(self, tray_app: "CloudMountTray") -> None:
+        self.tray_app = tray_app
+        self.qt = tray_app.qt
+        self.window = self.qt.QMainWindow()
+        self.window.setWindowTitle("Mountlet")
+        self.window.resize(760, 420)
+        self._build_app_menu()
+
+    def _build_app_menu(self) -> None:
+        menu = self.window.menuBar().addMenu("Mountlet")
+        self.tray_app._add_action(menu, "Mount all", lambda: self._mount_all())
+        self.tray_app._add_action(menu, "Unmount all", lambda: self._unmount_all())
+        self.tray_app._add_action(menu, "Update status", self.refresh)
+        menu.addSeparator()
+        self.tray_app._add_action(menu, "Open app config", lambda: self._open_config(app_config_file()))
+        self.tray_app._add_action(menu, "Open mount config", lambda: self._open_config(app_mounts_file()))
+        menu.addSeparator()
+        self.tray_app._add_action(menu, "Quit", self.tray_app.app.quit)
+
+    def is_visible(self) -> bool:
+        return bool(self.window.isVisible())
+
+    def show(self) -> None:
+        self.refresh()
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+
+    def refresh(self) -> None:
+        remotes = core.load_remotes()
+        mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
+
+        root = self.qt.QWidget()
+        outer = self.qt.QVBoxLayout(root)
+
+        header = self.qt.QHBoxLayout()
+        title = self.qt.QLabel("Mountlet")
+        title.setObjectName("mountletTitle")
+        summary = self.qt.QLabel(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
+        summary.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
+        header.addWidget(title)
+        header.addWidget(summary)
+        outer.addLayout(header)
+
+        scroll = self.qt.QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = self.qt.QWidget()
+        rows = self.qt.QVBoxLayout(container)
+        if remotes:
+            for remote in remotes:
+                rows.addWidget(self._remote_row(remote))
+            rows.addStretch(1)
+        else:
+            rows.addWidget(self.qt.QLabel("No rclone remotes found"))
+        scroll.setWidget(container)
+        outer.addWidget(scroll)
+
+        self.window.setCentralWidget(root)
+
+    def _remote_row(self, remote: core.RemoteInfo) -> Any:
+        mounted = core.is_mounted(remote)
+        usage = core.get_storage_usage_details(remote)
+
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        layout = self.qt.QGridLayout(frame)
+
+        title = self.qt.QLabel(remote.display_name)
+        status = self.qt.QLabel("Mounted" if mounted else "Unmounted")
+        path = self.qt.QLabel(remote.mount_path)
+        path.setTextInteractionFlags(path.textInteractionFlags())
+
+        usage_label = self.qt.QLabel(usage.text)
+        usage_bar = self.qt.QProgressBar()
+        usage_bar.setTextVisible(True)
+        if usage.percent is None:
+            usage_bar.setRange(0, 100)
+            usage_bar.setValue(0)
+            usage_bar.setFormat("Usage unavailable" if usage.text == "?" else usage.text)
+        else:
+            usage_bar.setRange(0, 100)
+            usage_bar.setValue(usage.percent)
+            usage_bar.setFormat(f"{usage.percent}%")
+
+        toggle_label = "Unmount" if mounted else "Mount"
+        toggle_action = core.unmount_remote if mounted else core.mount_remote
+        toggle_button = self._button(toggle_label, lambda: self._run_remote_action(remote, toggle_action))
+        open_button = self._button("Open", lambda: self._open_folder(remote), enabled=mounted)
+        config_button = self._button("Config", lambda: self._open_config(app_mounts_file()))
+
+        layout.addWidget(title, 0, 0)
+        layout.addWidget(status, 0, 1)
+        layout.addWidget(usage_label, 0, 2)
+        layout.addWidget(path, 1, 0, 1, 3)
+        layout.addWidget(usage_bar, 2, 0, 1, 3)
+        layout.addWidget(toggle_button, 0, 3)
+        layout.addWidget(open_button, 1, 3)
+        layout.addWidget(config_button, 2, 3)
+        return frame
+
+    def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
+        button = self.qt.QPushButton(label)
+        button.setEnabled(enabled)
+        button.clicked.connect(lambda checked=False: callback())
+        return button
+
+    def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
+        success, message = action(remote)
+        self.tray_app._notify("Mountlet", _clean_message(message), success=success)
+        self.tray_app.rebuild_menus()
+        self.refresh()
+
+    def _mount_all(self) -> None:
+        self.tray_app._mount_all(core.load_remotes())
+        self.refresh()
+
+    def _unmount_all(self) -> None:
+        self.tray_app._unmount_all(core.load_remotes())
+        self.refresh()
+
+    def _open_folder(self, remote: core.RemoteInfo) -> None:
+        self.tray_app._open_folder(remote)
+
+    def _open_config(self, path: Path) -> None:
+        ensure_default_config_files()
+        if not self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
+            self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
+
+
 class CloudMountTray:
     def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10) -> None:
         self.qt = qt
@@ -557,6 +714,7 @@ class CloudMountTray:
         self.app.setQuitOnLastWindowClosed(False)
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
+        self.main_window = MountletWindow(self)
         self.tray = qt.QSystemTrayIcon(self._icon(), self.app)
         self.tray.setToolTip("Mountlet")
         self.tray.setContextMenu(self.app_menu)
@@ -586,7 +744,7 @@ class CloudMountTray:
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return
         self.rebuild_menus()
-        self.remote_menu.popup(self.qt.QCursor.pos())
+        self.main_window.show()
 
     def rebuild_menus(self) -> None:
         self.remote_menu.clear()
@@ -608,8 +766,13 @@ class CloudMountTray:
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
+        self._add_action(self.app_menu, "Open app config", lambda: self.main_window._open_config(app_config_file()))
+        self._add_action(self.app_menu, "Open mount config", lambda: self.main_window._open_config(app_mounts_file()))
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.app.quit)
+
+        if self.main_window.is_visible():
+            self.main_window.refresh()
 
     def _add_remote_menu(self, remote: core.RemoteInfo, menu: Any) -> None:
         mounted = core.is_mounted(remote)

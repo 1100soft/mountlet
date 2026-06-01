@@ -122,6 +122,20 @@ class RemoteInfo:
         return self.alias
 
 
+@dataclass(frozen=True)
+class StorageUsage:
+    text: str
+    used: int | None = None
+    total: int | None = None
+
+    @property
+    def percent(self) -> int | None:
+        if not self.total:
+            return None
+        used = max(self.used or 0, 0)
+        return min(round((used / self.total) * 100), 100)
+
+
 PIDS: Dict[str, int] = {}
 
 
@@ -457,10 +471,10 @@ def unmount_all(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
     return unmounted, failures
 
 
-def get_storage_usage(remote: RemoteInfo) -> str:
+def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
     rclone_bin = find_rclone()
     if not rclone_bin:
-        return "?"
+        return StorageUsage("?")
     try:
         output = subprocess.check_output(
             [rclone_bin, "about", f"{remote.name}:", "--json"],
@@ -473,10 +487,14 @@ def get_storage_usage(remote: RemoteInfo) -> str:
         used_gb = used / (1024 ** 3)
         total_gb = total / (1024 ** 3) if total else 0
         if total:
-            return f"{used_gb:.1f} / {total_gb:.1f} GB"
-        return f"{used_gb:.1f} GB used"
+            return StorageUsage(f"{used_gb:.1f} / {total_gb:.1f} GB", used=used, total=total)
+        return StorageUsage(f"{used_gb:.1f} GB used", used=used)
     except Exception:
-        return "?"
+        return StorageUsage("?")
+
+
+def get_storage_usage(remote: RemoteInfo) -> str:
+    return get_storage_usage_details(remote).text
 
 
 def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
@@ -526,6 +544,7 @@ __all__ = [
     "unmount_all",
     "is_mounted",
     "get_storage_usage",
+    "get_storage_usage_details",
     "verify_remote",
     "verify_all",
     "wait_for",
