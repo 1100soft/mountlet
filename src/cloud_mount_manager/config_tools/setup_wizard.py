@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import core
+from ..settings import ensure_default_config_files
 from .shared import (
     app_cache_dir,
     app_config_dir,
     app_config_file,
+    app_mounts_file,
     app_state_dir,
     default_config_path,
     ensure_app_directories,
@@ -46,6 +48,7 @@ def _fuse_available() -> bool:
 def _print_paths() -> None:
     print("App files:")
     print(f"  Settings: {app_config_file()}")
+    print(f"  Mount settings: {app_mounts_file()}")
     print(f"  State:    {app_state_dir()}")
     print(f"  Cache:    {app_cache_dir()}")
     print(f"  Mounts:   {core.BASE_MOUNT_DIR}")
@@ -55,6 +58,7 @@ def _print_paths() -> None:
 def check_readiness() -> Readiness:
     messages: list[str] = []
     ensure_app_directories()
+    ensure_default_config_files()
     core.ensure_base_mount_dir()
     Path(core.BASE_MOUNT_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -124,6 +128,7 @@ def setup_command(args: argparse.Namespace) -> int:
     print()
 
     dirs = ensure_app_directories()
+    ensure_default_config_files()
     core.ensure_base_mount_dir()
     mount_dir = Path(core.BASE_MOUNT_DIR)
     mount_dir.mkdir(parents=True, exist_ok=True)
@@ -134,10 +139,20 @@ def setup_command(args: argparse.Namespace) -> int:
     print(_status(mount_dir.exists(), f"Prepared mount folder: {mount_dir}"))
 
     rclone_bin = find_rclone()
-    print(_status(bool(rclone_bin), f"Found rclone: {rclone_bin}" if rclone_bin else "Install rclone. On Ubuntu: sudo apt install rclone"))
+    print(
+        _status(
+            bool(rclone_bin),
+            f"Found rclone: {rclone_bin}" if rclone_bin else "Install rclone. On Ubuntu: sudo apt install rclone",
+        )
+    )
 
     fuse_ok = _fuse_available()
-    print(_status(fuse_ok, "Found FUSE mount support." if fuse_ok else "Install FUSE. On Ubuntu: sudo apt install fuse3"))
+    print(
+        _status(
+            fuse_ok,
+            "Found FUSE mount support." if fuse_ok else "Install FUSE. On Ubuntu: sudo apt install fuse3",
+        )
+    )
 
     config_path = default_config_path()
     config_exists = config_path.exists()

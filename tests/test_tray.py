@@ -172,7 +172,7 @@ class TrayTests(unittest.TestCase):
             with mock.patch.object(tray, "_open_folder_in_dolphin_tab", return_value=True) as open_tab:
                 self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
 
-        open_tab.assert_called_once_with("/tmp/docs")
+        open_tab.assert_called_once_with("/tmp/docs", current_desktop=True, focus=True)
         qt.QUrl.fromLocalFile.assert_not_called()
         qt.QDesktopServices.openUrl.assert_not_called()
 
@@ -542,6 +542,37 @@ class TrayTests(unittest.TestCase):
                     tray_app._open_folder(remote)
 
         notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
+
+    def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
+        remotes = [
+            core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True),
+            core.RemoteInfo("Photos", "Photos", "drive", "drive", "/tmp/photos", auto_mount=False),
+        ]
+        qt = mock.Mock()
+        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app.qt = qt
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=remotes):
+            with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                with mock.patch.object(tray, "load_app_settings") as load_settings:
+                    load_settings.return_value.auto_mount_delay = 1.5
+                    tray_app._schedule_auto_mounts()
+
+        qt.QTimer.singleShot.assert_called_once()
+        self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 1500)
+
+    def test_auto_mount_reports_results_and_rebuilds_menus(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
+        tray_app = object.__new__(tray.CloudMountTray)
+
+        with mock.patch.object(tray.core, "mount_all", return_value=(["Docs"], [])) as mount_all:
+            with mock.patch.object(tray_app, "_notify") as notify:
+                with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
+                    tray_app._auto_mount([remote])
+
+        mount_all.assert_called_once_with([remote])
+        notify.assert_called_once_with("Auto-mount", "Mounted: Docs", success=True)
+        rebuild.assert_called_once_with()
 
 
 if __name__ == "__main__":

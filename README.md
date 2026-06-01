@@ -127,6 +127,7 @@ On Linux:
 
 - `~/.config/rclone/rclone.conf`: rclone remotes and credentials.
 - `~/.config/cloud-mount-manager/config.toml`: Cloud Mount Manager preferences.
+- `~/.config/cloud-mount-manager/mounts.toml`: per-remote mount preferences.
 - `~/.local/state/cloud-mount-manager/`: runtime state.
 - `~/.cache/cloud-mount-manager/`: cache files.
 - `~/cloud_mounts/`: default mount root.
@@ -143,11 +144,42 @@ Create the Cloud Mount Manager user folders:
 cloud-mount-manager path --ensure
 ```
 
+That command also creates starter `config.toml` and `mounts.toml` files if they
+do not exist yet.
+
 Override the mount root for a shell session:
 
 ```bash
 export CLOUD_MOUNT_BASE=/path/to/mounts
 ```
+
+### App Settings
+
+Use `config.toml` for app-wide behavior:
+
+```toml
+[app]
+mount_base = ""
+auto_mount = false
+auto_mount_delay = 2.0
+
+[tray]
+open_folder_behavior = "current_desktop"
+focus_file_manager = true
+```
+
+Use `mounts.toml` for per-remote behavior. Remote names must match the names in
+`rclone`.
+
+```toml
+[remotes."Work__Drive"]
+auto_mount = true
+mount_path = "~/cloud_mounts/drive/Work"
+mount_flags = "--read-only --dir-cache-time 10m"
+```
+
+Keep cloud account details in `rclone.conf`; use these files only for Cloud
+Mount Manager behavior.
 
 ## Credentials
 

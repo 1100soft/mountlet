@@ -60,6 +60,10 @@ class ConfigToolTests(unittest.TestCase):
                     shared.app_config_file(),
                     Path(tempdir) / "config" / "cloud-mount-manager" / "config.toml",
                 )
+                self.assertEqual(
+                    shared.app_mounts_file(),
+                    Path(tempdir) / "config" / "cloud-mount-manager" / "mounts.toml",
+                )
                 self.assertEqual(shared.app_state_dir(), Path(tempdir) / "state" / "cloud-mount-manager")
                 self.assertEqual(shared.app_cache_dir(), Path(tempdir) / "cache" / "cloud-mount-manager")
 
@@ -81,6 +85,8 @@ class ConfigToolTests(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(path_config.main(["--ensure", "--app-config"]), 0)
                 self.assertTrue((Path(tempdir) / "config" / "cloud-mount-manager").is_dir())
+                self.assertTrue((Path(tempdir) / "config" / "cloud-mount-manager" / "config.toml").is_file())
+                self.assertTrue((Path(tempdir) / "config" / "cloud-mount-manager" / "mounts.toml").is_file())
                 self.assertTrue((Path(tempdir) / "state" / "cloud-mount-manager").is_dir())
                 self.assertTrue((Path(tempdir) / "cache" / "cloud-mount-manager").is_dir())
 

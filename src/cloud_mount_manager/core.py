@@ -15,11 +15,17 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
+from .settings import load_app_settings, load_mount_settings
+
 _ENV_CONFIG = os.environ.get("RCLONE_CONFIG")
 CONFIG_PATH = (
     os.path.expanduser(_ENV_CONFIG)
     if _ENV_CONFIG
-    else (os.path.expanduser("~/.config/rclone/rclone.conf") if platform.system() != "Windows" else os.path.expandvars("%APPDATA%\\rclone\\rclone.conf"))
+    else (
+        os.path.expanduser("~/.config/rclone/rclone.conf")
+        if platform.system() != "Windows"
+        else os.path.expandvars("%APPDATA%\\rclone\\rclone.conf")
+    )
 )
 IS_WINDOWS = platform.system() == "Windows"
 DEFAULT_HOME_MOUNT = os.path.expanduser("~/cloud_mounts")
@@ -39,6 +45,8 @@ def _configured_mount_dir() -> str | None:
         if val:
             configured = os.path.expanduser(val)
             break
+    if not configured:
+        configured = load_app_settings().mount_base
     return configured
 
 
@@ -80,7 +88,10 @@ def _resolve_base_mount_dir(create: bool = False) -> Tuple[str, str | None]:
     fallback = os.path.join(tempfile.gettempdir(), f"cloud-mount-{fallback_user}")
     if create:
         os.makedirs(fallback, exist_ok=True)
-    return fallback, f"[!] Using fallback mount directory {fallback}. Set CLOUD_MOUNT_BASE to choose a different location."
+    return (
+        fallback,
+        f"[!] Using fallback mount directory {fallback}. Set CLOUD_MOUNT_BASE to choose a different location.",
+    )
 
 
 BASE_MOUNT_DIR, BASE_DIR_NOTE = _resolve_base_mount_dir()
@@ -101,6 +112,7 @@ class RemoteInfo:
     mount_path: str
     flags: List[str] = field(default_factory=list)
     extra_info: Dict[str, str] = field(default_factory=dict)
+    auto_mount: bool = False
 
     @property
     def display_name(self) -> str:
@@ -210,14 +222,30 @@ def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
 
 def load_remotes() -> List[RemoteInfo]:
     config = _load_config()
+    app_settings = load_app_settings()
+    mount_settings = load_mount_settings()
     remotes: List[RemoteInfo] = []
     for name in config.sections():
         section = config[name]
+        remote_settings = mount_settings.get(name)
+        if remote_settings and not remote_settings.enabled:
+            continue
         backend_type = section.get("type", "").lower()
         alias, provider = _parse_remote_name(name, backend_type)
         extra_flags_str = section.get("mount_flags", "").strip()
         extra_flags = shlex.split(extra_flags_str) if extra_flags_str else []
-        mount_path = _build_mount_path(provider, alias)
+        if remote_settings:
+            extra_flags.extend(remote_settings.mount_flags)
+        mount_path = (
+            remote_settings.mount_path
+            if remote_settings and remote_settings.mount_path
+            else _build_mount_path(provider, alias)
+        )
+        auto_mount = (
+            remote_settings.auto_mount
+            if remote_settings and remote_settings.auto_mount is not None
+            else app_settings.auto_mount
+        )
         info = RemoteInfo(
             name=name,
             alias=alias,
@@ -226,6 +254,7 @@ def load_remotes() -> List[RemoteInfo]:
             mount_path=mount_path,
             flags=_build_flags(backend_type, extra_flags),
             extra_info=dict(section.items()),
+            auto_mount=auto_mount,
         )
         remotes.append(info)
     return remotes
@@ -464,7 +493,11 @@ def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
         return False, f"[!] Failed to verify {remote.name}: {exc}"
 
     detail = result.stderr.strip() or result.stdout.strip()
-    summary = detail.splitlines()[0] if detail else ("OK" if result.returncode == 0 else f"exit code {result.returncode}")
+    summary = (
+        detail.splitlines()[0]
+        if detail
+        else ("OK" if result.returncode == 0 else f"exit code {result.returncode}")
+    )
     if result.returncode == 0:
         return True, f"[✓] {remote.name}: {summary}"
     return False, f"[!] {remote.name}: {summary}"

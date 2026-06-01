@@ -67,6 +67,10 @@ def app_config_file() -> Path:
     return app_config_dir() / "config.toml"
 
 
+def app_mounts_file() -> Path:
+    return app_config_dir() / "mounts.toml"
+
+
 def ensure_app_directories() -> Dict[str, Path]:
     paths = {
         "config": app_config_dir(),
@@ -212,7 +216,11 @@ def verify_remotes(remotes: List[str]) -> Dict[str, Tuple[bool, str]]:
         )
         detail = result.stderr.strip() or result.stdout.strip()
         success = result.returncode == 0
-        summary = detail.splitlines()[0] if detail else ("credentials accepted" if success else f"exit code {result.returncode}")
+        summary = (
+            detail.splitlines()[0]
+            if detail
+            else ("credentials accepted" if success else f"exit code {result.returncode}")
+        )
         if success:
             print(f"[✓] {remote}: {summary}")
         else:
@@ -255,6 +263,7 @@ __all__ = [
     "app_state_dir",
     "app_cache_dir",
     "app_config_file",
+    "app_mounts_file",
     "ensure_app_directories",
     "ensure_dir",
     "copy_file",

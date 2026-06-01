@@ -17,6 +17,7 @@ from typing import Any
 from . import core
 from .config_tools import setup_wizard
 from .config_tools.shared import ensure_app_directories
+from .settings import ensure_default_config_files, load_app_settings
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -162,6 +163,10 @@ def _open_folder_with_dolphin(path: str) -> bool:
     if _open_folder_in_dolphin_tab(path):
         return True
 
+    return _open_folder_in_dolphin_new_window(path)
+
+
+def _open_folder_in_dolphin_new_window(path: str) -> bool:
     dolphin = shutil.which("dolphin")
     if not dolphin:
         return False
@@ -391,6 +396,8 @@ def _open_folder_in_dolphin_window_with_qtdbus(
     service: str,
     object_path: str,
     uri: str,
+    *,
+    focus: bool = True,
 ) -> bool:
     interface = dbus.QDBusInterface(service, object_path, "org.kde.dolphin.MainWindow", dbus.bus)
     if not interface.isValid():
@@ -398,7 +405,8 @@ def _open_folder_in_dolphin_window_with_qtdbus(
     reply = interface.call("openDirectories", [uri], False)
     if reply.errorName():
         return False
-    interface.call("activateWindow", "")
+    if focus:
+        interface.call("activateWindow", "")
     return True
 
 
@@ -408,8 +416,10 @@ def _open_folder_in_dolphin_window(
     service: str,
     object_path: str,
     uri: str,
+    *,
+    focus: bool = True,
 ) -> bool:
-    if dbus and _open_folder_in_dolphin_window_with_qtdbus(dbus, service, object_path, uri):
+    if dbus and _open_folder_in_dolphin_window_with_qtdbus(dbus, service, object_path, uri, focus=focus):
         return True
     if not qdbus:
         return False
@@ -433,15 +443,16 @@ def _open_folder_in_dolphin_window(
     if result.returncode != 0:
         return False
 
-    try:
-        subprocess.run(
-            [qdbus, service, object_path, "org.kde.dolphin.MainWindow.activateWindow", ""],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=1,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    if focus:
+        try:
+            subprocess.run(
+                [qdbus, service, object_path, "org.kde.dolphin.MainWindow.activateWindow", ""],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     return True
 
 
@@ -453,7 +464,7 @@ def _dolphin_slow_tab_targets(qdbus: str, tried: set[tuple[str, str]]) -> list[t
     return [target for target in _ordered_dolphin_dbus_windows(qdbus) if target not in tried]
 
 
-def _open_folder_in_dolphin_tab(path: str) -> bool:
+def _open_folder_in_dolphin_tab(path: str, *, current_desktop: bool = True, focus: bool = True) -> bool:
     global _dolphin_tab_target_cache
 
     uri = _folder_uri(path)
@@ -466,7 +477,7 @@ def _open_folder_in_dolphin_tab(path: str) -> bool:
     if _dolphin_tab_target_cache:
         service, object_path = _dolphin_tab_target_cache
         tried.add((service, object_path))
-        desktop = _x11_current_desktop()
+        desktop = _x11_current_desktop() if current_desktop else None
         cache_is_usable = desktop is None or _dolphin_window_is_on_desktop(
             dbus,
             qdbus,
@@ -474,24 +485,25 @@ def _open_folder_in_dolphin_tab(path: str) -> bool:
             object_path,
             desktop,
         )
-        if cache_is_usable and _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
+        if cache_is_usable and _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri, focus=focus):
             return True
         _dolphin_tab_target_cache = None
 
-    for service, object_path in _dolphin_current_desktop_targets(dbus, qdbus, tried):
-        tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
-            _dolphin_tab_target_cache = (service, object_path)
-            return True
+    if current_desktop:
+        for service, object_path in _dolphin_current_desktop_targets(dbus, qdbus, tried):
+            tried.add((service, object_path))
+            if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri, focus=focus):
+                _dolphin_tab_target_cache = (service, object_path)
+                return True
 
-    if _x11_current_desktop() is not None:
-        return False
+        if _x11_current_desktop() is not None:
+            return False
 
     for service, object_path in _dolphin_fast_tab_targets(dbus):
         if (service, object_path) in tried:
             continue
         tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
+        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri, focus=focus):
             _dolphin_tab_target_cache = (service, object_path)
             return True
 
@@ -500,24 +512,39 @@ def _open_folder_in_dolphin_tab(path: str) -> bool:
         return False
     for service, object_path in _dolphin_slow_tab_targets(qdbus, tried):
         tried.add((service, object_path))
-        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri):
+        if _open_folder_in_dolphin_window(dbus, qdbus, service, object_path, uri, focus=focus):
             _dolphin_tab_target_cache = (service, object_path)
             return True
 
     return False
 
 
-def _open_folder_with_known_file_manager(path: str) -> bool:
+def _open_folder_with_known_file_manager(path: str, *, behavior: str, focus: bool) -> bool:
     default_app = _default_directory_app().lower()
     if "dolphin" in default_app:
-        return _open_folder_with_dolphin(path)
+        if behavior == "new_window":
+            return False
+        if _open_folder_in_dolphin_tab(path, current_desktop=behavior == "current_desktop", focus=focus):
+            return True
+        if behavior == "current_desktop":
+            return _open_folder_in_dolphin_new_window(path)
     return False
 
 
 def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "default") -> bool:
+    settings = load_app_settings()
+    behavior = settings.open_folder_behavior
+    if strategy == "default":
+        strategy = behavior
     if strategy == "file-manager-service" and _show_folder_with_file_manager(path):
         return True
-    if strategy == "default" and _open_folder_with_known_file_manager(path):
+    if strategy in {"current_desktop", "existing_window"} and _open_folder_with_known_file_manager(
+        path,
+        behavior=strategy,
+        focus=settings.focus_file_manager,
+    ):
+        return True
+    if strategy == "new_window" and _open_folder_in_dolphin_new_window(path):
         return True
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
@@ -552,6 +579,7 @@ class CloudMountTray:
         self.rebuild_menus()
         self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
+        self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
 
     def _handle_activation(self, reason: Any) -> None:
@@ -611,13 +639,28 @@ class CloudMountTray:
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
         mounted, failures = core.mount_all(remotes)
-        if failures:
-            self._notify("Mount all", "\n".join(_clean_message(item) for item in failures), success=False)
-        elif mounted:
-            self._notify("Mount all", "Mounted: " + ", ".join(mounted), success=True)
-        else:
-            self._notify("Mount all", "Nothing to mount.", success=True)
+        self._report_mount_results("Mount all", mounted, failures)
         self.rebuild_menus()
+
+    def _schedule_auto_mounts(self) -> None:
+        remotes = [remote for remote in core.load_remotes() if remote.auto_mount and not core.is_mounted(remote)]
+        if not remotes:
+            return
+        delay_ms = int(load_app_settings().auto_mount_delay * 1000)
+        self.qt.QTimer.singleShot(delay_ms, lambda: self._auto_mount(remotes))
+
+    def _auto_mount(self, remotes: list[core.RemoteInfo]) -> None:
+        mounted, failures = core.mount_all(remotes)
+        self._report_mount_results("Auto-mount", mounted, failures)
+        self.rebuild_menus()
+
+    def _report_mount_results(self, title: str, mounted: list[str], failures: list[str]) -> None:
+        if failures:
+            self._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
+        elif mounted:
+            self._notify(title, "Mounted: " + ", ".join(mounted), success=True)
+        else:
+            self._notify(title, "Nothing to mount.", success=True)
 
     def _unmount_all(self, remotes: list[core.RemoteInfo]) -> None:
         unmounted, failures = core.unmount_all(remotes)
@@ -680,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     ensure_app_directories()
+    ensure_default_config_files()
     core.ensure_base_mount_dir()
     return CloudMountTray(qt, refresh_interval=args.refresh_interval).run()
 
