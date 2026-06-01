@@ -5,6 +5,7 @@
 - Added an optional PySide6 desktop tray preview with mount, unmount, restart-mount, and open-folder actions.
 - Split tray interactions between hover status, left-click remote actions, and right-click app actions.
 - Open-folder actions use the desktop default opener, with an internal file-manager service strategy reserved for later configuration.
+- Dolphin folder opens now use `dolphin --new-window` to avoid unpredictable portal/window reuse behavior.
 
 ## 0.1.1 - 2026-05-31
 

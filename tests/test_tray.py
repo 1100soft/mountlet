@@ -141,11 +141,25 @@ class TrayTests(unittest.TestCase):
         qt.QUrl.fromLocalFile.return_value = "qt-url"
 
         with mock.patch.object(tray, "_show_folder_with_file_manager") as show_folder:
-            self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+            with mock.patch.object(tray, "_open_folder_with_known_file_manager", return_value=False):
+                self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
 
         show_folder.assert_not_called()
         qt.QUrl.fromLocalFile.assert_called_once_with("/tmp/docs")
         qt.QDesktopServices.openUrl.assert_called_once_with("qt-url")
+
+    def test_open_folder_uses_dolphin_new_window_when_dolphin_is_default(self):
+        qt = mock.Mock()
+
+        with mock.patch.object(tray, "_default_directory_app", return_value="org.kde.dolphin.desktop"):
+            with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/dolphin"):
+                with mock.patch.object(tray.subprocess, "Popen") as popen:
+                    self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/dolphin", "--new-window", "/tmp/docs"])
+        qt.QUrl.fromLocalFile.assert_not_called()
+        qt.QDesktopServices.openUrl.assert_not_called()
 
     def test_open_folder_can_use_file_manager_service_strategy(self):
         qt = mock.Mock()

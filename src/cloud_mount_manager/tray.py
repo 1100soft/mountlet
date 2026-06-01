@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import sys
@@ -133,8 +134,51 @@ def _show_folder_with_file_manager(path: str) -> bool:
     return result.returncode == 0
 
 
+def _default_directory_app() -> str:
+    if platform.system() != "Linux":
+        return ""
+    try:
+        result = subprocess.run(
+            ["xdg-mime", "query", "default", "inode/directory"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _open_folder_with_dolphin(path: str) -> bool:
+    dolphin = shutil.which("dolphin")
+    if not dolphin:
+        return False
+    try:
+        subprocess.Popen(
+            [dolphin, "--new-window", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    return True
+
+
+def _open_folder_with_known_file_manager(path: str) -> bool:
+    default_app = _default_directory_app().lower()
+    if "dolphin" in default_app:
+        return _open_folder_with_dolphin(path)
+    return False
+
+
 def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "default") -> bool:
     if strategy == "file-manager-service" and _show_folder_with_file_manager(path):
+        return True
+    if strategy == "default" and _open_folder_with_known_file_manager(path):
         return True
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
