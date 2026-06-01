@@ -18,6 +18,10 @@ from .config_tools import setup_wizard
 from .config_tools.shared import ensure_app_directories
 
 
+_DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
+_dolphin_tab_target_cache: tuple[str, str] | None = None
+
+
 class TrayDependencyError(RuntimeError):
     pass
 
@@ -201,14 +205,17 @@ def _dolphin_service_sort_key(service: str) -> int:
     return int(suffix)
 
 
-def _dolphin_dbus_windows() -> list[tuple[str, str]]:
-    windows: list[tuple[str, str]] = []
-    services = sorted(
+def _dolphin_dbus_services() -> list[str]:
+    return sorted(
         (service for service in _qdbus_lines([]) if service.startswith("org.kde.dolphin-")),
         key=_dolphin_service_sort_key,
         reverse=True,
     )
-    for service in services:
+
+
+def _dolphin_dbus_windows() -> list[tuple[str, str]]:
+    windows: list[tuple[str, str]] = []
+    for service in _dolphin_dbus_services():
         paths = _qdbus_lines([service])
         for path in paths:
             if path.startswith("/dolphin/Dolphin_"):
@@ -241,31 +248,64 @@ def _ordered_dolphin_dbus_windows(qdbus: str) -> list[tuple[str, str]]:
     return [*active, *inactive]
 
 
+def _open_folder_in_dolphin_window(qdbus: str, service: str, object_path: str, uri: str) -> bool:
+    try:
+        result = subprocess.run(
+            [
+                qdbus,
+                service,
+                object_path,
+                "org.kde.dolphin.MainWindow.openDirectories",
+                uri,
+                "false",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _dolphin_fast_tab_targets() -> list[tuple[str, str]]:
+    return [(service, _DOLPHIN_MAIN_WINDOW_PATH) for service in _dolphin_dbus_services()]
+
+
+def _dolphin_slow_tab_targets(qdbus: str, tried: set[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [target for target in _ordered_dolphin_dbus_windows(qdbus) if target not in tried]
+
+
 def _open_folder_in_dolphin_tab(path: str) -> bool:
+    global _dolphin_tab_target_cache
+
     uri = _folder_uri(path)
     qdbus = _qdbus_binary()
     if not qdbus:
         return False
 
-    for service, object_path in _ordered_dolphin_dbus_windows(qdbus):
-        try:
-            result = subprocess.run(
-                [
-                    qdbus,
-                    service,
-                    object_path,
-                    "org.kde.dolphin.MainWindow.openDirectories",
-                    uri,
-                    "false",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if result.returncode == 0:
+    tried: set[tuple[str, str]] = set()
+    if _dolphin_tab_target_cache:
+        service, object_path = _dolphin_tab_target_cache
+        tried.add((service, object_path))
+        if _open_folder_in_dolphin_window(qdbus, service, object_path, uri):
             return True
+        _dolphin_tab_target_cache = None
+
+    for service, object_path in _dolphin_fast_tab_targets():
+        if (service, object_path) in tried:
+            continue
+        tried.add((service, object_path))
+        if _open_folder_in_dolphin_window(qdbus, service, object_path, uri):
+            _dolphin_tab_target_cache = (service, object_path)
+            return True
+
+    for service, object_path in _dolphin_slow_tab_targets(qdbus, tried):
+        tried.add((service, object_path))
+        if _open_folder_in_dolphin_window(qdbus, service, object_path, uri):
+            _dolphin_tab_target_cache = (service, object_path)
+            return True
+
     return False
 
 

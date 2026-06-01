@@ -23,6 +23,9 @@ class _FakeMenu:
 
 
 class TrayTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tray._dolphin_tab_target_cache = None
+
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
         with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
             with mock.patch.object(tray, "_load_qt_bindings") as load_qt:
@@ -178,7 +181,7 @@ class TrayTests(unittest.TestCase):
         windows = [("org.kde.dolphin-1234", "/dolphin/Dolphin_1")]
 
         with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_ordered_dolphin_dbus_windows", return_value=windows):
+            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
                 with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
@@ -197,9 +200,10 @@ class TrayTests(unittest.TestCase):
 
     def test_open_folder_in_dolphin_tab_falls_back_when_no_window_is_available(self):
         with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_ordered_dolphin_dbus_windows", return_value=[]):
-                with mock.patch.object(tray.subprocess, "run") as run:
-                    self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=[]):
+                with mock.patch.object(tray, "_dolphin_slow_tab_targets", return_value=[]):
+                    with mock.patch.object(tray.subprocess, "run") as run:
+                        self.assertFalse(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         run.assert_not_called()
 
@@ -214,11 +218,40 @@ class TrayTests(unittest.TestCase):
             ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"),
         ]
         with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
-            with mock.patch.object(tray, "_ordered_dolphin_dbus_windows", return_value=windows):
+            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
                 with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
                     self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
 
         self.assertEqual(run.call_count, 2)
+
+    def test_open_folder_in_dolphin_tab_reuses_cached_window(self):
+        completed = SimpleNamespace(returncode=0)
+        tray._dolphin_tab_target_cache = ("org.kde.dolphin-1234", "/dolphin/Dolphin_1")
+
+        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+            with mock.patch.object(tray, "_dolphin_fast_tab_targets") as fast_targets:
+                with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        fast_targets.assert_not_called()
+        run.assert_called_once()
+
+    def test_open_folder_in_dolphin_tab_clears_stale_cache(self):
+        def run_command(command: list[str], **kwargs: object) -> SimpleNamespace:
+            if "org.kde.dolphin-1234" in command:
+                return SimpleNamespace(returncode=1)
+            return SimpleNamespace(returncode=0)
+
+        tray._dolphin_tab_target_cache = ("org.kde.dolphin-1234", "/dolphin/Dolphin_1")
+        windows = [("org.kde.dolphin-5678", "/dolphin/Dolphin_1")]
+
+        with mock.patch.object(tray, "_qdbus_binary", return_value="/usr/bin/qdbus6"):
+            with mock.patch.object(tray, "_dolphin_fast_tab_targets", return_value=windows):
+                with mock.patch.object(tray.subprocess, "run", side_effect=run_command) as run:
+                    self.assertTrue(tray._open_folder_in_dolphin_tab("/tmp/docs"))
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(tray._dolphin_tab_target_cache, ("org.kde.dolphin-5678", "/dolphin/Dolphin_1"))
 
     def test_dolphin_dbus_windows_are_sorted_by_newest_service_suffix(self):
         def qdbus_lines(args: list[str]) -> list[str]:
