@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
+from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories, legacy_app_config_dirs
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class MountSettings:
     enabled: bool = True
 
 
-DEFAULT_APP_CONFIG = """# Cloud Mount Manager app settings.
+DEFAULT_APP_CONFIG = """# Mountlet app settings.
 # rclone account credentials stay in rclone.conf.
 
 [app]
@@ -47,7 +47,7 @@ focus_file_manager = true
 """
 
 
-DEFAULT_MOUNTS_CONFIG = """# Per-remote Cloud Mount Manager settings.
+DEFAULT_MOUNTS_CONFIG = """# Per-remote Mountlet settings.
 # Remote names must match the names shown by rclone.
 #
 # Example:
@@ -60,6 +60,7 @@ DEFAULT_MOUNTS_CONFIG = """# Per-remote Cloud Mount Manager settings.
 
 def ensure_default_config_files() -> None:
     ensure_app_directories()
+    _copy_legacy_config_files()
     defaults = {
         app_config_file(): DEFAULT_APP_CONFIG,
         app_mounts_file(): DEFAULT_MOUNTS_CONFIG,
@@ -67,6 +68,18 @@ def ensure_default_config_files() -> None:
     for path, content in defaults.items():
         if not path.exists():
             path.write_text(content, encoding="utf-8")
+
+
+def _copy_legacy_config_files() -> None:
+    current_dir = app_config_file().parent
+    for legacy_dir in legacy_app_config_dirs():
+        if not legacy_dir.exists() or legacy_dir == current_dir:
+            continue
+        for filename in ("config.toml", "mounts.toml"):
+            source = legacy_dir / filename
+            destination = current_dir / filename
+            if source.exists() and not destination.exists():
+                destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _strip_comment(line: str) -> str:

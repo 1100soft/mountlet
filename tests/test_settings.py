@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloud_mount_manager import settings
+from mountlet import settings
 
 
 class SettingsTests(unittest.TestCase):
@@ -62,14 +62,41 @@ enabled = false
     def test_ensure_default_config_files_creates_app_and_mount_files(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_dir = Path(tempdir) / "config"
-            env = {"XDG_CONFIG_HOME": str(config_dir)}
+            env = {
+                "XDG_CONFIG_HOME": str(config_dir),
+                "XDG_STATE_HOME": str(Path(tempdir) / "state"),
+                "XDG_CACHE_HOME": str(Path(tempdir) / "cache"),
+            }
             with mock.patch.dict("os.environ", env, clear=False):
                 settings.ensure_default_config_files()
 
-            app_config = config_dir / "cloud-mount-manager" / "config.toml"
-            mounts_config = config_dir / "cloud-mount-manager" / "mounts.toml"
+            app_config = config_dir / "mountlet" / "config.toml"
+            mounts_config = config_dir / "mountlet" / "mounts.toml"
             self.assertTrue(app_config.exists())
             self.assertTrue(mounts_config.exists())
+
+    def test_ensure_default_config_files_copies_legacy_config_once(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config"
+            legacy_dir = config_dir / "cloud-mount-manager"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "config.toml").write_text("[app]\nauto_mount = true\n", encoding="utf-8")
+            (legacy_dir / "mounts.toml").write_text(
+                '[remotes."Docs"]\nauto_mount = true\n',
+                encoding="utf-8",
+            )
+            env = {
+                "XDG_CONFIG_HOME": str(config_dir),
+                "XDG_STATE_HOME": str(Path(tempdir) / "state"),
+                "XDG_CACHE_HOME": str(Path(tempdir) / "cache"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                settings.ensure_default_config_files()
+
+            app_config = config_dir / "mountlet" / "config.toml"
+            mounts_config = config_dir / "mountlet" / "mounts.toml"
+            self.assertIn("auto_mount = true", app_config.read_text(encoding="utf-8"))
+            self.assertIn('remotes."Docs"', mounts_config.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

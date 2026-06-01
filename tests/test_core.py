@@ -21,8 +21,9 @@ class CoreTests(unittest.TestCase):
             "XDG_CONFIG_HOME": str(Path(tempdir) / "config"),
         }
         if set_mount_base:
-            env["CLOUD_MOUNT_BASE"] = str(mount_base)
+            env["MOUNTLET_MOUNT_BASE"] = str(mount_base)
         else:
+            env["MOUNTLET_MOUNT_BASE"] = ""
             env["CLOUD_MOUNT_BASE"] = ""
             env["GDRIVE_MOUNT_BASE"] = ""
 
@@ -30,7 +31,7 @@ class CoreTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-        import cloud_mount_manager.core as core
+        import mountlet.core as core
 
         return importlib.reload(core)
 
@@ -88,7 +89,7 @@ type = dropbox
 
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            config_dir = Path(tempdir) / "config" / "cloud-mount-manager"
+            config_dir = Path(tempdir) / "config" / "mountlet"
             config_dir.mkdir(parents=True)
             (config_dir / "config.toml").write_text(
                 "[app]\nmount_base = \"~/ignored\"\nauto_mount = true\n",

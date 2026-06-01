@@ -127,7 +127,7 @@ def clear_screen() -> None:
 
 def display(remotes: List[core.RemoteInfo], status_line: str = "") -> None:
     clear_screen()
-    print("cloud mount manager")
+    print("mountlet")
     if core.BASE_DIR_NOTE and not status_line:
         status_line = core.BASE_DIR_NOTE
     print(status_line or "")

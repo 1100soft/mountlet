@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloud_mount_manager.config_tools import import_config, path_config, shared, verify_config
+from mountlet.config_tools import import_config, path_config, shared, verify_config
 
 
 class ConfigToolTests(unittest.TestCase):
@@ -58,14 +58,14 @@ class ConfigToolTests(unittest.TestCase):
             with mock.patch.dict("os.environ", env, clear=False):
                 self.assertEqual(
                     shared.app_config_file(),
-                    Path(tempdir) / "config" / "cloud-mount-manager" / "config.toml",
+                    Path(tempdir) / "config" / "mountlet" / "config.toml",
                 )
                 self.assertEqual(
                     shared.app_mounts_file(),
-                    Path(tempdir) / "config" / "cloud-mount-manager" / "mounts.toml",
+                    Path(tempdir) / "config" / "mountlet" / "mounts.toml",
                 )
-                self.assertEqual(shared.app_state_dir(), Path(tempdir) / "state" / "cloud-mount-manager")
-                self.assertEqual(shared.app_cache_dir(), Path(tempdir) / "cache" / "cloud-mount-manager")
+                self.assertEqual(shared.app_state_dir(), Path(tempdir) / "state" / "mountlet")
+                self.assertEqual(shared.app_cache_dir(), Path(tempdir) / "cache" / "mountlet")
 
     def test_default_rclone_config_honors_rclone_config_environment(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -84,11 +84,11 @@ class ConfigToolTests(unittest.TestCase):
             with mock.patch.dict("os.environ", env, clear=False):
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(path_config.main(["--ensure", "--app-config"]), 0)
-                self.assertTrue((Path(tempdir) / "config" / "cloud-mount-manager").is_dir())
-                self.assertTrue((Path(tempdir) / "config" / "cloud-mount-manager" / "config.toml").is_file())
-                self.assertTrue((Path(tempdir) / "config" / "cloud-mount-manager" / "mounts.toml").is_file())
-                self.assertTrue((Path(tempdir) / "state" / "cloud-mount-manager").is_dir())
-                self.assertTrue((Path(tempdir) / "cache" / "cloud-mount-manager").is_dir())
+                self.assertTrue((Path(tempdir) / "config" / "mountlet").is_dir())
+                self.assertTrue((Path(tempdir) / "config" / "mountlet" / "config.toml").is_file())
+                self.assertTrue((Path(tempdir) / "config" / "mountlet" / "mounts.toml").is_file())
+                self.assertTrue((Path(tempdir) / "state" / "mountlet").is_dir())
+                self.assertTrue((Path(tempdir) / "cache" / "mountlet").is_dir())
 
 
 if __name__ == "__main__":

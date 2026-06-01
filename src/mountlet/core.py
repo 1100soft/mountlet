@@ -30,7 +30,8 @@ CONFIG_PATH = (
 IS_WINDOWS = platform.system() == "Windows"
 DEFAULT_HOME_MOUNT = os.path.expanduser("~/cloud_mounts")
 
-ENV_BASE_VARS = ("CLOUD_MOUNT_BASE", "GDRIVE_MOUNT_BASE")
+ENV_BASE_VARS = ("MOUNTLET_MOUNT_BASE", "CLOUD_MOUNT_BASE", "GDRIVE_MOUNT_BASE")
+PRIMARY_BASE_ENV = ENV_BASE_VARS[0]
 
 
 def _slugify(value: str) -> str:
@@ -77,20 +78,20 @@ def _resolve_base_mount_dir(create: bool = False) -> Tuple[str, str | None]:
             except OSError:
                 continue
         if os.path.isdir(cand) and os.access(cand, os.W_OK | os.X_OK):
-            note = f"[i] Using mount directory {cand}. Set CLOUD_MOUNT_BASE to override."
+            note = f"[i] Using mount directory {cand}. Set {PRIMARY_BASE_ENV} to override."
             if configured and os.path.abspath(cand) == os.path.abspath(configured):
                 note = f"[i] Using configured mount directory {cand}."
             elif cand == DEFAULT_HOME_MOUNT:
-                note = f"[i] Using default mount directory {cand}. Set CLOUD_MOUNT_BASE to override."
+                note = f"[i] Using default mount directory {cand}. Set {PRIMARY_BASE_ENV} to override."
             return cand, note
 
     fallback_user = os.getuid() if hasattr(os, "getuid") else "user"
-    fallback = os.path.join(tempfile.gettempdir(), f"cloud-mount-{fallback_user}")
+    fallback = os.path.join(tempfile.gettempdir(), f"mountlet-{fallback_user}")
     if create:
         os.makedirs(fallback, exist_ok=True)
     return (
         fallback,
-        f"[!] Using fallback mount directory {fallback}. Set CLOUD_MOUNT_BASE to choose a different location.",
+        f"[!] Using fallback mount directory {fallback}. Set {PRIMARY_BASE_ENV} to choose a different location.",
     )
 
 

@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloud_mount_manager import core, tray
+from mountlet import core, tray
 
 
 class _FakeMenu:
@@ -93,14 +93,14 @@ class TrayTests(unittest.TestCase):
             ),
         ]
 
-        self.assertEqual(tray._status_tooltip([], []), "Cloud Mount Manager - no rclone remotes")
+        self.assertEqual(tray._status_tooltip([], []), "Mountlet - no rclone remotes")
         self.assertEqual(
             tray._status_tooltip(remotes, []),
-            "Cloud Mount Manager - 0 mounted, 2 unmounted",
+            "Mountlet - 0 mounted, 2 unmounted",
         )
         self.assertEqual(
             tray._status_tooltip(remotes, ["Docs"]),
-            "Cloud Mount Manager - mounted: Docs",
+            "Mountlet - mounted: Docs",
         )
 
     def test_left_click_activation_opens_remote_menu(self):

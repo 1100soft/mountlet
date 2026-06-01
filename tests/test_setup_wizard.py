@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloud_mount_manager.config_tools import setup_wizard
+from mountlet.config_tools import setup_wizard
 
 
 class SetupWizardTests(unittest.TestCase):
@@ -62,7 +62,7 @@ class SetupWizardTests(unittest.TestCase):
                                     result = setup_wizard.setup_command(args)
 
             self.assertEqual(result, 1)
-            self.assertIn("cloud-mount-manager setup --configure-rclone", output.getvalue())
+            self.assertIn("mountlet setup --configure-rclone", output.getvalue())
 
     def test_setup_tells_user_to_install_rclone_before_configuring_storage(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -90,10 +90,10 @@ class SetupWizardTests(unittest.TestCase):
             self.assertIn("1. Install rclone: sudo apt install rclone", text)
             self.assertIn("2. Install FUSE: sudo apt install fuse3", text)
             self.assertIn(
-                "3. After installing rclone, add cloud storage: cloud-mount-manager setup --configure-rclone",
+                "3. After installing rclone, add cloud storage: mountlet setup --configure-rclone",
                 text,
             )
-            self.assertNotIn("3. Add cloud storage: cloud-mount-manager setup --configure-rclone", text)
+            self.assertNotIn("3. Add cloud storage: mountlet setup --configure-rclone", text)
 
     def test_menu_readiness_does_not_suggest_rclone_config_when_rclone_is_missing(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -117,7 +117,7 @@ class SetupWizardTests(unittest.TestCase):
 
             text = output.getvalue()
             self.assertFalse(ready)
-            self.assertIn("cloud-mount-manager setup", text)
+            self.assertIn("mountlet setup", text)
             self.assertNotIn("setup --configure-rclone", text)
 
 

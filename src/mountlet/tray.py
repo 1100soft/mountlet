@@ -37,9 +37,9 @@ def _load_qt_bindings() -> SimpleNamespace:
     except ImportError as exc:
         raise TrayDependencyError(
             "Tray support requires PySide6. Install it with:\n"
-            '  pipx install "cloud-mount-manager[tray]"\n'
+            '  pipx install "mountlet[tray]"\n'
             "or, for an existing pipx install:\n"
-            "  pipx inject cloud-mount-manager PySide6"
+            "  pipx inject mountlet PySide6"
         ) from exc
 
     return SimpleNamespace(
@@ -67,16 +67,16 @@ def _remote_title(remote: core.RemoteInfo, mounted: bool) -> str:
 
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
     if not remotes:
-        return "Cloud Mount Manager - no rclone remotes"
+        return "Mountlet - no rclone remotes"
 
     unmounted_count = len(remotes) - len(mounted_names)
     if not mounted_names:
-        return f"Cloud Mount Manager - 0 mounted, {unmounted_count} unmounted"
+        return f"Mountlet - 0 mounted, {unmounted_count} unmounted"
 
     names = ", ".join(mounted_names[:3])
     if len(mounted_names) > 3:
         names += f", +{len(mounted_names) - 3} more"
-    return f"Cloud Mount Manager - mounted: {names}"
+    return f"Mountlet - mounted: {names}"
 
 
 def _can_connect_unix_socket(path: str) -> bool:
@@ -558,7 +558,7 @@ class CloudMountTray:
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
         self.tray = qt.QSystemTrayIcon(self._icon(), self.app)
-        self.tray.setToolTip("Cloud Mount Manager")
+        self.tray.setToolTip("Mountlet")
         self.tray.setContextMenu(self.app_menu)
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
@@ -573,7 +573,7 @@ class CloudMountTray:
     def run(self) -> int:
         if not self.qt.QSystemTrayIcon.isSystemTrayAvailable():
             print("[!] No system tray is available in this desktop session.", file=sys.stderr)
-            print("    Use the terminal menu instead: cloud-mount-manager", file=sys.stderr)
+            print("    Use the terminal menu instead: mountlet", file=sys.stderr)
             return 1
 
         self.rebuild_menus()
@@ -602,7 +602,7 @@ class CloudMountTray:
             action = self.remote_menu.addAction("No rclone remotes found")
             action.setEnabled(False)
 
-        status = self.app_menu.addAction(_status_tooltip(remotes, mounted_names).replace("Cloud Mount Manager - ", ""))
+        status = self.app_menu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
         status.setEnabled(False)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
@@ -634,7 +634,7 @@ class CloudMountTray:
 
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
         success, message = action(remote)
-        self._notify("Cloud Mount Manager", _clean_message(message), success=success)
+        self._notify("Mountlet", _clean_message(message), success=success)
         self.rebuild_menus()
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
@@ -690,7 +690,7 @@ class CloudMountTray:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the Cloud Mount Manager desktop tray app.")
+    parser = argparse.ArgumentParser(description="Run the Mountlet desktop tray app.")
     parser.add_argument(
         "--skip-readiness-check",
         action="store_true",
@@ -713,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
     desktop_ready, message = _desktop_session_available()
     if not desktop_ready:
         print(f"[!] {message}", file=sys.stderr)
-        print("    Use the terminal menu instead: cloud-mount-manager", file=sys.stderr)
+        print("    Use the terminal menu instead: mountlet", file=sys.stderr)
         return 1
 
     try:

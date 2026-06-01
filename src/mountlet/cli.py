@@ -70,23 +70,23 @@ ALIASES = {
 
 
 def print_help() -> None:
-    print("cloud-mount-manager")
+    print("mountlet")
     print()
     print("Usage:")
-    print("  cloud-mount-manager")
-    print("  cloud-mount-manager <command> [options]")
+    print("  mountlet")
+    print("  mountlet <command> [options]")
     print()
     print("Commands:")
     for name, (description, _) in COMMANDS.items():
         print(f"  {name:<10} {description}")
     print()
-    print("Run 'cloud-mount-manager <command> --help' for command-specific options.")
+    print("Run 'mountlet <command> --help' for command-specific options.")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {"--version", "-V"}:
-        print(f"cloud-mount-manager {__version__}")
+        print(f"mountlet {__version__}")
         return 0
     if not args:
         return run_menu()

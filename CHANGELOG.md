@@ -2,10 +2,11 @@
 
 ## Unreleased
 
+- Renamed the project, import package, installed command, and user config directory to Mountlet.
 - Added an optional PySide6 desktop tray preview with mount, unmount, restart-mount, and open-folder actions.
 - Split tray interactions between hover status, left-click remote actions, and right-click app actions.
-- Open-folder actions use the desktop default opener, with an internal file-manager service strategy reserved for later configuration.
-- Dolphin folder opens now use `dolphin --new-window` to avoid unpredictable portal/window reuse behavior.
+- Added app-level and per-remote Mountlet config files.
+- Open-folder actions can use current-desktop Dolphin windows on X11 when available, with fallback open strategies elsewhere.
 
 ## 0.1.1 - 2026-05-31
 
@@ -16,10 +17,10 @@
 
 Initial public CLI release.
 
-- Single public command: `cloud-mount-manager`.
+- Single public command: `mountlet`.
 - Fast readiness check before opening the menu.
-- Guided setup flow with `cloud-mount-manager setup`.
-- Optional rclone connection flow with `cloud-mount-manager setup --configure-rclone`.
+- Guided setup flow with `mountlet setup`.
+- Optional rclone connection flow with `mountlet setup --configure-rclone`.
 - Interactive menu for mounting, unmounting, refreshing, and verifying remotes.
 - Subcommands for setup, path inspection, verification, reconnect, import, and export.
 - User-specific app directories for config, state, and cache.

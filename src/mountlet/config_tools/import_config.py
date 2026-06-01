@@ -71,7 +71,7 @@ def import_bundle(args: argparse.Namespace) -> int:
     print(f"[*] rclone check: {version_info}")
     if not remotes or args.skip_verify:
         if remotes and args.skip_verify:
-            print("[i] Verification skipped. Run 'cloud-mount-manager verify' when ready.")
+            print("[i] Verification skipped. Run 'mountlet verify' when ready.")
         elif remotes:
             print("[i] No remotes found to verify.")
         return 0

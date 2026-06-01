@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cloud_mount_manager import cli
+from mountlet import cli
 
 
 class CliTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(cli.main(["--version"]), 0)
 
-        self.assertIn("cloud-mount-manager 0.1.1", output.getvalue())
+        self.assertIn("mountlet 0.2.0", output.getvalue())
 
     def test_no_args_opens_menu(self):
         with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=True):
@@ -60,7 +60,7 @@ class CliTests(unittest.TestCase):
         setup.assert_called_once_with(["--skip-verify"])
 
     def test_tray_subcommand_dispatches_to_tray_tool(self):
-        from cloud_mount_manager import tray
+        from mountlet import tray
 
         with mock.patch.object(tray, "main", return_value=0) as tray_main:
             self.assertEqual(cli.main(["tray", "--skip-readiness-check"]), 0)

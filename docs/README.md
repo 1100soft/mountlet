@@ -35,7 +35,7 @@ Install the optional tray dependencies when working on the desktop preview:
 
 ```bash
 python -m pip install -e ".[dev,tray]"
-cloud-mount-manager tray
+mountlet tray
 ```
 
 The repository-level `secrets/` directory is for local development only. It is
