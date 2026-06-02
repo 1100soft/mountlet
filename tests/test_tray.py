@@ -133,6 +133,37 @@ class TrayTests(unittest.TestCase):
         rebuild.assert_not_called()
         self.assertEqual(fake_window.show_calls, 1)
 
+    def test_mountlet_window_show_refocuses_existing_window_without_repositioning(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isMinimized.return_value = False
+
+        with mock.patch.object(mountlet_window, "refresh") as refresh:
+            with mock.patch.object(mountlet_window, "_position_near_tray") as position:
+                mountlet_window.show()
+
+        refresh.assert_called_once_with()
+        position.assert_not_called()
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_mountlet_window_show_restores_minimized_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isMinimized.return_value = True
+
+        with mock.patch.object(mountlet_window, "refresh"):
+            with mock.patch.object(mountlet_window, "_position_near_tray"):
+                mountlet_window.show()
+
+        mountlet_window.window.show.assert_not_called()
+        mountlet_window.window.showNormal.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
     def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
         completed = SimpleNamespace(returncode=0)
 

@@ -46,6 +46,23 @@ MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
 )
+RCLONE_FIELD_TOOLTIPS = {
+    "description": "Optional note stored in rclone.conf. Mountlet does not use this value.",
+    "root_folder_id": "Limit this Drive remote to one Google Drive folder ID. rclone uses it when accessing the remote.",
+    "team_drive": "Google shared drive ID. rclone uses it when this remote points at a shared drive.",
+    "shared_with_me": "Show files shared with you. rclone uses this as a Drive remote setting.",
+    "scope": "Google Drive permission scope. Changing it can require re-authentication.",
+    "drive_id": "OneDrive drive ID. rclone uses it to choose the mapped drive.",
+    "drive_type": "OneDrive drive type. rclone uses it with the drive ID.",
+    "region": "Provider region. rclone uses it for providers that require a region.",
+    "url": "WebDAV server URL. rclone uses it as the remote endpoint.",
+    "vendor": "WebDAV vendor type. rclone uses it to choose provider-specific behavior.",
+    "provider": "Storage provider name. rclone uses it for provider-specific behavior.",
+    "env_auth": "Use provider credentials from the environment instead of values in rclone.conf.",
+    "endpoint": "Provider endpoint URL. rclone uses it for S3-compatible services.",
+    "acl": "Default access-control setting used by the remote provider.",
+    "storage_class": "Default storage class used by the remote provider.",
+}
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
@@ -685,6 +702,13 @@ def _field_label(key: str) -> str:
     return key.replace("_", " ").title()
 
 
+def _rclone_field_tooltip(key: str) -> str:
+    return RCLONE_FIELD_TOOLTIPS.get(
+        key,
+        "Safely editable rclone setting. rclone uses this value when accessing the remote.",
+    )
+
+
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
@@ -872,10 +896,10 @@ class MountConfigDialog(_ConfigDialogBase):
             rclone_form = self.qt.QFormLayout(rclone_frame)
             for key, value in rclone_fields.items():
                 field = self._line(value)
-                field.setToolTip("Safely editable rclone setting. Leave blank to remove this optional value.")
+                field.setToolTip(f"{_rclone_field_tooltip(key)} Leave blank to remove this optional value.")
                 self.rclone_fields[key] = field
                 rclone_form.addRow(_field_label(key), field)
-            form.addRow("Remote", rclone_frame)
+            form.addRow("Advanced rclone", rclone_frame)
 
         root.addWidget(frame)
         root.addWidget(self._buttons())
@@ -921,6 +945,7 @@ class MountletWindow:
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self.window = self.qt.QMainWindow()
         self.window.setWindowTitle("Mountlet")
+        self._make_tray_owned_window()
         self.window.resize(720, 260)
         self._build_app_menu()
 
@@ -957,10 +982,50 @@ class MountletWindow:
         return bool(self.window.isVisible())
 
     def show(self) -> None:
+        was_visible = self.is_visible()
         self.refresh()
-        self.window.show()
+        if not was_visible:
+            self._position_near_tray()
+        self._focus_window()
+
+    def _make_tray_owned_window(self) -> None:
+        try:
+            self.window.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
+        except Exception:
+            return
+
+    def _focus_window(self) -> None:
+        if self.window.isMinimized():
+            self.window.showNormal()
+        else:
+            self.window.show()
         self.window.raise_()
         self.window.activateWindow()
+
+    def _position_near_tray(self) -> None:
+        try:
+            tray_geometry = self.tray_app.tray.geometry()
+            anchor = tray_geometry.center() if tray_geometry.isValid() else self.qt.QCursor.pos()
+            screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            size = self.window.sizeHint()
+            if not size.isValid():
+                size = self.window.size()
+            width = size.width()
+            height = size.height()
+            max_x = max(available.left(), available.right() - width)
+            max_y = max(available.top(), available.bottom() - height)
+            x = min(max(anchor.x() - (width // 2), available.left()), max_x)
+            if anchor.y() > available.center().y():
+                y = anchor.y() - height - 8
+            else:
+                y = anchor.y() + 8
+            y = min(max(y, available.top()), max_y)
+            self.window.move(x, y)
+        except Exception:
+            return
 
     def refresh(self) -> None:
         self._refresh_pending = False
