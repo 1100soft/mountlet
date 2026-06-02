@@ -181,6 +181,13 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 }
 
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
+COMMON_SAFE_RCLONE_KEYS = ("description",)
+SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
+    "drive": ("root_folder_id", "team_drive", "shared_with_me", "scope"),
+    "onedrive": ("drive_id", "drive_type", "region"),
+    "webdav": ("url", "vendor"),
+    "s3": ("provider", "env_auth", "region", "endpoint", "acl", "storage_class"),
+}
 
 
 def _parse_remote_name(name: str, backend_type: str) -> Tuple[str, str]:
@@ -232,6 +239,45 @@ def _load_config() -> configparser.ConfigParser:
     config = configparser.ConfigParser(interpolation=None)
     config.read(CONFIG_PATH, encoding="utf-8")
     return config
+
+
+def _save_config(config: configparser.ConfigParser) -> None:
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+        config.write(handle)
+
+
+def _safe_rclone_keys(backend_type: str) -> Tuple[str, ...]:
+    return COMMON_SAFE_RCLONE_KEYS + SAFE_RCLONE_CONFIG_KEYS.get(backend_type.lower(), ())
+
+
+def editable_rclone_fields(remote: RemoteInfo) -> Dict[str, str]:
+    config = _load_config()
+    if not config.has_section(remote.name):
+        return {}
+    section = config[remote.name]
+    fields: Dict[str, str] = {}
+    for key in _safe_rclone_keys(remote.backend_type):
+        if key in section or key in SAFE_RCLONE_CONFIG_KEYS.get(remote.backend_type.lower(), ()):
+            fields[key] = section.get(key, "")
+    return fields
+
+
+def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
+    config = _load_config()
+    if not config.has_section(remote_name):
+        return
+    backend_type = config[remote_name].get("type", "").lower()
+    allowed = set(_safe_rclone_keys(backend_type))
+    for key, value in updates.items():
+        if key not in allowed:
+            continue
+        text = value.strip()
+        if text:
+            config[remote_name][key] = text
+        else:
+            config.remove_option(remote_name, key)
+    _save_config(config)
 
 
 def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
@@ -562,6 +608,8 @@ __all__ = [
     "CONFIG_PATH",
     "ensure_base_mount_dir",
     "load_remotes",
+    "editable_rclone_fields",
+    "save_rclone_fields",
     "mount_remote",
     "unmount_remote",
     "refresh_remote",

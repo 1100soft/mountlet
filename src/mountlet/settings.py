@@ -16,6 +16,7 @@ class AppSettings:
     mount_base: str | None = None
     auto_mount: bool = False
     auto_mount_delay: float = 2.0
+    start_at_login: bool = False
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
 
@@ -38,6 +39,7 @@ mount_base = ""
 # Default for remotes without their own auto_mount setting.
 auto_mount = false
 auto_mount_delay = 2.0
+start_at_login = false
 
 [tray]
 # current_desktop uses an existing Dolphin window on the current X11 desktop when possible.
@@ -205,6 +207,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         mount_base=_string_value(app.get("mount_base")),
         auto_mount=_bool_value(app.get("auto_mount"), False),
         auto_mount_delay=max(_float_value(app.get("auto_mount_delay"), 2.0), 0.0),
+        start_at_login=_bool_value(app.get("start_at_login"), _autostart_file().exists()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
     )
@@ -253,6 +256,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# Default for remotes without their own auto_mount setting.",
             f"auto_mount = {_toml_bool(settings.auto_mount)}",
             f"auto_mount_delay = {settings.auto_mount_delay:g}",
+            f"start_at_login = {_toml_bool(settings.start_at_login)}",
             "",
             "[tray]",
             "# current_desktop uses an existing Dolphin window on the current X11 desktop when possible.",
@@ -263,6 +267,37 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
         ]
     )
     destination.write_text(content, encoding="utf-8")
+
+
+def _autostart_file() -> Path:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return config_home / "autostart" / "mountlet.desktop"
+
+
+def set_start_at_login(enabled: bool, path: Path | None = None) -> None:
+    destination = path or _autostart_file()
+    if enabled:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            "\n".join(
+                [
+                    "[Desktop Entry]",
+                    "Type=Application",
+                    "Name=Mountlet",
+                    "Comment=Mount cloud storage folders with Mountlet",
+                    "Exec=mountlet tray",
+                    "Terminal=false",
+                    "X-GNOME-Autostart-enabled=true",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return
+    try:
+        destination.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _remote_section_name(remote_name: str) -> str:
@@ -300,4 +335,5 @@ __all__ = [
     "load_mount_settings",
     "save_app_settings",
     "save_mount_settings",
+    "set_start_at_login",
 ]

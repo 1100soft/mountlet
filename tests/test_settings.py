@@ -21,6 +21,7 @@ class SettingsTests(unittest.TestCase):
 mount_base = "~/Mounts"
 auto_mount = true
 auto_mount_delay = 3.5
+start_at_login = true
 
 [tray]
 open_folder_behavior = "new_window"
@@ -34,6 +35,7 @@ focus_file_manager = false
         self.assertTrue(config.mount_base.endswith("/Mounts"))
         self.assertTrue(config.auto_mount)
         self.assertEqual(config.auto_mount_delay, 3.5)
+        self.assertTrue(config.start_at_login)
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
 
@@ -106,6 +108,7 @@ enabled = false
                     mount_base="~/Mounts",
                     auto_mount=True,
                     auto_mount_delay=4.25,
+                    start_at_login=True,
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
                 ),
@@ -117,8 +120,20 @@ enabled = false
         self.assertTrue(loaded.mount_base.endswith("/Mounts"))
         self.assertTrue(loaded.auto_mount)
         self.assertEqual(loaded.auto_mount_delay, 4.25)
+        self.assertTrue(loaded.start_at_login)
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
+
+    def test_set_start_at_login_writes_and_removes_desktop_entry(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "mountlet.desktop"
+            settings.set_start_at_login(True, path)
+
+            self.assertIn("Exec=mountlet tray", path.read_text(encoding="utf-8"))
+
+            settings.set_start_at_login(False, path)
+
+            self.assertFalse(path.exists())
 
     def test_save_mount_settings_round_trips_values(self):
         with tempfile.TemporaryDirectory() as tempdir:

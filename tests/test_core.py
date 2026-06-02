@@ -142,6 +142,31 @@ type = dropbox
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)
 
+    def test_editable_rclone_fields_are_safe_and_saveable(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+root_folder_id = abc
+token = secret
+""".strip(),
+            )
+            remote = core.load_remotes()[0]
+
+            fields = core.editable_rclone_fields(remote)
+
+            self.assertEqual(fields["root_folder_id"], "abc")
+            self.assertIn("team_drive", fields)
+            self.assertNotIn("token", fields)
+
+            core.save_rclone_fields("Docs", {"root_folder_id": "def", "token": "changed"})
+            remote = core.load_remotes()[0]
+
+            self.assertEqual(remote.extra_info["root_folder_id"], "def")
+            self.assertEqual(remote.extra_info["token"], "secret")
+
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")

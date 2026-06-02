@@ -27,6 +27,7 @@ from .settings import (
     load_mount_settings,
     save_app_settings,
     save_mount_settings,
+    set_start_at_login,
 )
 
 
@@ -679,6 +680,10 @@ def _muted_text_style(widget: Any) -> str:
     return f"color: {color};"
 
 
+def _field_label(key: str) -> str:
+    return key.replace("_", " ").title()
+
+
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
@@ -745,16 +750,20 @@ class AppConfigDialog(_ConfigDialogBase):
             "mount_base": self._line(app_settings.mount_base, default=core.DEFAULT_HOME_MOUNT),
             "auto_mount": self._check(app_settings.auto_mount),
             "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
+            "start_at_login": self._check(app_settings.start_at_login),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
+        self.fields["start_at_login"].setText("Start Mountlet when I log in")
+        self.fields["start_at_login"].setToolTip("Create a Linux desktop autostart entry for Mountlet.")
         self.fields["focus_file_manager"].setText("Focus file manager")
         self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
         form.addRow("Mount base", self.fields["mount_base"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
+        form.addRow(self.fields["start_at_login"])
         form.addRow("Open folder behavior", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
         root.addWidget(frame)
@@ -772,10 +781,12 @@ class AppConfigDialog(_ConfigDialogBase):
                 mount_base=self.fields["mount_base"].text().strip() or None,
                 auto_mount=self.fields["auto_mount"].isChecked(),
                 auto_mount_delay=max(delay, 0.0),
+                start_at_login=self.fields["start_at_login"].isChecked(),
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
             )
         )
+        set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
 
 
@@ -786,6 +797,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.setWindowTitle(f"{remote.display_name} settings")
         self.dialog.resize(520, 220)
         self.fields: dict[str, Any] = {}
+        self.rclone_fields: dict[str, Any] = {}
         self._build()
 
     def _build(self) -> None:
@@ -853,6 +865,17 @@ class MountConfigDialog(_ConfigDialogBase):
             options_layout.addWidget(custom)
         form.addRow("Options", options_frame)
 
+        rclone_fields = core.editable_rclone_fields(self.remote)
+        if rclone_fields:
+            rclone_frame = self.qt.QFrame()
+            rclone_form = self.qt.QFormLayout(rclone_frame)
+            for key, value in rclone_fields.items():
+                field = self._line(value)
+                field.setToolTip("Safely editable rclone setting. Leave blank to remove this optional value.")
+                self.rclone_fields[key] = field
+                rclone_form.addRow(_field_label(key), field)
+            form.addRow("Remote", rclone_frame)
+
         root.addWidget(frame)
         root.addWidget(self._buttons())
         self.dialog.adjustSize()
@@ -872,6 +895,11 @@ class MountConfigDialog(_ConfigDialogBase):
             enabled=self._saved_enabled,
         )
         save_mount_settings(settings)
+        if self.rclone_fields:
+            core.save_rclone_fields(
+                self.remote.name,
+                {key: field.text() for key, field in self.rclone_fields.items()},
+            )
         self.dialog.accept()
 
 
@@ -1391,7 +1419,8 @@ class MountletWindow:
                 continue
             path_changed = _absolute_path(old_remote.mount_path) != _absolute_path(new_remote.mount_path)
             flags_changed = old_remote.flags != new_remote.flags
-            if path_changed or flags_changed:
+            rclone_changed = old_remote.extra_info != new_remote.extra_info
+            if path_changed or flags_changed or rclone_changed:
                 changes.append((old_remote, new_remote))
         return changes
 
