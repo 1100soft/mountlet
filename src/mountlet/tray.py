@@ -32,6 +32,7 @@ from .settings import (
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
 _dolphin_tab_target_cache: tuple[str, str] | None = None
+_file_manager_label_cache: str | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
@@ -45,6 +46,7 @@ MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
 )
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
+LOW_SPACE_BYTES = 100 * 1024 * 1024
 
 
 class TrayDependencyError(RuntimeError):
@@ -230,13 +232,18 @@ def _default_directory_app() -> str:
 
 
 def _file_manager_label() -> str:
+    global _file_manager_label_cache
+    if _file_manager_label_cache is not None:
+        return _file_manager_label_cache
     app = _default_directory_app()
     if not app:
-        return "the file manager"
+        _file_manager_label_cache = "the file manager"
+        return _file_manager_label_cache
     name = app.rsplit("/", 1)[-1].removesuffix(".desktop")
     name = re.sub(r"^(org|com|net)\.", "", name)
     name = name.rsplit(".", 1)[-1]
-    return name.replace("-", " ").replace("_", " ").title() or "the file manager"
+    _file_manager_label_cache = name.replace("-", " ").replace("_", " ").title() or "the file manager"
+    return _file_manager_label_cache
 
 
 def _open_folder_with_dolphin(path: str) -> bool:
@@ -851,6 +858,9 @@ class MountletWindow:
         self._usage_cache: dict[str, core.StorageUsage] = {}
         self._usage_pending: set[str] = set()
         self._action_pending: set[str] = set()
+        self._row_widgets: dict[str, SimpleNamespace] = {}
+        self._current_remote_names: list[str] = []
+        self._refresh_pending = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -896,8 +906,16 @@ class MountletWindow:
         self.window.activateWindow()
 
     def refresh(self) -> None:
+        self._refresh_pending = False
         remotes = core.load_remotes()
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
+        remote_names = [remote.name for remote in remotes]
+        if self._current_remote_names == remote_names and self._row_widgets:
+            for remote in remotes:
+                self._update_remote_row(remote, mounted_by_name[remote.name])
+                if mounted_by_name[remote.name]:
+                    self._schedule_storage_load(remote)
+            return
 
         root = self.qt.QWidget()
         outer = self.qt.QVBoxLayout(root)
@@ -910,10 +928,13 @@ class MountletWindow:
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
         rows.setSpacing(6)
+        self._row_widgets = {}
+        self._current_remote_names = remote_names
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                self._schedule_storage_load(remote)
+                if mounted_by_name[remote.name]:
+                    self._schedule_storage_load(remote)
             rows.addStretch(1)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
@@ -923,13 +944,18 @@ class MountletWindow:
         self.window.setCentralWidget(root)
         self._fit_to_remote_count(len(remotes))
 
+    def _request_refresh(self) -> None:
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        self.qt.QTimer.singleShot(25, self.refresh)
+
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
-        usage = self._usage_cache.get(remote.name)
-        checking_usage = usage is None
-        if usage is None:
-            usage = core.StorageUsage("Checking...")
+        usage = self._row_usage(remote, mounted)
+        checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
         open_tooltip = f"Open {remote.display_name} in {_file_manager_label()}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
 
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
@@ -956,52 +982,136 @@ class MountletWindow:
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(remote.display_name)
-        title.setToolTip(remote.mount_path)
+        title.setToolTip(title_tooltip)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
+        title.enterEvent = lambda event, widget=title, tooltip=title_tooltip: self._show_immediate_tooltip(widget, tooltip)
         if not mounted:
             title.setEnabled(False)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
         usage_indicator.setToolTip(usage.text)
-        usage_indicator.setVisible(not action_pending)
+        usage_indicator.enterEvent = lambda event, widget=usage_indicator, tooltip=usage.text: self._show_immediate_tooltip(
+            widget,
+            tooltip,
+        )
         if not mounted:
             usage_indicator.setEnabled(False)
 
-        toggle_action = core.unmount_remote if mounted else core.mount_remote
         toggle = self._switch()
         toggle.setProperty("rowControl", True)
         toggle.setChecked(mounted)
         toggle.setEnabled(not action_pending)
-        toggle.setToolTip("Mounted" if mounted else "Unmounted")
-        toggle.stateChanged.connect(lambda state, selected=remote, action=toggle_action: self._run_remote_action(selected, action))
-        working = self.qt.QLabel("Working..." if action_pending else "")
-        working.setFixedWidth(88)
-        working.setStyleSheet(_muted_text_style(working))
+        toggle_tooltip = f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        toggle.setToolTip(toggle_tooltip)
+        toggle.enterEvent = lambda event, widget=toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(widget, tooltip)
+        toggle.stateChanged.connect(
+            lambda state, selected=remote: self._run_remote_action(
+                selected,
+                core.mount_remote if state else core.unmount_remote,
+            )
+        )
+        status = self.qt.QLabel()
+        status.setFixedWidth(120)
+        self._set_status_text(status, usage, action_pending=action_pending)
         config_button = self._button("Config", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
         config_button.setProperty("rowControl", True)
+        config_tooltip = f"Configure {remote.display_name}"
+        config_button.setToolTip(config_tooltip)
+        config_button.enterEvent = lambda event, widget=config_button, tooltip=config_tooltip: self._show_immediate_tooltip(
+            widget,
+            tooltip,
+        )
 
         layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
         layout.addWidget(usage_indicator, 0, 2)
-        layout.addWidget(working, 0, 3)
+        layout.addWidget(status, 0, 3)
         layout.addWidget(config_button, 0, 4)
+        self._row_widgets[remote.name] = SimpleNamespace(
+            frame=frame,
+            title=title,
+            usage_indicator=usage_indicator,
+            toggle=toggle,
+            status=status,
+            config_button=config_button,
+        )
         return frame
 
-    def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
-        if usage.percent is None:
-            indicator = self.qt.QFrame()
-            indicator.setFixedSize(116, 8)
-            color = "#9ca3af" if checking_usage else "#6b7280"
-            indicator.setStyleSheet(f"background: {color}; border-radius: 4px;")
-            return indicator
+    def _update_remote_row(self, remote: core.RemoteInfo, mounted: bool) -> None:
+        row = self._row_widgets.get(remote.name)
+        if not row:
+            return
+        usage = self._row_usage(remote, mounted)
+        checking_usage = mounted and remote.name not in self._usage_cache
+        action_pending = remote.name in self._action_pending
+        open_tooltip = f"Open {remote.display_name} in {_file_manager_label()}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
 
-        pct = max(0, min(usage.percent, 100))
-        fill = "#dc2626" if pct >= 90 else "#16a34a"
+        row.frame.setProperty("mounted", mounted)
+        row.frame.setToolTip(open_tooltip)
+        row.frame.mouseReleaseEvent = lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
+            event,
+            frame,
+            selected,
+        )
+        row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
+            frame,
+            highlighted=True,
+            tooltip=tooltip,
+        )
+        row.frame.setStyleSheet(self._remote_row_style(row.frame, highlighted=False))
+
+        row.title.setText(remote.display_name)
+        row.title.setToolTip(title_tooltip)
+        row.title.setEnabled(mounted)
+        row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
+            widget,
+            tooltip,
+        )
+
+        row.usage_indicator.setToolTip(usage.text)
+        row.usage_indicator.enterEvent = (
+            lambda event, widget=row.usage_indicator, tooltip=usage.text: self._show_immediate_tooltip(widget, tooltip)
+        )
+        row.usage_indicator.setEnabled(mounted)
+        self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
+
+        row.toggle.blockSignals(True)
+        row.toggle.setChecked(mounted)
+        row.toggle.blockSignals(False)
+        row.toggle.setEnabled(not action_pending)
+        toggle_tooltip = f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        row.toggle.setToolTip(toggle_tooltip)
+        row.toggle.enterEvent = lambda event, widget=row.toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(
+            widget,
+            tooltip,
+        )
+
+        self._set_status_text(row.status, usage, action_pending=action_pending)
+        row.config_button.setEnabled(not action_pending)
+        config_tooltip = f"Configure {remote.display_name}"
+        row.config_button.setToolTip(config_tooltip)
+        row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
+            self._show_immediate_tooltip(widget, tooltip)
+        )
+
+    def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
+        if not mounted:
+            return core.StorageUsage("")
+        return self._usage_cache.get(remote.name) or core.StorageUsage("Checking...")
+
+    def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
         indicator = self.qt.QProgressBar()
         indicator.setFixedSize(116, 8)
         indicator.setRange(0, 100)
-        indicator.setValue(pct)
         indicator.setTextVisible(False)
+        self._apply_usage_indicator(indicator, usage, checking_usage=checking_usage)
+        return indicator
+
+    def _apply_usage_indicator(self, indicator: Any, usage: core.StorageUsage, *, checking_usage: bool) -> None:
+        pct = max(0, min(usage.percent or 0, 100))
+        fill = self._usage_color(usage, checking_usage=checking_usage)
+        indicator.setValue(pct)
         indicator.setStyleSheet(
             "QProgressBar {"
             "border: 0;"
@@ -1013,7 +1123,35 @@ class MountletWindow:
             "border-radius: 4px;"
             "}"
         )
-        return indicator
+
+    def _usage_color(self, usage: core.StorageUsage, *, checking_usage: bool = False) -> str:
+        if usage.percent is None:
+            return "#9ca3af" if checking_usage else "#6b7280"
+        remaining = None
+        if usage.total is not None and usage.used is not None:
+            remaining = max(usage.total - usage.used, 0)
+        return "#dc2626" if remaining is not None and remaining < LOW_SPACE_BYTES else "#16a34a"
+
+    def _usage_status_html(self, usage: core.StorageUsage, *, checking_usage: bool) -> str:
+        if usage.used is not None and usage.total is not None:
+            used_gb = usage.used / (1024**3)
+            total_gb = usage.total / (1024**3)
+            color = self._usage_color(usage, checking_usage=checking_usage)
+            return (
+                f'<span style="color:{color};">{used_gb:.1f}</span>'
+                f'<span style="color:#ffffff;">/{total_gb:.1f} GB</span>'
+            )
+        if usage.text:
+            return f'<span style="{_muted_text_style(self.window).removesuffix(";")}">{usage.text}</span>'
+        return ""
+
+    def _set_status_text(self, label: Any, usage: core.StorageUsage, *, action_pending: bool) -> None:
+        if action_pending:
+            label.setText("Working...")
+            label.setStyleSheet(_muted_text_style(label))
+            return
+        label.setStyleSheet("")
+        label.setText(self._usage_status_html(usage, checking_usage=usage.percent is None))
 
     def _switch(self) -> Any:
         qt = self.qt
@@ -1042,6 +1180,10 @@ class MountletWindow:
                 return bool(self.rect().contains(position))
 
         return Switch()
+
+    def _show_immediate_tooltip(self, widget: Any, tooltip: str) -> None:
+        if tooltip:
+            self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, widget)
 
     def _handle_remote_row_click(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
         child = row.childAt(event.position().toPoint()) if hasattr(event, "position") else None
@@ -1093,7 +1235,7 @@ class MountletWindow:
         if remote.name in self._action_pending:
             return
         self._action_pending.add(remote.name)
-        self.refresh()
+        self._request_refresh()
 
         def worker() -> None:
             success, message = action(remote)
@@ -1106,7 +1248,7 @@ class MountletWindow:
         self._usage_cache.pop(remote_name, None)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         self.tray_app.rebuild_menus()
-        self.refresh()
+        self._request_refresh()
 
     def _mount_all(self) -> None:
         self._run_bulk_action("Mount all", core.mount_all)
@@ -1120,7 +1262,7 @@ class MountletWindow:
             return
         for remote in remotes:
             self._action_pending.add(remote.name)
-        self.refresh()
+        self._request_refresh()
 
         def worker() -> None:
             completed, failures = action(remotes)
@@ -1140,7 +1282,7 @@ class MountletWindow:
             else:
                 self.tray_app._notify(title, "Nothing to do.", success=True)
         self.tray_app.rebuild_menus()
-        self.refresh()
+        self._request_refresh()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         self.tray_app._open_folder(remote)
@@ -1227,7 +1369,7 @@ class MountletWindow:
             return
         for _old_remote, new_remote in changes:
             self._action_pending.add(new_remote.name)
-        self.refresh()
+        self._request_refresh()
 
         def worker() -> None:
             completed: list[str] = []
@@ -1309,7 +1451,7 @@ class MountletWindow:
         self._usage_pending.discard(remote_name)
         self._usage_cache[remote_name] = usage
         if self.is_visible():
-            self.refresh()
+            self._request_refresh()
 
 
 class CloudMountTray:
