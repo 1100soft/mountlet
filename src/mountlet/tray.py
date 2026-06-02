@@ -860,6 +860,7 @@ class MountletWindow:
         self._action_pending: set[str] = set()
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
+        self._name_column_width = 160
         self._refresh_pending = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
@@ -910,11 +911,14 @@ class MountletWindow:
         remotes = core.load_remotes()
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
+        name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
+            self._name_column_width = name_width
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
+            self._fit_to_content(len(remotes), name_width)
             return
 
         root = self.qt.QWidget()
@@ -930,6 +934,7 @@ class MountletWindow:
         rows.setSpacing(6)
         self._row_widgets = {}
         self._current_remote_names = remote_names
+        self._name_column_width = name_width
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
@@ -942,7 +947,7 @@ class MountletWindow:
         outer.addWidget(scroll)
 
         self.window.setCentralWidget(root)
-        self._fit_to_remote_count(len(remotes))
+        self._fit_to_content(len(remotes), name_width)
 
     def _request_refresh(self) -> None:
         if self._refresh_pending:
@@ -978,22 +983,18 @@ class MountletWindow:
         layout.setColumnMinimumWidth(0, 50)
         layout.setColumnMinimumWidth(2, 126)
         layout.setColumnMinimumWidth(3, 96)
-        layout.setColumnMinimumWidth(4, 72)
+        layout.setColumnMinimumWidth(4, 34)
         layout.setColumnStretch(1, 1)
 
-        title = self.qt.QLabel(remote.display_name)
+        title = self.qt.QLabel(self._display_remote_name(remote))
         title.setToolTip(title_tooltip)
+        title.setFixedWidth(self._name_column_width)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
         title.enterEvent = lambda event, widget=title, tooltip=title_tooltip: self._show_immediate_tooltip(widget, tooltip)
         if not mounted:
             title.setEnabled(False)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
-        usage_indicator.setToolTip(usage.text)
-        usage_indicator.enterEvent = lambda event, widget=usage_indicator, tooltip=usage.text: self._show_immediate_tooltip(
-            widget,
-            tooltip,
-        )
         if not mounted:
             usage_indicator.setEnabled(False)
 
@@ -1005,15 +1006,12 @@ class MountletWindow:
         toggle.setToolTip(toggle_tooltip)
         toggle.enterEvent = lambda event, widget=toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(widget, tooltip)
         toggle.stateChanged.connect(
-            lambda state, selected=remote: self._run_remote_action(
-                selected,
-                core.mount_remote if state else core.unmount_remote,
-            )
+            lambda state, remote_name=remote.name: self._run_switch_action(remote_name, bool(state))
         )
         status = self.qt.QLabel()
         status.setFixedWidth(120)
         self._set_status_text(status, usage, action_pending=action_pending)
-        config_button = self._button("Config", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
+        config_button = self._icon_button("⚙", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
         config_button.setProperty("rowControl", True)
         config_tooltip = f"Configure {remote.display_name}"
         config_button.setToolTip(config_tooltip)
@@ -1061,18 +1059,15 @@ class MountletWindow:
         )
         row.frame.setStyleSheet(self._remote_row_style(row.frame, highlighted=False))
 
-        row.title.setText(remote.display_name)
+        row.title.setText(self._display_remote_name(remote))
         row.title.setToolTip(title_tooltip)
+        row.title.setFixedWidth(self._name_column_width)
         row.title.setEnabled(mounted)
         row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
             widget,
             tooltip,
         )
 
-        row.usage_indicator.setToolTip(usage.text)
-        row.usage_indicator.enterEvent = (
-            lambda event, widget=row.usage_indicator, tooltip=usage.text: self._show_immediate_tooltip(widget, tooltip)
-        )
         row.usage_indicator.setEnabled(mounted)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
 
@@ -1218,18 +1213,45 @@ class MountletWindow:
         if highlighted and row.property("mounted") and tooltip:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
 
-    def _fit_to_remote_count(self, remote_count: int) -> None:
+    def _display_remote_name(self, remote: core.RemoteInfo) -> str:
+        name = remote.display_name
+        return name if len(name) <= 20 else name[:17] + "..."
+
+    def _remote_name_width(self, remotes: list[core.RemoteInfo]) -> int:
+        displayed = [self._display_remote_name(remote) for remote in remotes]
+        longest = max(displayed, key=len, default="Remote")
+        metrics = self.window.fontMetrics()
+        return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
+
+    def _fit_to_content(self, remote_count: int, name_width: int) -> None:
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
-        available_height = screen.availableGeometry().height() if screen else 720
-        target_height = 92 + max(remote_count, 1) * 58
+        available = screen.availableGeometry() if screen else None
+        available_height = available.height() if available else 720
+        available_width = available.width() if available else 960
+        target_height = 76 + max(remote_count, 1) * 42
         capped_height = min(max(target_height, 150), max(220, available_height - 96))
-        self.window.resize(self.window.width(), capped_height)
+        target_width = 16 + 50 + name_width + 126 + 120 + 34 + (10 * 4) + 24
+        capped_width = min(max(target_width, 360), max(360, available_width - 96))
+        self.window.resize(capped_width, capped_height)
 
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)
         button.setEnabled(enabled)
         button.clicked.connect(lambda checked=False: callback())
         return button
+
+    def _icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
+        button = self._button(label, callback, enabled=enabled)
+        button.setFixedSize(28, 24)
+        return button
+
+    def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
+        remote = next((candidate for candidate in core.load_remotes() if candidate.name == remote_name), None)
+        if remote is None:
+            self.tray_app._notify("Mountlet", f"{remote_name} is no longer available.", success=False)
+            self._request_refresh()
+            return
+        self._run_remote_action(remote, core.mount_remote if want_mounted else core.unmount_remote)
 
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
         if remote.name in self._action_pending:
