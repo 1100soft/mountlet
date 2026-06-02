@@ -388,6 +388,15 @@ def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
         return False, f"[!] Cannot create mount dir {path}: {exc}"
     if not os.access(path, os.W_OK | os.X_OK):
         return False, f"[!] Mount dir {path} is not writable."
+    already_mounted = is_mounted_windows(path) if IS_WINDOWS else os.path.ismount(path)
+    if not already_mounted:
+        try:
+            if os.listdir(path):
+                return False, (
+                    f"[!] Mount dir {path} is not empty. Choose an empty folder or move the existing files first."
+                )
+        except OSError as exc:
+            return False, f"[!] Cannot inspect mount dir {path}: {exc}"
     return True, None
 
 

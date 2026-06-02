@@ -43,8 +43,8 @@ OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
-    ("Allow non-empty folder", "Permit mounting over a folder that already contains files.", ("--allow-non-empty",)),
 )
+REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 
 
 class TrayDependencyError(RuntimeError):
@@ -631,6 +631,13 @@ def _path_relative_to_base(path: str | None, base_path: str) -> str:
     return expanded
 
 
+def _muted_text_style(widget: Any) -> str:
+    background = widget.palette().color(widget.backgroundRole())
+    luminance = (0.2126 * background.red()) + (0.7152 * background.green()) + (0.0722 * background.blue())
+    color = "#cbd5e1" if luminance < 128 else "#4b5563"
+    return f"color: {color};"
+
+
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
@@ -752,7 +759,11 @@ class MountConfigDialog(_ConfigDialogBase):
         )
         mount_flags = mount_settings.mount_flags if mount_settings else []
         option_tokens = {token for _label, _tooltip, tokens in MOUNT_FLAG_OPTIONS for token in tokens}
-        self._preserved_mount_flags = [flag for flag in mount_flags if flag not in option_tokens]
+        self._preserved_mount_flags = [
+            flag
+            for flag in mount_flags
+            if flag not in option_tokens and flag not in REMOVED_MOUNT_FLAGS
+        ]
         self.flag_fields: list[tuple[Any, tuple[str, ...]]] = []
         self._saved_enabled = mount_settings.enabled if mount_settings else True
         self._mount_base = core.BASE_MOUNT_DIR
@@ -764,34 +775,36 @@ class MountConfigDialog(_ConfigDialogBase):
                 default=default_relative_path,
             ),
         }
-        form.addRow("Auto-mount", self.fields["auto_mount"])
 
         path_row = self.qt.QWidget()
         path_layout = self.qt.QHBoxLayout(path_row)
         path_layout.setContentsMargins(0, 0, 0, 0)
         path_layout.setSpacing(4)
         base_label = self.qt.QLabel(os.path.join(self._mount_base, ""))
-        base_label.setStyleSheet("color: palette(mid);")
+        base_label.setStyleSheet(_muted_text_style(base_label))
         path_layout.addWidget(base_label)
         path_layout.addWidget(self.fields["mount_path"], 1)
         form.addRow("Mount path", path_row)
 
-        flags_frame = self.qt.QFrame()
-        flags_layout = self.qt.QVBoxLayout(flags_frame)
-        flags_layout.setContentsMargins(0, 0, 0, 0)
-        flags_layout.setSpacing(4)
+        options_frame = self.qt.QFrame()
+        options_layout = self.qt.QVBoxLayout(options_frame)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(4)
+        self.fields["auto_mount"].setText("Auto-mount")
+        self.fields["auto_mount"].setToolTip("Mount this remote automatically when Mountlet starts.")
+        options_layout.addWidget(self.fields["auto_mount"])
         for label, tooltip, tokens in MOUNT_FLAG_OPTIONS:
             field = self._check(all(token in mount_flags for token in tokens))
             field.setText(label)
             field.setToolTip(tooltip)
             self.flag_fields.append((field, tokens))
-            flags_layout.addWidget(field)
+            options_layout.addWidget(field)
         if self._preserved_mount_flags:
             custom = self.qt.QLabel("Additional existing rclone flags will be preserved.")
             custom.setToolTip("Preserved flags: " + shlex.join(self._preserved_mount_flags))
-            custom.setStyleSheet("color: palette(mid);")
-            flags_layout.addWidget(custom)
-        form.addRow("Mount flags", flags_frame)
+            custom.setStyleSheet(_muted_text_style(custom))
+            options_layout.addWidget(custom)
+        form.addRow("Options", options_frame)
 
         root.addWidget(frame)
         root.addWidget(self._buttons())
@@ -912,7 +925,7 @@ class MountletWindow:
         title = self.qt.QLabel(remote.display_name)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
         path = self.qt.QLabel(remote.mount_path)
-        path.setStyleSheet("color: palette(mid);")
+        path.setStyleSheet(_muted_text_style(path))
         path.setTextInteractionFlags(path.textInteractionFlags())
 
         usage_label = self.qt.QLabel(usage.text)

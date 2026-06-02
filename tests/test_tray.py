@@ -103,6 +103,15 @@ class TrayTests(unittest.TestCase):
             "Mountlet - mounted: Docs",
         )
 
+    def test_mount_flag_options_do_not_include_allow_non_empty(self):
+        tokens = {
+            token
+            for _label, _tooltip, option_tokens in tray.MOUNT_FLAG_OPTIONS
+            for token in option_tokens
+        }
+
+        self.assertNotIn("--allow-non-empty", tokens)
+
     def test_left_click_activation_opens_mountlet_window(self):
         fake_window = _FakeWindow()
         fake_qt = mock.Mock()

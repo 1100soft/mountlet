@@ -87,6 +87,21 @@ type = dropbox
             self.assertEqual(args[3], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
 
+    def test_mount_remote_rejects_non_empty_mount_directory(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            Path(remote.mount_path).mkdir(parents=True)
+            (Path(remote.mount_path) / "existing.txt").write_text("keep", encoding="utf-8")
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "_launch_mount_process") as launch:
+                    success, message = core.mount_remote(remote)
+
+            self.assertFalse(success)
+            self.assertIn("is not empty", message)
+            launch.assert_not_called()
+
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_dir = Path(tempdir) / "config" / "mountlet"
