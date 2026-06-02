@@ -942,7 +942,6 @@ class MountletWindow:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
-            self._fit_to_content(len(remotes), name_width)
             return
 
         root = self.qt.QWidget()
@@ -971,7 +970,6 @@ class MountletWindow:
         outer.addWidget(scroll)
 
         self.window.setCentralWidget(root)
-        self._fit_to_content(len(remotes), name_width)
 
     def _request_refresh(self) -> None:
         if self._refresh_pending:
@@ -1246,18 +1244,6 @@ class MountletWindow:
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
         return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
-
-    def _fit_to_content(self, remote_count: int, name_width: int) -> None:
-        screen = self.window.screen() or self.qt.QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen else None
-        available_height = available.height() if available else 720
-        available_width = available.width() if available else 960
-        menu_height = self.window.menuBar().sizeHint().height()
-        target_height = menu_height + 24 + max(remote_count, 1) * 38
-        capped_height = min(max(target_height, 132), max(220, available_height - 96))
-        target_width = 16 + 50 + name_width + 126 + 120 + 36 + (10 * 4) + 24
-        capped_width = min(max(target_width, 360), max(360, available_width - 96))
-        self.window.resize(capped_width, capped_height)
 
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)
