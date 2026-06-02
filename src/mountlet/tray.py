@@ -48,6 +48,7 @@ MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
+FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 
 
 class TrayDependencyError(RuntimeError):
@@ -946,8 +947,11 @@ class MountletWindow:
         config_menu = self.window.menuBar().addMenu("Config")
         self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
         config_menu.addSeparator()
-        self.tray_app._add_action(config_menu, "Open app config file", lambda: self._open_text_config(app_config_file()))
-        self.tray_app._add_action(config_menu, "Open mount config file", lambda: self._open_text_config(app_mounts_file()))
+        self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
+        self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
+        config_menu.addSeparator()
+        self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
+        self.tray_app._add_action(config_menu, "Open FUSE config file", self._open_fuse_config_file)
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -1522,8 +1526,24 @@ class MountletWindow:
             )
         return None
 
-    def _open_text_config(self, path: Path) -> None:
-        ensure_default_config_files()
+    def _open_app_config_file(self) -> None:
+        self._open_text_config(app_config_file(), ensure_mountlet_config=True)
+
+    def _open_mount_config_file(self) -> None:
+        self._open_text_config(app_mounts_file(), ensure_mountlet_config=True)
+
+    def _open_rclone_config_file(self) -> None:
+        self._open_text_config(Path(core.CONFIG_PATH))
+
+    def _open_fuse_config_file(self) -> None:
+        self._open_text_config(FUSE_CONFIG_PATH)
+
+    def _open_text_config(self, path: Path, *, ensure_mountlet_config: bool = False) -> None:
+        if ensure_mountlet_config:
+            ensure_default_config_files()
+        if not path.exists():
+            self.tray_app._notify("Open config", f"{path} does not exist.", success=False)
+            return
         if _open_text_file_focused(path):
             return
         if not self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
@@ -1608,8 +1628,10 @@ class CloudMountTray:
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self._add_action(self.app_menu, "App settings", self.main_window._show_app_config_editor)
-        self._add_action(self.app_menu, "Open app config file", lambda: self.main_window._open_text_config(app_config_file()))
-        self._add_action(self.app_menu, "Open mount config file", lambda: self.main_window._open_text_config(app_mounts_file()))
+        self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
+        self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
+        self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
+        self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.app.quit)
 
