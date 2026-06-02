@@ -63,6 +63,21 @@ RCLONE_FIELD_TOOLTIPS = {
     "acl": "Default access-control setting used by the remote provider.",
     "storage_class": "Default storage class used by the remote provider.",
 }
+RCLONE_BOOLEAN_FIELDS = {"shared_with_me", "env_auth"}
+RCLONE_SELECT_FIELDS = {
+    "scope": (
+        ("drive", "Full Drive access"),
+        ("drive.readonly", "Read-only Drive access"),
+        ("drive.file", "Files created or opened by rclone"),
+        ("drive.appfolder", "Rclone application data folder"),
+        ("drive.metadata.readonly", "Read-only file names and metadata"),
+    ),
+    "drive_type": (
+        ("personal", "Personal"),
+        ("business", "Business"),
+        ("documentLibrary", "SharePoint document library"),
+    ),
+}
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
@@ -709,6 +724,10 @@ def _rclone_field_tooltip(key: str) -> str:
     )
 
 
+def _config_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
@@ -737,6 +756,23 @@ class _ConfigDialogBase:
             field.addItem(label, value)
             if value == current:
                 selected_index = index
+        field.setCurrentIndex(selected_index)
+        return field
+
+    def _editable_config_combo(self, options: tuple[tuple[str, str], ...], current: str) -> Any:
+        field = self.qt.QComboBox()
+        field.setEditable(True)
+        field.addItem("", "")
+        selected_index = 0
+        current = current.strip()
+        for index, (value, label) in enumerate(options, start=1):
+            field.addItem(value, value)
+            field.setItemData(index, label, self.qt.Qt.ItemDataRole.ToolTipRole)
+            if value == current:
+                selected_index = index
+        if current and selected_index == 0:
+            field.addItem(current, current)
+            selected_index = field.count() - 1
         field.setCurrentIndex(selected_index)
         return field
 
@@ -822,7 +858,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.setWindowTitle(f"{remote.display_name} settings")
         self.dialog.resize(520, 220)
         self.fields: dict[str, Any] = {}
-        self.rclone_fields: dict[str, Any] = {}
+        self.rclone_fields: dict[str, tuple[str, Any]] = {}
         self._build()
 
     def _build(self) -> None:
@@ -895,9 +931,9 @@ class MountConfigDialog(_ConfigDialogBase):
             rclone_frame = self.qt.QFrame()
             rclone_form = self.qt.QFormLayout(rclone_frame)
             for key, value in rclone_fields.items():
-                field = self._line(value)
+                kind, field = self._rclone_config_field(key, value)
                 field.setToolTip(f"{_rclone_field_tooltip(key)} Leave blank to remove this optional value.")
-                self.rclone_fields[key] = field
+                self.rclone_fields[key] = (kind, field)
                 rclone_form.addRow(_field_label(key), field)
             form.addRow("Advanced rclone", rclone_frame)
 
@@ -923,9 +959,23 @@ class MountConfigDialog(_ConfigDialogBase):
         if self.rclone_fields:
             core.save_rclone_fields(
                 self.remote.name,
-                {key: field.text() for key, field in self.rclone_fields.items()},
+                {key: self._rclone_config_value(kind, field) for key, (kind, field) in self.rclone_fields.items()},
             )
         self.dialog.accept()
+
+    def _rclone_config_field(self, key: str, value: str) -> tuple[str, Any]:
+        if key in RCLONE_BOOLEAN_FIELDS:
+            return "bool", self._check(_config_bool(value))
+        if key in RCLONE_SELECT_FIELDS:
+            return "combo", self._editable_config_combo(RCLONE_SELECT_FIELDS[key], value)
+        return "text", self._line(value)
+
+    def _rclone_config_value(self, kind: str, field: Any) -> str:
+        if kind == "bool":
+            return "true" if field.isChecked() else ""
+        if kind == "combo":
+            return field.currentText().strip()
+        return field.text().strip()
 
 
 class MountletWindow:
@@ -963,7 +1013,7 @@ class MountletWindow:
         app_menu = self.window.menuBar().addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
         app_menu.addSeparator()
-        self.tray_app._add_action(app_menu, "Quit", self.tray_app.app.quit)
+        self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
 
         mount_menu = self.window.menuBar().addMenu("Mount")
         self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
@@ -982,6 +1032,8 @@ class MountletWindow:
         return bool(self.window.isVisible())
 
     def show(self) -> None:
+        if self._tray_is_quitting():
+            return
         was_visible = self.is_visible()
         self.refresh()
         if not was_visible:
@@ -1028,6 +1080,8 @@ class MountletWindow:
             return
 
     def refresh(self) -> None:
+        if self._tray_is_quitting():
+            return
         self._refresh_pending = False
         remotes = core.load_remotes()
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
@@ -1070,6 +1124,8 @@ class MountletWindow:
         self._fit_to_content(root, scroll, container)
 
     def _request_refresh(self) -> None:
+        if self._tray_is_quitting():
+            return
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -1403,6 +1459,8 @@ class MountletWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _handle_action_finished(self, remote_name: str, success: bool, message: str) -> None:
+        if self._tray_is_quitting():
+            return
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
@@ -1430,6 +1488,8 @@ class MountletWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _handle_bulk_action_finished(self, title: str, completed: object, failures: object) -> None:
+        if self._tray_is_quitting():
+            return
         self._action_pending.clear()
         self._usage_cache.clear()
         if isinstance(completed, list) and isinstance(failures, list):
@@ -1615,6 +1675,8 @@ class MountletWindow:
             self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
 
     def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
+        if self._tray_is_quitting():
+            return
         if remote.name in self._usage_cache or remote.name in self._usage_pending:
             return
         self._usage_pending.add(remote.name)
@@ -1626,10 +1688,24 @@ class MountletWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _handle_storage_ready(self, remote_name: str, usage: core.StorageUsage) -> None:
+        if self._tray_is_quitting():
+            return
         self._usage_pending.discard(remote_name)
         self._usage_cache[remote_name] = usage
         if self.is_visible():
             self._request_refresh()
+
+    def prepare_quit(self) -> None:
+        self._refresh_pending = False
+        self._usage_pending.clear()
+        self._action_pending.clear()
+        try:
+            self.window.hide()
+        except Exception:
+            pass
+
+    def _tray_is_quitting(self) -> bool:
+        return bool(getattr(getattr(self, "tray_app", None), "_quitting", False))
 
 
 class CloudMountTray:
@@ -1638,6 +1714,7 @@ class CloudMountTray:
         self.refresh_interval = max(refresh_interval, 2)
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setQuitOnLastWindowClosed(False)
+        self._quitting = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
         self.main_window = MountletWindow(self)
@@ -1647,6 +1724,10 @@ class CloudMountTray:
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self.rebuild_menus)
+        try:
+            self.app.aboutToQuit.connect(self._prepare_quit)
+        except Exception:
+            pass
 
     def _icon(self) -> Any:
         try:
@@ -1667,12 +1748,16 @@ class CloudMountTray:
         return int(self.app.exec() or 0)
 
     def _handle_activation(self, reason: Any) -> None:
+        if getattr(self, "_quitting", False):
+            return
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return
         self.rebuild_menus()
         self.main_window.show()
 
     def rebuild_menus(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
         self.remote_menu.clear()
         self.app_menu.clear()
         remotes = core.load_remotes()
@@ -1698,7 +1783,7 @@ class CloudMountTray:
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
         self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
         self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "Quit", self.app.quit)
+        self._add_action(self.app_menu, "Quit", self.request_quit)
 
         if self.main_window.is_visible():
             self.main_window.refresh()
@@ -1726,16 +1811,22 @@ class CloudMountTray:
         return action
 
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
+        if getattr(self, "_quitting", False):
+            return
         success, message = action(remote)
         self._notify("Mountlet", _clean_message(message), success=success)
         self.rebuild_menus()
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
+        if getattr(self, "_quitting", False):
+            return
         mounted, failures = core.mount_all(remotes)
         self._report_mount_results("Mount all", mounted, failures)
         self.rebuild_menus()
 
     def _schedule_auto_mounts(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
         remotes = [remote for remote in core.load_remotes() if remote.auto_mount and not core.is_mounted(remote)]
         if not remotes:
             return
@@ -1743,6 +1834,8 @@ class CloudMountTray:
         self.qt.QTimer.singleShot(delay_ms, lambda: self._auto_mount(remotes))
 
     def _auto_mount(self, remotes: list[core.RemoteInfo]) -> None:
+        if getattr(self, "_quitting", False):
+            return
         mounted, failures = core.mount_all(remotes)
         self._report_mount_results("Auto-mount", mounted, failures)
         self.rebuild_menus()
@@ -1756,6 +1849,8 @@ class CloudMountTray:
             self._notify(title, "Nothing to mount.", success=True)
 
     def _unmount_all(self, remotes: list[core.RemoteInfo]) -> None:
+        if getattr(self, "_quitting", False):
+            return
         unmounted, failures = core.unmount_all(remotes)
         if failures:
             self._notify("Unmount all", "\n".join(_clean_message(item) for item in failures), success=False)
@@ -1773,6 +1868,8 @@ class CloudMountTray:
             self._notify("Open folder", "Could not open the mount folder.", success=False)
 
     def _notify(self, title: str, message: str, *, success: bool) -> None:
+        if getattr(self, "_quitting", False):
+            return
         print(f"{title}: {message}")
         icon = (
             self.qt.QSystemTrayIcon.MessageIcon.Information
@@ -1780,6 +1877,27 @@ class CloudMountTray:
             else self.qt.QSystemTrayIcon.MessageIcon.Warning
         )
         self.tray.showMessage(title, message, icon, 5000)
+
+    def request_quit(self) -> None:
+        self._prepare_quit()
+        try:
+            self.app.exit(0)
+        except Exception:
+            self.app.quit()
+
+    def _prepare_quit(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self._quitting = True
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+        self.main_window.prepare_quit()
+        try:
+            self.tray.hide()
+        except Exception:
+            pass
 
 
 def build_parser() -> argparse.ArgumentParser:

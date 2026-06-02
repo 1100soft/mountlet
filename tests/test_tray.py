@@ -112,6 +112,13 @@ class TrayTests(unittest.TestCase):
 
         self.assertNotIn("--allow-non-empty", tokens)
 
+    def test_config_bool_accepts_common_true_values(self):
+        for value in ("true", "True", "1", "yes", "on"):
+            self.assertTrue(tray._config_bool(value))
+
+        for value in ("", "false", "0", "no", "off"):
+            self.assertFalse(tray._config_bool(value))
+
     def test_left_click_activation_opens_mountlet_window(self):
         fake_window = _FakeWindow()
         fake_qt = mock.Mock()
@@ -163,6 +170,22 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.showNormal.assert_called_once_with()
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_request_quit_stops_refresh_and_hides_ui(self):
+        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app._quitting = False
+        tray_app.timer = mock.Mock()
+        tray_app.main_window = mock.Mock()
+        tray_app.tray = mock.Mock()
+        tray_app.app = mock.Mock()
+
+        tray_app.request_quit()
+
+        self.assertTrue(tray_app._quitting)
+        tray_app.timer.stop.assert_called_once_with()
+        tray_app.main_window.prepare_quit.assert_called_once_with()
+        tray_app.tray.hide.assert_called_once_with()
+        tray_app.app.exit.assert_called_once_with(0)
 
     def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
         completed = SimpleNamespace(returncode=0)
