@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import threading
+from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -85,6 +86,17 @@ FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 
 class TrayDependencyError(RuntimeError):
     pass
+
+
+def _packaged_icon_path() -> str | None:
+    try:
+        asset = files("mountlet").joinpath("assets/icon.png")
+        if asset.is_file():
+            return str(asset)
+    except Exception:
+        pass
+    fallback = Path(__file__).resolve().parents[2] / "icon.png"
+    return str(fallback) if fallback.is_file() else None
 
 
 def _load_qt_bindings() -> SimpleNamespace:
@@ -998,6 +1010,7 @@ class MountletWindow:
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self.window = self.qt.QMainWindow()
         self.window.setWindowTitle("Mountlet")
+        self.window.setWindowIcon(self.tray_app.icon)
         self._make_tray_owned_window()
         self.window.resize(720, 260)
         self._build_app_menu()
@@ -1720,8 +1733,10 @@ class CloudMountTray:
         self._quitting = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
+        self.icon = self._icon()
+        self.app.setWindowIcon(self.icon)
         self.main_window = MountletWindow(self)
-        self.tray = qt.QSystemTrayIcon(self._icon(), self.app)
+        self.tray = qt.QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("Mountlet")
         self.tray.setContextMenu(self.app_menu)
         self.tray.activated.connect(self._handle_activation)
@@ -1733,6 +1748,14 @@ class CloudMountTray:
             pass
 
     def _icon(self) -> Any:
+        icon_path = _packaged_icon_path()
+        if icon_path:
+            icon = self.qt.QIcon(icon_path)
+            try:
+                if not icon.isNull():
+                    return icon
+            except Exception:
+                return icon
         try:
             return self.app.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DriveNetIcon)
         except Exception:

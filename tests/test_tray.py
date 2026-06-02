@@ -119,6 +119,12 @@ class TrayTests(unittest.TestCase):
         for value in ("", "false", "0", "no", "off"):
             self.assertFalse(tray._config_bool(value))
 
+    def test_packaged_icon_path_exists(self):
+        icon_path = tray._packaged_icon_path()
+
+        self.assertIsNotNone(icon_path)
+        self.assertTrue(Path(icon_path or "").is_file())
+
     def test_left_click_activation_opens_mountlet_window(self):
         fake_window = _FakeWindow()
         fake_qt = mock.Mock()

@@ -47,6 +47,9 @@ mountlet = "mountlet.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+mountlet = ["assets/*.png"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"
