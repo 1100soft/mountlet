@@ -1107,6 +1107,15 @@ class MountletWindow:
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
 
+    def toggle_from_tray(self) -> None:
+        if self._tray_is_quitting():
+            return
+        visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
+        if self.is_visible() and visible_on_current_desktop is not False:
+            self.window.hide()
+            return
+        self.show()
+
     def show(self) -> None:
         if self._tray_is_quitting():
             return
@@ -1845,7 +1854,7 @@ class MountletTray:
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return
         self.rebuild_menus()
-        self.main_window.show()
+        self.main_window.toggle_from_tray()
 
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):

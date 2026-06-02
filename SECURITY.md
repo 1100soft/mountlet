@@ -6,9 +6,9 @@ remote paths that identify private infrastructure.
 
 ## Reporting Issues
 
-This repository does not have a public security contact configured yet. Before
-public release, enable GitHub private vulnerability reporting or add a dedicated
-security contact.
+GitHub private vulnerability reporting is enabled for this repository. Use the
+repository's private vulnerability reporting flow for security issues so they
+can be reviewed before public disclosure.
 
 ## Handling Local Secrets
 

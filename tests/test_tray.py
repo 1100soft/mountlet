@@ -17,9 +17,13 @@ from mountlet import core, tray
 class _FakeWindow:
     def __init__(self) -> None:
         self.show_calls = 0
+        self.toggle_calls = 0
 
     def show(self) -> None:
         self.show_calls += 1
+
+    def toggle_from_tray(self) -> None:
+        self.toggle_calls += 1
 
 
 class TrayTests(unittest.TestCase):
@@ -125,7 +129,7 @@ class TrayTests(unittest.TestCase):
         self.assertIsNotNone(icon_path)
         self.assertTrue(Path(icon_path or "").is_file())
 
-    def test_left_click_activation_opens_mountlet_window(self):
+    def test_left_click_activation_toggles_mountlet_window(self):
         fake_window = _FakeWindow()
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
@@ -138,13 +142,37 @@ class TrayTests(unittest.TestCase):
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
         rebuild.assert_called_once_with()
-        self.assertEqual(fake_window.show_calls, 1)
+        self.assertEqual(fake_window.toggle_calls, 1)
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
         rebuild.assert_not_called()
-        self.assertEqual(fake_window.show_calls, 1)
+        self.assertEqual(fake_window.toggle_calls, 1)
+
+    def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        mountlet_window.window.hide.assert_called_once_with()
+        show.assert_not_called()
+
+    def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        mountlet_window.window.hide.assert_not_called()
+        show.assert_called_once_with()
 
     def test_mountlet_window_show_refocuses_existing_window_without_repositioning(self):
         mountlet_window = object.__new__(tray.MountletWindow)
