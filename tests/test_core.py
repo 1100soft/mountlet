@@ -98,7 +98,7 @@ type = dropbox
             (config_dir / "mounts.toml").write_text(
                 """
 [remotes."Docs"]
-mount_path = "~/custom-docs"
+mount_path = "custom-docs"
 mount_flags = "--read-only"
 auto_mount = false
 
@@ -123,6 +123,7 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Docs"])
         self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertTrue(Path(remotes[0].mount_path).is_absolute())
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)
 

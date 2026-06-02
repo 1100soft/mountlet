@@ -53,7 +53,7 @@ DEFAULT_MOUNTS_CONFIG = """# Per-remote Mountlet settings.
 # Example:
 # [remotes."Work__Drive"]
 # auto_mount = true
-# mount_path = "~/cloud_mounts/drive/Work"
+# mount_path = "drive/Work"
 # mount_flags = "--read-only --dir-cache-time 10m"
 """
 

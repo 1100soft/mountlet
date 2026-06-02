@@ -205,6 +205,13 @@ def _build_mount_path(provider: str, alias: str) -> str:
     return os.path.join(BASE_MOUNT_DIR, provider_component, alias_component)
 
 
+def _resolve_configured_mount_path(path: str) -> str:
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return expanded
+    return os.path.join(BASE_MOUNT_DIR, expanded)
+
+
 def _cleanup_mount_dir(path: str) -> None:
     try:
         os.rmdir(path)
@@ -252,7 +259,7 @@ def load_remotes() -> List[RemoteInfo]:
         if remote_settings:
             extra_flags.extend(remote_settings.mount_flags)
         mount_path = (
-            remote_settings.mount_path
+            _resolve_configured_mount_path(remote_settings.mount_path)
             if remote_settings and remote_settings.mount_path
             else _build_mount_path(provider, alias)
         )

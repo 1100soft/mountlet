@@ -542,7 +542,7 @@ class TrayTests(unittest.TestCase):
 
         notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
 
-    def test_path_changes_match_remotes_by_name(self):
+    def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")
         new_remotes = [
@@ -552,9 +552,43 @@ class TrayTests(unittest.TestCase):
         window = object.__new__(tray.MountletWindow)
 
         with mock.patch.object(tray.core, "load_remotes", return_value=new_remotes):
-            changes = window._path_changes([old_remote, unchanged_remote])
+            changes = window._remount_changes([old_remote, unchanged_remote], {"Docs"})
 
         self.assertEqual(changes, [(old_remote, new_remotes[0])])
+
+    def test_remount_changes_ignore_unmounted_remotes(self):
+        old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
+        new_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/new/docs")
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], set())
+
+        self.assertEqual(changes, [])
+
+    def test_remount_changes_include_flag_changes_for_mounted_remotes(self):
+        old_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            flags=["--vfs-cache-mode", "full"],
+        )
+        new_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            flags=["--vfs-cache-mode", "full", "--read-only"],
+        )
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], {"Docs"})
+
+        self.assertEqual(changes, [(old_remote, new_remote)])
 
     def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
         remotes = [
