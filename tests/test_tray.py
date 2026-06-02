@@ -177,6 +177,36 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_mountlet_window_show_reopens_visible_window_from_other_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isMinimized.return_value = False
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
+            with mock.patch.object(mountlet_window, "refresh") as refresh:
+                with mock.patch.object(mountlet_window, "_position_near_tray") as position:
+                    mountlet_window.show()
+
+        mountlet_window.window.hide.assert_called_once_with()
+        refresh.assert_called_once_with()
+        position.assert_called_once_with()
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_x11_qt_window_is_on_current_desktop_compares_window_desktop(self):
+        window = mock.Mock()
+        window.winId.return_value = 12345
+
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=3):
+            with mock.patch.object(tray, "_x11_window_desktop", return_value=3):
+                self.assertTrue(tray._x11_qt_window_is_on_current_desktop(window))
+            with mock.patch.object(tray, "_x11_window_desktop", return_value=2):
+                self.assertFalse(tray._x11_qt_window_is_on_current_desktop(window))
+            with mock.patch.object(tray, "_x11_window_desktop", return_value=0xFFFFFFFF):
+                self.assertTrue(tray._x11_qt_window_is_on_current_desktop(window))
+
     def test_set_x11_window_desktop_uses_net_wm_desktop_value(self):
         window = mock.Mock()
         window.winId.return_value = 12345

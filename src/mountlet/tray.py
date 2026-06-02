@@ -446,6 +446,24 @@ def _x11_window_desktop(window_id: int) -> int | None:
     return _xprop_cardinal(["-id", str(window_id), "_NET_WM_DESKTOP"])
 
 
+def _x11_qt_window_id(window: Any) -> int | None:
+    try:
+        return int(window.winId())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _x11_qt_window_is_on_current_desktop(window: Any) -> bool | None:
+    current_desktop = _x11_current_desktop()
+    window_id = _x11_qt_window_id(window)
+    if current_desktop is None or window_id is None:
+        return None
+    window_desktop = _x11_window_desktop(window_id)
+    if window_desktop is None:
+        return None
+    return window_desktop in {current_desktop, 0xFFFFFFFF}
+
+
 def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
     if platform.system() != "Linux":
         return False
@@ -456,9 +474,8 @@ def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
     xprop = shutil.which("xprop")
     if not xprop:
         return False
-    try:
-        window_id = int(window.winId())
-    except (AttributeError, TypeError, ValueError):
+    window_id = _x11_qt_window_id(window)
+    if window_id is None:
         return False
     try:
         result = subprocess.run(
@@ -1094,6 +1111,10 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         was_visible = self.is_visible()
+        visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
+        if was_visible and visible_on_current_desktop is False:
+            self.window.hide()
+            was_visible = False
         self.refresh()
         if not was_visible:
             self._position_near_tray()
