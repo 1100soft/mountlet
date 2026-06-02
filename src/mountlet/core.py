@@ -183,10 +183,10 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
 COMMON_SAFE_RCLONE_KEYS = ("description",)
 SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
-    "drive": ("root_folder_id", "team_drive", "shared_with_me", "scope"),
-    "onedrive": ("drive_id", "drive_type", "region"),
+    "drive": ("shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor"),
-    "s3": ("provider", "env_auth", "region", "endpoint", "acl", "storage_class"),
+    "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
 }
 
 
@@ -248,7 +248,7 @@ def _save_config(config: configparser.ConfigParser) -> None:
 
 
 def _safe_rclone_keys(backend_type: str) -> Tuple[str, ...]:
-    return COMMON_SAFE_RCLONE_KEYS + SAFE_RCLONE_CONFIG_KEYS.get(backend_type.lower(), ())
+    return SAFE_RCLONE_CONFIG_KEYS.get(backend_type.lower(), ()) + COMMON_SAFE_RCLONE_KEYS
 
 
 def editable_rclone_fields(remote: RemoteInfo) -> Dict[str, str]:

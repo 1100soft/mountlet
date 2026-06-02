@@ -821,12 +821,12 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["start_at_login"].setToolTip("Create a Linux desktop autostart entry for Mountlet.")
         self.fields["focus_file_manager"].setText("Focus file manager")
         self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
-        form.addRow("Mount base", self.fields["mount_base"])
-        form.addRow(self.fields["auto_mount"])
-        form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow(self.fields["start_at_login"])
-        form.addRow("Open folder behavior", self.fields["open_folder_behavior"])
+        form.addRow(self.fields["auto_mount"])
+        form.addRow("Default mount folder", self.fields["mount_base"])
+        form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
+        form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         root.addWidget(frame)
         root.addWidget(self._buttons())
         self.dialog.adjustSize()
@@ -904,7 +904,10 @@ class MountConfigDialog(_ConfigDialogBase):
         base_label.setStyleSheet(_muted_text_style(base_label))
         path_layout.addWidget(base_label)
         path_layout.addWidget(self.fields["mount_path"], 1)
-        form.addRow("Mount path", path_row)
+        self.fields["mount_path"].setToolTip(
+            "Local folder name for this remote. Leave blank to use Mountlet's default name."
+        )
+        form.addRow("Local folder name", path_row)
 
         options_frame = self.qt.QFrame()
         options_layout = self.qt.QVBoxLayout(options_frame)

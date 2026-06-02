@@ -157,6 +157,7 @@ token = secret
 
             fields = core.editable_rclone_fields(remote)
 
+            self.assertEqual(list(fields)[:4], ["shared_with_me", "root_folder_id", "team_drive", "scope"])
             self.assertEqual(fields["root_folder_id"], "abc")
             self.assertIn("team_drive", fields)
             self.assertNotIn("token", fields)
