@@ -446,7 +446,7 @@ def _x11_window_desktop(window_id: int) -> int | None:
     return _xprop_cardinal(["-id", str(window_id), "_NET_WM_DESKTOP"])
 
 
-def _set_x11_window_all_desktops(window: Any) -> bool:
+def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
     if platform.system() != "Linux":
         return False
     if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
@@ -471,7 +471,7 @@ def _set_x11_window_all_desktops(window: Any) -> bool:
                 "32c",
                 "-set",
                 "_NET_WM_DESKTOP",
-                "0xFFFFFFFF",
+                str(desktop),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -480,6 +480,13 @@ def _set_x11_window_all_desktops(window: Any) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
+
+
+def _move_x11_window_to_current_desktop(window: Any) -> bool:
+    desktop = _x11_current_desktop()
+    if desktop is None:
+        return False
+    return _set_x11_window_desktop(window, desktop)
 
 
 def _dolphin_window_id_with_qtdbus(
@@ -1099,11 +1106,12 @@ class MountletWindow:
             return
 
     def _focus_window(self) -> None:
+        _move_x11_window_to_current_desktop(self.window)
         if self.window.isMinimized():
             self.window.showNormal()
         else:
             self.window.show()
-        _set_x11_window_all_desktops(self.window)
+        _move_x11_window_to_current_desktop(self.window)
         self.window.raise_()
         self.window.activateWindow()
 
