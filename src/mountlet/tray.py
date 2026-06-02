@@ -54,7 +54,7 @@ class TrayDependencyError(RuntimeError):
 def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
-        from PySide6.QtGui import QAction, QCursor, QDesktopServices, QIcon
+        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
         from PySide6.QtWidgets import (
             QApplication,
             QCheckBox,
@@ -70,11 +70,13 @@ def _load_qt_bindings() -> SimpleNamespace:
             QMainWindow,
             QMenu,
             QMessageBox,
+            QProgressBar,
             QPushButton,
             QScrollArea,
             QSizePolicy,
             QStyle,
             QSystemTrayIcon,
+            QToolTip,
             QVBoxLayout,
             QWidget,
         )
@@ -89,6 +91,7 @@ def _load_qt_bindings() -> SimpleNamespace:
     return SimpleNamespace(
         QAction=QAction,
         QApplication=QApplication,
+        QColor=QColor,
         QCheckBox=QCheckBox,
         QComboBox=QComboBox,
         QCursor=QCursor,
@@ -106,12 +109,15 @@ def _load_qt_bindings() -> SimpleNamespace:
         QMenu=QMenu,
         QMessageBox=QMessageBox,
         QObject=QObject,
+        QPainter=QPainter,
+        QProgressBar=QProgressBar,
         QPushButton=QPushButton,
         QScrollArea=QScrollArea,
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
         QSystemTrayIcon=QSystemTrayIcon,
         QTimer=QTimer,
+        QToolTip=QToolTip,
         Qt=Qt,
         QUrl=QUrl,
         Signal=Signal,
@@ -697,6 +703,7 @@ class AppConfigDialog(_ConfigDialogBase):
         root.setSpacing(10)
 
         frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
         self.fields = {
@@ -894,6 +901,7 @@ class MountletWindow:
         rows.setContentsMargins(0, 0, 0, 0)
         rows.setSpacing(6)
         if remotes:
+            rows.addWidget(self._remote_header())
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
                 self._schedule_storage_load(remote)
@@ -906,6 +914,24 @@ class MountletWindow:
         self.window.setCentralWidget(root)
         self._fit_to_remote_count(len(remotes))
 
+    def _remote_header(self) -> Any:
+        header = self.qt.QFrame()
+        layout = self.qt.QGridLayout(header)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setHorizontalSpacing(10)
+        labels = [
+            ("Mounted", 0),
+            ("Remote", 1),
+            ("Usage", 2),
+            ("Status", 3),
+            ("Config", 4),
+        ]
+        for text, column in labels:
+            label = self.qt.QLabel(text)
+            label.setStyleSheet(f"{_muted_text_style(label)} font-weight: 600;")
+            layout.addWidget(label, 0, column)
+        return header
+
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._usage_cache.get(remote.name)
         checking_usage = usage is None
@@ -916,63 +942,97 @@ class MountletWindow:
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+        frame.setToolTip("Open")
         frame.mouseReleaseEvent = lambda event, selected=remote: self._open_folder(selected)
+        frame.enterEvent = lambda event, row=frame: self._highlight_remote_row(row, highlighted=True)
+        frame.leaveEvent = lambda event, row=frame: self._highlight_remote_row(row, highlighted=False)
         layout = self.qt.QGridLayout(frame)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(8, 5, 8, 5)
         layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(2)
+        layout.setVerticalSpacing(0)
 
         title = self.qt.QLabel(remote.display_name)
+        title.setToolTip(remote.mount_path)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
-        path = self.qt.QLabel(remote.mount_path)
-        path.setStyleSheet(_muted_text_style(path))
-        path.setTextInteractionFlags(path.textInteractionFlags())
 
-        usage_label = self.qt.QLabel(usage.text)
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
+        usage_indicator.setToolTip(usage.text)
 
         toggle_action = core.unmount_remote if mounted else core.mount_remote
-        toggle = self.qt.QCheckBox("Mounted" if mounted else "Mount")
+        toggle = self._switch()
         toggle.setChecked(mounted)
         toggle.setEnabled(not action_pending)
+        toggle.setToolTip("Mounted" if mounted else "Unmounted")
         toggle.stateChanged.connect(lambda state, selected=remote, action=toggle_action: self._run_remote_action(selected, action))
         working = self.qt.QLabel("Working..." if action_pending else "")
         config_button = self._button("Config", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
 
-        layout.addWidget(toggle, 0, 0, 2, 1)
+        layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
-        layout.addWidget(path, 1, 1)
         layout.addWidget(usage_indicator, 0, 2)
-        layout.addWidget(usage_label, 1, 2)
         layout.addWidget(working, 0, 3)
-        layout.addWidget(config_button, 0, 4, 2, 1)
+        layout.addWidget(config_button, 0, 4)
         return frame
 
     def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
-        indicator = self.qt.QFrame()
-        indicator.setFixedSize(116, 8)
         if usage.percent is None:
+            indicator = self.qt.QFrame()
+            indicator.setFixedSize(116, 8)
             color = "#9ca3af" if checking_usage else "#6b7280"
             indicator.setStyleSheet(f"background: {color}; border-radius: 4px;")
             return indicator
 
         pct = max(0, min(usage.percent, 100))
-        if pct >= 90:
-            fill = "#dc2626"
-        elif pct >= 75:
-            fill = "#d97706"
-        else:
-            fill = "#2563eb"
-        stop = pct / 100
+        fill = "#dc2626" if pct >= 90 else "#16a34a"
+        indicator = self.qt.QProgressBar()
+        indicator.setFixedSize(116, 8)
+        indicator.setRange(0, 100)
+        indicator.setValue(pct)
+        indicator.setTextVisible(False)
         indicator.setStyleSheet(
+            "QProgressBar {"
+            "border: 0;"
             "border-radius: 4px;"
-            "background: qlineargradient("
-            "x1:0, y1:0, x2:1, y2:0, "
-            f"stop:0 {fill}, stop:{stop:.3f} {fill}, "
-            f"stop:{stop:.3f} #d1d5db, stop:1 #d1d5db"
-            ");"
+            "background: #d1d5db;"
+            "}"
+            "QProgressBar::chunk {"
+            f"background: {fill};"
+            "border-radius: 4px;"
+            "}"
         )
         return indicator
+
+    def _switch(self) -> Any:
+        qt = self.qt
+
+        class Switch(qt.QCheckBox):
+            def __init__(self) -> None:
+                super().__init__()
+                self.setText("")
+                self.setFixedSize(42, 22)
+                self.setCursor(qt.QCursor(qt.Qt.CursorShape.PointingHandCursor))
+
+            def paintEvent(self, event: Any) -> None:
+                painter = qt.QPainter(self)
+                painter.setRenderHint(qt.QPainter.RenderHint.Antialiasing)
+                painter.setPen(qt.Qt.PenStyle.NoPen)
+                track = qt.QColor("#16a34a" if self.isChecked() else "#9ca3af")
+                if not self.isEnabled():
+                    track = qt.QColor("#6b7280")
+                painter.setBrush(track)
+                painter.drawRoundedRect(1, 2, 40, 18, 9, 9)
+                painter.setBrush(qt.QColor("#ffffff"))
+                knob_x = 22 if self.isChecked() else 4
+                painter.drawEllipse(knob_x, 4, 14, 14)
+
+        return Switch()
+
+    def _highlight_remote_row(self, row: Any, *, highlighted: bool) -> None:
+        if highlighted:
+            row.setStyleSheet("QFrame#remoteRow { background: rgba(59, 130, 246, 38); }")
+            self.qt.QToolTip.showText(self.qt.QCursor.pos(), "Open", row)
+        else:
+            row.setStyleSheet("")
 
     def _fit_to_remote_count(self, remote_count: int) -> None:
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()

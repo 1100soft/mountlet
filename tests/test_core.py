@@ -91,7 +91,7 @@ type = dropbox
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
             remote = core.load_remotes()[0]
-            Path(remote.mount_path).mkdir(parents=True)
+            Path(remote.mount_path).mkdir(parents=True, exist_ok=True)
             (Path(remote.mount_path) / "existing.txt").write_text("keep", encoding="utf-8")
 
             with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
