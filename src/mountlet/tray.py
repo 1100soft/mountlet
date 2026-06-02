@@ -951,6 +951,7 @@ class MountletWindow:
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
@@ -963,13 +964,13 @@ class MountletWindow:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
                 if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
-            rows.addStretch(1)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
         scroll.setWidget(container)
         outer.addWidget(scroll)
 
         self.window.setCentralWidget(root)
+        self._fit_to_content(root, scroll, container)
 
     def _request_refresh(self) -> None:
         if self._refresh_pending:
@@ -1244,6 +1245,31 @@ class MountletWindow:
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
         return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
+
+    def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
+        root.layout().activate()
+        container.layout().activate()
+        content_size = container.sizeHint()
+        root_margins = root.layout().contentsMargins()
+        scroll_frame = scroll.frameWidth() * 2
+        menu_height = self.window.menuBar().sizeHint().height()
+        width = root_margins.left() + root_margins.right() + scroll_frame + content_size.width() + 2
+        height = menu_height + root_margins.top() + root_margins.bottom() + scroll_frame + content_size.height() + 2
+
+        screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            max_width = max(360, available.width() - 96)
+            max_height = max(220, available.height() - 96)
+        else:
+            max_width = 960
+            max_height = 720
+
+        if height > max_height:
+            width += scroll.verticalScrollBar().sizeHint().width()
+            height = max_height
+
+        self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
 
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)
