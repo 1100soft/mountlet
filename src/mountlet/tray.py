@@ -641,9 +641,6 @@ def _open_text_file_focused(path: Path) -> bool:
         return False
     path_text = str(path)
     commands: list[list[str]] = []
-    kstart = shutil.which("kstart") or shutil.which("kstart5")
-    if kstart:
-        commands.append([kstart, "--activate", path_text])
     for editor in ("kate", "kwrite", "gedit", "xed", "mousepad"):
         editor_path = shutil.which(editor)
         if editor_path:
@@ -729,7 +726,7 @@ class AppConfigDialog(_ConfigDialogBase):
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("App settings")
-        self.dialog.resize(520, 260)
+        self.dialog.resize(460, 210)
         self.fields: dict[str, Any] = {}
         self._build()
 
@@ -737,8 +734,8 @@ class AppConfigDialog(_ConfigDialogBase):
         ensure_default_config_files()
         app_settings = load_app_settings()
         root = self.qt.QVBoxLayout(self.dialog)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
 
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
@@ -751,13 +748,18 @@ class AppConfigDialog(_ConfigDialogBase):
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
         }
+        self.fields["auto_mount"].setText("Auto-mount by default")
+        self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
+        self.fields["focus_file_manager"].setText("Focus file manager")
+        self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
         form.addRow("Mount base", self.fields["mount_base"])
-        form.addRow("Auto-mount by default", self.fields["auto_mount"])
+        form.addRow(self.fields["auto_mount"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow("Open folder behavior", self.fields["open_folder_behavior"])
-        form.addRow("Focus file manager", self.fields["focus_file_manager"])
+        form.addRow(self.fields["focus_file_manager"])
         root.addWidget(frame)
         root.addWidget(self._buttons())
+        self.dialog.adjustSize()
 
     def _save(self) -> None:
         try:
@@ -782,7 +784,7 @@ class MountConfigDialog(_ConfigDialogBase):
         super().__init__(qt, parent)
         self.remote = remote
         self.dialog.setWindowTitle(f"{remote.display_name} settings")
-        self.dialog.resize(560, 260)
+        self.dialog.resize(520, 220)
         self.fields: dict[str, Any] = {}
         self._build()
 
@@ -791,8 +793,8 @@ class MountConfigDialog(_ConfigDialogBase):
         app_settings = load_app_settings()
         mount_settings = load_mount_settings().get(self.remote.name)
         root = self.qt.QVBoxLayout(self.dialog)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
 
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
@@ -853,6 +855,7 @@ class MountConfigDialog(_ConfigDialogBase):
 
         root.addWidget(frame)
         root.addWidget(self._buttons())
+        self.dialog.adjustSize()
 
     def _save(self) -> None:
         settings = load_mount_settings()
@@ -1249,8 +1252,9 @@ class MountletWindow:
         available = screen.availableGeometry() if screen else None
         available_height = available.height() if available else 720
         available_width = available.width() if available else 960
-        target_height = 76 + max(remote_count, 1) * 42
-        capped_height = min(max(target_height, 150), max(220, available_height - 96))
+        menu_height = self.window.menuBar().sizeHint().height()
+        target_height = menu_height + 24 + max(remote_count, 1) * 38
+        capped_height = min(max(target_height, 132), max(220, available_height - 96))
         target_width = 16 + 50 + name_width + 126 + 120 + 36 + (10 * 4) + 24
         capped_width = min(max(target_width, 360), max(360, available_width - 96))
         self.window.resize(capped_width, capped_height)
