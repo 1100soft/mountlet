@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import platform
 import shutil
 import subprocess
@@ -14,7 +13,6 @@ from .. import core
 from ..settings import ensure_default_config_files
 from .shared import (
     app_cache_dir,
-    app_config_dir,
     app_config_file,
     app_mounts_file,
     app_state_dir,

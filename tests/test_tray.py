@@ -177,6 +177,42 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_set_x11_window_all_desktops_uses_net_wm_desktop_sticky_value(self):
+        window = mock.Mock()
+        window.winId.return_value = 12345
+        completed = SimpleNamespace(returncode=0)
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.dict(tray.os.environ, {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}, clear=True):
+                with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/xprop"):
+                    with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                        self.assertTrue(tray._set_x11_window_all_desktops(window))
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/usr/bin/xprop",
+                "-id",
+                "12345",
+                "-f",
+                "_NET_WM_DESKTOP",
+                "32c",
+                "-set",
+                "_NET_WM_DESKTOP",
+                "0xFFFFFFFF",
+            ],
+        )
+
+    def test_set_x11_window_all_desktops_skips_wayland(self):
+        window = mock.Mock()
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.dict(tray.os.environ, {"DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland"}, clear=True):
+                with mock.patch.object(tray.subprocess, "run") as run:
+                    self.assertFalse(tray._set_x11_window_all_desktops(window))
+
+        run.assert_not_called()
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False

@@ -446,6 +446,42 @@ def _x11_window_desktop(window_id: int) -> int | None:
     return _xprop_cardinal(["-id", str(window_id), "_NET_WM_DESKTOP"])
 
 
+def _set_x11_window_all_desktops(window: Any) -> bool:
+    if platform.system() != "Linux":
+        return False
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return False
+    if not os.environ.get("DISPLAY"):
+        return False
+    xprop = shutil.which("xprop")
+    if not xprop:
+        return False
+    try:
+        window_id = int(window.winId())
+    except (AttributeError, TypeError, ValueError):
+        return False
+    try:
+        result = subprocess.run(
+            [
+                xprop,
+                "-id",
+                str(window_id),
+                "-f",
+                "_NET_WM_DESKTOP",
+                "32c",
+                "-set",
+                "_NET_WM_DESKTOP",
+                "0xFFFFFFFF",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def _dolphin_window_id_with_qtdbus(
     dbus: SimpleNamespace,
     service: str,
@@ -1067,6 +1103,7 @@ class MountletWindow:
             self.window.showNormal()
         else:
             self.window.show()
+        _set_x11_window_all_desktops(self.window)
         self.window.raise_()
         self.window.activateWindow()
 
