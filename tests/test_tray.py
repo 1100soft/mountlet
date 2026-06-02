@@ -532,6 +532,14 @@ class TrayTests(unittest.TestCase):
         qt.QUrl.fromLocalFile.assert_not_called()
         qt.QDesktopServices.openUrl.assert_not_called()
 
+    def test_open_text_file_focused_prefers_kstart_activate(self):
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.object(tray.shutil, "which", side_effect=lambda name: "/usr/bin/kstart" if name == "kstart" else None):
+                with mock.patch.object(tray.subprocess, "Popen") as popen:
+                    self.assertTrue(tray._open_text_file_focused(Path("/tmp/config.toml")))
+
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/kstart", "--activate", "/tmp/config.toml"])
+
     def test_open_folder_action_reports_failure_when_default_opener_fails(self):
         remote = core.RemoteInfo(
             name="Docs",

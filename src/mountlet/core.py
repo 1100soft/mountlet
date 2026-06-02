@@ -438,10 +438,19 @@ def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     unmount_cmd = shutil.which("fusermount3") or shutil.which("fusermount") or shutil.which("umount")
     if not unmount_cmd:
         return False, "[!] No unmount command found. Install fuse3/fuse or unmount manually."
-    args = [unmount_cmd, "-u", path] if os.path.basename(unmount_cmd) != "umount" else [unmount_cmd, path]
-    result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 0:
-        return False, f"[!] Failed to unmount {remote.name} from {path}."
+    unmount_name = os.path.basename(unmount_cmd)
+    commands = (
+        [[unmount_cmd, "-u", path], [unmount_cmd, "-uz", path]]
+        if unmount_name != "umount"
+        else [[unmount_cmd, path], [unmount_cmd, "-l", path]]
+    )
+    last_result = None
+    for args in commands:
+        last_result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if last_result.returncode == 0:
+            break
+    if last_result is None or last_result.returncode != 0:
+        return False, f"[!] Failed to unmount {remote.name} from {path}. Close files or folders using it and try again."
     if pid:
         try:
             os.kill(pid, 15)

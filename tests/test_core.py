@@ -192,6 +192,26 @@ type = dropbox
             self.assertTrue(success)
             self.assertEqual(run.call_args.args[0][:2], ["/usr/bin/fusermount3", "-u"])
 
+    def test_unmount_remote_falls_back_to_lazy_unmount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            def which(name: str) -> str | None:
+                return "/usr/bin/fusermount3" if name == "fusermount3" else None
+
+            with mock.patch.object(core.shutil, "which", side_effect=which):
+                with mock.patch.object(core.subprocess, "run") as run:
+                    run.side_effect = [
+                        mock.Mock(returncode=1),
+                        mock.Mock(returncode=0),
+                    ]
+                    success, _ = core.unmount_remote(remote)
+
+            self.assertTrue(success)
+            self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/fusermount3", "-u", remote.mount_path])
+            self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/fusermount3", "-uz", remote.mount_path])
+
 
 if __name__ == "__main__":
     unittest.main()

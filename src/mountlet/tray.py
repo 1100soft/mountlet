@@ -636,6 +636,27 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
 
+def _open_text_file_focused(path: Path) -> bool:
+    if platform.system() != "Linux":
+        return False
+    path_text = str(path)
+    commands: list[list[str]] = []
+    kstart = shutil.which("kstart") or shutil.which("kstart5")
+    if kstart:
+        commands.append([kstart, "--activate", path_text])
+    for editor in ("kate", "kwrite", "gedit", "xed", "mousepad"):
+        editor_path = shutil.which(editor)
+        if editor_path:
+            commands.append([editor_path, path_text])
+    for command in commands:
+        try:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def _absolute_path(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
@@ -983,7 +1004,7 @@ class MountletWindow:
         layout.setColumnMinimumWidth(0, 50)
         layout.setColumnMinimumWidth(2, 126)
         layout.setColumnMinimumWidth(3, 96)
-        layout.setColumnMinimumWidth(4, 34)
+        layout.setColumnMinimumWidth(4, 36)
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
@@ -1230,7 +1251,7 @@ class MountletWindow:
         available_width = available.width() if available else 960
         target_height = 76 + max(remote_count, 1) * 42
         capped_height = min(max(target_height, 150), max(220, available_height - 96))
-        target_width = 16 + 50 + name_width + 126 + 120 + 34 + (10 * 4) + 24
+        target_width = 16 + 50 + name_width + 126 + 120 + 36 + (10 * 4) + 24
         capped_width = min(max(target_width, 360), max(360, available_width - 96))
         self.window.resize(capped_width, capped_height)
 
@@ -1242,7 +1263,10 @@ class MountletWindow:
 
     def _icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self._button(label, callback, enabled=enabled)
-        button.setFixedSize(28, 24)
+        button.setFixedSize(30, 26)
+        font = button.font()
+        font.setPointSize(max(font.pointSize() + 4, 14))
+        button.setFont(font)
         return button
 
     def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
@@ -1455,6 +1479,8 @@ class MountletWindow:
 
     def _open_text_config(self, path: Path) -> None:
         ensure_default_config_files()
+        if _open_text_file_focused(path):
+            return
         if not self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
             self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
 
