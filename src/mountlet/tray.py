@@ -994,7 +994,7 @@ class MountConfigDialog(_ConfigDialogBase):
 
 
 class MountletWindow:
-    def __init__(self, tray_app: "CloudMountTray") -> None:
+    def __init__(self, tray_app: "MountletTray") -> None:
         self.tray_app = tray_app
         self.qt = tray_app.qt
         self._usage_cache: dict[str, core.StorageUsage] = {}
@@ -1724,7 +1724,7 @@ class MountletWindow:
         return bool(getattr(getattr(self, "tray_app", None), "_quitting", False))
 
 
-class CloudMountTray:
+class MountletTray:
     def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10) -> None:
         self.qt = qt
         self.refresh_interval = max(refresh_interval, 2)
@@ -1962,7 +1962,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_app_directories()
     ensure_default_config_files()
     core.ensure_base_mount_dir()
-    return CloudMountTray(qt, refresh_interval=args.refresh_interval).run()
+    return MountletTray(qt, refresh_interval=args.refresh_interval).run()
 
 
 if __name__ == "__main__":

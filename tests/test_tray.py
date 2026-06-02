@@ -130,7 +130,7 @@ class TrayTests(unittest.TestCase):
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
         fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick = "double"
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = fake_qt
         tray_app.main_window = fake_window
 
@@ -178,7 +178,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.activateWindow.assert_called_once_with()
 
     def test_request_quit_stops_refresh_and_hides_ui(self):
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
         tray_app.timer = mock.Mock()
         tray_app.main_window = mock.Mock()
@@ -616,7 +616,7 @@ class TrayTests(unittest.TestCase):
             backend_type="drive",
             mount_path="/tmp/missing-docs",
         )
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = mock.Mock()
 
         with tempfile.TemporaryDirectory() as tempdir:
@@ -681,7 +681,7 @@ class TrayTests(unittest.TestCase):
             core.RemoteInfo("Photos", "Photos", "drive", "drive", "/tmp/photos", auto_mount=False),
         ]
         qt = mock.Mock()
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = qt
 
         with mock.patch.object(tray.core, "load_remotes", return_value=remotes):
@@ -695,7 +695,7 @@ class TrayTests(unittest.TestCase):
 
     def test_auto_mount_reports_results_and_rebuilds_menus(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
 
         with mock.patch.object(tray.core, "mount_all", return_value=(["Docs"], [])) as mount_all:
             with mock.patch.object(tray_app, "_notify") as notify:

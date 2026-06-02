@@ -150,7 +150,7 @@ type = dropbox
 [Docs]
 type = drive
 root_folder_id = abc
-token = secret
+token = REDACTED
 """.strip(),
             )
             remote = core.load_remotes()[0]
@@ -162,11 +162,11 @@ token = secret
             self.assertIn("team_drive", fields)
             self.assertNotIn("token", fields)
 
-            core.save_rclone_fields("Docs", {"root_folder_id": "def", "token": "changed"})
+            core.save_rclone_fields("Docs", {"root_folder_id": "def", "token": "REDACTED"})
             remote = core.load_remotes()[0]
 
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
-            self.assertEqual(remote.extra_info["token"], "secret")
+            self.assertEqual(remote.extra_info["token"], "REDACTED")
 
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
