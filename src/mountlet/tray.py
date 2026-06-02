@@ -229,6 +229,16 @@ def _default_directory_app() -> str:
     return result.stdout.strip()
 
 
+def _file_manager_label() -> str:
+    app = _default_directory_app()
+    if not app:
+        return "the file manager"
+    name = app.rsplit("/", 1)[-1].removesuffix(".desktop")
+    name = re.sub(r"^(org|com|net)\.", "", name)
+    name = name.rsplit(".", 1)[-1]
+    return name.replace("-", " ").replace("_", " ").title() or "the file manager"
+
+
 def _open_folder_with_dolphin(path: str) -> bool:
     if _open_folder_in_dolphin_tab(path):
         return True
@@ -901,7 +911,6 @@ class MountletWindow:
         rows.setContentsMargins(0, 0, 0, 0)
         rows.setSpacing(6)
         if remotes:
-            rows.addWidget(self._remote_header())
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
                 self._schedule_storage_load(remote)
@@ -914,58 +923,62 @@ class MountletWindow:
         self.window.setCentralWidget(root)
         self._fit_to_remote_count(len(remotes))
 
-    def _remote_header(self) -> Any:
-        header = self.qt.QFrame()
-        layout = self.qt.QGridLayout(header)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.setHorizontalSpacing(10)
-        labels = [
-            ("Mounted", 0),
-            ("Remote", 1),
-            ("Usage", 2),
-            ("Status", 3),
-            ("Config", 4),
-        ]
-        for text, column in labels:
-            label = self.qt.QLabel(text)
-            label.setStyleSheet(f"{_muted_text_style(label)} font-weight: 600;")
-            layout.addWidget(label, 0, column)
-        return header
-
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._usage_cache.get(remote.name)
         checking_usage = usage is None
         if usage is None:
             usage = core.StorageUsage("Checking...")
         action_pending = remote.name in self._action_pending
+        open_tooltip = f"Open {remote.display_name} in {_file_manager_label()}"
 
         frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setProperty("mounted", mounted)
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
-        frame.setToolTip("Open")
-        frame.mouseReleaseEvent = lambda event, selected=remote: self._open_folder(selected)
-        frame.enterEvent = lambda event, row=frame: self._highlight_remote_row(row, highlighted=True)
+        frame.setToolTip(open_tooltip)
+        frame.mouseReleaseEvent = lambda event, row=frame, selected=remote: self._handle_remote_row_click(event, row, selected)
+        frame.enterEvent = lambda event, row=frame, tooltip=open_tooltip: self._highlight_remote_row(
+            row,
+            highlighted=True,
+            tooltip=tooltip,
+        )
         frame.leaveEvent = lambda event, row=frame: self._highlight_remote_row(row, highlighted=False)
+        frame.setStyleSheet(self._remote_row_style(frame, highlighted=False))
         layout = self.qt.QGridLayout(frame)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(0)
+        layout.setColumnMinimumWidth(0, 50)
+        layout.setColumnMinimumWidth(2, 126)
+        layout.setColumnMinimumWidth(3, 96)
+        layout.setColumnMinimumWidth(4, 72)
+        layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(remote.display_name)
         title.setToolTip(remote.mount_path)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
+        if not mounted:
+            title.setEnabled(False)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
         usage_indicator.setToolTip(usage.text)
+        usage_indicator.setVisible(not action_pending)
+        if not mounted:
+            usage_indicator.setEnabled(False)
 
         toggle_action = core.unmount_remote if mounted else core.mount_remote
         toggle = self._switch()
+        toggle.setProperty("rowControl", True)
         toggle.setChecked(mounted)
         toggle.setEnabled(not action_pending)
         toggle.setToolTip("Mounted" if mounted else "Unmounted")
         toggle.stateChanged.connect(lambda state, selected=remote, action=toggle_action: self._run_remote_action(selected, action))
         working = self.qt.QLabel("Working..." if action_pending else "")
+        working.setFixedWidth(88)
+        working.setStyleSheet(_muted_text_style(working))
         config_button = self._button("Config", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
+        config_button.setProperty("rowControl", True)
 
         layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
@@ -1025,14 +1038,43 @@ class MountletWindow:
                 knob_x = 22 if self.isChecked() else 4
                 painter.drawEllipse(knob_x, 4, 14, 14)
 
+            def hitButton(self, position: Any) -> bool:
+                return bool(self.rect().contains(position))
+
         return Switch()
 
-    def _highlight_remote_row(self, row: Any, *, highlighted: bool) -> None:
+    def _handle_remote_row_click(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        child = row.childAt(event.position().toPoint()) if hasattr(event, "position") else None
+        while child is not None and child is not row:
+            if child.property("rowControl"):
+                return
+            child = child.parentWidget()
+        if not row.property("mounted"):
+            return
+        self._open_folder(remote)
+
+    def _remote_row_style(self, row: Any, *, highlighted: bool) -> str:
+        mounted = bool(row.property("mounted"))
+        if not mounted:
+            return (
+                "QFrame#remoteRow {"
+                "border: 1px solid rgba(107, 114, 128, 90);"
+                "background: rgba(107, 114, 128, 24);"
+                "}"
+            )
         if highlighted:
-            row.setStyleSheet("QFrame#remoteRow { background: rgba(59, 130, 246, 38); }")
-            self.qt.QToolTip.showText(self.qt.QCursor.pos(), "Open", row)
-        else:
-            row.setStyleSheet("")
+            return (
+                "QFrame#remoteRow {"
+                "border: 1px solid rgba(22, 163, 74, 190);"
+                "background: rgba(22, 163, 74, 36);"
+                "}"
+            )
+        return ""
+
+    def _highlight_remote_row(self, row: Any, *, highlighted: bool, tooltip: str | None = None) -> None:
+        row.setStyleSheet(self._remote_row_style(row, highlighted=highlighted))
+        if highlighted and row.property("mounted") and tooltip:
+            self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
 
     def _fit_to_remote_count(self, remote_count: int) -> None:
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
