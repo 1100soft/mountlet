@@ -937,6 +937,7 @@ class MountConfigDialog(_ConfigDialogBase):
         ensure_default_config_files()
         app_settings = load_app_settings()
         mount_settings = load_mount_settings().get(self.remote.name)
+        self._saved_order = mount_settings.order if mount_settings else None
         root = self.qt.QVBoxLayout(self.dialog)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
@@ -1029,6 +1030,7 @@ class MountConfigDialog(_ConfigDialogBase):
             + self._preserved_mount_flags,
             auto_mount=self.fields["auto_mount"].isChecked(),
             enabled=self._saved_enabled,
+            order=self._saved_order,
         )
         save_mount_settings(settings)
         if self.rclone_fields:
@@ -1051,6 +1053,61 @@ class MountConfigDialog(_ConfigDialogBase):
         if kind == "combo":
             return field.currentText().strip()
         return field.text().strip()
+
+
+class NewRemoteWizard:
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        self.qt = qt
+        self.dialog = qt.QDialog(parent)
+        self.dialog.setWindowTitle("Add remote")
+        self.dialog.resize(420, 180)
+        self.fields: dict[str, Any] = {}
+        self._build()
+
+    def exec(self) -> int:
+        return int(self.dialog.exec() or 0)
+
+    def _build(self) -> None:
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+
+        provider = self.qt.QComboBox()
+        provider_options = (
+            ("drive", "Google Drive"),
+            ("dropbox", "Dropbox"),
+            ("onedrive", "OneDrive"),
+            ("webdav", "WebDAV"),
+            ("s3", "S3-compatible storage"),
+        )
+        for value, label in provider_options:
+            provider.addItem(label, value)
+
+        name = self.qt.QLineEdit()
+        name.setPlaceholderText("Personal Drive")
+
+        self.fields = {"provider": provider, "name": name}
+        form.addRow("Storage type", provider)
+        form.addRow("Name", name)
+
+        note = self.qt.QLabel("GUI remote creation is not ready yet.")
+        note.setStyleSheet(_muted_text_style(note))
+        note.setWordWrap(True)
+        form.addRow(note)
+
+        buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+        create_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
+        create_button.setEnabled(False)
+        create_button.setToolTip("The rclone setup backend is the next implementation step.")
+        buttons.rejected.connect(self.dialog.reject)
+
+        root.addWidget(frame)
+        root.addWidget(buttons)
+        self.dialog.adjustSize()
 
 
 class MountletWindow:
@@ -1094,6 +1151,8 @@ class MountletWindow:
         mount_menu = self.window.menuBar().addMenu("Mount")
         self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
         self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
+        mount_menu.addSeparator()
+        self.tray_app._add_action(mount_menu, "Add remote", self._show_new_remote_wizard)
 
         config_menu = self.window.menuBar().addMenu("Config")
         self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
@@ -1208,6 +1267,7 @@ class MountletWindow:
                     self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
+        rows.addWidget(self._add_remote_row())
         scroll.setWidget(container)
         outer.addWidget(scroll)
 
@@ -1251,6 +1311,8 @@ class MountletWindow:
         layout.setColumnMinimumWidth(2, 126)
         layout.setColumnMinimumWidth(3, 96)
         layout.setColumnMinimumWidth(4, 36)
+        layout.setColumnMinimumWidth(5, 36)
+        layout.setColumnMinimumWidth(6, 36)
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
@@ -1286,12 +1348,16 @@ class MountletWindow:
             widget,
             tooltip,
         )
+        up_button = self._move_button(remote, -1)
+        down_button = self._move_button(remote, 1)
 
         layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
         layout.addWidget(usage_indicator, 0, 2)
         layout.addWidget(status, 0, 3)
         layout.addWidget(config_button, 0, 4)
+        layout.addWidget(up_button, 0, 5)
+        layout.addWidget(down_button, 0, 6)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             title=title,
@@ -1299,7 +1365,33 @@ class MountletWindow:
             toggle=toggle,
             status=status,
             config_button=config_button,
+            up_button=up_button,
+            down_button=down_button,
         )
+        return frame
+
+    def _add_remote_row(self) -> Any:
+        frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+        tooltip = "Add a new remote"
+        frame.setToolTip(tooltip)
+        frame.mouseReleaseEvent = lambda event: self._show_new_remote_wizard()
+        frame.enterEvent = lambda event, widget=frame: self._show_immediate_tooltip(widget, tooltip)
+
+        layout = self.qt.QHBoxLayout(frame)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
+        add_button = self._icon_button("+", self._show_new_remote_wizard)
+        add_button.setProperty("rowControl", True)
+        add_button.setToolTip(tooltip)
+        add_button.enterEvent = lambda event, widget=add_button: self._show_immediate_tooltip(widget, tooltip)
+        label = self.qt.QLabel("Add remote")
+        label.setStyleSheet(_muted_text_style(label))
+        layout.addWidget(add_button)
+        layout.addWidget(label)
+        layout.addStretch(1)
         return frame
 
     def _update_remote_row(self, remote: core.RemoteInfo, mounted: bool) -> None:
@@ -1356,6 +1448,57 @@ class MountletWindow:
         row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
             self._show_immediate_tooltip(widget, tooltip)
         )
+        self._update_move_button(row.up_button, remote, -1)
+        self._update_move_button(row.down_button, remote, 1)
+
+    def _move_button(self, remote: core.RemoteInfo, delta: int) -> Any:
+        button = self._icon_button("↑" if delta < 0 else "↓", lambda: self._move_remote(remote.name, delta))
+        button.setProperty("rowControl", True)
+        self._update_move_button(button, remote, delta)
+        return button
+
+    def _update_move_button(self, button: Any, remote: core.RemoteInfo, delta: int) -> None:
+        direction = "up" if delta < 0 else "down"
+        enabled = self._can_move_remote(remote.name, delta)
+        tooltip = f"Move {remote.display_name} {direction}"
+        button.setEnabled(enabled)
+        button.setToolTip(tooltip)
+        button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
+
+    def _can_move_remote(self, remote_name: str, delta: int) -> bool:
+        try:
+            index = self._current_remote_names.index(remote_name)
+        except ValueError:
+            return False
+        target = index + delta
+        return 0 <= target < len(self._current_remote_names)
+
+    def _move_remote(self, remote_name: str, delta: int) -> None:
+        names = [remote.name for remote in core.load_remotes()]
+        try:
+            index = names.index(remote_name)
+        except ValueError:
+            return
+        target = index + delta
+        if not 0 <= target < len(names):
+            return
+        names[index], names[target] = names[target], names[index]
+        self._save_remote_order(names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
+
+    def _save_remote_order(self, remote_names: list[str]) -> None:
+        settings = load_mount_settings()
+        for order, remote_name in enumerate(remote_names):
+            current = settings.get(remote_name) or MountSettings()
+            settings[remote_name] = MountSettings(
+                mount_path=current.mount_path,
+                mount_flags=list(current.mount_flags),
+                auto_mount=current.auto_mount,
+                enabled=current.enabled,
+                order=order,
+            )
+        save_mount_settings(settings)
 
     def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
         if not mounted:
@@ -1623,6 +1766,10 @@ class MountletWindow:
             self.refresh()
             self._ask_remount_for_config_changes(changes)
 
+    def _show_new_remote_wizard(self) -> None:
+        dialog = NewRemoteWizard(self.qt, self.window)
+        dialog.exec()
+
     def _mounted_remote_names(self, remotes: list[core.RemoteInfo]) -> set[str]:
         return {remote.name for remote in remotes if core.is_mounted(remote)}
 
@@ -1877,6 +2024,7 @@ class MountletTray:
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
+        self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self._add_action(self.app_menu, "App settings", self.main_window._show_app_config_editor)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)

@@ -49,6 +49,7 @@ mount_path = "~/Cloud/Work"
 mount_flags = "--read-only --dir-cache-time 10m"
 auto_mount = true
 enabled = false
+order = 2
 """.strip(),
                 encoding="utf-8",
             )
@@ -60,6 +61,7 @@ enabled = false
         self.assertEqual(remote.mount_flags, ["--read-only", "--dir-cache-time", "10m"])
         self.assertTrue(remote.auto_mount)
         self.assertFalse(remote.enabled)
+        self.assertEqual(remote.order, 2)
 
     def test_ensure_default_config_files_creates_app_and_mount_files(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -145,6 +147,7 @@ enabled = false
                         mount_flags=["--read-only", "--dir-cache-time", "10m"],
                         auto_mount=True,
                         enabled=False,
+                        order=3,
                     )
                 },
                 path,
@@ -156,6 +159,28 @@ enabled = false
         self.assertEqual(loaded.mount_flags, ["--read-only", "--dir-cache-time", "10m"])
         self.assertTrue(loaded.auto_mount)
         self.assertFalse(loaded.enabled)
+        self.assertEqual(loaded.order, 3)
+
+    def test_save_mount_settings_omits_unset_auto_mount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "mounts.toml"
+            settings.save_mount_settings(
+                {
+                    "Docs": settings.MountSettings(
+                        mount_path="docs",
+                        auto_mount=None,
+                        order=0,
+                    )
+                },
+                path,
+            )
+
+            text = path.read_text(encoding="utf-8")
+            loaded = settings.load_mount_settings(path)["Docs"]
+
+        self.assertNotIn("auto_mount", text)
+        self.assertIsNone(loaded.auto_mount)
+        self.assertEqual(loaded.order, 0)
 
 
 if __name__ == "__main__":

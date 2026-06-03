@@ -27,6 +27,7 @@ class MountSettings:
     mount_flags: list[str] = field(default_factory=list)
     auto_mount: bool | None = None
     enabled: bool = True
+    order: int | None = None
 
 
 DEFAULT_APP_CONFIG = """# Mountlet app settings.
@@ -55,6 +56,7 @@ DEFAULT_MOUNTS_CONFIG = """# Per-remote Mountlet settings.
 # Example:
 # [remotes."Work__Drive"]
 # auto_mount = true
+# order = 10
 # mount_path = "drive/Work"
 # mount_flags = "--read-only --dir-cache-time 10m"
 """
@@ -188,6 +190,15 @@ def _optional_bool_value(value: Any) -> bool | None:
     return None
 
 
+def _optional_int_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _toml_string(value: str | None) -> str:
     text = value or ""
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
@@ -237,6 +248,7 @@ def load_mount_settings(path: Path | None = None) -> dict[str, MountSettings]:
             mount_flags=shlex.split(flags) if flags else [],
             auto_mount=_optional_bool_value(values.get("auto_mount")),
             enabled=_bool_value(values.get("enabled"), True),
+            order=_optional_int_value(values.get("order")),
         )
     return remotes
 
@@ -318,7 +330,14 @@ def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = 
             [
                 f"[{_remote_section_name(remote_name)}]",
                 f"enabled = {_toml_bool(remote.enabled)}",
-                f"auto_mount = {_toml_bool(bool(remote.auto_mount))}",
+            ]
+        )
+        if remote.auto_mount is not None:
+            lines.append(f"auto_mount = {_toml_bool(remote.auto_mount)}")
+        if remote.order is not None:
+            lines.append(f"order = {remote.order}")
+        lines.extend(
+            [
                 f"mount_path = {_toml_string(remote.mount_path)}",
                 f"mount_flags = {_toml_string(' '.join(remote.mount_flags))}",
                 "",

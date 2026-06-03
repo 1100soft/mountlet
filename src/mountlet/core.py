@@ -292,8 +292,8 @@ def load_remotes() -> List[RemoteInfo]:
     config = _load_config()
     app_settings = load_app_settings()
     mount_settings = load_mount_settings()
-    remotes: List[RemoteInfo] = []
-    for name in config.sections():
+    remotes: List[Tuple[int | None, int, RemoteInfo]] = []
+    for config_index, name in enumerate(config.sections()):
         section = config[name]
         remote_settings = mount_settings.get(name)
         if remote_settings and not remote_settings.enabled:
@@ -324,8 +324,17 @@ def load_remotes() -> List[RemoteInfo]:
             extra_info=dict(section.items()),
             auto_mount=auto_mount,
         )
-        remotes.append(info)
-    return remotes
+        order = remote_settings.order if remote_settings else None
+        remotes.append((order, config_index, info))
+    if any(order is not None for order, _config_index, _info in remotes):
+        remotes.sort(
+            key=lambda item: (
+                item[0] is None,
+                item[0] if item[0] is not None else item[1],
+                item[1],
+            )
+        )
+    return [info for _order, _config_index, info in remotes]
 
 
 def find_rclone() -> str | None:

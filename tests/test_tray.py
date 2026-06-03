@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mountlet import core, tray
+from mountlet import core, settings, tray
 
 
 class _FakeWindow:
@@ -149,6 +149,35 @@ class TrayTests(unittest.TestCase):
 
         rebuild.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 1)
+
+    def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        original = {
+            "Docs": settings.MountSettings(
+                mount_path="docs",
+                mount_flags=["--read-only"],
+                auto_mount=True,
+                enabled=True,
+            ),
+            "Photos": settings.MountSettings(
+                mount_path="photos",
+                mount_flags=[],
+                auto_mount=False,
+                enabled=False,
+            ),
+        }
+
+        with mock.patch.object(tray, "load_mount_settings", return_value=original):
+            with mock.patch.object(tray, "save_mount_settings") as save:
+                mountlet_window._save_remote_order(["Photos", "Docs"])
+
+        saved = save.call_args.args[0]
+        self.assertEqual(saved["Photos"].order, 0)
+        self.assertEqual(saved["Docs"].order, 1)
+        self.assertEqual(saved["Docs"].mount_path, "docs")
+        self.assertEqual(saved["Docs"].mount_flags, ["--read-only"])
+        self.assertTrue(saved["Docs"].auto_mount)
+        self.assertFalse(saved["Photos"].enabled)
 
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)

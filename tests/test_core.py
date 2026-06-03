@@ -142,6 +142,35 @@ type = dropbox
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)
 
+    def test_load_remotes_uses_mountlet_order_when_configured(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config" / "mountlet"
+            config_dir.mkdir(parents=True)
+            (config_dir / "mounts.toml").write_text(
+                """
+[remotes."Photos"]
+order = 0
+
+[remotes."Docs"]
+order = 1
+""".strip(),
+                encoding="utf-8",
+            )
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+
+[Photos]
+type = dropbox
+""".strip(),
+            )
+
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.name for remote in remotes], ["Photos", "Docs"])
+
     def test_editable_rclone_fields_are_safe_and_saveable(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(
