@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from mountlet import rclone_wizard
+
+
+class RcloneWizardTests(unittest.TestCase):
+    def test_extract_json_object_ignores_rclone_notices(self):
+        output = """
+<5>NOTICE: Config file not found - using defaults
+{
+  "State": "*oauth-islocal",
+  "Option": {"Name": "config_is_local"},
+  "Error": "",
+  "Result": ""
+}
+""".strip()
+
+        parsed = rclone_wizard._extract_json_object(output)
+
+        self.assertEqual(parsed["State"], "*oauth-islocal")
+        self.assertEqual(parsed["Option"]["Name"], "config_is_local")
+
+    def test_start_drive_remote_runs_non_interactive_create_with_safe_defaults(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout='{"State":"next","Option":{"Name":"config_is_local"},"Error":"","Result":""}',
+                stderr="",
+            )
+            with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
+                    with mock.patch.object(subprocess, "run", return_value=completed) as run:
+                        step = rclone_wizard.start_drive_remote("Docs")
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[:7], ["/usr/bin/rclone", "--config", str(config_path), "config", "create", "Docs", "drive"])
+        self.assertIn("--non-interactive", command)
+        self.assertEqual(command[-6:], ["client_id", "", "client_secret", "", "scope", "drive"])
+        self.assertEqual(step.state, "next")
+        self.assertEqual(step.option["Name"], "config_is_local")
+
+    def test_continue_drive_remote_passes_state_and_result(self):
+        completed = SimpleNamespace(returncode=0, stdout='{"State":"","Option":{},"Error":"","Result":""}', stderr="")
+        with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+            with mock.patch.object(rclone_wizard, "default_config_path", return_value=Path("/tmp/rclone.conf")):
+                with mock.patch.object(subprocess, "run", return_value=completed) as run:
+                    step = rclone_wizard.continue_drive_remote("Docs", "*state", "true")
+
+        self.assertEqual(run.call_args.args[0][-5:], ["--continue", "--state", "*state", "--result", "true"])
+        self.assertTrue(step.complete)
+
+    def test_run_config_create_reports_rclone_failure(self):
+        completed = SimpleNamespace(returncode=1, stdout="", stderr="failed")
+        with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+            with mock.patch.object(rclone_wizard, "default_config_path", return_value=Path("/tmp/rclone.conf")):
+                with mock.patch.object(subprocess, "run", return_value=completed):
+                    with self.assertRaisesRegex(rclone_wizard.RcloneWizardError, "failed"):
+                        rclone_wizard.start_drive_remote("Docs")
+
+
+if __name__ == "__main__":
+    unittest.main()

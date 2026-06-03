@@ -17,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import core
+from . import core, rclone_wizard
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .settings import (
@@ -118,6 +118,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QMainWindow,
             QMenu,
             QMessageBox,
+            QPlainTextEdit,
             QProgressBar,
             QPushButton,
             QScrollArea,
@@ -156,6 +157,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
+        QPlainTextEdit=QPlainTextEdit,
         QObject=QObject,
         QPainter=QPainter,
         QProgressBar=QProgressBar,
@@ -1060,54 +1062,214 @@ class NewRemoteWizard:
         self.qt = qt
         self.dialog = qt.QDialog(parent)
         self.dialog.setWindowTitle("Add remote")
-        self.dialog.resize(420, 180)
+        self.dialog.resize(520, 280)
         self.fields: dict[str, Any] = {}
+        self._remote_name = ""
+        self._state = ""
+        self._question: rclone_wizard.RcloneConfigStep | None = None
+        self._answer_kind = ""
+        self._answer_field: Any | None = None
+        self._bridge = self._make_bridge()
+        self._bridge.command_finished.connect(self._handle_command_finished)
         self._build()
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
 
+    def _make_bridge(self) -> Any:
+        qt = self.qt
+
+        class Bridge(qt.QObject):
+            command_finished = qt.Signal(object, object)
+
+        return Bridge()
+
     def _build(self) -> None:
         root = self.qt.QVBoxLayout(self.dialog)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
+        self.root = root
 
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
 
         provider = self.qt.QComboBox()
-        provider_options = (
-            ("drive", "Google Drive"),
-            ("dropbox", "Dropbox"),
-            ("onedrive", "OneDrive"),
-            ("webdav", "WebDAV"),
-            ("s3", "S3-compatible storage"),
-        )
-        for value, label in provider_options:
-            provider.addItem(label, value)
+        provider.addItem("Google Drive", "drive")
 
         name = self.qt.QLineEdit()
         name.setPlaceholderText("Personal Drive")
+        name.textChanged.connect(self._update_action_button)
 
         self.fields = {"provider": provider, "name": name}
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
 
-        note = self.qt.QLabel("GUI remote creation is not ready yet.")
-        note.setStyleSheet(_muted_text_style(note))
-        note.setWordWrap(True)
-        form.addRow(note)
+        self.question_frame = self.qt.QFrame()
+        self.question_layout = self.qt.QFormLayout(self.question_frame)
+        self.question_frame.hide()
+
+        self.status = self.qt.QLabel("")
+        self.status.setStyleSheet(_muted_text_style(self.status))
+        self.status.setWordWrap(True)
 
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
-        create_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
-        create_button.setEnabled(False)
-        create_button.setToolTip("The rclone setup backend is the next implementation step.")
+        self.action_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
+        self.action_button.clicked.connect(self._next)
         buttons.rejected.connect(self.dialog.reject)
 
         root.addWidget(frame)
+        root.addWidget(self.question_frame)
+        root.addWidget(self.status)
         root.addWidget(buttons)
+        self._update_action_button()
         self.dialog.adjustSize()
+
+    def _update_action_button(self) -> None:
+        if not hasattr(self, "action_button"):
+            return
+        if self._question is not None:
+            self.action_button.setEnabled(True)
+            self.action_button.setText("Continue")
+            return
+        self.action_button.setText("Create remote")
+        self.action_button.setEnabled(bool(self.fields["name"].text().strip()))
+
+    def _next(self) -> None:
+        if self._question is None:
+            self._start()
+            return
+        self._continue()
+
+    def _start(self) -> None:
+        name = self.fields["name"].text().strip()
+        if not self._valid_remote_name(name):
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Add remote",
+                "Use a name without ':' or path separators.",
+            )
+            return
+        if any(remote.name == name for remote in core.load_remotes()):
+            self.qt.QMessageBox.warning(self.dialog, "Add remote", f"{name} already exists.")
+            return
+        self._remote_name = name
+        self._run_rclone(lambda: rclone_wizard.start_drive_remote(name))
+
+    def _continue(self) -> None:
+        answer = self._answer_value()
+        self._run_rclone(lambda: rclone_wizard.continue_drive_remote(self._remote_name, self._state, answer))
+
+    def _run_rclone(self, action: Any) -> None:
+        self._set_busy(True)
+
+        def worker() -> None:
+            try:
+                self._bridge.command_finished.emit(action(), None)
+            except Exception as exc:
+                self._bridge.command_finished.emit(None, exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_command_finished(self, step: object, error: object) -> None:
+        self._set_busy(False)
+        if error is not None:
+            self.qt.QMessageBox.warning(self.dialog, "Add remote", str(error))
+            return
+        if not isinstance(step, rclone_wizard.RcloneConfigStep):
+            self.qt.QMessageBox.warning(self.dialog, "Add remote", "rclone returned an unexpected response.")
+            return
+        if step.error:
+            self.status.setText(step.error)
+        if step.complete:
+            self.qt.QMessageBox.information(self.dialog, "Add remote", f"{self._remote_name} was added.")
+            self.dialog.accept()
+            return
+        self._show_question(step)
+
+    def _set_busy(self, busy: bool) -> None:
+        self.action_button.setEnabled(False if busy else True)
+        self.fields["name"].setEnabled(not busy and self._question is None)
+        self.fields["provider"].setEnabled(not busy and self._question is None)
+        self.status.setText("Waiting for rclone..." if busy else "")
+
+    def _show_question(self, step: rclone_wizard.RcloneConfigStep) -> None:
+        self._question = step
+        self._state = step.state
+        self._clear_layout(self.question_layout)
+        option = step.option
+        title = self.qt.QLabel(_field_label(str(option.get("Name", "Option"))))
+        title_font = title.font()
+        title_font.setBold(True)
+        title.setFont(title_font)
+        help_text = self.qt.QLabel(str(option.get("Help", "")).strip())
+        help_text.setWordWrap(True)
+        help_text.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        help_text.setOpenExternalLinks(True)
+        self._answer_kind, self._answer_field = self._answer_widget(option)
+        self.question_layout.addRow(title)
+        self.question_layout.addRow(help_text)
+        self.question_layout.addRow("Answer", self._answer_field)
+        self.question_frame.show()
+        self._update_action_button()
+        self.dialog.adjustSize()
+
+    def _answer_widget(self, option: dict[str, Any]) -> tuple[str, Any]:
+        option_type = str(option.get("Type", "")).lower()
+        default = option.get("DefaultStr")
+        if default is None:
+            default = option.get("Default", "")
+        default_text = str(default).lower() if isinstance(default, bool) else str(default or "")
+        examples = option.get("Examples") if isinstance(option.get("Examples"), list) else []
+        if option_type == "bool":
+            field = self.qt.QCheckBox()
+            field.setChecked(default_text.lower() in {"true", "1", "yes", "on"})
+            return "bool", field
+        if examples and option.get("Exclusive"):
+            field = self.qt.QComboBox()
+            selected = 0
+            for index, example in enumerate(examples):
+                value = str(example.get("Value", ""))
+                label = str(example.get("Help", "")).strip().splitlines()[0] if example.get("Help") else value
+                field.addItem(label, value)
+                if value == default_text:
+                    selected = index
+            field.setCurrentIndex(selected)
+            return "combo", field
+        if option.get("IsPassword"):
+            field = self.qt.QLineEdit()
+            field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+            field.setText(default_text)
+            return "text", field
+        if str(option.get("Name", "")).endswith("token"):
+            field = self.qt.QPlainTextEdit()
+            field.setPlainText(default_text)
+            field.setMinimumHeight(76)
+            return "plain", field
+        field = self.qt.QLineEdit()
+        field.setText(default_text)
+        return "text", field
+
+    def _answer_value(self) -> str:
+        if self._answer_field is None:
+            return ""
+        if self._answer_kind == "bool":
+            return "true" if self._answer_field.isChecked() else "false"
+        if self._answer_kind == "combo":
+            return str(self._answer_field.currentData() or "")
+        if self._answer_kind == "plain":
+            return self._answer_field.toPlainText().strip()
+        return self._answer_field.text().strip()
+
+    def _valid_remote_name(self, name: str) -> bool:
+        return bool(name) and ":" not in name and "/" not in name and "\\" not in name
+
+    def _clear_layout(self, layout: Any) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
 
 class MountletWindow:
@@ -1768,7 +1930,11 @@ class MountletWindow:
 
     def _show_new_remote_wizard(self) -> None:
         dialog = NewRemoteWizard(self.qt, self.window)
-        dialog.exec()
+        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+            self._usage_cache.clear()
+            self._current_remote_names = []
+            self.tray_app.rebuild_menus()
+            self.refresh()
 
     def _mounted_remote_names(self, remotes: list[core.RemoteInfo]) -> set[str]:
         return {remote.name for remote in remotes if core.is_mounted(remote)}
