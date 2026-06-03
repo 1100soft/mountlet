@@ -14,12 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mountlet import core, tray
 
 
-class _FakeMenu:
+class _FakeWindow:
     def __init__(self) -> None:
-        self.popup_calls: list[object] = []
+        self.show_calls = 0
+        self.toggle_calls = 0
 
-    def popup(self, position: object) -> None:
-        self.popup_calls.append(position)
+    def show(self) -> None:
+        self.show_calls += 1
+
+    def toggle_from_tray(self) -> None:
+        self.toggle_calls += 1
 
 
 class TrayTests(unittest.TestCase):
@@ -103,27 +107,198 @@ class TrayTests(unittest.TestCase):
             "Mountlet - mounted: Docs",
         )
 
-    def test_left_click_activation_opens_remote_menu(self):
-        fake_menu = _FakeMenu()
+    def test_mount_flag_options_do_not_include_allow_non_empty(self):
+        tokens = {
+            token
+            for _label, _tooltip, option_tokens in tray.MOUNT_FLAG_OPTIONS
+            for token in option_tokens
+        }
+
+        self.assertNotIn("--allow-non-empty", tokens)
+
+    def test_config_bool_accepts_common_true_values(self):
+        for value in ("true", "True", "1", "yes", "on"):
+            self.assertTrue(tray._config_bool(value))
+
+        for value in ("", "false", "0", "no", "off"):
+            self.assertFalse(tray._config_bool(value))
+
+    def test_packaged_icon_path_exists(self):
+        icon_path = tray._packaged_icon_path()
+
+        self.assertIsNotNone(icon_path)
+        self.assertTrue(Path(icon_path or "").is_file())
+
+    def test_left_click_activation_toggles_mountlet_window(self):
+        fake_window = _FakeWindow()
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
         fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick = "double"
-        fake_qt.QCursor.pos.return_value = "cursor-position"
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = fake_qt
-        tray_app.remote_menu = fake_menu
+        tray_app.main_window = fake_window
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
         rebuild.assert_called_once_with()
-        self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
+        self.assertEqual(fake_window.toggle_calls, 1)
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
         rebuild.assert_not_called()
-        self.assertEqual(fake_menu.popup_calls, ["cursor-position"])
+        self.assertEqual(fake_window.toggle_calls, 1)
+
+    def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        mountlet_window.window.hide.assert_called_once_with()
+        show.assert_not_called()
+
+    def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        mountlet_window.window.hide.assert_not_called()
+        show.assert_called_once_with()
+
+    def test_mountlet_window_show_refocuses_existing_window_without_repositioning(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isMinimized.return_value = False
+
+        with mock.patch.object(mountlet_window, "refresh") as refresh:
+            with mock.patch.object(mountlet_window, "_position_near_tray") as position:
+                mountlet_window.show()
+
+        refresh.assert_called_once_with()
+        position.assert_not_called()
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_mountlet_window_show_restores_minimized_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isMinimized.return_value = True
+
+        with mock.patch.object(mountlet_window, "refresh"):
+            with mock.patch.object(mountlet_window, "_position_near_tray"):
+                mountlet_window.show()
+
+        mountlet_window.window.show.assert_not_called()
+        mountlet_window.window.showNormal.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_mountlet_window_show_reopens_visible_window_from_other_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isMinimized.return_value = False
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
+            with mock.patch.object(mountlet_window, "refresh") as refresh:
+                with mock.patch.object(mountlet_window, "_position_near_tray") as position:
+                    mountlet_window.show()
+
+        mountlet_window.window.hide.assert_called_once_with()
+        refresh.assert_called_once_with()
+        position.assert_called_once_with()
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_x11_qt_window_is_on_current_desktop_compares_window_desktop(self):
+        window = mock.Mock()
+        window.winId.return_value = 12345
+
+        with mock.patch.object(tray, "_x11_current_desktop", return_value=3):
+            with mock.patch.object(tray, "_x11_window_desktop", return_value=3):
+                self.assertTrue(tray._x11_qt_window_is_on_current_desktop(window))
+            with mock.patch.object(tray, "_x11_window_desktop", return_value=2):
+                self.assertFalse(tray._x11_qt_window_is_on_current_desktop(window))
+            with mock.patch.object(tray, "_x11_window_desktop", return_value=0xFFFFFFFF):
+                self.assertTrue(tray._x11_qt_window_is_on_current_desktop(window))
+
+    def test_set_x11_window_desktop_uses_net_wm_desktop_value(self):
+        window = mock.Mock()
+        window.winId.return_value = 12345
+        completed = SimpleNamespace(returncode=0)
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.dict(tray.os.environ, {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}, clear=True):
+                with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/xprop"):
+                    with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                        self.assertTrue(tray._set_x11_window_desktop(window, 3))
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/usr/bin/xprop",
+                "-id",
+                "12345",
+                "-f",
+                "_NET_WM_DESKTOP",
+                "32c",
+                "-set",
+                "_NET_WM_DESKTOP",
+                "3",
+            ],
+        )
+
+    def test_set_x11_window_desktop_skips_wayland(self):
+        window = mock.Mock()
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.dict(tray.os.environ, {"DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland"}, clear=True):
+                with mock.patch.object(tray.subprocess, "run") as run:
+                    self.assertFalse(tray._set_x11_window_desktop(window, 3))
+
+        run.assert_not_called()
+
+    def test_focus_window_moves_to_current_desktop_before_activating(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isMinimized.return_value = False
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop", return_value=True) as move:
+            mountlet_window._focus_window()
+
+        self.assertEqual(move.call_args_list, [mock.call(mountlet_window.window), mock.call(mountlet_window.window)])
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+
+    def test_request_quit_stops_refresh_and_hides_ui(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.timer = mock.Mock()
+        tray_app.main_window = mock.Mock()
+        tray_app.tray = mock.Mock()
+        tray_app.app = mock.Mock()
+
+        tray_app.request_quit()
+
+        self.assertTrue(tray_app._quitting)
+        tray_app.timer.stop.assert_called_once_with()
+        tray_app.main_window.prepare_quit.assert_called_once_with()
+        tray_app.tray.hide.assert_called_once_with()
+        tray_app.app.exit.assert_called_once_with(0)
 
     def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
         completed = SimpleNamespace(returncode=0)
@@ -524,6 +699,22 @@ class TrayTests(unittest.TestCase):
         qt.QUrl.fromLocalFile.assert_not_called()
         qt.QDesktopServices.openUrl.assert_not_called()
 
+    def test_open_text_file_focused_opens_known_editor(self):
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.object(tray.shutil, "which", side_effect=lambda name: "/usr/bin/kate" if name == "kate" else None):
+                with mock.patch.object(tray.subprocess, "Popen") as popen:
+                    self.assertTrue(tray._open_text_file_focused(Path("/tmp/config.toml")))
+
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/kate", "/tmp/config.toml"])
+
+    def test_open_text_file_focused_falls_back_without_known_editor(self):
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.object(tray.shutil, "which", return_value=None):
+                with mock.patch.object(tray.subprocess, "Popen") as popen:
+                    self.assertFalse(tray._open_text_file_focused(Path("/tmp/config.toml")))
+
+        popen.assert_not_called()
+
     def test_open_folder_action_reports_failure_when_default_opener_fails(self):
         remote = core.RemoteInfo(
             name="Docs",
@@ -532,7 +723,7 @@ class TrayTests(unittest.TestCase):
             backend_type="drive",
             mount_path="/tmp/missing-docs",
         )
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = mock.Mock()
 
         with tempfile.TemporaryDirectory() as tempdir:
@@ -543,13 +734,61 @@ class TrayTests(unittest.TestCase):
 
         notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
 
+    def test_remount_changes_match_mounted_remotes_by_name(self):
+        old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
+        unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")
+        new_remotes = [
+            core.RemoteInfo("Docs", "Docs", "drive", "drive", "/new/docs"),
+            core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos"),
+        ]
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=new_remotes):
+            changes = window._remount_changes([old_remote, unchanged_remote], {"Docs"})
+
+        self.assertEqual(changes, [(old_remote, new_remotes[0])])
+
+    def test_remount_changes_ignore_unmounted_remotes(self):
+        old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
+        new_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/new/docs")
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], set())
+
+        self.assertEqual(changes, [])
+
+    def test_remount_changes_include_flag_changes_for_mounted_remotes(self):
+        old_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            flags=["--vfs-cache-mode", "full"],
+        )
+        new_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            flags=["--vfs-cache-mode", "full", "--read-only"],
+        )
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], {"Docs"})
+
+        self.assertEqual(changes, [(old_remote, new_remote)])
+
     def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
         remotes = [
             core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True),
             core.RemoteInfo("Photos", "Photos", "drive", "drive", "/tmp/photos", auto_mount=False),
         ]
         qt = mock.Mock()
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = qt
 
         with mock.patch.object(tray.core, "load_remotes", return_value=remotes):
@@ -563,7 +802,7 @@ class TrayTests(unittest.TestCase):
 
     def test_auto_mount_reports_results_and_rebuilds_menus(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
-        tray_app = object.__new__(tray.CloudMountTray)
+        tray_app = object.__new__(tray.MountletTray)
 
         with mock.patch.object(tray.core, "mount_all", return_value=(["Docs"], [])) as mount_all:
             with mock.patch.object(tray_app, "_notify") as notify:

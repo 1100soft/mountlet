@@ -122,6 +122,20 @@ class RemoteInfo:
         return self.alias
 
 
+@dataclass(frozen=True)
+class StorageUsage:
+    text: str
+    used: int | None = None
+    total: int | None = None
+
+    @property
+    def percent(self) -> int | None:
+        if not self.total:
+            return None
+        used = max(self.used or 0, 0)
+        return min(round((used / self.total) * 100), 100)
+
+
 PIDS: Dict[str, int] = {}
 
 
@@ -167,6 +181,13 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 }
 
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
+COMMON_SAFE_RCLONE_KEYS = ("description",)
+SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
+    "drive": ("shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "onedrive": ("drive_type", "region", "drive_id"),
+    "webdav": ("url", "vendor"),
+    "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
+}
 
 
 def _parse_remote_name(name: str, backend_type: str) -> Tuple[str, str]:
@@ -191,6 +212,13 @@ def _build_mount_path(provider: str, alias: str) -> str:
     return os.path.join(BASE_MOUNT_DIR, provider_component, alias_component)
 
 
+def _resolve_configured_mount_path(path: str) -> str:
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return expanded
+    return os.path.join(BASE_MOUNT_DIR, expanded)
+
+
 def _cleanup_mount_dir(path: str) -> None:
     try:
         os.rmdir(path)
@@ -211,6 +239,45 @@ def _load_config() -> configparser.ConfigParser:
     config = configparser.ConfigParser(interpolation=None)
     config.read(CONFIG_PATH, encoding="utf-8")
     return config
+
+
+def _save_config(config: configparser.ConfigParser) -> None:
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
+        config.write(handle)
+
+
+def _safe_rclone_keys(backend_type: str) -> Tuple[str, ...]:
+    return SAFE_RCLONE_CONFIG_KEYS.get(backend_type.lower(), ()) + COMMON_SAFE_RCLONE_KEYS
+
+
+def editable_rclone_fields(remote: RemoteInfo) -> Dict[str, str]:
+    config = _load_config()
+    if not config.has_section(remote.name):
+        return {}
+    section = config[remote.name]
+    fields: Dict[str, str] = {}
+    for key in _safe_rclone_keys(remote.backend_type):
+        if key in section or key in SAFE_RCLONE_CONFIG_KEYS.get(remote.backend_type.lower(), ()):
+            fields[key] = section.get(key, "")
+    return fields
+
+
+def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
+    config = _load_config()
+    if not config.has_section(remote_name):
+        return
+    backend_type = config[remote_name].get("type", "").lower()
+    allowed = set(_safe_rclone_keys(backend_type))
+    for key, value in updates.items():
+        if key not in allowed:
+            continue
+        text = value.strip()
+        if text:
+            config[remote_name][key] = text
+        else:
+            config.remove_option(remote_name, key)
+    _save_config(config)
 
 
 def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
@@ -238,7 +305,7 @@ def load_remotes() -> List[RemoteInfo]:
         if remote_settings:
             extra_flags.extend(remote_settings.mount_flags)
         mount_path = (
-            remote_settings.mount_path
+            _resolve_configured_mount_path(remote_settings.mount_path)
             if remote_settings and remote_settings.mount_path
             else _build_mount_path(provider, alias)
         )
@@ -367,6 +434,15 @@ def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
         return False, f"[!] Cannot create mount dir {path}: {exc}"
     if not os.access(path, os.W_OK | os.X_OK):
         return False, f"[!] Mount dir {path} is not writable."
+    already_mounted = is_mounted_windows(path) if IS_WINDOWS else os.path.ismount(path)
+    if not already_mounted:
+        try:
+            if os.listdir(path):
+                return False, (
+                    f"[!] Mount dir {path} is not empty. Choose an empty folder or move the existing files first."
+                )
+        except OSError as exc:
+            return False, f"[!] Cannot inspect mount dir {path}: {exc}"
     return True, None
 
 
@@ -408,10 +484,19 @@ def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     unmount_cmd = shutil.which("fusermount3") or shutil.which("fusermount") or shutil.which("umount")
     if not unmount_cmd:
         return False, "[!] No unmount command found. Install fuse3/fuse or unmount manually."
-    args = [unmount_cmd, "-u", path] if os.path.basename(unmount_cmd) != "umount" else [unmount_cmd, path]
-    result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 0:
-        return False, f"[!] Failed to unmount {remote.name} from {path}."
+    unmount_name = os.path.basename(unmount_cmd)
+    commands = (
+        [[unmount_cmd, "-u", path], [unmount_cmd, "-uz", path]]
+        if unmount_name != "umount"
+        else [[unmount_cmd, path], [unmount_cmd, "-l", path]]
+    )
+    last_result = None
+    for args in commands:
+        last_result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if last_result.returncode == 0:
+            break
+    if last_result is None or last_result.returncode != 0:
+        return False, f"[!] Failed to unmount {remote.name} from {path}. Close files or folders using it and try again."
     if pid:
         try:
             os.kill(pid, 15)
@@ -457,10 +542,10 @@ def unmount_all(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
     return unmounted, failures
 
 
-def get_storage_usage(remote: RemoteInfo) -> str:
+def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
     rclone_bin = find_rclone()
     if not rclone_bin:
-        return "?"
+        return StorageUsage("?")
     try:
         output = subprocess.check_output(
             [rclone_bin, "about", f"{remote.name}:", "--json"],
@@ -473,10 +558,14 @@ def get_storage_usage(remote: RemoteInfo) -> str:
         used_gb = used / (1024 ** 3)
         total_gb = total / (1024 ** 3) if total else 0
         if total:
-            return f"{used_gb:.1f} / {total_gb:.1f} GB"
-        return f"{used_gb:.1f} GB used"
+            return StorageUsage(f"{used_gb:.1f} / {total_gb:.1f} GB", used=used, total=total)
+        return StorageUsage(f"{used_gb:.1f} GB used", used=used)
     except Exception:
-        return "?"
+        return StorageUsage("?")
+
+
+def get_storage_usage(remote: RemoteInfo) -> str:
+    return get_storage_usage_details(remote).text
 
 
 def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
@@ -519,6 +608,8 @@ __all__ = [
     "CONFIG_PATH",
     "ensure_base_mount_dir",
     "load_remotes",
+    "editable_rclone_fields",
+    "save_rclone_fields",
     "mount_remote",
     "unmount_remote",
     "refresh_remote",
@@ -526,6 +617,7 @@ __all__ = [
     "unmount_all",
     "is_mounted",
     "get_storage_usage",
+    "get_storage_usage_details",
     "verify_remote",
     "verify_all",
     "wait_for",

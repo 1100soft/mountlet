@@ -87,6 +87,21 @@ type = dropbox
             self.assertEqual(args[3], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
 
+    def test_mount_remote_rejects_non_empty_mount_directory(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            Path(remote.mount_path).mkdir(parents=True, exist_ok=True)
+            (Path(remote.mount_path) / "existing.txt").write_text("keep", encoding="utf-8")
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "_launch_mount_process") as launch:
+                    success, message = core.mount_remote(remote)
+
+            self.assertFalse(success)
+            self.assertIn("is not empty", message)
+            launch.assert_not_called()
+
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_dir = Path(tempdir) / "config" / "mountlet"
@@ -98,7 +113,7 @@ type = dropbox
             (config_dir / "mounts.toml").write_text(
                 """
 [remotes."Docs"]
-mount_path = "~/custom-docs"
+mount_path = "custom-docs"
 mount_flags = "--read-only"
 auto_mount = false
 
@@ -123,8 +138,35 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Docs"])
         self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertTrue(Path(remotes[0].mount_path).is_absolute())
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)
+
+    def test_editable_rclone_fields_are_safe_and_saveable(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+root_folder_id = abc
+token = REDACTED
+""".strip(),
+            )
+            remote = core.load_remotes()[0]
+
+            fields = core.editable_rclone_fields(remote)
+
+            self.assertEqual(list(fields)[:4], ["shared_with_me", "root_folder_id", "team_drive", "scope"])
+            self.assertEqual(fields["root_folder_id"], "abc")
+            self.assertIn("team_drive", fields)
+            self.assertNotIn("token", fields)
+
+            core.save_rclone_fields("Docs", {"root_folder_id": "def", "token": "REDACTED"})
+            remote = core.load_remotes()[0]
+
+            self.assertEqual(remote.extra_info["root_folder_id"], "def")
+            self.assertEqual(remote.extra_info["token"], "REDACTED")
 
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -142,6 +184,24 @@ type = dropbox
             self.assertEqual(usage, "1.0 / 2.0 GB")
             self.assertEqual(check_output.call_args.args[0][0], "/custom/rclone")
 
+    def test_get_storage_usage_details_includes_numeric_percent(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/custom/rclone"):
+                with mock.patch.object(
+                    core.subprocess,
+                    "check_output",
+                    return_value='{"used": 1073741824, "total": 2147483648}',
+                ):
+                    usage = core.get_storage_usage_details(remote)
+
+            self.assertEqual(usage.text, "1.0 / 2.0 GB")
+            self.assertEqual(usage.used, 1073741824)
+            self.assertEqual(usage.total, 2147483648)
+            self.assertEqual(usage.percent, 50)
+
     def test_unmount_remote_uses_available_fuse_command(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
@@ -157,6 +217,26 @@ type = dropbox
 
             self.assertTrue(success)
             self.assertEqual(run.call_args.args[0][:2], ["/usr/bin/fusermount3", "-u"])
+
+    def test_unmount_remote_falls_back_to_lazy_unmount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            def which(name: str) -> str | None:
+                return "/usr/bin/fusermount3" if name == "fusermount3" else None
+
+            with mock.patch.object(core.shutil, "which", side_effect=which):
+                with mock.patch.object(core.subprocess, "run") as run:
+                    run.side_effect = [
+                        mock.Mock(returncode=1),
+                        mock.Mock(returncode=0),
+                    ]
+                    success, _ = core.unmount_remote(remote)
+
+            self.assertTrue(success)
+            self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/fusermount3", "-u", remote.mount_path])
+            self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/fusermount3", "-uz", remote.mount_path])
 
 
 if __name__ == "__main__":

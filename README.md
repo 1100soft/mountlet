@@ -1,8 +1,8 @@
 # Mountlet
 
-Mountlet is a terminal app for mounting and unmounting `rclone`
-remotes from a simple menu. It uses your existing `rclone` configuration and
-does not store cloud credentials inside the application install directory.
+Mountlet is a desktop tray and terminal tool for mounting and unmounting
+`rclone` remotes. It uses your existing `rclone` configuration and does not
+store cloud credentials inside the application install directory.
 
 ## How It Works
 
@@ -99,8 +99,11 @@ pipx inject mountlet PySide6
 The tray app uses the tray icon this way:
 
 - Hover shows a short mounted/unmounted summary.
-- Left-click shows each remote with mount, unmount, restart-mount, and open-folder actions.
-- Right-click shows app-level actions such as mount all, unmount all, update status, and quit.
+- Left-click opens the Mountlet window with compact remote strips, storage
+  usage, mount-state toggles, click-to-open behavior, and config actions.
+- Right-click shows app-level actions such as mount all, unmount all, update
+  status, app settings, raw app, mount, rclone, and FUSE config files, and
+  quit.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.
@@ -155,31 +158,16 @@ export MOUNTLET_MOUNT_BASE=/path/to/mounts
 
 ### App Settings
 
-Use `config.toml` for app-wide behavior:
+In the tray app, use `Config` > `App settings` to edit app-wide behavior. Use
+the `Config` button on a remote strip to edit only that mount. The settings
+windows show the available fields with text boxes, checkboxes, and dropdowns,
+then write `config.toml` and `mounts.toml` for you.
 
-```toml
-[app]
-mount_base = ""
-auto_mount = false
-auto_mount_delay = 2.0
+Technical users can still open the raw text files from the app-level config
+menu.
 
-[tray]
-open_folder_behavior = "current_desktop"
-focus_file_manager = true
-```
-
-Use `mounts.toml` for per-remote behavior. Remote names must match the names in
-`rclone`.
-
-```toml
-[remotes."Work__Drive"]
-auto_mount = true
-mount_path = "~/cloud_mounts/drive/Work"
-mount_flags = "--read-only --dir-cache-time 10m"
-```
-
-Keep cloud account details in `rclone.conf`; use these files only for Mountlet
-behavior.
+Keep cloud account details in `rclone.conf`; Mountlet settings only control
+local app and mount behavior.
 
 ## Credentials
 
@@ -193,8 +181,8 @@ bundles as sensitive files.
 
 ## Status
 
-The current public target is Linux CLI use. The desktop tray is an early preview
-for the next product layer.
+The current public target is Linux CLI and desktop tray use. The tray is still
+early, but it is the main direction for the app.
 
 See the [changelog](https://github.com/eric-holt/mountlet/blob/main/CHANGELOG.md)
 for version history.

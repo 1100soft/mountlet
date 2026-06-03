@@ -1,10 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 - 2026-06-02
+
+- Added a cropped transparent Mountlet icon for the tray and window.
+- Improved tray-window behavior so left-click refocuses the existing window and first show positions it near the tray icon.
+- Improved GUI quit handling by stopping refresh timers, hiding UI surfaces, and ignoring late background UI updates during shutdown.
+- Reordered app and mount settings by likely everyday use.
+- Renamed the per-remote mount path field to "Local folder name" to clarify that it changes the local mount folder, not the cloud remote.
+- Improved advanced rclone controls with checkboxes and combo boxes for boolean and limited-choice fields.
+- Added GUI menu options to open app, mount, rclone, and FUSE config files.
+
+## 0.2.0 - 2026-06-02
 
 - Renamed the project, import package, installed command, and user config directory to Mountlet.
 - Added an optional PySide6 desktop tray preview with mount, unmount, restart-mount, and open-folder actions.
-- Split tray interactions between hover status, left-click remote actions, and right-click app actions.
+- Split tray interactions between hover status, a left-click Mountlet window, and right-click app actions.
+- Added compact remote strips with visual and numerical storage usage, mount toggles, and click-to-open behavior.
+- Added separate GUI settings dialogs for app-level and per-remote Mountlet config fields, with raw file access for technical users.
 - Added app-level and per-remote Mountlet config files.
 - Open-folder actions can use current-desktop Dolphin windows on X11 when available, with fallback open strategies elsewhere.
 
