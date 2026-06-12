@@ -339,6 +339,21 @@ class TrayTests(unittest.TestCase):
             "false",
         )
 
+    def test_new_remote_wizard_answers_shared_drive_prompt_by_help_text(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._drive_shared_drive = False
+        wizard._drive_team_drive = ""
+        step = tray.rclone_wizard.RcloneConfigStep(
+            "state",
+            {
+                "Name": "drive_kind",
+                "Type": "bool",
+                "Help": "Configure this as a Shared Drive?",
+            },
+        )
+
+        self.assertEqual(wizard._automatic_answer(step), "false")
+
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._connect_after_create = True
@@ -537,18 +552,14 @@ class TrayTests(unittest.TestCase):
         owner = SimpleNamespace(dialog=mock.Mock())
         on_accepted = mock.Mock()
 
-        with mock.patch.object(mountlet_window, "_restore_child_offsets") as restore:
-            with mock.patch.object(mountlet_window, "_child_offsets", return_value={}) as offsets:
-                with mock.patch.object(mountlet_window, "_raise_active_child_window") as raise_child:
-                    mountlet_window._open_child_dialog(owner, on_accepted)
+        with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
+            mountlet_window._open_child_dialog(owner, on_accepted)
 
         self.assertEqual(mountlet_window._child_dialogs, [owner.dialog])
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
         owner.dialog.show.assert_called_once_with()
-        offsets.assert_called_once_with()
-        restore.assert_called_once_with({})
         raise_child.assert_called_once_with()
 
     def test_restore_child_offsets_moves_subwindow_with_main_window(self):

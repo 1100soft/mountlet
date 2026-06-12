@@ -1361,6 +1361,13 @@ class NewRemoteWizard:
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
+        if self._drive_shared_drive and not self._drive_team_drive.strip():
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Add remote",
+                "Enter the shared drive ID before connecting, or choose My Drive.",
+            )
+            return
         if self._drive_local_auth:
             port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
         else:
@@ -1459,11 +1466,38 @@ class NewRemoteWizard:
         option_name = self._option_name(step.option)
         if option_name == "config_is_local":
             return "true" if self._drive_local_auth else "false"
-        if option_name == "config_team_drive":
+        if self._is_drive_shared_drive_choice(step.option):
             return "true" if self._drive_shared_drive else "false"
-        if option_name == "team_drive":
+        if self._is_drive_shared_drive_id(step.option):
             return self._drive_team_drive
         return None
+
+    def _is_drive_shared_drive_choice(self, option: dict[str, Any]) -> bool:
+        option_name = self._option_name(option)
+        if option_name in {"config_team_drive", "config_shared_drive"}:
+            return True
+        text = self._option_search_text(option)
+        if "shared drive" not in text and "team drive" not in text:
+            return False
+        option_type = str(option.get("Type", "")).lower()
+        examples = option.get("Examples") if isinstance(option.get("Examples"), list) else []
+        example_values = {str(example.get("Value", "")).lower() for example in examples}
+        return option_type == "bool" or {"true", "false"}.issubset(example_values)
+
+    def _is_drive_shared_drive_id(self, option: dict[str, Any]) -> bool:
+        option_name = self._option_name(option)
+        if option_name in {"team_drive", "shared_drive_id", "team_drive_id"}:
+            return True
+        text = self._option_search_text(option)
+        return ("shared drive" in text or "team drive" in text) and "id" in text
+
+    def _option_search_text(self, option: dict[str, Any]) -> str:
+        parts = [self._option_name(option)]
+        for key in ("Help", "ShortOpt", "DefaultStr"):
+            value = option.get(key)
+            if value is not None:
+                parts.append(str(value))
+        return " ".join(parts).lower()
 
     def _mount_created_remote(self) -> None:
         self._set_busy(True, message=f"Connecting {self._remote_name}...")
@@ -1727,6 +1761,8 @@ class MountletWindow:
         self._refresh_pending = False
         self._child_dialogs: list[Any] = []
         self._child_dialog_owners: dict[Any, Any] = {}
+        self._last_child_offsets: dict[Any, tuple[int, int]] = {}
+        self._window_stack_hidden = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -1784,7 +1820,10 @@ class MountletWindow:
     def show(self) -> None:
         if self._tray_is_quitting():
             return
-        child_offsets = self._child_offsets()
+        if getattr(self, "_window_stack_hidden", False):
+            child_offsets = getattr(self, "_last_child_offsets", {})
+        else:
+            child_offsets = self._child_offsets()
         was_visible = self.is_visible()
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if was_visible and visible_on_current_desktop is False:
@@ -1795,6 +1834,7 @@ class MountletWindow:
             self._position_near_tray()
         self._restore_child_offsets(child_offsets)
         self._show_child_dialogs()
+        self._window_stack_hidden = False
         self._focus_window()
 
     def _make_tray_owned_window(self) -> None:
@@ -1812,14 +1852,24 @@ class MountletWindow:
         _move_x11_window_to_current_desktop(self.window)
         self.window.raise_()
         self.window.activateWindow()
-        self._raise_active_child_window()
+        self._raise_child_windows()
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
         if timer is not None:
-            timer.singleShot(0, self._raise_active_child_window)
-            timer.singleShot(100, self._raise_active_child_window)
+            timer.singleShot(0, self._raise_child_windows)
+            timer.singleShot(100, self._raise_child_windows)
 
     def _raise_active_child_window(self) -> None:
-        child = self._active_child_window()
+        self._raise_child_window(self._active_child_window())
+
+    def _raise_child_windows(self) -> None:
+        seen: set[int] = set()
+        for child in (self._active_child_window(), *getattr(self, "_child_dialogs", [])):
+            if child is None or id(child) in seen:
+                continue
+            seen.add(id(child))
+            self._raise_child_window(child)
+
+    def _raise_child_window(self, child: Any | None) -> None:
         if child is None:
             return
         try:
@@ -1851,14 +1901,20 @@ class MountletWindow:
     def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
+        try:
+            dialog.setModal(False)
+            dialog.setWindowModality(self.qt.Qt.WindowModality.NonModal)
+        except Exception:
+            pass
         if on_accepted is not None:
             dialog.accepted.connect(on_accepted)
         dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
         dialog.show()
-        self._restore_child_offsets(self._child_offsets())
-        self._raise_active_child_window()
+        self._raise_child_windows()
 
     def _hide_window_stack(self) -> None:
+        self._last_child_offsets = self._child_offsets()
+        self._window_stack_hidden = True
         for child in reversed(getattr(self, "_child_dialogs", [])):
             try:
                 child.hide()
@@ -1878,6 +1934,7 @@ class MountletWindow:
                     child.show()
             except Exception:
                 pass
+        self._raise_child_windows()
 
     def _child_offsets(self) -> dict[Any, tuple[int, int]]:
         main_position = self._window_position(self.window)
