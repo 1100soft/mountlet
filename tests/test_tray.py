@@ -242,6 +242,52 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.core, "load_remotes", return_value=[remote_with_token]):
             self.assertTrue(wizard._created_remote_has_credentials())
 
+    def test_new_remote_wizard_requires_oauth_credentials_after_completion(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Cloud"
+        remote_without_token = core.RemoteInfo(
+            name="Cloud",
+            alias="Cloud",
+            provider="onedrive",
+            backend_type="onedrive",
+            mount_path="/tmp/cloud",
+            extra_info={"type": "onedrive"},
+        )
+        remote_with_token = core.RemoteInfo(
+            name="Cloud",
+            alias="Cloud",
+            provider="onedrive",
+            backend_type="onedrive",
+            mount_path="/tmp/cloud",
+            extra_info={"type": "onedrive", "token": "{}"},
+        )
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_without_token]):
+            self.assertFalse(wizard._created_remote_has_credentials())
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_with_token]):
+            self.assertTrue(wizard._created_remote_has_credentials())
+
+    def test_load_visible_remotes_hides_incomplete_entries(self):
+        with mock.patch.object(tray.core, "load_remotes", return_value=[]) as load_remotes:
+            self.assertEqual(tray._load_visible_remotes(), [])
+
+        load_remotes.assert_called_once_with(include_incomplete=False)
+
+    def test_new_remote_wizard_progress_is_estimated_for_dynamic_oauth_flows(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "onedrive"
+        wizard._setup_step = 1
+        wizard._estimated_steps = wizard._estimated_setup_steps()
+        wizard.progress_label = mock.Mock()
+        wizard.progress = mock.Mock()
+
+        wizard._advance_progress("Choose account type")
+
+        wizard.progress_label.setText.assert_called_once_with("Step 2 of about 4: Choose account type")
+        wizard.progress.setValue.assert_called_once_with(50)
+        wizard.progress_label.show.assert_called_once_with()
+        wizard.progress.show.assert_called_once_with()
+
     def test_new_remote_wizard_labels_drive_boolean_choices(self):
         wizard = object.__new__(tray.NewRemoteWizard)
 

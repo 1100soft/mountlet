@@ -171,6 +171,31 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Photos", "Docs"])
 
+    def test_load_remotes_can_hide_incomplete_oauth_remotes(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[PartialDrive]
+type = drive
+
+[ReadyDrive]
+type = drive
+token = REDACTED
+
+[PartialDropbox]
+type = dropbox
+
+[WebDav]
+type = webdav
+url = https://example.test
+""".strip(),
+            )
+
+            remotes = core.load_remotes(include_incomplete=False)
+
+        self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "WebDav"])
+
     def test_editable_rclone_fields_are_safe_and_saveable(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(

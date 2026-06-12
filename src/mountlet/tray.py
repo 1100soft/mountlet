@@ -1201,6 +1201,8 @@ class NewRemoteWizard:
         self._answer_field: Any | None = None
         self._answer_group: Any | None = None
         self._completed = False
+        self._setup_step = 0
+        self._estimated_steps = 1
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
         self._bridge.mount_finished.connect(self._handle_mount_finished)
@@ -1342,6 +1344,15 @@ class NewRemoteWizard:
         self.status.setStyleSheet(_muted_text_style(self.status))
         self.status.setWordWrap(True)
 
+        self.progress_label = self.qt.QLabel("")
+        self.progress_label.setStyleSheet(_muted_text_style(self.progress_label))
+        self.progress_label.setWordWrap(True)
+        self.progress_label.hide()
+        self.progress = self.qt.QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.hide()
+
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
         self.action_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
         self.action_button.clicked.connect(self._next)
@@ -1349,6 +1360,8 @@ class NewRemoteWizard:
 
         root.addWidget(frame)
         root.addWidget(self.question_frame)
+        root.addWidget(self.progress_label)
+        root.addWidget(self.progress)
         root.addWidget(self.status)
         root.addWidget(buttons)
         self._apply_credential_choice()
@@ -1413,6 +1426,9 @@ class NewRemoteWizard:
                 "You can also choose token authorization from another computer.",
             )
             return
+        self._setup_step = 1
+        self._estimated_steps = self._estimated_setup_steps()
+        self._set_progress("Starting rclone setup")
         self._run_rclone(
             lambda: rclone_wizard.start_remote(
                 name,
@@ -1456,12 +1472,13 @@ class NewRemoteWizard:
         if step.error:
             self.status.setText(step.error)
         if step.complete:
+            self._set_progress("Setup complete", complete=True)
             if not self._created_remote_has_credentials():
                 self._cleanup_incomplete_remote()
                 self.qt.QMessageBox.warning(
                     self.dialog,
                     "Add remote",
-                    "Google Drive authorization did not finish. No remote was added.",
+                    f"{self._provider_label(self._remote_type)} authorization did not finish. No remote was added.",
                 )
                 return
             if self._connect_after_create:
@@ -1471,6 +1488,7 @@ class NewRemoteWizard:
             return
         automatic_answer = self._automatic_answer(step)
         if automatic_answer is not None:
+            self._advance_progress(self._question_title(step.option))
             self._state = step.state
             self._run_rclone(
                 lambda: rclone_wizard.continue_remote(
@@ -1482,6 +1500,7 @@ class NewRemoteWizard:
                 )
             )
             return
+        self._advance_progress(self._question_title(step.option))
         self._show_question(step)
 
     def _uses_browser_auth(self) -> bool:
@@ -1563,6 +1582,31 @@ class NewRemoteWizard:
     def _finish_success(self) -> None:
         self._completed = True
         self.dialog.accept()
+
+    def _estimated_setup_steps(self) -> int:
+        if self._remote_type == "drive":
+            return 3
+        if self._remote_type in OAUTH_REMOTE_TYPES:
+            return 4
+        return 6
+
+    def _advance_progress(self, label: str) -> None:
+        self._setup_step = min(self._setup_step + 1, max(self._estimated_steps, self._setup_step + 1))
+        self._set_progress(label)
+
+    def _set_progress(self, label: str, *, complete: bool = False) -> None:
+        if not hasattr(self, "progress"):
+            return
+        if complete:
+            self.progress_label.setText("Setup complete")
+            self.progress.setValue(100)
+        else:
+            step = max(self._setup_step, 1)
+            total = max(self._estimated_steps, step)
+            self.progress_label.setText(f"Step {step} of about {total}: {label}")
+            self.progress.setValue(min(95, round((step / total) * 100)))
+        self.progress_label.show()
+        self.progress.show()
 
     def _set_busy(self, busy: bool, *, message: str | None = None) -> None:
         self.action_button.setEnabled(False if busy else True)
@@ -1830,8 +1874,8 @@ class NewRemoteWizard:
         for remote in core.load_remotes():
             if remote.name != self._remote_name:
                 continue
-            if remote.backend_type != "drive":
-                return True
+            if remote.backend_type not in core.OAUTH_BACKEND_TYPES:
+                return bool(remote.backend_type)
             return bool(remote.extra_info.get("token") or remote.extra_info.get("service_account_file"))
         return False
 
