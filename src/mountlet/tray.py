@@ -206,6 +206,12 @@ def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) ->
     return f"Mountlet - mounted: {names}"
 
 
+def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, unique_count: int) -> str:
+    if unique_count <= 1:
+        return "Existing credentials (recommended)"
+    return f"Existing: {credentials.remote_name}"
+
+
 def _can_connect_unix_socket(path: str) -> bool:
     client = socket.socket(socket.AF_UNIX)
     try:
@@ -1239,9 +1245,13 @@ class NewRemoteWizard:
         client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
 
         credential_source = self.qt.QComboBox()
-        credential_source.addItem("Use rclone's built-in Google client", DRIVE_CREDENTIAL_SOURCE_BUILTIN)
-        for credentials in core.drive_oauth_credentials():
-            credential_source.addItem(f"Use credentials from {credentials.remote_name}", credentials)
+        existing_credentials = core.drive_oauth_credentials()
+        if existing_credentials:
+            for credentials in existing_credentials:
+                credential_source.addItem(_drive_credential_option_label(credentials, len(existing_credentials)), credentials)
+            credential_source.addItem("Built-in rclone client", DRIVE_CREDENTIAL_SOURCE_BUILTIN)
+        else:
+            credential_source.addItem("Built-in rclone client", DRIVE_CREDENTIAL_SOURCE_BUILTIN)
         credential_source.addItem("Enter client ID and secret", DRIVE_CREDENTIAL_SOURCE_CUSTOM)
         credential_source.currentIndexChanged.connect(lambda _index=0: self._apply_credential_choice())
         credential_help = self.qt.QLabel(

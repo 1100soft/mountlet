@@ -141,6 +141,7 @@ class DriveOAuthCredentials:
     remote_name: str
     client_id: str
     client_secret: str
+    remote_names: Tuple[str, ...] = ()
 
 
 PIDS: Dict[str, int] = {}
@@ -289,7 +290,7 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
 
 def drive_oauth_credentials() -> List[DriveOAuthCredentials]:
     config = _load_config()
-    credentials: List[DriveOAuthCredentials] = []
+    groups: Dict[Tuple[str, str], List[str]] = {}
     for remote_name in config.sections():
         section = config[remote_name]
         if section.get("type", "").lower() != "drive":
@@ -297,14 +298,27 @@ def drive_oauth_credentials() -> List[DriveOAuthCredentials]:
         client_id = section.get("client_id", "").strip()
         client_secret = section.get("client_secret", "").strip()
         if client_id and client_secret:
-            credentials.append(
-                DriveOAuthCredentials(
-                    remote_name=remote_name,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                )
+            groups.setdefault((client_id, client_secret), []).append(remote_name)
+    credentials: List[DriveOAuthCredentials] = []
+    for (client_id, client_secret), remote_names in groups.items():
+        names = tuple(remote_names)
+        credentials.append(
+            DriveOAuthCredentials(
+                remote_name=_drive_credential_group_label(names),
+                client_id=client_id,
+                client_secret=client_secret,
+                remote_names=names,
             )
+        )
     return credentials
+
+
+def _drive_credential_group_label(remote_names: Tuple[str, ...]) -> str:
+    if not remote_names:
+        return "existing remote"
+    if len(remote_names) == 1:
+        return remote_names[0]
+    return f"{remote_names[0]}, +{len(remote_names) - 1}"
 
 
 def delete_rclone_remote(remote_name: str) -> bool:

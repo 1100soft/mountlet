@@ -244,6 +244,35 @@ client_secret = other-secret
         self.assertEqual(credentials[0].client_id, "docs-client")
         self.assertEqual(credentials[0].client_secret, "docs-secret")
 
+    def test_drive_oauth_credentials_groups_duplicate_client_values(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+client_id = shared-client
+client_secret = shared-secret
+
+[Photos]
+type = drive
+client_id = shared-client
+client_secret = shared-secret
+
+[Work]
+type = drive
+client_id = work-client
+client_secret = work-secret
+""".strip(),
+            )
+
+            credentials = core.drive_oauth_credentials()
+
+        self.assertEqual([item.remote_name for item in credentials], ["Docs, +1", "Work"])
+        self.assertEqual(credentials[0].remote_names, ("Docs", "Photos"))
+        self.assertEqual(credentials[0].client_id, "shared-client")
+        self.assertEqual(credentials[1].client_id, "work-client")
+
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")

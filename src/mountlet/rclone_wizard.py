@@ -16,6 +16,9 @@ class RcloneWizardError(RuntimeError):
     pass
 
 
+RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS = 300
+
+
 @dataclass(frozen=True)
 class RcloneConfigStep:
     state: str
@@ -131,7 +134,12 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            timeout=RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise RcloneWizardError(
+            "Google sign-in timed out. Close any browser sign-in tabs that are still open and try again."
+        ) from exc
     except OSError as exc:
         raise RcloneWizardError(f"Could not run rclone: {exc}") from exc
 

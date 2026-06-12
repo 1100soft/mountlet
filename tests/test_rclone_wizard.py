@@ -69,6 +69,7 @@ class RcloneWizardTests(unittest.TestCase):
         )
         self.assertEqual(step.state, "next")
         self.assertEqual(step.option["Name"], "config_is_local")
+        self.assertEqual(run.call_args.kwargs["timeout"], rclone_wizard.RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
 
     def test_continue_drive_remote_passes_state_and_result(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -99,6 +100,13 @@ class RcloneWizardTests(unittest.TestCase):
             with mock.patch.object(rclone_wizard, "default_config_path", return_value=Path("/tmp/rclone.conf")):
                 with mock.patch.object(subprocess, "run", return_value=completed):
                     with self.assertRaisesRegex(rclone_wizard.RcloneWizardError, "failed"):
+                        rclone_wizard.start_drive_remote("Docs")
+
+    def test_run_config_create_reports_timeout(self):
+        with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+            with mock.patch.object(rclone_wizard, "default_config_path", return_value=Path("/tmp/rclone.conf")):
+                with mock.patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("rclone", 300)):
+                    with self.assertRaisesRegex(rclone_wizard.RcloneWizardError, "timed out"):
                         rclone_wizard.start_drive_remote("Docs")
 
 

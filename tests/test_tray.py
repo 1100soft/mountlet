@@ -284,6 +284,18 @@ class TrayTests(unittest.TestCase):
         client_id.setEnabled.assert_called_once_with(False)
         client_secret.setEnabled.assert_called_once_with(False)
 
+    def test_drive_credential_option_label_prefers_existing_credentials(self):
+        credentials = core.DriveOAuthCredentials("Docs, +1", "client", "secret", ("Docs", "Photos"))
+
+        self.assertEqual(
+            tray._drive_credential_option_label(credentials, 1),
+            "Existing credentials (recommended)",
+        )
+        self.assertEqual(
+            tray._drive_credential_option_label(credentials, 2),
+            "Existing: Docs, +1",
+        )
+
     def test_new_remote_wizard_uses_builtin_drive_client_by_default(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._question = None
