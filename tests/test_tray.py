@@ -530,6 +530,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window = object.__new__(tray.MountletWindow)
         child = mock.Mock()
         child.isMinimized.return_value = False
+        child.isVisible.return_value = True
         child.parentWidget.return_value = mock.Mock()
         mountlet_window.window = child.parentWidget.return_value
         mountlet_window.window.isMinimized.return_value = False
@@ -542,8 +543,8 @@ class TrayTests(unittest.TestCase):
             mountlet_window._focus_window()
 
         mountlet_window.window.show.assert_called_once_with()
-        mountlet_window.window.raise_.assert_called_once_with()
-        mountlet_window.window.activateWindow.assert_called_once_with()
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
         child.show.assert_called_once_with()
         child.raise_.assert_called_once_with()
         child.activateWindow.assert_called_once_with()
@@ -552,6 +553,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window = object.__new__(tray.MountletWindow)
         child = mock.Mock()
         child.isMinimized.return_value = False
+        child.isVisible.return_value = True
         child.parentWidget.return_value = mock.Mock()
         mountlet_window.window = child.parentWidget.return_value
         mountlet_window.window.isMinimized.return_value = False
@@ -567,6 +569,8 @@ class TrayTests(unittest.TestCase):
         child.show.assert_called_once_with()
         child.raise_.assert_called_once_with()
         child.activateWindow.assert_called_once_with()
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
         self.assertEqual(qt.QTimer.singleShot.call_count, 3)
 
     def test_open_child_dialog_tracks_owner_and_uses_modeless_show(self):
@@ -577,7 +581,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.qt = SimpleNamespace(
             Qt=SimpleNamespace(
                 WindowModality=SimpleNamespace(NonModal="nonmodal"),
-                WindowType=SimpleNamespace(Tool="tool"),
+                WindowType=SimpleNamespace(Tool="tool", WindowStaysOnTopHint="stay-on-top"),
             )
         )
         owner = SimpleNamespace(dialog=mock.Mock())
@@ -591,7 +595,10 @@ class TrayTests(unittest.TestCase):
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
         owner.dialog.setModal.assert_called_once_with(False)
-        owner.dialog.setWindowFlag.assert_called_once()
+        self.assertEqual(
+            owner.dialog.setWindowFlag.call_args_list,
+            [mock.call("tool", False), mock.call("stay-on-top", True)],
+        )
         owner.dialog.show.assert_called_once_with()
         raise_child.assert_called_once_with()
 

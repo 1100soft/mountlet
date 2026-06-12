@@ -1941,14 +1941,32 @@ class MountletWindow:
         else:
             self.window.show()
         _move_x11_window_to_current_desktop(self.window)
+        if self._has_visible_child_dialog():
+            self._raise_child_windows()
+            self._schedule_child_window_raises()
+            return
         self.window.raise_()
         self.window.activateWindow()
         self._raise_child_windows()
+        self._schedule_child_window_raises()
+
+    def _schedule_child_window_raises(self) -> None:
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
         if timer is not None:
             timer.singleShot(0, self._raise_child_windows)
             timer.singleShot(100, self._raise_child_windows)
             timer.singleShot(300, self._raise_child_windows)
+
+    def _has_visible_child_dialog(self) -> bool:
+        for child in (self._active_child_window(), *getattr(self, "_child_dialogs", [])):
+            if child is None:
+                continue
+            try:
+                if child.isVisible():
+                    return True
+            except Exception:
+                return True
+        return False
 
     def _raise_active_child_window(self) -> None:
         self._raise_child_window(self._active_child_window())
@@ -1999,7 +2017,8 @@ class MountletWindow:
         except Exception:
             pass
         try:
-            dialog.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
+            dialog.setWindowFlag(self.qt.Qt.WindowType.Tool, False)
+            dialog.setWindowFlag(self.qt.Qt.WindowType.WindowStaysOnTopHint, True)
         except Exception:
             pass
         if on_accepted is not None:
