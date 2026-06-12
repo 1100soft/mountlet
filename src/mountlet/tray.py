@@ -1174,6 +1174,7 @@ class NewRemoteWizard:
         self._drive_local_auth = True
         self._drive_shared_drive = False
         self._drive_team_drive = ""
+        self._connect_after_create = True
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
         self._answer_field: Any | None = None
@@ -1181,6 +1182,7 @@ class NewRemoteWizard:
         self._completed = False
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
+        self._bridge.mount_finished.connect(self._handle_mount_finished)
         self._build()
 
     def exec(self) -> int:
@@ -1191,6 +1193,7 @@ class NewRemoteWizard:
 
         class Bridge(qt.QObject):
             command_finished = qt.Signal(object, object)
+            mount_finished = qt.Signal(bool, str)
 
         return Bridge()
 
@@ -1272,6 +1275,9 @@ class NewRemoteWizard:
         shared_drive_id.setEnabled(False)
         shared_drive_id.setToolTip("Only needed when using a Google shared drive.")
         shared_drive.toggled.connect(lambda _checked=False: shared_drive_id.setEnabled(shared_drive.isChecked()))
+        connect_after_create = self.qt.QCheckBox("Connect this remote after creating it")
+        connect_after_create.setChecked(True)
+        connect_after_create.setToolTip("Mount the new remote immediately after Google authorization succeeds.")
 
         self.fields = {
             "provider": provider,
@@ -1286,6 +1292,7 @@ class NewRemoteWizard:
             "my_drive": my_drive,
             "shared_drive": shared_drive,
             "shared_drive_id": shared_drive_id,
+            "connect_after_create": connect_after_create,
         }
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
@@ -1296,6 +1303,7 @@ class NewRemoteWizard:
         form.addRow("Authorization", auth_group)
         form.addRow("Drive", drive_group)
         form.addRow("Shared drive ID", shared_drive_id)
+        form.addRow(connect_after_create)
 
         self.question_frame = self.qt.QFrame()
         self.question_layout = self.qt.QFormLayout(self.question_frame)
@@ -1352,6 +1360,7 @@ class NewRemoteWizard:
         self._drive_local_auth = self.fields["local_auth"].isChecked()
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
+        self._connect_after_create = self.fields["connect_after_create"].isChecked()
         if self._drive_local_auth:
             port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
         else:
@@ -1423,24 +1432,79 @@ class NewRemoteWizard:
                     "Google Drive authorization did not finish. No remote was added.",
                 )
                 return
-            self._completed = True
-            self.qt.QMessageBox.information(self.dialog, "Add remote", f"{self._remote_name} was added.")
-            self.dialog.accept()
+            if self._connect_after_create:
+                self._mount_created_remote()
+                return
+            self._finish_success()
+            return
+        automatic_answer = self._automatic_answer(step)
+        if automatic_answer is not None:
+            self._state = step.state
+            self._run_rclone(
+                lambda: rclone_wizard.continue_drive_remote(
+                    self._remote_name,
+                    self._state,
+                    automatic_answer,
+                    client_id=self._drive_client_id,
+                    client_secret=self._drive_client_secret,
+                    local_auth=self._drive_local_auth,
+                    shared_drive=self._drive_shared_drive,
+                    team_drive=self._drive_team_drive,
+                )
+            )
             return
         self._show_question(step)
 
-    def _set_busy(self, busy: bool) -> None:
+    def _automatic_answer(self, step: rclone_wizard.RcloneConfigStep) -> str | None:
+        option_name = self._option_name(step.option)
+        if option_name == "config_is_local":
+            return "true" if self._drive_local_auth else "false"
+        if option_name == "config_team_drive":
+            return "true" if self._drive_shared_drive else "false"
+        if option_name == "team_drive":
+            return self._drive_team_drive
+        return None
+
+    def _mount_created_remote(self) -> None:
+        self._set_busy(True, message=f"Connecting {self._remote_name}...")
+
+        def worker() -> None:
+            for remote in core.load_remotes():
+                if remote.name == self._remote_name:
+                    success, message = core.mount_remote(remote)
+                    self._bridge.mount_finished.emit(success, message)
+                    return
+            self._bridge.mount_finished.emit(False, f"{self._remote_name} was created but could not be found.")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_mount_finished(self, success: bool, message: str) -> None:
+        self._set_busy(False)
+        if not success:
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Add remote",
+                f"{self._remote_name} was created, but Mountlet could not connect it.\n\n{_clean_message(message)}",
+            )
+        self._finish_success()
+
+    def _finish_success(self) -> None:
+        self._completed = True
+        self.dialog.accept()
+
+    def _set_busy(self, busy: bool, *, message: str | None = None) -> None:
         self.action_button.setEnabled(False if busy else True)
         self.fields["name"].setEnabled(not busy and self._question is None)
         self.fields["provider"].setEnabled(not busy and self._question is None)
         self.fields["credential_source"].setEnabled(not busy and self._question is None)
         self.fields["auth_group"].setEnabled(not busy and self._question is None)
         self.fields["drive_group"].setEnabled(not busy and self._question is None)
+        self.fields["connect_after_create"].setEnabled(not busy and self._question is None)
         self.fields["shared_drive_id"].setEnabled(
             not busy and self._question is None and self.fields["shared_drive"].isChecked()
         )
         self._apply_credential_choice(enabled=not busy and self._question is None)
-        self.status.setText(self._busy_message() if busy else "")
+        self.status.setText((message or self._busy_message()) if busy else "")
 
     def _apply_credential_choice(self, *, enabled: bool | None = None) -> None:
         if not self.fields:
@@ -1662,6 +1726,7 @@ class MountletWindow:
         self._name_column_width = 160
         self._refresh_pending = False
         self._child_dialogs: list[Any] = []
+        self._child_dialog_owners: dict[Any, Any] = {}
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -1712,21 +1777,24 @@ class MountletWindow:
             return
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
-            self.window.hide()
+            self._hide_window_stack()
             return
         self.show()
 
     def show(self) -> None:
         if self._tray_is_quitting():
             return
+        child_offsets = self._child_offsets()
         was_visible = self.is_visible()
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if was_visible and visible_on_current_desktop is False:
-            self.window.hide()
+            self._hide_window_stack()
             was_visible = False
         self.refresh()
         if not was_visible:
             self._position_near_tray()
+        self._restore_child_offsets(child_offsets)
+        self._show_child_dialogs()
         self._focus_window()
 
     def _make_tray_owned_window(self) -> None:
@@ -1764,16 +1832,86 @@ class MountletWindow:
         except Exception:
             return
 
-    def _track_child_dialog(self, dialog: Any) -> None:
+    def _track_child_dialog(self, dialog: Any, owner: Any | None = None) -> None:
         self._child_dialogs = [
             child for child in getattr(self, "_child_dialogs", []) if child is not dialog
         ]
         self._child_dialogs.append(dialog)
+        if owner is not None:
+            if not hasattr(self, "_child_dialog_owners"):
+                self._child_dialog_owners = {}
+            self._child_dialog_owners[dialog] = owner
 
     def _untrack_child_dialog(self, dialog: Any) -> None:
         self._child_dialogs = [
             child for child in getattr(self, "_child_dialogs", []) if child is not dialog
         ]
+        getattr(self, "_child_dialog_owners", {}).pop(dialog, None)
+
+    def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
+        dialog = owner.dialog
+        self._track_child_dialog(dialog, owner)
+        if on_accepted is not None:
+            dialog.accepted.connect(on_accepted)
+        dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
+        dialog.show()
+        self._restore_child_offsets(self._child_offsets())
+        self._raise_active_child_window()
+
+    def _hide_window_stack(self) -> None:
+        for child in reversed(getattr(self, "_child_dialogs", [])):
+            try:
+                child.hide()
+            except Exception:
+                pass
+        try:
+            self.window.hide()
+        except Exception:
+            pass
+
+    def _show_child_dialogs(self) -> None:
+        for child in getattr(self, "_child_dialogs", []):
+            try:
+                if child.isMinimized():
+                    child.showNormal()
+                else:
+                    child.show()
+            except Exception:
+                pass
+
+    def _child_offsets(self) -> dict[Any, tuple[int, int]]:
+        main_position = self._window_position(self.window)
+        if main_position is None:
+            return {}
+        offsets: dict[Any, tuple[int, int]] = {}
+        for child in getattr(self, "_child_dialogs", []):
+            child_position = self._window_position(child)
+            if child_position is None:
+                continue
+            offsets[child] = (
+                child_position[0] - main_position[0],
+                child_position[1] - main_position[1],
+            )
+        return offsets
+
+    def _restore_child_offsets(self, offsets: dict[Any, tuple[int, int]]) -> None:
+        main_position = self._window_position(self.window)
+        if main_position is None:
+            return
+        for child, (x_offset, y_offset) in offsets.items():
+            if child not in getattr(self, "_child_dialogs", []):
+                continue
+            try:
+                child.move(main_position[0] + x_offset, main_position[1] + y_offset)
+            except Exception:
+                pass
+
+    def _window_position(self, window: Any) -> tuple[int, int] | None:
+        try:
+            point = window.frameGeometry().topLeft()
+            return int(point.x()), int(point.y())
+        except Exception:
+            return None
 
     def _active_child_window(self) -> Any | None:
         qt = getattr(self, "qt", None)
@@ -2357,12 +2495,8 @@ class MountletWindow:
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
         dialog = AppConfigDialog(self.qt, self.window)
-        self._track_child_dialog(dialog.dialog)
-        try:
-            accepted = dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted)
-        finally:
-            self._untrack_child_dialog(dialog.dialog)
-        if accepted:
+
+        def on_accepted() -> None:
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -2371,16 +2505,14 @@ class MountletWindow:
             self.refresh()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
+        self._open_child_dialog(dialog, on_accepted)
+
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
         old_remotes = core.load_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         dialog = MountConfigDialog(self.qt, remote, self.window)
-        self._track_child_dialog(dialog.dialog)
-        try:
-            accepted = dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted)
-        finally:
-            self._untrack_child_dialog(dialog.dialog)
-        if accepted:
+
+        def on_accepted() -> None:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
                 self._current_remote_names = []
@@ -2394,18 +2526,18 @@ class MountletWindow:
             self.refresh()
             self._ask_remount_for_config_changes(changes)
 
+        self._open_child_dialog(dialog, on_accepted)
+
     def _show_new_remote_wizard(self) -> None:
         dialog = NewRemoteWizard(self.qt, self.window)
-        self._track_child_dialog(dialog.dialog)
-        try:
-            accepted = dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted)
-        finally:
-            self._untrack_child_dialog(dialog.dialog)
-        if accepted:
+
+        def on_accepted() -> None:
             self._usage_cache.clear()
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
             self.refresh()
+
+        self._open_child_dialog(dialog, on_accepted)
 
     def _mounted_remote_names(self, remotes: list[core.RemoteInfo]) -> set[str]:
         return {remote.name for remote in remotes if core.is_mounted(remote)}
@@ -2574,10 +2706,7 @@ class MountletWindow:
         self._refresh_pending = False
         self._usage_pending.clear()
         self._action_pending.clear()
-        try:
-            self.window.hide()
-        except Exception:
-            pass
+        self._hide_window_stack()
 
     def _tray_is_quitting(self) -> bool:
         return bool(getattr(getattr(self, "tray_app", None), "_quitting", False))

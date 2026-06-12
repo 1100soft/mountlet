@@ -324,6 +324,34 @@ class TrayTests(unittest.TestCase):
         client_id.setEnabled.assert_called_once_with(True)
         client_secret.setEnabled.assert_called_once_with(True)
 
+    def test_new_remote_wizard_answers_known_drive_questions_from_form(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._drive_local_auth = True
+        wizard._drive_shared_drive = False
+        wizard._drive_team_drive = ""
+
+        self.assertEqual(
+            wizard._automatic_answer(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_is_local"})),
+            "true",
+        )
+        self.assertEqual(
+            wizard._automatic_answer(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_team_drive"})),
+            "false",
+        )
+
+    def test_new_remote_wizard_mounts_created_remote_when_requested(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._connect_after_create = True
+        wizard._remote_name = "Docs"
+        step = tray.rclone_wizard.RcloneConfigStep("", {})
+
+        with mock.patch.object(wizard, "_created_remote_has_credentials", return_value=True):
+            with mock.patch.object(wizard, "_mount_created_remote") as mount_created:
+                with mock.patch.object(wizard, "_set_busy"):
+                    wizard._handle_command_finished(step, None)
+
+        mount_created.assert_called_once_with()
+
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
@@ -500,6 +528,39 @@ class TrayTests(unittest.TestCase):
         child.raise_.assert_called_once_with()
         child.activateWindow.assert_called_once_with()
         self.assertEqual(qt.QTimer.singleShot.call_count, 2)
+
+    def test_open_child_dialog_tracks_owner_and_uses_modeless_show(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        owner = SimpleNamespace(dialog=mock.Mock())
+        on_accepted = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_restore_child_offsets") as restore:
+            with mock.patch.object(mountlet_window, "_child_offsets", return_value={}) as offsets:
+                with mock.patch.object(mountlet_window, "_raise_active_child_window") as raise_child:
+                    mountlet_window._open_child_dialog(owner, on_accepted)
+
+        self.assertEqual(mountlet_window._child_dialogs, [owner.dialog])
+        self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
+        owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
+        owner.dialog.finished.connect.assert_called_once()
+        owner.dialog.show.assert_called_once_with()
+        offsets.assert_called_once_with()
+        restore.assert_called_once_with({})
+        raise_child.assert_called_once_with()
+
+    def test_restore_child_offsets_moves_subwindow_with_main_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        child = mock.Mock()
+        mountlet_window._child_dialogs = [child]
+
+        with mock.patch.object(mountlet_window, "_window_position", side_effect=[(300, 400)]):
+            mountlet_window._restore_child_offsets({child: (25, 35)})
+
+        child.move.assert_called_once_with(325, 435)
 
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
