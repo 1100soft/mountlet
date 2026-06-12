@@ -204,6 +204,24 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.core, "load_remotes", return_value=[remote_with_token]):
             self.assertTrue(wizard._created_remote_has_credentials())
 
+    def test_new_remote_wizard_labels_drive_boolean_choices(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        self.assertEqual(
+            wizard._bool_radio_options("config_is_local", []),
+            [
+                ("true", "Open the browser on this computer"),
+                ("false", "Authorize from another computer"),
+            ],
+        )
+        self.assertEqual(
+            wizard._bool_radio_options("config_team_drive", []),
+            [
+                ("false", "My Drive"),
+                ("true", "Shared drive"),
+            ],
+        )
+
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()

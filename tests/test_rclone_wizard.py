@@ -30,7 +30,7 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertEqual(parsed["State"], "*oauth-islocal")
         self.assertEqual(parsed["Option"]["Name"], "config_is_local")
 
-    def test_start_drive_remote_runs_non_interactive_create_with_safe_defaults(self):
+    def test_start_drive_remote_runs_non_interactive_create_with_oauth_credentials(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "rclone.conf"
             completed = SimpleNamespace(
@@ -41,12 +41,19 @@ class RcloneWizardTests(unittest.TestCase):
             with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
                 with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
                     with mock.patch.object(subprocess, "run", return_value=completed) as run:
-                        step = rclone_wizard.start_drive_remote("Docs")
+                        step = rclone_wizard.start_drive_remote(
+                            "Docs",
+                            client_id="client.apps.googleusercontent.com",
+                            client_secret="secret",
+                        )
 
         command = run.call_args.args[0]
         self.assertEqual(command[:7], ["/usr/bin/rclone", "--config", str(config_path), "config", "create", "Docs", "drive"])
         self.assertIn("--non-interactive", command)
-        self.assertEqual(command[-6:], ["client_id", "", "client_secret", "", "scope", "drive"])
+        self.assertEqual(
+            command[-6:],
+            ["client_id", "client.apps.googleusercontent.com", "client_secret", "secret", "scope", "drive"],
+        )
         self.assertEqual(step.state, "next")
         self.assertEqual(step.option["Name"], "config_is_local")
 

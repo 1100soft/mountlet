@@ -105,6 +105,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
         from PySide6.QtWidgets import (
             QApplication,
+            QButtonGroup,
             QCheckBox,
             QComboBox,
             QDialog,
@@ -121,6 +122,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QPlainTextEdit,
             QProgressBar,
             QPushButton,
+            QRadioButton,
             QScrollArea,
             QSizePolicy,
             QStyle,
@@ -140,6 +142,7 @@ def _load_qt_bindings() -> SimpleNamespace:
     return SimpleNamespace(
         QAction=QAction,
         QApplication=QApplication,
+        QButtonGroup=QButtonGroup,
         QColor=QColor,
         QCheckBox=QCheckBox,
         QComboBox=QComboBox,
@@ -162,6 +165,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QPainter=QPainter,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
+        QRadioButton=QRadioButton,
         QScrollArea=QScrollArea,
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
@@ -1108,6 +1112,7 @@ class NewRemoteWizard:
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
         self._answer_field: Any | None = None
+        self._answer_group: Any | None = None
         self._completed = False
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
@@ -1141,9 +1146,24 @@ class NewRemoteWizard:
         name.setPlaceholderText("Personal Drive")
         name.textChanged.connect(self._update_action_button)
 
-        self.fields = {"provider": provider, "name": name}
+        client_id = self.qt.QLineEdit()
+        client_id.setPlaceholderText("Optional")
+        client_id.setToolTip("Google OAuth client ID. Leave blank to let rclone use its built-in client.")
+        client_secret = self.qt.QLineEdit()
+        client_secret.setPlaceholderText("Optional")
+        client_secret.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
+
+        self.fields = {
+            "provider": provider,
+            "name": name,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
+        form.addRow("Google client ID", client_id)
+        form.addRow("Google client secret", client_secret)
 
         self.question_frame = self.qt.QFrame()
         self.question_layout = self.qt.QFormLayout(self.question_frame)
@@ -1194,7 +1214,15 @@ class NewRemoteWizard:
             self.qt.QMessageBox.warning(self.dialog, "Add remote", f"{name} already exists.")
             return
         self._remote_name = name
-        self._run_rclone(lambda: rclone_wizard.start_drive_remote(name))
+        client_id = self.fields["client_id"].text()
+        client_secret = self.fields["client_secret"].text()
+        self._run_rclone(
+            lambda: rclone_wizard.start_drive_remote(
+                name,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+        )
 
     def _continue(self) -> None:
         answer = self._answer_value()
@@ -1241,6 +1269,8 @@ class NewRemoteWizard:
         self.action_button.setEnabled(False if busy else True)
         self.fields["name"].setEnabled(not busy and self._question is None)
         self.fields["provider"].setEnabled(not busy and self._question is None)
+        self.fields["client_id"].setEnabled(not busy and self._question is None)
+        self.fields["client_secret"].setEnabled(not busy and self._question is None)
         self.status.setText(self._busy_message() if busy else "")
 
     def _busy_message(self) -> str:
@@ -1254,6 +1284,7 @@ class NewRemoteWizard:
         self._question = step
         self._state = step.state
         self._clear_layout(self.question_layout)
+        self._answer_group = None
         option = step.option
         title = self.qt.QLabel(self._question_title(option))
         title_font = title.font()
@@ -1280,12 +1311,7 @@ class NewRemoteWizard:
         default_text = str(default).lower() if isinstance(default, bool) else str(default or "")
         examples = option.get("Examples") if isinstance(option.get("Examples"), list) else []
         if option_type == "bool":
-            field = self.qt.QCheckBox()
-            if option_name == "config_is_local":
-                field.setText("Open the browser on this computer")
-            field.setChecked(default_text.lower() in {"true", "1", "yes", "on"})
-            field.stateChanged.connect(self._update_action_button)
-            return "bool", field
+            return self._bool_radio_widget(option_name, default_text, examples)
         if examples and option.get("Exclusive"):
             field = self.qt.QComboBox()
             selected = 0
@@ -1316,6 +1342,10 @@ class NewRemoteWizard:
             return ""
         if self._answer_kind == "bool":
             return "true" if self._answer_field.isChecked() else "false"
+        if self._answer_kind == "radio":
+            if self._answer_group is None or self._answer_group.checkedButton() is None:
+                return ""
+            return str(self._answer_group.checkedButton().property("answerValue") or "")
         if self._answer_kind == "combo":
             return str(self._answer_field.currentData() or "")
         if self._answer_kind == "plain":
@@ -1324,6 +1354,52 @@ class NewRemoteWizard:
 
     def _valid_remote_name(self, name: str) -> bool:
         return bool(name) and ":" not in name and "/" not in name and "\\" not in name
+
+    def _bool_radio_widget(
+        self,
+        option_name: str,
+        default_text: str,
+        examples: list[dict[str, Any]],
+    ) -> tuple[str, Any]:
+        widget = self.qt.QWidget()
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        group = self.qt.QButtonGroup(widget)
+        options = self._bool_radio_options(option_name, examples)
+        selected_value = "true" if default_text.lower() in {"true", "1", "yes", "on"} else "false"
+        for index, (value, label) in enumerate(options):
+            button = self.qt.QRadioButton(label)
+            button.setProperty("answerValue", value)
+            group.addButton(button, index)
+            layout.addWidget(button)
+            if value == selected_value:
+                button.setChecked(True)
+        if group.checkedButton() is None and group.buttons():
+            group.buttons()[0].setChecked(True)
+        group.buttonClicked.connect(lambda _button=None: self._update_action_button())
+        self._answer_group = group
+        return "radio", widget
+
+    def _bool_radio_options(self, option_name: str, examples: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        if option_name == "config_is_local":
+            return [
+                ("true", "Open the browser on this computer"),
+                ("false", "Authorize from another computer"),
+            ]
+        if option_name in {"team_drive", "config_team_drive"}:
+            return [
+                ("false", "My Drive"),
+                ("true", "Shared drive"),
+            ]
+        values: list[tuple[str, str]] = []
+        for example in examples:
+            value = str(example.get("Value", "")).lower()
+            if value not in {"true", "false"}:
+                continue
+            label = str(example.get("Help", "")).strip().splitlines()[0] if example.get("Help") else value.title()
+            values.append((value, label))
+        return values or [("true", "Yes"), ("false", "No")]
 
     def _option_name(self, option: dict[str, Any]) -> str:
         return str(option.get("Name", "")).strip()
@@ -1334,7 +1410,7 @@ class NewRemoteWizard:
             return "Connect Google Drive"
         if option_name == "config_token":
             return "Paste authorization token"
-        if option_name == "team_drive":
+        if option_name in {"team_drive", "config_team_drive"}:
             return "Shared drive"
         return _field_label(option_name or "Option")
 
@@ -1345,6 +1421,8 @@ class NewRemoteWizard:
                 "Mountlet will ask rclone to open Google sign-in in your browser. "
                 "Leave this enabled unless you need to authorize from another computer."
             )
+        if option_name == "config_team_drive":
+            return "Choose whether this remote should use your main Google Drive or a Google shared drive."
         if option_name == "team_drive":
             return "Leave blank for My Drive, or enter a shared drive ID."
         return str(option.get("Help", "")).strip()

@@ -27,15 +27,15 @@ class RcloneConfigStep:
         return not self.state
 
 
-def start_drive_remote(remote_name: str) -> RcloneConfigStep:
+def start_drive_remote(remote_name: str, *, client_id: str = "", client_secret: str = "") -> RcloneConfigStep:
     return _run_config_create(
         remote_name,
         "drive",
         [
             "client_id",
-            "",
+            client_id.strip(),
             "client_secret",
-            "",
+            client_secret.strip(),
             "scope",
             "drive",
         ],
