@@ -933,6 +933,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.resize(520, 220)
         self.fields: dict[str, Any] = {}
         self.rclone_fields: dict[str, tuple[str, Any]] = {}
+        self.deleted = False
         self._build()
 
     def _build(self) -> None:
@@ -1042,6 +1043,44 @@ class MountConfigDialog(_ConfigDialogBase):
             )
         self.dialog.accept()
 
+    def _buttons(self) -> Any:
+        buttons = self.qt.QDialogButtonBox(
+            self.qt.QDialogButtonBox.StandardButton.Save | self.qt.QDialogButtonBox.StandardButton.Cancel
+        )
+        delete_button = buttons.addButton("Delete remote", self.qt.QDialogButtonBox.ButtonRole.DestructiveRole)
+        delete_button.setStyleSheet("QPushButton { color: #ffffff; background: #dc2626; }")
+        delete_button.clicked.connect(self._delete_remote)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.dialog.reject)
+        return buttons
+
+    def _delete_remote(self) -> None:
+        if core.is_mounted(self.remote):
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Delete remote",
+                "Unmount this remote before deleting it.",
+            )
+            return
+        reply = self.qt.QMessageBox.question(
+            self.dialog,
+            "Delete remote?",
+            f"Delete {self.remote.display_name} from rclone.conf?\n\nThis does not delete files in cloud storage.",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        if not core.delete_rclone_remote(self.remote.name):
+            self.qt.QMessageBox.warning(self.dialog, "Delete remote", f"{self.remote.name} was not found in rclone.conf.")
+            return
+        settings = load_mount_settings()
+        if self.remote.name in settings:
+            settings.pop(self.remote.name)
+            save_mount_settings(settings)
+        self.deleted = True
+        self.dialog.accept()
+
     def _rclone_config_field(self, key: str, value: str) -> tuple[str, Any]:
         if key in RCLONE_BOOLEAN_FIELDS:
             return "bool", self._check(_config_bool(value))
@@ -1069,6 +1108,7 @@ class NewRemoteWizard:
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
         self._answer_field: Any | None = None
+        self._completed = False
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
         self._build()
@@ -1116,7 +1156,7 @@ class NewRemoteWizard:
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
         self.action_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
         self.action_button.clicked.connect(self._next)
-        buttons.rejected.connect(self.dialog.reject)
+        buttons.rejected.connect(self._reject)
 
         root.addWidget(frame)
         root.addWidget(self.question_frame)
@@ -1130,7 +1170,7 @@ class NewRemoteWizard:
             return
         if self._question is not None:
             self.action_button.setEnabled(True)
-            self.action_button.setText("Continue")
+            self.action_button.setText(self._question_button_text())
             return
         self.action_button.setText("Create remote")
         self.action_button.setEnabled(bool(self.fields["name"].text().strip()))
@@ -1174,6 +1214,7 @@ class NewRemoteWizard:
     def _handle_command_finished(self, step: object, error: object) -> None:
         self._set_busy(False)
         if error is not None:
+            self._cleanup_incomplete_remote()
             self.qt.QMessageBox.warning(self.dialog, "Add remote", str(error))
             return
         if not isinstance(step, rclone_wizard.RcloneConfigStep):
@@ -1182,6 +1223,15 @@ class NewRemoteWizard:
         if step.error:
             self.status.setText(step.error)
         if step.complete:
+            if not self._created_remote_has_credentials():
+                self._cleanup_incomplete_remote()
+                self.qt.QMessageBox.warning(
+                    self.dialog,
+                    "Add remote",
+                    "Google Drive authorization did not finish. No remote was added.",
+                )
+                return
+            self._completed = True
             self.qt.QMessageBox.information(self.dialog, "Add remote", f"{self._remote_name} was added.")
             self.dialog.accept()
             return
@@ -1191,18 +1241,25 @@ class NewRemoteWizard:
         self.action_button.setEnabled(False if busy else True)
         self.fields["name"].setEnabled(not busy and self._question is None)
         self.fields["provider"].setEnabled(not busy and self._question is None)
-        self.status.setText("Waiting for rclone..." if busy else "")
+        self.status.setText(self._busy_message() if busy else "")
+
+    def _busy_message(self) -> str:
+        if self._question and self._option_name(self._question.option) == "config_is_local":
+            if self._answer_value() == "true":
+                return "Waiting for rclone. Your browser may open for Google sign-in."
+            return "Waiting for rclone."
+        return "Waiting for rclone..."
 
     def _show_question(self, step: rclone_wizard.RcloneConfigStep) -> None:
         self._question = step
         self._state = step.state
         self._clear_layout(self.question_layout)
         option = step.option
-        title = self.qt.QLabel(_field_label(str(option.get("Name", "Option"))))
+        title = self.qt.QLabel(self._question_title(option))
         title_font = title.font()
         title_font.setBold(True)
         title.setFont(title_font)
-        help_text = self.qt.QLabel(str(option.get("Help", "")).strip())
+        help_text = self.qt.QLabel(self._question_help(option))
         help_text.setWordWrap(True)
         help_text.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         help_text.setOpenExternalLinks(True)
@@ -1216,6 +1273,7 @@ class NewRemoteWizard:
 
     def _answer_widget(self, option: dict[str, Any]) -> tuple[str, Any]:
         option_type = str(option.get("Type", "")).lower()
+        option_name = self._option_name(option)
         default = option.get("DefaultStr")
         if default is None:
             default = option.get("Default", "")
@@ -1223,7 +1281,10 @@ class NewRemoteWizard:
         examples = option.get("Examples") if isinstance(option.get("Examples"), list) else []
         if option_type == "bool":
             field = self.qt.QCheckBox()
+            if option_name == "config_is_local":
+                field.setText("Open the browser on this computer")
             field.setChecked(default_text.lower() in {"true", "1", "yes", "on"})
+            field.stateChanged.connect(self._update_action_button)
             return "bool", field
         if examples and option.get("Exclusive"):
             field = self.qt.QComboBox()
@@ -1241,7 +1302,7 @@ class NewRemoteWizard:
             field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
             field.setText(default_text)
             return "text", field
-        if str(option.get("Name", "")).endswith("token"):
+        if option_name.endswith("token"):
             field = self.qt.QPlainTextEdit()
             field.setPlainText(default_text)
             field.setMinimumHeight(76)
@@ -1263,6 +1324,59 @@ class NewRemoteWizard:
 
     def _valid_remote_name(self, name: str) -> bool:
         return bool(name) and ":" not in name and "/" not in name and "\\" not in name
+
+    def _option_name(self, option: dict[str, Any]) -> str:
+        return str(option.get("Name", "")).strip()
+
+    def _question_title(self, option: dict[str, Any]) -> str:
+        option_name = self._option_name(option)
+        if option_name == "config_is_local":
+            return "Connect Google Drive"
+        if option_name == "config_token":
+            return "Paste authorization token"
+        if option_name == "team_drive":
+            return "Shared drive"
+        return _field_label(option_name or "Option")
+
+    def _question_help(self, option: dict[str, Any]) -> str:
+        option_name = self._option_name(option)
+        if option_name == "config_is_local":
+            return (
+                "Mountlet will ask rclone to open Google sign-in in your browser. "
+                "Leave this enabled unless you need to authorize from another computer."
+            )
+        if option_name == "team_drive":
+            return "Leave blank for My Drive, or enter a shared drive ID."
+        return str(option.get("Help", "")).strip()
+
+    def _question_button_text(self) -> str:
+        if self._question and self._option_name(self._question.option) == "config_is_local":
+            return "Open browser" if self._answer_value() == "true" else "Continue"
+        if self._question and self._option_name(self._question.option) == "config_token":
+            return "Finish setup"
+        return "Continue"
+
+    def _reject(self) -> None:
+        self._cleanup_incomplete_remote()
+        self.dialog.reject()
+
+    def _cleanup_incomplete_remote(self) -> None:
+        if not self._remote_name or self._completed:
+            return
+        core.delete_rclone_remote(self._remote_name)
+        settings = load_mount_settings()
+        if self._remote_name in settings:
+            settings.pop(self._remote_name)
+            save_mount_settings(settings)
+
+    def _created_remote_has_credentials(self) -> bool:
+        for remote in core.load_remotes():
+            if remote.name != self._remote_name:
+                continue
+            if remote.backend_type != "drive":
+                return True
+            return bool(remote.extra_info.get("token") or remote.extra_info.get("service_account_file"))
+        return False
 
     def _clear_layout(self, layout: Any) -> None:
         while layout.count():
@@ -1473,8 +1587,7 @@ class MountletWindow:
         layout.setColumnMinimumWidth(2, 126)
         layout.setColumnMinimumWidth(3, 96)
         layout.setColumnMinimumWidth(4, 36)
-        layout.setColumnMinimumWidth(5, 36)
-        layout.setColumnMinimumWidth(6, 36)
+        layout.setColumnMinimumWidth(5, 24)
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
@@ -1510,16 +1623,14 @@ class MountletWindow:
             widget,
             tooltip,
         )
-        up_button = self._move_button(remote, -1)
-        down_button = self._move_button(remote, 1)
+        move_controls, up_button, down_button = self._move_button_stack(remote)
 
         layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
         layout.addWidget(usage_indicator, 0, 2)
         layout.addWidget(status, 0, 3)
         layout.addWidget(config_button, 0, 4)
-        layout.addWidget(up_button, 0, 5)
-        layout.addWidget(down_button, 0, 6)
+        layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             title=title,
@@ -1613,8 +1724,20 @@ class MountletWindow:
         self._update_move_button(row.up_button, remote, -1)
         self._update_move_button(row.down_button, remote, 1)
 
+    def _move_button_stack(self, remote: core.RemoteInfo) -> tuple[Any, Any, Any]:
+        widget = self.qt.QWidget()
+        widget.setProperty("rowControl", True)
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        up_button = self._move_button(remote, -1)
+        down_button = self._move_button(remote, 1)
+        layout.addWidget(up_button)
+        layout.addWidget(down_button)
+        return widget, up_button, down_button
+
     def _move_button(self, remote: core.RemoteInfo, delta: int) -> Any:
-        button = self._icon_button("↑" if delta < 0 else "↓", lambda: self._move_remote(remote.name, delta))
+        button = self._small_icon_button("▲" if delta < 0 else "▼", lambda: self._move_remote(remote.name, delta))
         button.setProperty("rowControl", True)
         self._update_move_button(button, remote, delta)
         return button
@@ -1834,6 +1957,14 @@ class MountletWindow:
         button.setFont(font)
         return button
 
+    def _small_icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
+        button = self._button(label, callback, enabled=enabled)
+        button.setFixedSize(22, 13)
+        font = button.font()
+        font.setPointSize(max(font.pointSize() - 2, 7))
+        button.setFont(font)
+        return button
+
     def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
         remote = next((candidate for candidate in core.load_remotes() if candidate.name == remote_name), None)
         if remote is None:
@@ -1921,6 +2052,12 @@ class MountletWindow:
         mounted_before = self._mounted_remote_names(old_remotes)
         dialog = MountConfigDialog(self.qt, remote, self.window)
         if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+            if dialog.deleted:
+                self._usage_cache.pop(remote.name, None)
+                self._current_remote_names = []
+                self.tray_app.rebuild_menus()
+                self.refresh()
+                return
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()

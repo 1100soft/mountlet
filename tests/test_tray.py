@@ -179,6 +179,31 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(saved["Docs"].auto_mount)
         self.assertFalse(saved["Photos"].enabled)
 
+    def test_new_remote_wizard_requires_drive_credentials_after_completion(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Docs"
+        remote_without_token = core.RemoteInfo(
+            name="Docs",
+            alias="Docs",
+            provider="drive",
+            backend_type="drive",
+            mount_path="/tmp/docs",
+            extra_info={"type": "drive"},
+        )
+        remote_with_token = core.RemoteInfo(
+            name="Docs",
+            alias="Docs",
+            provider="drive",
+            backend_type="drive",
+            mount_path="/tmp/docs",
+            extra_info={"type": "drive", "token": "{}"},
+        )
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_without_token]):
+            self.assertFalse(wizard._created_remote_has_credentials())
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_with_token]):
+            self.assertTrue(wizard._created_remote_has_credentials())
+
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()

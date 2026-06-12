@@ -280,6 +280,14 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
     _save_config(config)
 
 
+def delete_rclone_remote(remote_name: str) -> bool:
+    config = _load_config()
+    if not config.remove_section(remote_name):
+        return False
+    _save_config(config)
+    return True
+
+
 def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
     flags = list(TYPE_FLAG_PRESETS.get(backend_type, DEFAULT_FLAGS))
     if backend_type == "drive" and "--links" not in flags:

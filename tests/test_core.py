@@ -197,6 +197,24 @@ token = REDACTED
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
             self.assertEqual(remote.extra_info["token"], "REDACTED")
 
+    def test_delete_rclone_remote_removes_config_section(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+
+[Photos]
+type = dropbox
+""".strip(),
+            )
+
+            self.assertTrue(core.delete_rclone_remote("Docs"))
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.name for remote in remotes], ["Photos"])
+
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
