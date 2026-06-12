@@ -82,6 +82,8 @@ RCLONE_SELECT_FIELDS = {
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
+DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
+DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 
 
 class TrayDependencyError(RuntimeError):
@@ -1155,10 +1157,22 @@ class NewRemoteWizard:
         client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
 
         credential_source = self.qt.QComboBox()
+        credential_source.addItem("Use rclone's built-in Google client", DRIVE_CREDENTIAL_SOURCE_BUILTIN)
         for credentials in core.drive_oauth_credentials():
             credential_source.addItem(f"Use credentials from {credentials.remote_name}", credentials)
-        credential_source.addItem("Enter client ID and secret", None)
+        credential_source.addItem("Enter client ID and secret", DRIVE_CREDENTIAL_SOURCE_CUSTOM)
         credential_source.currentIndexChanged.connect(lambda _index=0: self._apply_credential_choice())
+        credential_help = self.qt.QLabel(
+            "The built-in rclone client is usually easiest. Custom Google OAuth clients can fail with 403 "
+            "unless the consent screen, scopes, redirect URI, and test users are configured. "
+            '<a href="https://rclone.org/drive/#making-your-own-client-id">rclone guide</a> | '
+            '<a href="https://developers.google.com/workspace/guides/configure-oauth-consent">'
+            "Google OAuth setup</a>"
+        )
+        credential_help.setWordWrap(True)
+        credential_help.setOpenExternalLinks(True)
+        credential_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        credential_help.setStyleSheet(_muted_text_style(credential_help))
 
         self.fields = {
             "provider": provider,
@@ -1170,6 +1184,7 @@ class NewRemoteWizard:
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
         form.addRow("Google credentials", credential_source)
+        form.addRow(credential_help)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
 
@@ -1285,12 +1300,17 @@ class NewRemoteWizard:
     def _apply_credential_choice(self, *, enabled: bool | None = None) -> None:
         if not self.fields:
             return
-        credentials = self.fields["credential_source"].currentData()
-        using_existing = isinstance(credentials, core.DriveOAuthCredentials)
+        choice = self.fields["credential_source"].currentData()
+        using_builtin = choice == DRIVE_CREDENTIAL_SOURCE_BUILTIN
+        using_custom = choice == DRIVE_CREDENTIAL_SOURCE_CUSTOM
+        using_existing = isinstance(choice, core.DriveOAuthCredentials)
         if using_existing:
-            self.fields["client_id"].setText(credentials.client_id)
-            self.fields["client_secret"].setText(credentials.client_secret)
-        allow_edit = (enabled if enabled is not None else self._question is None) and not using_existing
+            self.fields["client_id"].setText(choice.client_id)
+            self.fields["client_secret"].setText(choice.client_secret)
+        elif using_builtin:
+            self.fields["client_id"].clear()
+            self.fields["client_secret"].clear()
+        allow_edit = (enabled if enabled is not None else self._question is None) and using_custom
         self.fields["client_id"].setEnabled(allow_edit)
         self.fields["client_secret"].setEnabled(allow_edit)
 

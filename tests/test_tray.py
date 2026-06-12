@@ -246,11 +246,31 @@ class TrayTests(unittest.TestCase):
         client_id.setEnabled.assert_called_once_with(False)
         client_secret.setEnabled.assert_called_once_with(False)
 
+    def test_new_remote_wizard_uses_builtin_drive_client_by_default(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        credential_source = mock.Mock()
+        credential_source.currentData.return_value = tray.DRIVE_CREDENTIAL_SOURCE_BUILTIN
+        client_id = mock.Mock()
+        client_secret = mock.Mock()
+        wizard.fields = {
+            "credential_source": credential_source,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+
+        wizard._apply_credential_choice()
+
+        client_id.clear.assert_called_once_with()
+        client_secret.clear.assert_called_once_with()
+        client_id.setEnabled.assert_called_once_with(False)
+        client_secret.setEnabled.assert_called_once_with(False)
+
     def test_new_remote_wizard_allows_custom_drive_credentials(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._question = None
         credential_source = mock.Mock()
-        credential_source.currentData.return_value = None
+        credential_source.currentData.return_value = tray.DRIVE_CREDENTIAL_SOURCE_CUSTOM
         client_id = mock.Mock()
         client_secret = mock.Mock()
         wizard.fields = {
