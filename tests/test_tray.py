@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import socket
 import sys
 import tempfile
 import unittest
@@ -115,6 +116,19 @@ class TrayTests(unittest.TestCase):
         }
 
         self.assertNotIn("--allow-non-empty", tokens)
+
+    def test_local_port_available_detects_bound_port(self):
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except PermissionError:
+            self.skipTest("socket creation is blocked in this environment")
+        server.bind(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+        try:
+            self.assertFalse(tray._local_port_available(port))
+        finally:
+            server.close()
+        self.assertTrue(tray._local_port_available(port))
 
     def test_config_bool_accepts_common_true_values(self):
         for value in ("true", "True", "1", "yes", "on"):

@@ -84,6 +84,7 @@ LOW_SPACE_BYTES = 100 * 1024 * 1024
 FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
+RCLONE_OAUTH_LOCAL_PORT = 53682
 
 
 class TrayDependencyError(RuntimeError):
@@ -215,6 +216,17 @@ def _can_connect_unix_socket(path: str) -> bool:
         return False
     finally:
         client.close()
+
+
+def _local_port_available(port: int, host: str = "127.0.0.1") -> bool:
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        server.bind((host, port))
+    except OSError:
+        return False
+    finally:
+        server.close()
+    return True
 
 
 def _desktop_session_available() -> tuple[bool, str]:
@@ -1113,6 +1125,9 @@ class NewRemoteWizard:
         self._state = ""
         self._drive_client_id = ""
         self._drive_client_secret = ""
+        self._drive_local_auth = True
+        self._drive_shared_drive = False
+        self._drive_team_drive = ""
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
         self._answer_field: Any | None = None
@@ -1132,6 +1147,22 @@ class NewRemoteWizard:
             command_finished = qt.Signal(object, object)
 
         return Bridge()
+
+    def _radio_group(self, options: list[tuple[str, str]], *, selected: str) -> tuple[Any, Any, Any]:
+        widget = self.qt.QWidget()
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        group = self.qt.QButtonGroup(widget)
+        buttons = []
+        for index, (value, label) in enumerate(options):
+            button = self.qt.QRadioButton(label)
+            button.setProperty("answerValue", value)
+            button.setChecked(value == selected)
+            group.addButton(button, index)
+            layout.addWidget(button)
+            buttons.append(button)
+        return widget, buttons[0], buttons[1]
 
     def _build(self) -> None:
         root = self.qt.QVBoxLayout(self.dialog)
@@ -1176,12 +1207,39 @@ class NewRemoteWizard:
         credential_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         credential_help.setStyleSheet(_muted_text_style(credential_help))
 
+        auth_group, local_auth, remote_auth = self._radio_group(
+            [
+                ("local", "Open browser on this computer"),
+                ("remote", "Paste a token from another computer"),
+            ],
+            selected="local",
+        )
+        drive_group, my_drive, shared_drive = self._radio_group(
+            [
+                ("my_drive", "My Drive"),
+                ("shared_drive", "Shared drive"),
+            ],
+            selected="my_drive",
+        )
+        shared_drive_id = self.qt.QLineEdit()
+        shared_drive_id.setPlaceholderText("Shared drive ID")
+        shared_drive_id.setEnabled(False)
+        shared_drive_id.setToolTip("Only needed when using a Google shared drive.")
+        shared_drive.toggled.connect(lambda _checked=False: shared_drive_id.setEnabled(shared_drive.isChecked()))
+
         self.fields = {
             "provider": provider,
             "name": name,
             "credential_source": credential_source,
             "client_id": client_id,
             "client_secret": client_secret,
+            "auth_group": auth_group,
+            "local_auth": local_auth,
+            "remote_auth": remote_auth,
+            "drive_group": drive_group,
+            "my_drive": my_drive,
+            "shared_drive": shared_drive,
+            "shared_drive_id": shared_drive_id,
         }
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
@@ -1189,6 +1247,9 @@ class NewRemoteWizard:
         form.addRow(credential_help)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
+        form.addRow("Authorization", auth_group)
+        form.addRow("Drive", drive_group)
+        form.addRow("Shared drive ID", shared_drive_id)
 
         self.question_frame = self.qt.QFrame()
         self.question_layout = self.qt.QFormLayout(self.question_frame)
@@ -1242,11 +1303,26 @@ class NewRemoteWizard:
         self._remote_name = name
         self._drive_client_id = self.fields["client_id"].text()
         self._drive_client_secret = self.fields["client_secret"].text()
+        self._drive_local_auth = self.fields["local_auth"].isChecked()
+        self._drive_shared_drive = self.fields["shared_drive"].isChecked()
+        self._drive_team_drive = self.fields["shared_drive_id"].text()
+        if self._drive_local_auth and not _local_port_available(RCLONE_OAUTH_LOCAL_PORT):
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Add remote",
+                "rclone's browser sign-in port is already in use.\n\n"
+                "Finish or close any other rclone Google sign-in window, then try again. "
+                "You can also choose token authorization from another computer.",
+            )
+            return
         self._run_rclone(
             lambda: rclone_wizard.start_drive_remote(
                 name,
                 client_id=self._drive_client_id,
                 client_secret=self._drive_client_secret,
+                local_auth=self._drive_local_auth,
+                shared_drive=self._drive_shared_drive,
+                team_drive=self._drive_team_drive,
             )
         )
 
@@ -1259,6 +1335,9 @@ class NewRemoteWizard:
                 answer,
                 client_id=self._drive_client_id,
                 client_secret=self._drive_client_secret,
+                local_auth=self._drive_local_auth,
+                shared_drive=self._drive_shared_drive,
+                team_drive=self._drive_team_drive,
             )
         )
 
@@ -1304,6 +1383,11 @@ class NewRemoteWizard:
         self.fields["name"].setEnabled(not busy and self._question is None)
         self.fields["provider"].setEnabled(not busy and self._question is None)
         self.fields["credential_source"].setEnabled(not busy and self._question is None)
+        self.fields["auth_group"].setEnabled(not busy and self._question is None)
+        self.fields["drive_group"].setEnabled(not busy and self._question is None)
+        self.fields["shared_drive_id"].setEnabled(
+            not busy and self._question is None and self.fields["shared_drive"].isChecked()
+        )
         self._apply_credential_choice(enabled=not busy and self._question is None)
         self.status.setText(self._busy_message() if busy else "")
 

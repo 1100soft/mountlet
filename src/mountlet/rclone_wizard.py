@@ -28,18 +28,25 @@ class RcloneConfigStep:
         return not self.state
 
 
-def start_drive_remote(remote_name: str, *, client_id: str = "", client_secret: str = "") -> RcloneConfigStep:
+def start_drive_remote(
+    remote_name: str,
+    *,
+    client_id: str = "",
+    client_secret: str = "",
+    local_auth: bool = True,
+    shared_drive: bool = False,
+    team_drive: str = "",
+) -> RcloneConfigStep:
     return _run_config_create(
         remote_name,
         "drive",
-        [
-            "client_id",
-            client_id.strip(),
-            "client_secret",
-            client_secret.strip(),
-            "scope",
-            "drive",
-        ],
+        _drive_config_args(
+            client_id=client_id,
+            client_secret=client_secret,
+            local_auth=local_auth,
+            shared_drive=shared_drive,
+            team_drive=team_drive,
+        ),
     )
 
 
@@ -50,12 +57,22 @@ def continue_drive_remote(
     *,
     client_id: str = "",
     client_secret: str = "",
+    local_auth: bool = True,
+    shared_drive: bool = False,
+    team_drive: str = "",
 ) -> RcloneConfigStep:
     _ensure_drive_remote_config(remote_name, client_id=client_id, client_secret=client_secret)
     return _run_config_create(
         remote_name,
         "drive",
         [
+            *_drive_config_args(
+                client_id=client_id,
+                client_secret=client_secret,
+                local_auth=local_auth,
+                shared_drive=shared_drive,
+                team_drive=team_drive,
+            ),
             "--continue",
             "--state",
             state,
@@ -63,6 +80,31 @@ def continue_drive_remote(
             result,
         ],
     )
+
+
+def _drive_config_args(
+    *,
+    client_id: str = "",
+    client_secret: str = "",
+    local_auth: bool | None = None,
+    shared_drive: bool | None = None,
+    team_drive: str = "",
+) -> list[str]:
+    args = [
+        "client_id",
+        client_id.strip(),
+        "client_secret",
+        client_secret.strip(),
+        "scope",
+        "drive",
+    ]
+    if local_auth is not None:
+        args.extend(["config_is_local", "true" if local_auth else "false"])
+    if shared_drive is not None:
+        args.extend(["config_team_drive", "true" if shared_drive else "false"])
+    if team_drive.strip():
+        args.extend(["team_drive", team_drive.strip()])
+    return args
 
 
 def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> RcloneConfigStep:

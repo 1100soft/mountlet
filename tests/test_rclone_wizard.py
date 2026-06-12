@@ -45,14 +45,27 @@ class RcloneWizardTests(unittest.TestCase):
                             "Docs",
                             client_id="client.apps.googleusercontent.com",
                             client_secret="secret",
+                            local_auth=True,
+                            shared_drive=False,
                         )
 
         command = run.call_args.args[0]
         self.assertEqual(command[:7], ["/usr/bin/rclone", "--config", str(config_path), "config", "create", "Docs", "drive"])
         self.assertIn("--non-interactive", command)
         self.assertEqual(
-            command[-6:],
-            ["client_id", "client.apps.googleusercontent.com", "client_secret", "secret", "scope", "drive"],
+            command[-10:],
+            [
+                "client_id",
+                "client.apps.googleusercontent.com",
+                "client_secret",
+                "secret",
+                "scope",
+                "drive",
+                "config_is_local",
+                "true",
+                "config_team_drive",
+                "false",
+            ],
         )
         self.assertEqual(step.state, "next")
         self.assertEqual(step.option["Name"], "config_is_local")
