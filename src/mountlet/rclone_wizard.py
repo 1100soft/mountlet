@@ -159,7 +159,7 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
         )
     except subprocess.TimeoutExpired as exc:
         raise RcloneWizardError(
-            "Google sign-in timed out. Close any browser sign-in tabs that are still open and try again."
+            "Browser sign-in timed out. Close any provider sign-in tabs that are still open and try again."
         ) from exc
     except OSError as exc:
         raise RcloneWizardError(f"Could not run rclone: {exc}") from exc

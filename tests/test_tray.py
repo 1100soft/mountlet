@@ -574,6 +574,12 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window = mock.Mock()
         mountlet_window._child_dialogs = []
         mountlet_window._child_dialog_owners = {}
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowModality=SimpleNamespace(NonModal="nonmodal"),
+                WindowType=SimpleNamespace(Tool="tool"),
+            )
+        )
         owner = SimpleNamespace(dialog=mock.Mock())
         on_accepted = mock.Mock()
 
