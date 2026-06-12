@@ -1111,6 +1111,8 @@ class NewRemoteWizard:
         self.fields: dict[str, Any] = {}
         self._remote_name = ""
         self._state = ""
+        self._drive_client_id = ""
+        self._drive_client_secret = ""
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
         self._answer_field: Any | None = None
@@ -1238,19 +1240,27 @@ class NewRemoteWizard:
             self.qt.QMessageBox.warning(self.dialog, "Add remote", f"{name} already exists.")
             return
         self._remote_name = name
-        client_id = self.fields["client_id"].text()
-        client_secret = self.fields["client_secret"].text()
+        self._drive_client_id = self.fields["client_id"].text()
+        self._drive_client_secret = self.fields["client_secret"].text()
         self._run_rclone(
             lambda: rclone_wizard.start_drive_remote(
                 name,
-                client_id=client_id,
-                client_secret=client_secret,
+                client_id=self._drive_client_id,
+                client_secret=self._drive_client_secret,
             )
         )
 
     def _continue(self) -> None:
         answer = self._answer_value()
-        self._run_rclone(lambda: rclone_wizard.continue_drive_remote(self._remote_name, self._state, answer))
+        self._run_rclone(
+            lambda: rclone_wizard.continue_drive_remote(
+                self._remote_name,
+                self._state,
+                answer,
+                client_id=self._drive_client_id,
+                client_secret=self._drive_client_secret,
+            )
+        )
 
     def _run_rclone(self, action: Any) -> None:
         self._set_busy(True)
@@ -1598,6 +1608,44 @@ class MountletWindow:
         _move_x11_window_to_current_desktop(self.window)
         self.window.raise_()
         self.window.activateWindow()
+        self._raise_active_child_window()
+
+    def _raise_active_child_window(self) -> None:
+        child = self._active_child_window()
+        if child is None:
+            return
+        try:
+            if child.isMinimized():
+                child.showNormal()
+            else:
+                child.show()
+            child.raise_()
+            child.activateWindow()
+        except Exception:
+            return
+
+    def _active_child_window(self) -> Any | None:
+        qt = getattr(self, "qt", None)
+        if qt is None:
+            return None
+        for candidate in (
+            qt.QApplication.activeModalWidget(),
+            qt.QApplication.activeWindow(),
+        ):
+            if candidate is not None and self._is_child_window(candidate):
+                return candidate
+        return None
+
+    def _is_child_window(self, candidate: Any) -> bool:
+        current = candidate
+        while current is not None:
+            if current is self.window:
+                return candidate is not self.window
+            try:
+                current = current.parentWidget()
+            except Exception:
+                return False
+        return False
 
     def _position_near_tray(self) -> None:
         try:

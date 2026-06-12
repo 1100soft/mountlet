@@ -420,6 +420,28 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_focus_window_restores_modal_child_z_order(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        child = mock.Mock()
+        child.isMinimized.return_value = False
+        child.parentWidget.return_value = mock.Mock()
+        mountlet_window.window = child.parentWidget.return_value
+        mountlet_window.window.isMinimized.return_value = False
+        qt = mock.Mock()
+        qt.QApplication.activeModalWidget.return_value = child
+        qt.QApplication.activeWindow.return_value = None
+        mountlet_window.qt = qt
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop", return_value=True):
+            mountlet_window._focus_window()
+
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_called_once_with()
+        mountlet_window.window.activateWindow.assert_called_once_with()
+        child.show.assert_called_once_with()
+        child.raise_.assert_called_once_with()
+        child.activateWindow.assert_called_once_with()
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False

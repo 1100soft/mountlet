@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import configparser
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,7 +43,15 @@ def start_drive_remote(remote_name: str, *, client_id: str = "", client_secret: 
     )
 
 
-def continue_drive_remote(remote_name: str, state: str, result: str) -> RcloneConfigStep:
+def continue_drive_remote(
+    remote_name: str,
+    state: str,
+    result: str,
+    *,
+    client_id: str = "",
+    client_secret: str = "",
+) -> RcloneConfigStep:
+    _ensure_drive_remote_config(remote_name, client_id=client_id, client_secret=client_secret)
     return _run_config_create(
         remote_name,
         "drive",
@@ -102,6 +111,22 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
 
 def _ensure_config_parent(config_path: Path) -> None:
     config_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_drive_remote_config(remote_name: str, *, client_id: str = "", client_secret: str = "") -> None:
+    config_path = default_config_path()
+    _ensure_config_parent(config_path)
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(config_path, encoding="utf-8")
+    if not config.has_section(remote_name):
+        config.add_section(remote_name)
+    section = config[remote_name]
+    section["type"] = "drive"
+    section["scope"] = section.get("scope", "drive") or "drive"
+    section["client_id"] = client_id.strip()
+    section["client_secret"] = client_secret.strip()
+    with config_path.open("w", encoding="utf-8") as handle:
+        config.write(handle)
 
 
 def _extract_json_object(output: str) -> dict[str, Any]:

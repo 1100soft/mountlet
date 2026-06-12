@@ -58,14 +58,27 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertEqual(step.option["Name"], "config_is_local")
 
     def test_continue_drive_remote_passes_state_and_result(self):
-        completed = SimpleNamespace(returncode=0, stdout='{"State":"","Option":{},"Error":"","Result":""}', stderr="")
-        with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
-            with mock.patch.object(rclone_wizard, "default_config_path", return_value=Path("/tmp/rclone.conf")):
-                with mock.patch.object(subprocess, "run", return_value=completed) as run:
-                    step = rclone_wizard.continue_drive_remote("Docs", "*state", "true")
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            completed = SimpleNamespace(returncode=0, stdout='{"State":"","Option":{},"Error":"","Result":""}', stderr="")
+            with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
+                    with mock.patch.object(subprocess, "run", return_value=completed) as run:
+                        step = rclone_wizard.continue_drive_remote(
+                            "Docs",
+                            "*state",
+                            "true",
+                            client_id="client",
+                            client_secret="secret",
+                        )
 
-        self.assertEqual(run.call_args.args[0][-5:], ["--continue", "--state", "*state", "--result", "true"])
-        self.assertTrue(step.complete)
+            self.assertEqual(run.call_args.args[0][-5:], ["--continue", "--state", "*state", "--result", "true"])
+            self.assertTrue(step.complete)
+
+            text = config_path.read_text(encoding="utf-8")
+            self.assertIn("type = drive", text)
+            self.assertIn("client_id = client", text)
+            self.assertIn("client_secret = secret", text)
 
     def test_run_config_create_reports_rclone_failure(self):
         completed = SimpleNamespace(returncode=1, stdout="", stderr="failed")
