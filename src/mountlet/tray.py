@@ -219,14 +219,60 @@ def _can_connect_unix_socket(path: str) -> bool:
 
 
 def _local_port_available(port: int, host: str = "127.0.0.1") -> bool:
+    available, _owner_hint = _local_port_status(port, host)
+    return available
+
+
+def _local_port_status(port: int, host: str = "127.0.0.1") -> tuple[bool, str]:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         server.bind((host, port))
     except OSError:
-        return False
+        return False, _local_port_owner_hint(port)
     finally:
         server.close()
-    return True
+    return True, ""
+
+
+def _local_port_owner_hint(port: int) -> str:
+    if platform.system() != "Linux":
+        return ""
+    for command in (
+        ["ss", "-ltnp", f"sport = :{port}"],
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+    ):
+        if not shutil.which(command[0]):
+            continue
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=1,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        output = completed.stdout.strip()
+        if completed.returncode == 0 and output:
+            return _summarize_port_owner(output)
+    return ""
+
+
+def _summarize_port_owner(output: str) -> str:
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return ""
+    owner = lines[-1]
+    process_match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', owner)
+    if process_match:
+        name, pid = process_match.groups()
+        return f"Process using the port: {name} (PID {pid})."
+    command_match = re.match(r"(\S+)\s+(\d+)\s+", owner)
+    if command_match:
+        name, pid = command_match.groups()
+        return f"Process using the port: {name} (PID {pid})."
+    return f"Port owner: {owner}"
 
 
 def _desktop_session_available() -> tuple[bool, str]:
