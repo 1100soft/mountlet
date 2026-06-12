@@ -94,6 +94,46 @@ class RcloneWizardTests(unittest.TestCase):
             self.assertIn("client_id = client", text)
             self.assertIn("client_secret = secret", text)
 
+    def test_start_remote_can_request_token_authorization(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout='{"State":"token","Option":{"Name":"config_token"},"Error":"","Result":""}',
+                stderr="",
+            )
+            with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
+                    with mock.patch.object(subprocess, "run", return_value=completed) as run:
+                        step = rclone_wizard.start_remote(
+                            "Docs",
+                            "drive",
+                            ["config_is_local", "false"],
+                        )
+
+        command = run.call_args.args[0]
+        self.assertIn("config_is_local", command)
+        self.assertEqual(command[command.index("config_is_local") + 1], "false")
+        self.assertEqual(step.option["Name"], "config_token")
+
+    def test_continue_remote_preserves_generic_backend_type(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            completed = SimpleNamespace(returncode=0, stdout='{"State":"","Option":{},"Error":"","Result":""}', stderr="")
+            with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
+                    with mock.patch.object(subprocess, "run", return_value=completed):
+                        step = rclone_wizard.continue_remote(
+                            "Photos",
+                            "dropbox",
+                            "*state",
+                            "token",
+                            ["config_is_local", "false"],
+                        )
+
+            self.assertTrue(step.complete)
+            self.assertIn("type = dropbox", config_path.read_text(encoding="utf-8"))
+
     def test_run_config_create_reports_rclone_failure(self):
         completed = SimpleNamespace(returncode=1, stdout="", stderr="failed")
         with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):

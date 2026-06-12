@@ -40,7 +40,7 @@ def start_drive_remote(
     shared_drive: bool = False,
     team_drive: str = "",
 ) -> RcloneConfigStep:
-    return _run_config_create(
+    return start_remote(
         remote_name,
         "drive",
         _drive_config_args(
@@ -64,18 +64,39 @@ def continue_drive_remote(
     shared_drive: bool = False,
     team_drive: str = "",
 ) -> RcloneConfigStep:
-    _ensure_drive_remote_config(remote_name, client_id=client_id, client_secret=client_secret)
-    return _run_config_create(
+    return continue_remote(
         remote_name,
         "drive",
+        state,
+        result,
+        _drive_config_args(
+            client_id=client_id,
+            client_secret=client_secret,
+            local_auth=local_auth,
+            shared_drive=shared_drive,
+            team_drive=team_drive,
+        ),
+    )
+
+
+def start_remote(remote_name: str, remote_type: str, args: list[str] | None = None) -> RcloneConfigStep:
+    return _run_config_create(remote_name, remote_type, list(args or []))
+
+
+def continue_remote(
+    remote_name: str,
+    remote_type: str,
+    state: str,
+    result: str,
+    args: list[str] | None = None,
+) -> RcloneConfigStep:
+    config_args = list(args or [])
+    _ensure_remote_config(remote_name, remote_type, config_args)
+    return _run_config_create(
+        remote_name,
+        remote_type,
         [
-            *_drive_config_args(
-                client_id=client_id,
-                client_secret=client_secret,
-                local_auth=local_auth,
-                shared_drive=shared_drive,
-                team_drive=team_drive,
-            ),
+            *config_args,
             "--continue",
             "--state",
             state,
@@ -163,7 +184,7 @@ def _ensure_config_parent(config_path: Path) -> None:
     config_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
 
 
-def _ensure_drive_remote_config(remote_name: str, *, client_id: str = "", client_secret: str = "") -> None:
+def _ensure_remote_config(remote_name: str, remote_type: str, args: list[str] | None = None) -> None:
     config_path = default_config_path()
     _ensure_config_parent(config_path)
     config = configparser.ConfigParser(interpolation=None)
@@ -171,12 +192,27 @@ def _ensure_drive_remote_config(remote_name: str, *, client_id: str = "", client
     if not config.has_section(remote_name):
         config.add_section(remote_name)
     section = config[remote_name]
-    section["type"] = "drive"
-    section["scope"] = section.get("scope", "drive") or "drive"
-    section["client_id"] = client_id.strip()
-    section["client_secret"] = client_secret.strip()
+    section["type"] = remote_type
+    for key, value in _config_pairs(args or []):
+        if key.startswith("--") or key.startswith("config_"):
+            continue
+        section[key] = value
     with config_path.open("w", encoding="utf-8") as handle:
         config.write(handle)
+
+
+def _config_pairs(args: list[str]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    index = 0
+    while index + 1 < len(args):
+        key = args[index]
+        value = args[index + 1]
+        if key.startswith("--"):
+            index += 1
+            continue
+        pairs.append((key, value))
+        index += 2
+    return pairs
 
 
 def _extract_json_object(output: str) -> dict[str, Any]:
@@ -198,5 +234,7 @@ __all__ = [
     "RcloneConfigStep",
     "RcloneWizardError",
     "continue_drive_remote",
+    "continue_remote",
     "start_drive_remote",
+    "start_remote",
 ]

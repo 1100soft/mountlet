@@ -366,6 +366,19 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(wizard._automatic_answer(step), "false")
 
+    def test_new_remote_wizard_uses_generic_oauth_args_for_non_drive(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "dropbox"
+        wizard._drive_local_auth = False
+
+        self.assertEqual(wizard._initial_config_args(), ["config_is_local", "false"])
+
+    def test_new_remote_wizard_uses_no_initial_args_for_webdav(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "webdav"
+
+        self.assertEqual(wizard._initial_config_args(), [])
+
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._connect_after_create = True

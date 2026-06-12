@@ -85,6 +85,16 @@ FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
+REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("Google Drive", "drive"),
+    ("Dropbox", "dropbox"),
+    ("Microsoft OneDrive", "onedrive"),
+    ("Box", "box"),
+    ("pCloud", "pcloud"),
+    ("S3-compatible storage", "s3"),
+    ("WebDAV", "webdav"),
+)
+OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 
 
 class TrayDependencyError(RuntimeError):
@@ -1180,6 +1190,7 @@ class NewRemoteWizard:
         self._drive_local_auth = True
         self._drive_shared_drive = False
         self._drive_team_drive = ""
+        self._remote_type = "drive"
         self._connect_after_create = True
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
@@ -1228,9 +1239,12 @@ class NewRemoteWizard:
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
+        self.form = form
 
         provider = self.qt.QComboBox()
-        provider.addItem("Google Drive", "drive")
+        for label, backend_type in REMOTE_PROVIDER_OPTIONS:
+            provider.addItem(label, backend_type)
+        provider.currentIndexChanged.connect(lambda _index=0: self._apply_provider_choice())
 
         name = self.qt.QLineEdit()
         name.setPlaceholderText("Personal Drive")
@@ -1293,6 +1307,7 @@ class NewRemoteWizard:
             "provider": provider,
             "name": name,
             "credential_source": credential_source,
+            "credential_help": credential_help,
             "client_id": client_id,
             "client_secret": client_secret,
             "auth_group": auth_group,
@@ -1333,6 +1348,7 @@ class NewRemoteWizard:
         root.addWidget(self.status)
         root.addWidget(buttons)
         self._apply_credential_choice()
+        self._apply_provider_choice()
         self._update_action_button()
         self.dialog.adjustSize()
 
@@ -1365,20 +1381,21 @@ class NewRemoteWizard:
             self.qt.QMessageBox.warning(self.dialog, "Add remote", f"{name} already exists.")
             return
         self._remote_name = name
+        self._remote_type = self.fields["provider"].currentData() or "drive"
         self._drive_client_id = self.fields["client_id"].text()
         self._drive_client_secret = self.fields["client_secret"].text()
         self._drive_local_auth = self.fields["local_auth"].isChecked()
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
-        if self._drive_shared_drive and not self._drive_team_drive.strip():
+        if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
             self.qt.QMessageBox.warning(
                 self.dialog,
                 "Add remote",
                 "Enter the shared drive ID before connecting, or choose My Drive.",
             )
             return
-        if self._drive_local_auth:
+        if self._uses_browser_auth() and self._drive_local_auth:
             port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
         else:
             port_available, owner_hint = True, ""
@@ -1393,28 +1410,22 @@ class NewRemoteWizard:
             )
             return
         self._run_rclone(
-            lambda: rclone_wizard.start_drive_remote(
+            lambda: rclone_wizard.start_remote(
                 name,
-                client_id=self._drive_client_id,
-                client_secret=self._drive_client_secret,
-                local_auth=self._drive_local_auth,
-                shared_drive=self._drive_shared_drive,
-                team_drive=self._drive_team_drive,
+                self._remote_type,
+                self._initial_config_args(),
             )
         )
 
     def _continue(self) -> None:
         answer = self._answer_value()
         self._run_rclone(
-            lambda: rclone_wizard.continue_drive_remote(
+            lambda: rclone_wizard.continue_remote(
                 self._remote_name,
+                self._remote_type,
                 self._state,
                 answer,
-                client_id=self._drive_client_id,
-                client_secret=self._drive_client_secret,
-                local_auth=self._drive_local_auth,
-                shared_drive=self._drive_shared_drive,
-                team_drive=self._drive_team_drive,
+                self._initial_config_args(),
             )
         )
 
@@ -1458,19 +1469,32 @@ class NewRemoteWizard:
         if automatic_answer is not None:
             self._state = step.state
             self._run_rclone(
-                lambda: rclone_wizard.continue_drive_remote(
+                lambda: rclone_wizard.continue_remote(
                     self._remote_name,
+                    self._remote_type,
                     self._state,
                     automatic_answer,
-                    client_id=self._drive_client_id,
-                    client_secret=self._drive_client_secret,
-                    local_auth=self._drive_local_auth,
-                    shared_drive=self._drive_shared_drive,
-                    team_drive=self._drive_team_drive,
+                    self._initial_config_args(),
                 )
             )
             return
         self._show_question(step)
+
+    def _uses_browser_auth(self) -> bool:
+        return self._remote_type in OAUTH_REMOTE_TYPES
+
+    def _initial_config_args(self) -> list[str]:
+        if self._remote_type == "drive":
+            return rclone_wizard._drive_config_args(
+                client_id=self._drive_client_id,
+                client_secret=self._drive_client_secret,
+                local_auth=self._drive_local_auth,
+                shared_drive=self._drive_shared_drive,
+                team_drive=self._drive_team_drive,
+            )
+        if self._remote_type in OAUTH_REMOTE_TYPES:
+            return ["config_is_local", "true" if self._drive_local_auth else "false"]
+        return []
 
     def _automatic_answer(self, step: rclone_wizard.RcloneConfigStep) -> str | None:
         option_name = self._option_name(step.option)
@@ -1550,8 +1574,59 @@ class NewRemoteWizard:
         self._apply_credential_choice(enabled=not busy and self._question is None)
         self.status.setText((message or self._busy_message()) if busy else "")
 
+    def _apply_provider_choice(self) -> None:
+        if not self.fields:
+            return
+        remote_type = self.fields["provider"].currentData() or "drive"
+        self._remote_type = remote_type
+        is_drive = remote_type == "drive"
+        uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
+        for field_name in (
+            "credential_source",
+            "client_id",
+            "client_secret",
+            "drive_group",
+            "shared_drive_id",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_drive)
+        self._set_form_row_visible(self.fields["credential_help"], is_drive)
+        self._set_form_row_visible(self.fields["auth_group"], uses_browser_auth)
+        self.fields["name"].setPlaceholderText(self._remote_name_placeholder(remote_type))
+        self.fields["connect_after_create"].setToolTip(
+            "Mount the new remote immediately after setup succeeds."
+        )
+        self._apply_credential_choice()
+        self.dialog.adjustSize()
+
+    def _set_form_row_visible(self, widget: Any, visible: bool) -> None:
+        try:
+            widget.setVisible(visible)
+            label = self.form.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+        except Exception:
+            pass
+
+    def _remote_name_placeholder(self, remote_type: str) -> str:
+        placeholders = {
+            "drive": "Personal Drive",
+            "dropbox": "Personal Dropbox",
+            "onedrive": "Personal OneDrive",
+            "box": "Work Box",
+            "pcloud": "Personal pCloud",
+            "s3": "Archive S3",
+            "webdav": "Nextcloud",
+        }
+        return placeholders.get(remote_type, "Cloud storage")
+
     def _apply_credential_choice(self, *, enabled: bool | None = None) -> None:
         if not self.fields:
+            return
+        if getattr(self, "_remote_type", "drive") != "drive":
+            self.fields["client_id"].clear()
+            self.fields["client_secret"].clear()
+            self.fields["client_id"].setEnabled(False)
+            self.fields["client_secret"].setEnabled(False)
             return
         choice = self.fields["credential_source"].currentData()
         using_builtin = choice == DRIVE_CREDENTIAL_SOURCE_BUILTIN
@@ -1701,7 +1776,7 @@ class NewRemoteWizard:
     def _question_title(self, option: dict[str, Any]) -> str:
         option_name = self._option_name(option)
         if option_name == "config_is_local":
-            return "Connect Google Drive"
+            return f"Connect {self._provider_label(self._remote_type)}"
         if option_name == "config_token":
             return "Paste authorization token"
         if option_name in {"team_drive", "config_team_drive"}:
@@ -1712,7 +1787,7 @@ class NewRemoteWizard:
         option_name = self._option_name(option)
         if option_name == "config_is_local":
             return (
-                "Mountlet will ask rclone to open Google sign-in in your browser. "
+                "Mountlet will ask rclone to open the provider sign-in page in your browser. "
                 "Leave this enabled unless you need to authorize from another computer."
             )
         if option_name == "config_team_drive":
@@ -1720,6 +1795,12 @@ class NewRemoteWizard:
         if option_name == "team_drive":
             return "Leave blank for My Drive, or enter a shared drive ID."
         return str(option.get("Help", "")).strip()
+
+    def _provider_label(self, remote_type: str) -> str:
+        for label, backend_type in REMOTE_PROVIDER_OPTIONS:
+            if backend_type == remote_type:
+                return label
+        return remote_type
 
     def _question_button_text(self) -> str:
         if self._question and self._option_name(self._question.option) == "config_is_local":
@@ -1915,6 +1996,9 @@ class MountletWindow:
         try:
             dialog.setModal(False)
             dialog.setWindowModality(self.qt.Qt.WindowModality.NonModal)
+        except Exception:
+            pass
+        try:
             dialog.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
         except Exception:
             pass
