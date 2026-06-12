@@ -581,7 +581,6 @@ class TrayTests(unittest.TestCase):
         mountlet_window.qt = SimpleNamespace(
             Qt=SimpleNamespace(
                 WindowModality=SimpleNamespace(NonModal="nonmodal"),
-                WindowType=SimpleNamespace(Tool="tool", WindowStaysOnTopHint="stay-on-top"),
             )
         )
         owner = SimpleNamespace(dialog=mock.Mock())
@@ -595,10 +594,7 @@ class TrayTests(unittest.TestCase):
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
         owner.dialog.setModal.assert_called_once_with(False)
-        self.assertEqual(
-            owner.dialog.setWindowFlag.call_args_list,
-            [mock.call("tool", False), mock.call("stay-on-top", True)],
-        )
+        owner.dialog.setWindowFlag.assert_not_called()
         owner.dialog.show.assert_called_once_with()
         raise_child.assert_called_once_with()
 

@@ -2016,11 +2016,6 @@ class MountletWindow:
             dialog.setWindowModality(self.qt.Qt.WindowModality.NonModal)
         except Exception:
             pass
-        try:
-            dialog.setWindowFlag(self.qt.Qt.WindowType.Tool, False)
-            dialog.setWindowFlag(self.qt.Qt.WindowType.WindowStaysOnTopHint, True)
-        except Exception:
-            pass
         if on_accepted is not None:
             dialog.accepted.connect(on_accepted)
         dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
