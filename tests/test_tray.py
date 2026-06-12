@@ -130,6 +130,30 @@ class TrayTests(unittest.TestCase):
             server.close()
         self.assertTrue(tray._local_port_available(port))
 
+    def test_local_port_status_reports_owner_hint_when_busy(self):
+        fake_socket = mock.Mock()
+        fake_socket.bind.side_effect = OSError("busy")
+
+        with mock.patch.object(tray.socket, "socket", return_value=fake_socket):
+            with mock.patch.object(tray, "_local_port_owner_hint", return_value="Process using the port: rclone (PID 123)."):
+                self.assertEqual(
+                    tray._local_port_status(53682),
+                    (False, "Process using the port: rclone (PID 123)."),
+                )
+
+        fake_socket.close.assert_called_once_with()
+
+    def test_summarize_port_owner_parses_ss_output(self):
+        output = (
+            "State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess\n"
+            'LISTEN 0 4096 127.0.0.1:53682 0.0.0.0:* users:(("rclone",pid=1767993,fd=7))'
+        )
+
+        self.assertEqual(
+            tray._summarize_port_owner(output),
+            "Process using the port: rclone (PID 1767993).",
+        )
+
     def test_config_bool_accepts_common_true_values(self):
         for value in ("true", "True", "1", "yes", "on"):
             self.assertTrue(tray._config_bool(value))
@@ -455,6 +479,27 @@ class TrayTests(unittest.TestCase):
         child.show.assert_called_once_with()
         child.raise_.assert_called_once_with()
         child.activateWindow.assert_called_once_with()
+
+    def test_focus_window_restores_tracked_child_z_order(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        child = mock.Mock()
+        child.isMinimized.return_value = False
+        child.parentWidget.return_value = mock.Mock()
+        mountlet_window.window = child.parentWidget.return_value
+        mountlet_window.window.isMinimized.return_value = False
+        mountlet_window._child_dialogs = [child]
+        qt = mock.Mock()
+        qt.QApplication.activeModalWidget.return_value = None
+        qt.QApplication.activeWindow.return_value = mountlet_window.window
+        mountlet_window.qt = qt
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop", return_value=True):
+            mountlet_window._focus_window()
+
+        child.show.assert_called_once_with()
+        child.raise_.assert_called_once_with()
+        child.activateWindow.assert_called_once_with()
+        self.assertEqual(qt.QTimer.singleShot.call_count, 2)
 
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)

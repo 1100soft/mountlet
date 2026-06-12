@@ -1352,11 +1352,16 @@ class NewRemoteWizard:
         self._drive_local_auth = self.fields["local_auth"].isChecked()
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
-        if self._drive_local_auth and not _local_port_available(RCLONE_OAUTH_LOCAL_PORT):
+        if self._drive_local_auth:
+            port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
+        else:
+            port_available, owner_hint = True, ""
+        if not port_available:
+            details = f"\n\n{owner_hint}" if owner_hint else ""
             self.qt.QMessageBox.warning(
                 self.dialog,
                 "Add remote",
-                "rclone's browser sign-in port is already in use.\n\n"
+                f"rclone's browser sign-in port {RCLONE_OAUTH_LOCAL_PORT} is already in use.{details}\n\n"
                 "Finish or close any other rclone Google sign-in window, then try again. "
                 "You can also choose token authorization from another computer.",
             )
@@ -1656,6 +1661,7 @@ class MountletWindow:
         self._current_remote_names: list[str] = []
         self._name_column_width = 160
         self._refresh_pending = False
+        self._child_dialogs: list[Any] = []
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -1739,6 +1745,10 @@ class MountletWindow:
         self.window.raise_()
         self.window.activateWindow()
         self._raise_active_child_window()
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is not None:
+            timer.singleShot(0, self._raise_active_child_window)
+            timer.singleShot(100, self._raise_active_child_window)
 
     def _raise_active_child_window(self) -> None:
         child = self._active_child_window()
@@ -1754,6 +1764,17 @@ class MountletWindow:
         except Exception:
             return
 
+    def _track_child_dialog(self, dialog: Any) -> None:
+        self._child_dialogs = [
+            child for child in getattr(self, "_child_dialogs", []) if child is not dialog
+        ]
+        self._child_dialogs.append(dialog)
+
+    def _untrack_child_dialog(self, dialog: Any) -> None:
+        self._child_dialogs = [
+            child for child in getattr(self, "_child_dialogs", []) if child is not dialog
+        ]
+
     def _active_child_window(self) -> Any | None:
         qt = getattr(self, "qt", None)
         if qt is None:
@@ -1761,6 +1782,7 @@ class MountletWindow:
         for candidate in (
             qt.QApplication.activeModalWidget(),
             qt.QApplication.activeWindow(),
+            *reversed(getattr(self, "_child_dialogs", [])),
         ):
             if candidate is not None and self._is_child_window(candidate):
                 return candidate
@@ -2335,7 +2357,12 @@ class MountletWindow:
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
         dialog = AppConfigDialog(self.qt, self.window)
-        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+        self._track_child_dialog(dialog.dialog)
+        try:
+            accepted = dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted)
+        finally:
+            self._untrack_child_dialog(dialog.dialog)
+        if accepted:
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -2348,7 +2375,12 @@ class MountletWindow:
         old_remotes = core.load_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         dialog = MountConfigDialog(self.qt, remote, self.window)
-        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+        self._track_child_dialog(dialog.dialog)
+        try:
+            accepted = dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted)
+        finally:
+            self._untrack_child_dialog(dialog.dialog)
+        if accepted:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
                 self._current_remote_names = []
@@ -2364,7 +2396,12 @@ class MountletWindow:
 
     def _show_new_remote_wizard(self) -> None:
         dialog = NewRemoteWizard(self.qt, self.window)
-        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+        self._track_child_dialog(dialog.dialog)
+        try:
+            accepted = dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted)
+        finally:
+            self._untrack_child_dialog(dialog.dialog)
+        if accepted:
             self._usage_cache.clear()
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
