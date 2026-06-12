@@ -222,6 +222,10 @@ def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, uniq
     return f"Existing: {credentials.remote_name}"
 
 
+def _load_visible_remotes() -> list[core.RemoteInfo]:
+    return core.load_remotes(include_incomplete=False)
+
+
 def _can_connect_unix_socket(path: str) -> bool:
     client = socket.socket(socket.AF_UNIX)
     try:
@@ -2132,7 +2136,7 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         self._refresh_pending = False
-        remotes = core.load_remotes()
+        remotes = _load_visible_remotes()
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
@@ -2382,7 +2386,7 @@ class MountletWindow:
         return 0 <= target < len(self._current_remote_names)
 
     def _move_remote(self, remote_name: str, delta: int) -> None:
-        names = [remote.name for remote in core.load_remotes()]
+        names = [remote.name for remote in _load_visible_remotes()]
         try:
             index = names.index(remote_name)
         except ValueError:
@@ -2589,7 +2593,7 @@ class MountletWindow:
         return button
 
     def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
-        remote = next((candidate for candidate in core.load_remotes() if candidate.name == remote_name), None)
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
             self.tray_app._notify("Mountlet", f"{remote_name} is no longer available.", success=False)
             self._request_refresh()
@@ -2624,7 +2628,7 @@ class MountletWindow:
         self._run_bulk_action("Unmount all", core.unmount_all)
 
     def _run_bulk_action(self, title: str, action: Any) -> None:
-        remotes = core.load_remotes()
+        remotes = _load_visible_remotes()
         if not remotes:
             return
         for remote in remotes:
@@ -2657,7 +2661,7 @@ class MountletWindow:
         self.tray_app._open_folder(remote)
 
     def _show_app_config_editor(self) -> None:
-        old_remotes = core.load_remotes()
+        old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
         dialog = AppConfigDialog(self.qt, self.window)
@@ -2674,7 +2678,7 @@ class MountletWindow:
         self._open_child_dialog(dialog, on_accepted)
 
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
-        old_remotes = core.load_remotes()
+        old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         dialog = MountConfigDialog(self.qt, remote, self.window)
 
@@ -2715,7 +2719,7 @@ class MountletWindow:
     ) -> list[tuple[core.RemoteInfo, core.RemoteInfo]]:
         old_by_name = {remote.name: remote for remote in old_remotes}
         changes: list[tuple[core.RemoteInfo, core.RemoteInfo]] = []
-        for new_remote in core.load_remotes():
+        for new_remote in _load_visible_remotes():
             old_remote = old_by_name.get(new_remote.name)
             if not old_remote or old_remote.name not in mounted_before:
                 continue
@@ -2940,7 +2944,7 @@ class MountletTray:
             return
         self.remote_menu.clear()
         self.app_menu.clear()
-        remotes = core.load_remotes()
+        remotes = _load_visible_remotes()
         mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
@@ -3008,7 +3012,7 @@ class MountletTray:
     def _schedule_auto_mounts(self) -> None:
         if getattr(self, "_quitting", False):
             return
-        remotes = [remote for remote in core.load_remotes() if remote.auto_mount and not core.is_mounted(remote)]
+        remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount and not core.is_mounted(remote)]
         if not remotes:
             return
         delay_ms = int(load_app_settings().auto_mount_delay * 1000)

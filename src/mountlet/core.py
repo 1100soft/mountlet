@@ -145,6 +145,7 @@ class DriveOAuthCredentials:
 
 
 PIDS: Dict[str, int] = {}
+OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -337,7 +338,7 @@ def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
     return flags
 
 
-def load_remotes() -> List[RemoteInfo]:
+def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
     config = _load_config()
     app_settings = load_app_settings()
     mount_settings = load_mount_settings()
@@ -348,6 +349,8 @@ def load_remotes() -> List[RemoteInfo]:
         if remote_settings and not remote_settings.enabled:
             continue
         backend_type = section.get("type", "").lower()
+        if not include_incomplete and not _remote_section_is_configured(backend_type, dict(section.items())):
+            continue
         alias, provider = _parse_remote_name(name, backend_type)
         extra_flags_str = section.get("mount_flags", "").strip()
         extra_flags = shlex.split(extra_flags_str) if extra_flags_str else []
@@ -384,6 +387,12 @@ def load_remotes() -> List[RemoteInfo]:
             )
         )
     return [info for _order, _config_index, info in remotes]
+
+
+def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> bool:
+    if backend_type not in OAUTH_BACKEND_TYPES:
+        return bool(backend_type)
+    return bool(values.get("token") or values.get("service_account_file"))
 
 
 def find_rclone() -> str | None:
