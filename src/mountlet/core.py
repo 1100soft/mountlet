@@ -136,6 +136,13 @@ class StorageUsage:
         return min(round((used / self.total) * 100), 100)
 
 
+@dataclass(frozen=True)
+class DriveOAuthCredentials:
+    remote_name: str
+    client_id: str
+    client_secret: str
+
+
 PIDS: Dict[str, int] = {}
 
 
@@ -278,6 +285,26 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
         else:
             config.remove_option(remote_name, key)
     _save_config(config)
+
+
+def drive_oauth_credentials() -> List[DriveOAuthCredentials]:
+    config = _load_config()
+    credentials: List[DriveOAuthCredentials] = []
+    for remote_name in config.sections():
+        section = config[remote_name]
+        if section.get("type", "").lower() != "drive":
+            continue
+        client_id = section.get("client_id", "").strip()
+        client_secret = section.get("client_secret", "").strip()
+        if client_id and client_secret:
+            credentials.append(
+                DriveOAuthCredentials(
+                    remote_name=remote_name,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
+            )
+    return credentials
 
 
 def delete_rclone_remote(remote_name: str) -> bool:

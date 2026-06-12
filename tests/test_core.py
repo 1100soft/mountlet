@@ -215,6 +215,35 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Photos"])
 
+    def test_drive_oauth_credentials_reads_existing_drive_client_values(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+client_id = docs-client
+client_secret = docs-secret
+
+[Blank]
+type = drive
+client_id =
+client_secret =
+
+[Other]
+type = dropbox
+client_id = other-client
+client_secret = other-secret
+""".strip(),
+            )
+
+            credentials = core.drive_oauth_credentials()
+
+        self.assertEqual(len(credentials), 1)
+        self.assertEqual(credentials[0].remote_name, "Docs")
+        self.assertEqual(credentials[0].client_id, "docs-client")
+        self.assertEqual(credentials[0].client_secret, "docs-secret")
+
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")

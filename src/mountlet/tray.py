@@ -1154,14 +1154,22 @@ class NewRemoteWizard:
         client_secret.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
         client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
 
+        credential_source = self.qt.QComboBox()
+        for credentials in core.drive_oauth_credentials():
+            credential_source.addItem(f"Use credentials from {credentials.remote_name}", credentials)
+        credential_source.addItem("Enter client ID and secret", None)
+        credential_source.currentIndexChanged.connect(lambda _index=0: self._apply_credential_choice())
+
         self.fields = {
             "provider": provider,
             "name": name,
+            "credential_source": credential_source,
             "client_id": client_id,
             "client_secret": client_secret,
         }
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
+        form.addRow("Google credentials", credential_source)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
 
@@ -1182,6 +1190,7 @@ class NewRemoteWizard:
         root.addWidget(self.question_frame)
         root.addWidget(self.status)
         root.addWidget(buttons)
+        self._apply_credential_choice()
         self._update_action_button()
         self.dialog.adjustSize()
 
@@ -1269,9 +1278,21 @@ class NewRemoteWizard:
         self.action_button.setEnabled(False if busy else True)
         self.fields["name"].setEnabled(not busy and self._question is None)
         self.fields["provider"].setEnabled(not busy and self._question is None)
-        self.fields["client_id"].setEnabled(not busy and self._question is None)
-        self.fields["client_secret"].setEnabled(not busy and self._question is None)
+        self.fields["credential_source"].setEnabled(not busy and self._question is None)
+        self._apply_credential_choice(enabled=not busy and self._question is None)
         self.status.setText(self._busy_message() if busy else "")
+
+    def _apply_credential_choice(self, *, enabled: bool | None = None) -> None:
+        if not self.fields:
+            return
+        credentials = self.fields["credential_source"].currentData()
+        using_existing = isinstance(credentials, core.DriveOAuthCredentials)
+        if using_existing:
+            self.fields["client_id"].setText(credentials.client_id)
+            self.fields["client_secret"].setText(credentials.client_secret)
+        allow_edit = (enabled if enabled is not None else self._question is None) and not using_existing
+        self.fields["client_id"].setEnabled(allow_edit)
+        self.fields["client_secret"].setEnabled(allow_edit)
 
     def _busy_message(self) -> str:
         if self._question and self._option_name(self._question.option) == "config_is_local":

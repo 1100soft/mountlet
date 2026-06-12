@@ -222,6 +222,50 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_applies_reused_drive_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        credential_source = mock.Mock()
+        credential_source.currentData.return_value = core.DriveOAuthCredentials(
+            remote_name="Docs",
+            client_id="docs-client",
+            client_secret="docs-secret",
+        )
+        client_id = mock.Mock()
+        client_secret = mock.Mock()
+        wizard.fields = {
+            "credential_source": credential_source,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+
+        wizard._apply_credential_choice()
+
+        client_id.setText.assert_called_once_with("docs-client")
+        client_secret.setText.assert_called_once_with("docs-secret")
+        client_id.setEnabled.assert_called_once_with(False)
+        client_secret.setEnabled.assert_called_once_with(False)
+
+    def test_new_remote_wizard_allows_custom_drive_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        credential_source = mock.Mock()
+        credential_source.currentData.return_value = None
+        client_id = mock.Mock()
+        client_secret = mock.Mock()
+        wizard.fields = {
+            "credential_source": credential_source,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+
+        wizard._apply_credential_choice()
+
+        client_id.setText.assert_not_called()
+        client_secret.setText.assert_not_called()
+        client_id.setEnabled.assert_called_once_with(True)
+        client_secret.setEnabled.assert_called_once_with(True)
+
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
