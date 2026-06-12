@@ -396,6 +396,8 @@ class TrayTests(unittest.TestCase):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
         mountlet_window.window.isVisible.return_value = True
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
 
         with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
             with mock.patch.object(mountlet_window, "show") as show:
@@ -452,6 +454,8 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window = mock.Mock()
         mountlet_window.window.isVisible.return_value = True
         mountlet_window.window.isMinimized.return_value = False
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
 
         with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
             with mock.patch.object(mountlet_window, "refresh") as refresh:
@@ -572,6 +576,22 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_not_called()
         mountlet_window.window.activateWindow.assert_not_called()
         self.assertEqual(qt.QTimer.singleShot.call_count, 3)
+
+    def test_hide_window_stack_rejects_child_dialogs(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        child = mock.Mock()
+        owner = mock.Mock()
+        mountlet_window._child_dialogs = [child]
+        mountlet_window._child_dialog_owners = {child: owner}
+
+        mountlet_window._hide_window_stack()
+
+        owner._reject.assert_called_once_with()
+        child.hide.assert_not_called()
+        mountlet_window.window.hide.assert_called_once_with()
+        self.assertEqual(mountlet_window._child_dialogs, [])
+        self.assertEqual(mountlet_window._child_dialog_owners, {})
 
     def test_open_child_dialog_tracks_owner_and_uses_modeless_show(self):
         mountlet_window = object.__new__(tray.MountletWindow)

@@ -1911,20 +1911,15 @@ class MountletWindow:
     def show(self) -> None:
         if self._tray_is_quitting():
             return
-        if getattr(self, "_window_stack_hidden", False):
-            child_offsets = getattr(self, "_last_child_offsets", {})
-        else:
-            child_offsets = self._child_offsets()
         was_visible = self.is_visible()
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if was_visible and visible_on_current_desktop is False:
-            self._hide_window_stack()
+            self._close_child_dialogs()
+            self.window.hide()
             was_visible = False
         self.refresh()
         if not was_visible:
             self._position_near_tray()
-        self._restore_child_offsets(child_offsets)
-        self._show_child_dialogs()
         self._window_stack_hidden = False
         self._focus_window()
 
@@ -2023,28 +2018,32 @@ class MountletWindow:
         self._raise_child_windows()
 
     def _hide_window_stack(self) -> None:
-        self._last_child_offsets = self._child_offsets()
+        self._close_child_dialogs()
         self._window_stack_hidden = True
-        for child in reversed(getattr(self, "_child_dialogs", [])):
-            try:
-                child.hide()
-            except Exception:
-                pass
         try:
             self.window.hide()
         except Exception:
             pass
 
-    def _show_child_dialogs(self) -> None:
-        for child in getattr(self, "_child_dialogs", []):
+    def _close_child_dialogs(self) -> None:
+        dialogs = list(reversed(getattr(self, "_child_dialogs", [])))
+        owners = dict(getattr(self, "_child_dialog_owners", {}))
+        for child in dialogs:
+            owner = owners.get(child)
             try:
-                if child.isMinimized():
-                    child.showNormal()
+                if owner is not None and hasattr(owner, "_reject"):
+                    owner._reject()
+                elif hasattr(child, "reject"):
+                    child.reject()
                 else:
-                    child.show()
+                    child.close()
             except Exception:
-                pass
-        self._raise_child_windows()
+                try:
+                    child.close()
+                except Exception:
+                    pass
+        self._child_dialogs = []
+        self._child_dialog_owners = {}
 
     def _child_offsets(self) -> dict[Any, tuple[int, int]]:
         main_position = self._window_position(self.window)
