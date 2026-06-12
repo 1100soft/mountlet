@@ -554,7 +554,7 @@ class TrayTests(unittest.TestCase):
         child.show.assert_called_once_with()
         child.raise_.assert_called_once_with()
         child.activateWindow.assert_called_once_with()
-        self.assertEqual(qt.QTimer.singleShot.call_count, 2)
+        self.assertEqual(qt.QTimer.singleShot.call_count, 3)
 
     def test_open_child_dialog_tracks_owner_and_uses_modeless_show(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -571,6 +571,8 @@ class TrayTests(unittest.TestCase):
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
+        owner.dialog.setModal.assert_called_once_with(False)
+        owner.dialog.setWindowFlag.assert_called_once()
         owner.dialog.show.assert_called_once_with()
         raise_child.assert_called_once_with()
 

@@ -1867,6 +1867,7 @@ class MountletWindow:
         if timer is not None:
             timer.singleShot(0, self._raise_child_windows)
             timer.singleShot(100, self._raise_child_windows)
+            timer.singleShot(300, self._raise_child_windows)
 
     def _raise_active_child_window(self) -> None:
         self._raise_child_window(self._active_child_window())
@@ -1914,6 +1915,7 @@ class MountletWindow:
         try:
             dialog.setModal(False)
             dialog.setWindowModality(self.qt.Qt.WindowModality.NonModal)
+            dialog.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
         except Exception:
             pass
         if on_accepted is not None:
