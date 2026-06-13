@@ -295,6 +295,35 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(stopped)
         terminate.assert_called_once_with(1234)
 
+    def test_new_remote_wizard_checks_port_before_browser_continue(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Docs"
+        wizard._remote_type = "drive"
+        wizard._state = "state"
+        wizard._question = tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_is_local"})
+
+        with mock.patch.object(wizard, "_answer_value", return_value="true"):
+            with mock.patch.object(wizard, "_browser_auth_port_ready", return_value=False) as port_ready:
+                with mock.patch.object(wizard, "_run_rclone") as run_rclone:
+                    wizard._continue()
+
+        port_ready.assert_called_once_with()
+        run_rclone.assert_not_called()
+
+    def test_wait_for_local_port_retries_before_reporting_busy(self):
+        with mock.patch.object(
+            tray,
+            "_local_port_status",
+            side_effect=[(False, "busy"), (False, "busy"), (True, "")],
+        ) as status:
+            with mock.patch.object(tray.time, "sleep") as sleep:
+                available, owner_hint = tray._wait_for_local_port(53682, timeout_seconds=1)
+
+        self.assertTrue(available)
+        self.assertEqual(owner_hint, "")
+        self.assertEqual(status.call_count, 3)
+        sleep.assert_called()
+
     def test_new_remote_wizard_labels_drive_boolean_choices(self):
         wizard = object.__new__(tray.NewRemoteWizard)
 

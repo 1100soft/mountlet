@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import platform
 import re
@@ -246,14 +247,34 @@ def _local_port_available(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def _local_port_status(port: int, host: str = "127.0.0.1") -> tuple[bool, str]:
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        server.bind((host, port))
-    except OSError:
-        return False, _local_port_owner_hint(port)
-    finally:
-        server.close()
+    for family, address in _loopback_bind_addresses(port, host):
+        server = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            server.bind(address)
+        except OSError as exc:
+            if family == socket.AF_INET6 and exc.errno not in {errno.EADDRINUSE, errno.EACCES}:
+                continue
+            return False, _local_port_owner_hint(port)
+        finally:
+            server.close()
     return True, ""
+
+
+def _wait_for_local_port(port: int, *, timeout_seconds: float = 2.0) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout_seconds
+    owner_hint = ""
+    while True:
+        available, owner_hint = _local_port_status(port)
+        if available or time.monotonic() >= deadline:
+            return available, owner_hint
+        time.sleep(0.1)
+
+
+def _loopback_bind_addresses(port: int, host: str) -> list[tuple[int, tuple[Any, ...]]]:
+    addresses: list[tuple[int, tuple[Any, ...]]] = [(socket.AF_INET, (host, port))]
+    if host in {"127.0.0.1", "localhost"} and socket.has_ipv6:
+        addresses.append((socket.AF_INET6, ("::1", port)))
+    return addresses
 
 
 def _local_port_owner_hint(port: int) -> str:
@@ -1428,22 +1449,7 @@ class NewRemoteWizard:
                 "Enter the shared drive ID before connecting, or choose My Drive.",
             )
             return
-        if self._uses_browser_auth() and self._drive_local_auth:
-            port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
-        else:
-            port_available, owner_hint = True, ""
-        if not port_available:
-            if self._offer_to_stop_stuck_rclone(owner_hint):
-                port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
-        if not port_available:
-            details = f"\n\n{owner_hint}" if owner_hint else ""
-            self.qt.QMessageBox.warning(
-                self.dialog,
-                "Add remote",
-                f"rclone's browser sign-in port {RCLONE_OAUTH_LOCAL_PORT} is already in use.{details}\n\n"
-                "Finish or close any other rclone Google sign-in window, then try again. "
-                "You can also choose token authorization from another computer.",
-            )
+        if not self._browser_auth_port_ready():
             return
         self._run_rclone(
             lambda: rclone_wizard.start_remote(
@@ -1455,6 +1461,8 @@ class NewRemoteWizard:
 
     def _continue(self) -> None:
         answer = self._answer_value()
+        if self._answer_opens_browser_auth(answer) and not self._browser_auth_port_ready():
+            return
         self._run_rclone(
             lambda: rclone_wizard.continue_remote(
                 self._remote_name,
@@ -1505,6 +1513,8 @@ class NewRemoteWizard:
             return
         automatic_answer = self._automatic_answer(step)
         if automatic_answer is not None:
+            if self._answer_opens_browser_auth(automatic_answer, step.option) and not self._browser_auth_port_ready():
+                return
             self._state = step.state
             self._run_rclone(
                 lambda: rclone_wizard.continue_remote(
@@ -1520,6 +1530,30 @@ class NewRemoteWizard:
 
     def _uses_browser_auth(self) -> bool:
         return self._remote_type in OAUTH_REMOTE_TYPES
+
+    def _answer_opens_browser_auth(self, answer: str, option: dict[str, Any] | None = None) -> bool:
+        option = option or (self._question.option if self._question else None)
+        if not option or self._option_name(option) != "config_is_local":
+            return False
+        return answer.lower() in {"true", "1", "yes", "y"}
+
+    def _browser_auth_port_ready(self) -> bool:
+        if not (self._uses_browser_auth() and self._drive_local_auth):
+            return True
+        port_available, owner_hint = _wait_for_local_port(RCLONE_OAUTH_LOCAL_PORT)
+        if not port_available and self._offer_to_stop_stuck_rclone(owner_hint):
+            port_available, owner_hint = _wait_for_local_port(RCLONE_OAUTH_LOCAL_PORT)
+        if port_available:
+            return True
+        details = f"\n\n{owner_hint}" if owner_hint else ""
+        self.qt.QMessageBox.warning(
+            self.dialog,
+            "Add remote",
+            f"rclone's browser sign-in port {RCLONE_OAUTH_LOCAL_PORT} is already in use.{details}\n\n"
+            "Finish or close any other rclone sign-in window, then try again. "
+            "You can also choose token authorization from another computer.",
+        )
+        return False
 
     def _initial_config_args(self) -> list[str]:
         if self._remote_type == "drive":

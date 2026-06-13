@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import configparser
+import os
+import signal
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -167,6 +169,7 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
         with _ACTIVE_CONFIG_LOCK:
             _ACTIVE_CONFIG_PROCESSES[remote_name] = process
@@ -202,12 +205,22 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
 def _terminate_process(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
-    process.terminate()
+    _signal_process_tree(process, signal.SIGTERM)
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        process.kill()
+        _signal_process_tree(process, signal.SIGKILL)
         process.wait(timeout=2)
+
+
+def _signal_process_tree(process: subprocess.Popen[str], sig: int) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except OSError:
+        try:
+            process.send_signal(sig)
+        except OSError:
+            pass
 
 
 def _ensure_config_parent(config_path: Path) -> None:

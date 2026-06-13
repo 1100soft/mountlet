@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import signal
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,7 @@ class FakeProcess:
         self.communicate_timeout = None
         self.terminated = False
         self.killed = False
+        self.pid = 12345
 
     def communicate(self, *, timeout: int | None = None) -> tuple[str, str]:
         self.communicate_timeout = timeout
@@ -36,6 +38,12 @@ class FakeProcess:
 
     def kill(self) -> None:
         self.killed = True
+
+    def send_signal(self, sig: int) -> None:
+        if sig == signal.SIGTERM:
+            self.terminated = True
+        if sig == signal.SIGKILL:
+            self.killed = True
 
     def wait(self, timeout: int | None = None) -> int:
         self.returncode = -15 if self.terminated else self.returncode
@@ -98,6 +106,7 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertEqual(step.state, "next")
         self.assertEqual(step.option["Name"], "config_is_local")
         self.assertEqual(process.communicate_timeout, rclone_wizard.RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
     def test_continue_drive_remote_passes_state_and_result(self):
         with tempfile.TemporaryDirectory() as tempdir:
