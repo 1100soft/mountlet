@@ -31,6 +31,7 @@ class TrayTests(unittest.TestCase):
     def setUp(self) -> None:
         tray._dolphin_tab_target_cache = None
         tray._last_local_oauth_finished_at = 0.0
+        tray._wizard_pending_remote_names.clear()
 
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
         with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
@@ -270,7 +271,7 @@ class TrayTests(unittest.TestCase):
             provider="onedrive",
             backend_type="onedrive",
             mount_path="/tmp/cloud",
-            extra_info={"type": "onedrive", "token": "{}"},
+            extra_info={"type": "onedrive", "token": "{}", "drive_id": "drive", "drive_type": "personal"},
         )
 
         with mock.patch.object(tray.core, "load_remotes", return_value=[remote_without_token]):
@@ -283,6 +284,21 @@ class TrayTests(unittest.TestCase):
             self.assertEqual(tray._load_visible_remotes(), [])
 
         load_remotes.assert_called_once_with(include_incomplete=False)
+
+    def test_load_visible_remotes_hides_pending_wizard_entries(self):
+        remote = core.RemoteInfo(
+            name="Cloud",
+            alias="Cloud",
+            provider="onedrive",
+            backend_type="onedrive",
+            mount_path="/tmp/cloud",
+            extra_info={"type": "onedrive", "token": "{}", "drive_id": "drive", "drive_type": "personal"},
+        )
+        tray._wizard_pending_remote_names.add("Cloud")
+        self.addCleanup(tray._wizard_pending_remote_names.clear)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote]):
+            self.assertEqual(tray._load_visible_remotes(), [])
 
     def test_rclone_port_owner_pid_only_matches_rclone(self):
         self.assertEqual(tray._rclone_port_owner_pid("Process using the port: rclone (PID 1234)."), 1234)
@@ -331,6 +347,22 @@ class TrayTests(unittest.TestCase):
         run_rclone.assert_called_once_with(action, reset_port_retry=False)
         self.assertTrue(wizard._port_retry_attempted)
 
+    def test_new_remote_wizard_keeps_port_race_recoverable(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._last_rclone_action = object()
+        wizard._port_retry_attempted = False
+        wizard.status = mock.Mock()
+
+        with mock.patch.object(wizard, "_browser_auth_port_ready", return_value=False):
+            with mock.patch.object(wizard, "_run_rclone") as run_rclone:
+                recovered = wizard._recover_from_rclone_port_error(
+                    "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
+                )
+
+        self.assertTrue(recovered)
+        run_rclone.assert_not_called()
+        wizard.status.setText.assert_called_once()
+
     def test_new_remote_wizard_checks_port_before_browser_continue(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_name = "Docs"
@@ -345,6 +377,26 @@ class TrayTests(unittest.TestCase):
 
         port_ready.assert_called_once_with()
         run_rclone.assert_not_called()
+
+    def test_new_remote_wizard_question_status_says_setup_is_incomplete(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.qt = SimpleNamespace(
+            QLabel=mock.Mock(side_effect=lambda text="": mock.Mock()),
+            Qt=SimpleNamespace(TextInteractionFlag=SimpleNamespace(TextBrowserInteraction=1)),
+        )
+        wizard.question_layout = mock.Mock()
+        wizard.question_frame = mock.Mock()
+        wizard.status = mock.Mock()
+        wizard.dialog = mock.Mock()
+        wizard._answer_kind = ""
+        wizard._answer_field = mock.Mock()
+
+        with mock.patch.object(wizard, "_clear_layout"):
+            with mock.patch.object(wizard, "_answer_widget", return_value=("text", wizard._answer_field)):
+                with mock.patch.object(wizard, "_update_action_button"):
+                    wizard._show_question(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "drive_id"}))
+
+        wizard.status.setText.assert_called_once_with("Setup is not complete yet. Finish this prompt to continue.")
 
     def test_wait_for_local_port_retries_before_reporting_busy(self):
         with mock.patch.object(

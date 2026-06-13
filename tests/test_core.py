@@ -186,6 +186,16 @@ token = REDACTED
 [PartialDropbox]
 type = dropbox
 
+[PartialOneDrive]
+type = onedrive
+token = REDACTED
+
+[ReadyOneDrive]
+type = onedrive
+token = REDACTED
+drive_id = drive
+drive_type = personal
+
 [WebDav]
 type = webdav
 url = https://example.test
@@ -194,7 +204,7 @@ url = https://example.test
 
             remotes = core.load_remotes(include_incomplete=False)
 
-        self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "WebDav"])
+        self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "ReadyOneDrive", "WebDav"])
 
     def test_editable_rclone_fields_are_safe_and_saveable(self):
         with tempfile.TemporaryDirectory() as tempdir:

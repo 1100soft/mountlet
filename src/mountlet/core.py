@@ -392,6 +392,8 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
 def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> bool:
     if backend_type not in OAUTH_BACKEND_TYPES:
         return bool(backend_type)
+    if backend_type == "onedrive":
+        return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))
     return bool(values.get("token") or values.get("service_account_file"))
 
 

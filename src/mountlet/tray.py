@@ -88,8 +88,8 @@ FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
-RCLONE_OAUTH_PORT_WAIT_SECONDS = 20.0
-RCLONE_OAUTH_COOLDOWN_SECONDS = 8.0
+RCLONE_OAUTH_PORT_WAIT_SECONDS = 60.0
+RCLONE_OAUTH_COOLDOWN_SECONDS = 15.0
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Google Drive", "drive"),
     ("Dropbox", "dropbox"),
@@ -101,6 +101,7 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 _last_local_oauth_finished_at = 0.0
+_wizard_pending_remote_names: set[str] = set()
 
 
 class TrayDependencyError(RuntimeError):
@@ -229,7 +230,11 @@ def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, uniq
 
 
 def _load_visible_remotes() -> list[core.RemoteInfo]:
-    return core.load_remotes(include_incomplete=False)
+    return [
+        remote
+        for remote in core.load_remotes(include_incomplete=False)
+        if remote.name not in _wizard_pending_remote_names
+    ]
 
 
 def _can_connect_unix_socket(path: str) -> bool:
@@ -1544,6 +1549,7 @@ class NewRemoteWizard:
             return
         if not self._browser_auth_port_ready():
             return
+        _wizard_pending_remote_names.add(name)
         self._run_rclone(
             lambda: rclone_wizard.start_remote(
                 name,
@@ -1692,13 +1698,17 @@ class NewRemoteWizard:
             pass
 
     def _recover_from_rclone_port_error(self, message: str) -> bool:
-        if self._port_retry_attempted or not _is_rclone_auth_port_error(message):
+        if not _is_rclone_auth_port_error(message):
             return False
+        if self._port_retry_attempted:
+            self.status.setText("The browser sign-in is still finishing. Wait a moment, then try again.")
+            return True
         self._port_retry_attempted = True
         if self._browser_auth_port_ready() and self._last_rclone_action is not None:
             self._run_rclone(self._last_rclone_action, reset_port_retry=False)
             return True
-        return False
+        self.status.setText("The browser sign-in is still finishing. Wait a moment, then try again.")
+        return True
 
     def _initial_config_args(self) -> list[str]:
         if self._remote_type == "drive":
@@ -1775,6 +1785,7 @@ class NewRemoteWizard:
 
     def _finish_success(self) -> None:
         self._completed = True
+        _wizard_pending_remote_names.discard(self._remote_name)
         self.dialog.accept()
 
     def _set_busy(self, busy: bool, *, message: str | None = None) -> None:
@@ -1903,6 +1914,7 @@ class NewRemoteWizard:
         self.question_layout.addRow(help_text)
         self.question_layout.addRow("Answer", self._answer_field)
         self.question_frame.show()
+        self.status.setText("Setup is not complete yet. Finish this prompt to continue.")
         self._update_action_button()
         self.dialog.adjustSize()
 
@@ -2052,6 +2064,7 @@ class NewRemoteWizard:
     def _cleanup_incomplete_remote(self) -> None:
         if not self._remote_name or self._completed:
             return
+        _wizard_pending_remote_names.discard(self._remote_name)
         rclone_wizard.cancel_remote_config(self._remote_name)
         core.delete_rclone_remote(self._remote_name)
         settings = load_mount_settings()
@@ -2063,9 +2076,7 @@ class NewRemoteWizard:
         for remote in core.load_remotes():
             if remote.name != self._remote_name:
                 continue
-            if remote.backend_type not in core.OAUTH_BACKEND_TYPES:
-                return bool(remote.backend_type)
-            return bool(remote.extra_info.get("token") or remote.extra_info.get("service_account_file"))
+            return core._remote_section_is_configured(remote.backend_type, remote.extra_info)
         return False
 
     def _clear_layout(self, layout: Any) -> None:
