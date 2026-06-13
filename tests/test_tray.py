@@ -154,6 +154,16 @@ class TrayTests(unittest.TestCase):
             "Process using the port: rclone (PID 1767993).",
         )
 
+    def test_proc_listening_socket_inodes_finds_listening_port(self):
+        tcp = (
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0100007F:D1B2 00000000:0000 0A 00000000:00000000 00:00000000 "
+            "00000000 1000 0 98765 1 0000000000000000 100 0 0 10 0\n"
+        )
+
+        with mock.patch.object(Path, "read_text", side_effect=[tcp, ""]):
+            self.assertEqual(tray._proc_listening_socket_inodes(53682), {"98765"})
+
     def test_config_bool_accepts_common_true_values(self):
         for value in ("true", "True", "1", "yes", "on"):
             self.assertTrue(tray._config_bool(value))
@@ -277,6 +287,15 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._rclone_port_owner_pid("Process using the port: rclone (PID 1234)."), 1234)
         self.assertIsNone(tray._rclone_port_owner_pid("Process using the port: python (PID 1234)."))
 
+    def test_is_rclone_auth_port_error_matches_rclone_bind_failure(self):
+        self.assertTrue(
+            tray._is_rclone_auth_port_error(
+                "config failed to refresh token: failed to start auth webserver: "
+                "listen tcp 127.0.0.1:53682: bind: address already in use"
+            )
+        )
+        self.assertFalse(tray._is_rclone_auth_port_error("listen tcp 127.0.0.1:12345: bind: address already in use"))
+
     def test_new_remote_wizard_can_offer_to_stop_stuck_rclone(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard.dialog = mock.Mock()
@@ -294,6 +313,22 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(stopped)
         terminate.assert_called_once_with(1234)
+
+    def test_new_remote_wizard_recovers_once_from_rclone_port_error(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        action = object()
+        wizard._last_rclone_action = action
+        wizard._port_retry_attempted = False
+
+        with mock.patch.object(wizard, "_browser_auth_port_ready", return_value=True):
+            with mock.patch.object(wizard, "_run_rclone") as run_rclone:
+                recovered = wizard._recover_from_rclone_port_error(
+                    "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
+                )
+
+        self.assertTrue(recovered)
+        run_rclone.assert_called_once_with(action, reset_port_retry=False)
+        self.assertTrue(wizard._port_retry_attempted)
 
     def test_new_remote_wizard_checks_port_before_browser_continue(self):
         wizard = object.__new__(tray.NewRemoteWizard)

@@ -299,7 +299,7 @@ def _local_port_owner_hint(port: int) -> str:
         output = completed.stdout.strip()
         if completed.returncode == 0 and output:
             return _summarize_port_owner(output)
-    return ""
+    return _proc_local_port_owner_hint(port)
 
 
 def _summarize_port_owner(output: str) -> str:
@@ -318,9 +318,80 @@ def _summarize_port_owner(output: str) -> str:
     return f"Port owner: {owner}"
 
 
+def _proc_local_port_owner_hint(port: int) -> str:
+    inodes = _proc_listening_socket_inodes(port)
+    if not inodes:
+        return ""
+    for proc_entry in Path("/proc").iterdir():
+        if not proc_entry.name.isdigit():
+            continue
+        fd_dir = proc_entry / "fd"
+        try:
+            fds = list(fd_dir.iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            match = re.fullmatch(r"socket:\[(\d+)\]", target)
+            if not match or match.group(1) not in inodes:
+                continue
+            return f"Process using the port: {_proc_comm(proc_entry)} (PID {proc_entry.name})."
+    return ""
+
+
+def _proc_listening_socket_inodes(port: int) -> set[str]:
+    inodes: set[str] = set()
+    port_hex = f"{port:04X}"
+    for path in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            columns = line.split()
+            if len(columns) <= 9:
+                continue
+            local_address = columns[1]
+            state = columns[3]
+            if state != "0A":
+                continue
+            if not local_address.upper().endswith(f":{port_hex}"):
+                continue
+            inodes.add(columns[9])
+    return inodes
+
+
+def _proc_comm(proc_entry: Path) -> str:
+    try:
+        return (proc_entry / "comm").read_text(encoding="utf-8").strip() or proc_entry.name
+    except OSError:
+        return proc_entry.name
+
+
+def _port_owner_from_hint(owner_hint: str) -> tuple[str, int] | None:
+    match = re.search(r"Process using the port: (.+?) \(PID (\d+)\)", owner_hint)
+    if not match:
+        return None
+    name, pid = match.groups()
+    return name, int(pid)
+
+
 def _rclone_port_owner_pid(owner_hint: str) -> int | None:
-    match = re.search(r"Process using the port: rclone \(PID (\d+)\)", owner_hint)
-    return int(match.group(1)) if match else None
+    owner = _port_owner_from_hint(owner_hint)
+    if owner is None:
+        return None
+    name, pid = owner
+    return pid if "rclone" in name.lower() else None
+
+
+def _is_rclone_auth_port_error(message: str) -> bool:
+    text = message.lower()
+    return "auth webserver" in text and "53682" in text and (
+        "already in use" in text or "operation not permitted" in text
+    )
 
 
 def _terminate_process_id(pid: int) -> bool:
@@ -1250,6 +1321,8 @@ class NewRemoteWizard:
         self._answer_group: Any | None = None
         self._completed = False
         self._cancelled = False
+        self._last_rclone_action: Any | None = None
+        self._port_retry_attempted = False
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
         self._bridge.mount_finished.connect(self._handle_mount_finished)
@@ -1473,7 +1546,10 @@ class NewRemoteWizard:
             )
         )
 
-    def _run_rclone(self, action: Any) -> None:
+    def _run_rclone(self, action: Any, *, reset_port_retry: bool = True) -> None:
+        self._last_rclone_action = action
+        if reset_port_retry:
+            self._port_retry_attempted = False
         self._set_busy(True)
 
         def worker() -> None:
@@ -1489,6 +1565,8 @@ class NewRemoteWizard:
             return
         self._set_busy(False)
         if error is not None:
+            if self._recover_from_rclone_port_error(str(error)):
+                return
             self._cleanup_incomplete_remote()
             self.qt.QMessageBox.warning(self.dialog, "Add remote", str(error))
             return
@@ -1553,6 +1631,15 @@ class NewRemoteWizard:
             "Finish or close any other rclone sign-in window, then try again. "
             "You can also choose token authorization from another computer.",
         )
+        return False
+
+    def _recover_from_rclone_port_error(self, message: str) -> bool:
+        if self._port_retry_attempted or not _is_rclone_auth_port_error(message):
+            return False
+        self._port_retry_attempted = True
+        if self._browser_auth_port_ready() and self._last_rclone_action is not None:
+            self._run_rclone(self._last_rclone_action, reset_port_retry=False)
+            return True
         return False
 
     def _initial_config_args(self) -> list[str]:
@@ -1647,15 +1734,16 @@ class NewRemoteWizard:
         self.status.setText((message or self._busy_message()) if busy else "")
 
     def _offer_to_stop_stuck_rclone(self, owner_hint: str) -> bool:
-        pid = _rclone_port_owner_pid(owner_hint)
-        if pid is None:
+        owner = _port_owner_from_hint(owner_hint)
+        if owner is None:
             return False
+        name, pid = owner
         answer = self.qt.QMessageBox.question(
             self.dialog,
             "Add remote",
-            f"rclone is still using sign-in port {RCLONE_OAUTH_LOCAL_PORT}.\n\n"
-            "This usually means a previous browser sign-in is still waiting.\n\n"
-            "Stop that rclone sign-in process and try again?",
+            f"{name} is using sign-in port {RCLONE_OAUTH_LOCAL_PORT}.\n\n"
+            "If this is a previous rclone sign-in attempt, stopping it should free the port.\n\n"
+            f"Stop process {pid} and try again?",
             self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
             self.qt.QMessageBox.StandardButton.Yes,
         )
