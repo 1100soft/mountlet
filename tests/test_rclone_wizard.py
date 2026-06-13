@@ -196,6 +196,18 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertNotIn("Docs", rclone_wizard._ACTIVE_CONFIG_PROCESSES)
 
+    def test_cancel_all_remote_configs_terminates_active_processes(self):
+        docs = FakeProcess()
+        photos = FakeProcess()
+        rclone_wizard._ACTIVE_CONFIG_PROCESSES["Docs"] = docs
+        rclone_wizard._ACTIVE_CONFIG_PROCESSES["Photos"] = photos
+
+        rclone_wizard.cancel_all_remote_configs()
+
+        self.assertTrue(docs.terminated)
+        self.assertTrue(photos.terminated)
+        self.assertEqual(rclone_wizard._ACTIVE_CONFIG_PROCESSES, {})
+
 
 if __name__ == "__main__":
     unittest.main()

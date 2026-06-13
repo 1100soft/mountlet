@@ -30,7 +30,6 @@ class _FakeWindow:
 class TrayTests(unittest.TestCase):
     def setUp(self) -> None:
         tray._dolphin_tab_target_cache = None
-        tray._last_local_oauth_finished_at = 0.0
         tray._wizard_pending_remote_names.clear()
 
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
@@ -398,39 +397,29 @@ class TrayTests(unittest.TestCase):
 
         wizard.status.setText.assert_called_once_with("Setup is not complete yet. Finish this prompt to continue.")
 
-    def test_wait_for_local_port_retries_before_reporting_busy(self):
-        with mock.patch.object(
-            tray,
-            "_local_port_status",
-            side_effect=[(False, "busy"), (False, "busy"), (True, "")],
-        ) as status:
-            with mock.patch.object(tray.time, "sleep") as sleep:
-                available, owner_hint = tray._wait_for_local_port(53682, timeout_seconds=1)
-
-        self.assertTrue(available)
-        self.assertEqual(owner_hint, "")
-        self.assertEqual(status.call_count, 3)
-        sleep.assert_called()
-
-    def test_local_oauth_cooldown_tracks_recent_browser_sign_in(self):
-        with mock.patch.object(tray.time, "monotonic", side_effect=[100.0, 103.0]):
-            tray._record_local_oauth_finished()
-            remaining = tray._local_oauth_cooldown_remaining()
-
-        self.assertEqual(remaining, tray.RCLONE_OAUTH_COOLDOWN_SECONDS - 3.0)
-
-    def test_browser_auth_port_waits_for_previous_local_oauth(self):
+    def test_browser_auth_port_checks_once_before_launch(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "onedrive"
         wizard._drive_local_auth = True
         wizard.status = mock.Mock()
-        wizard.qt = SimpleNamespace(QApplication=SimpleNamespace(processEvents=mock.Mock()))
 
-        with mock.patch.object(wizard, "_wait_for_previous_local_oauth") as cooldown:
-            with mock.patch.object(tray, "_wait_for_local_port", return_value=(True, "")):
-                self.assertTrue(wizard._browser_auth_port_ready())
+        with mock.patch.object(tray, "_local_port_status", return_value=(True, "")) as port_status:
+            self.assertTrue(wizard._browser_auth_port_ready())
 
-        cooldown.assert_called_once_with()
+        port_status.assert_called_once_with(tray.RCLONE_OAUTH_LOCAL_PORT)
+        wizard.status.setText.assert_called_once_with("")
+
+    def test_new_remote_wizard_can_hide_setup_view(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.initial_frame = mock.Mock()
+        wizard.question_frame = mock.Mock()
+
+        wizard._show_setup_view(False)
+        wizard.initial_frame.setVisible.assert_called_once_with(False)
+        wizard.question_frame.hide.assert_not_called()
+
+        wizard._show_setup_view(True)
+        wizard.question_frame.hide.assert_called_once_with()
 
     def test_new_remote_wizard_labels_drive_boolean_choices(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -827,9 +816,11 @@ class TrayTests(unittest.TestCase):
         tray_app.tray = mock.Mock()
         tray_app.app = mock.Mock()
 
-        tray_app.request_quit()
+        with mock.patch.object(tray.rclone_wizard, "cancel_all_remote_configs") as cancel_configs:
+            tray_app.request_quit()
 
         self.assertTrue(tray_app._quitting)
+        cancel_configs.assert_called_once_with()
         tray_app.timer.stop.assert_called_once_with()
         tray_app.main_window.prepare_quit.assert_called_once_with()
         tray_app.tray.hide.assert_called_once_with()

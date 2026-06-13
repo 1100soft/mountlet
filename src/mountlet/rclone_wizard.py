@@ -120,6 +120,15 @@ def cancel_remote_config(remote_name: str) -> bool:
     return True
 
 
+def cancel_all_remote_configs() -> None:
+    with _ACTIVE_CONFIG_LOCK:
+        processes = list(_ACTIVE_CONFIG_PROCESSES.values())
+        _ACTIVE_CONFIG_PROCESSES.clear()
+    for process in processes:
+        if process.poll() is None:
+            _terminate_process(process)
+
+
 def _drive_config_args(
     *,
     client_id: str = "",
@@ -278,6 +287,7 @@ __all__ = [
     "RcloneWizardError",
     "continue_drive_remote",
     "continue_remote",
+    "cancel_all_remote_configs",
     "cancel_remote_config",
     "start_drive_remote",
     "start_remote",
