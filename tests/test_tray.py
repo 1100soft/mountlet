@@ -30,6 +30,7 @@ class _FakeWindow:
 class TrayTests(unittest.TestCase):
     def setUp(self) -> None:
         tray._dolphin_tab_target_cache = None
+        tray._last_local_oauth_finished_at = 0.0
 
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
         with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
@@ -358,6 +359,26 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(owner_hint, "")
         self.assertEqual(status.call_count, 3)
         sleep.assert_called()
+
+    def test_local_oauth_cooldown_tracks_recent_browser_sign_in(self):
+        with mock.patch.object(tray.time, "monotonic", side_effect=[100.0, 103.0]):
+            tray._record_local_oauth_finished()
+            remaining = tray._local_oauth_cooldown_remaining()
+
+        self.assertEqual(remaining, tray.RCLONE_OAUTH_COOLDOWN_SECONDS - 3.0)
+
+    def test_browser_auth_port_waits_for_previous_local_oauth(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "onedrive"
+        wizard._drive_local_auth = True
+        wizard.status = mock.Mock()
+        wizard.qt = SimpleNamespace(QApplication=SimpleNamespace(processEvents=mock.Mock()))
+
+        with mock.patch.object(wizard, "_wait_for_previous_local_oauth") as cooldown:
+            with mock.patch.object(tray, "_wait_for_local_port", return_value=(True, "")):
+                self.assertTrue(wizard._browser_auth_port_ready())
+
+        cooldown.assert_called_once_with()
 
     def test_new_remote_wizard_labels_drive_boolean_choices(self):
         wizard = object.__new__(tray.NewRemoteWizard)

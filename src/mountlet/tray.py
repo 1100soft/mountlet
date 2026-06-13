@@ -88,6 +88,8 @@ FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
+RCLONE_OAUTH_PORT_WAIT_SECONDS = 20.0
+RCLONE_OAUTH_COOLDOWN_SECONDS = 8.0
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Google Drive", "drive"),
     ("Dropbox", "dropbox"),
@@ -98,6 +100,7 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("WebDAV", "webdav"),
 )
 OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+_last_local_oauth_finished_at = 0.0
 
 
 class TrayDependencyError(RuntimeError):
@@ -260,13 +263,20 @@ def _local_port_status(port: int, host: str = "127.0.0.1") -> tuple[bool, str]:
     return True, ""
 
 
-def _wait_for_local_port(port: int, *, timeout_seconds: float = 2.0) -> tuple[bool, str]:
+def _wait_for_local_port(
+    port: int,
+    *,
+    timeout_seconds: float = 2.0,
+    on_wait: Any | None = None,
+) -> tuple[bool, str]:
     deadline = time.monotonic() + timeout_seconds
     owner_hint = ""
     while True:
         available, owner_hint = _local_port_status(port)
         if available or time.monotonic() >= deadline:
             return available, owner_hint
+        if on_wait is not None:
+            on_wait(max(0.0, deadline - time.monotonic()))
         time.sleep(0.1)
 
 
@@ -392,6 +402,16 @@ def _is_rclone_auth_port_error(message: str) -> bool:
     return "auth webserver" in text and "53682" in text and (
         "already in use" in text or "operation not permitted" in text
     )
+
+
+def _record_local_oauth_finished() -> None:
+    global _last_local_oauth_finished_at
+    _last_local_oauth_finished_at = time.monotonic()
+
+
+def _local_oauth_cooldown_remaining() -> float:
+    elapsed = time.monotonic() - _last_local_oauth_finished_at
+    return max(0.0, RCLONE_OAUTH_COOLDOWN_SECONDS - elapsed)
 
 
 def _terminate_process_id(pid: int) -> bool:
@@ -1584,6 +1604,8 @@ class NewRemoteWizard:
                     f"{self._provider_label(self._remote_type)} authorization did not finish. No remote was added.",
                 )
                 return
+            if self._uses_browser_auth() and getattr(self, "_drive_local_auth", True):
+                _record_local_oauth_finished()
             if self._connect_after_create:
                 self._mount_created_remote()
                 return
@@ -1607,7 +1629,7 @@ class NewRemoteWizard:
         self._show_question(step)
 
     def _uses_browser_auth(self) -> bool:
-        return self._remote_type in OAUTH_REMOTE_TYPES
+        return getattr(self, "_remote_type", "") in OAUTH_REMOTE_TYPES
 
     def _answer_opens_browser_auth(self, answer: str, option: dict[str, Any] | None = None) -> bool:
         option = option or (self._question.option if self._question else None)
@@ -1618,10 +1640,20 @@ class NewRemoteWizard:
     def _browser_auth_port_ready(self) -> bool:
         if not (self._uses_browser_auth() and self._drive_local_auth):
             return True
-        port_available, owner_hint = _wait_for_local_port(RCLONE_OAUTH_LOCAL_PORT)
+        self._wait_for_previous_local_oauth()
+        port_available, owner_hint = _wait_for_local_port(
+            RCLONE_OAUTH_LOCAL_PORT,
+            timeout_seconds=RCLONE_OAUTH_PORT_WAIT_SECONDS,
+            on_wait=self._show_port_wait_status,
+        )
         if not port_available and self._offer_to_stop_stuck_rclone(owner_hint):
-            port_available, owner_hint = _wait_for_local_port(RCLONE_OAUTH_LOCAL_PORT)
+            port_available, owner_hint = _wait_for_local_port(
+                RCLONE_OAUTH_LOCAL_PORT,
+                timeout_seconds=RCLONE_OAUTH_PORT_WAIT_SECONDS,
+                on_wait=self._show_port_wait_status,
+            )
         if port_available:
+            self.status.setText("")
             return True
         details = f"\n\n{owner_hint}" if owner_hint else ""
         self.qt.QMessageBox.warning(
@@ -1632,6 +1664,32 @@ class NewRemoteWizard:
             "You can also choose token authorization from another computer.",
         )
         return False
+
+    def _wait_for_previous_local_oauth(self) -> None:
+        while True:
+            remaining = _local_oauth_cooldown_remaining()
+            if remaining <= 0:
+                return
+            self.status.setText(
+                f"Waiting {remaining:.0f} seconds for the previous browser sign-in to release rclone's callback port..."
+            )
+            self._process_gui_events()
+            time.sleep(min(0.1, remaining))
+
+    def _show_port_wait_status(self, remaining: float) -> None:
+        self.status.setText(
+            f"Waiting for rclone's browser sign-in port to become available ({remaining:.0f} seconds left)..."
+        )
+        self._process_gui_events()
+
+    def _process_gui_events(self) -> None:
+        app = getattr(self.qt, "QApplication", None)
+        if app is None:
+            return
+        try:
+            app.processEvents()
+        except Exception:
+            pass
 
     def _recover_from_rclone_port_error(self, message: str) -> bool:
         if self._port_retry_attempted or not _is_rclone_auth_port_error(message):
