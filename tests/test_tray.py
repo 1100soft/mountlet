@@ -273,20 +273,27 @@ class TrayTests(unittest.TestCase):
 
         load_remotes.assert_called_once_with(include_incomplete=False)
 
-    def test_new_remote_wizard_progress_is_estimated_for_dynamic_oauth_flows(self):
+    def test_rclone_port_owner_pid_only_matches_rclone(self):
+        self.assertEqual(tray._rclone_port_owner_pid("Process using the port: rclone (PID 1234)."), 1234)
+        self.assertIsNone(tray._rclone_port_owner_pid("Process using the port: python (PID 1234)."))
+
+    def test_new_remote_wizard_can_offer_to_stop_stuck_rclone(self):
         wizard = object.__new__(tray.NewRemoteWizard)
-        wizard._remote_type = "onedrive"
-        wizard._setup_step = 1
-        wizard._estimated_steps = wizard._estimated_setup_steps()
-        wizard.progress_label = mock.Mock()
-        wizard.progress = mock.Mock()
+        wizard.dialog = mock.Mock()
+        yes = 1
+        no = 2
+        wizard.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=yes, No=no),
+                question=mock.Mock(return_value=yes),
+            )
+        )
 
-        wizard._advance_progress("Choose account type")
+        with mock.patch.object(tray, "_terminate_process_id", return_value=True) as terminate:
+            stopped = wizard._offer_to_stop_stuck_rclone("Process using the port: rclone (PID 1234).")
 
-        wizard.progress_label.setText.assert_called_once_with("Step 2 of about 4: Choose account type")
-        wizard.progress.setValue.assert_called_once_with(50)
-        wizard.progress_label.show.assert_called_once_with()
-        wizard.progress.show.assert_called_once_with()
+        self.assertTrue(stopped)
+        terminate.assert_called_once_with(1234)
 
     def test_new_remote_wizard_labels_drive_boolean_choices(self):
         wizard = object.__new__(tray.NewRemoteWizard)

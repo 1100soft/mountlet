@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import configparser
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ class RcloneWizardError(RuntimeError):
 
 
 RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS = 300
+_ACTIVE_CONFIG_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+_ACTIVE_CONFIG_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,15 @@ def continue_remote(
     )
 
 
+def cancel_remote_config(remote_name: str) -> bool:
+    with _ACTIVE_CONFIG_LOCK:
+        process = _ACTIVE_CONFIG_PROCESSES.pop(remote_name, None)
+    if process is None or process.poll() is not None:
+        return False
+    _terminate_process(process)
+    return True
+
+
 def _drive_config_args(
     *,
     client_id: str = "",
@@ -150,23 +162,30 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
         *args,
     ]
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS,
         )
+        with _ACTIVE_CONFIG_LOCK:
+            _ACTIVE_CONFIG_PROCESSES[remote_name] = process
+        stdout, stderr = process.communicate(timeout=RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
+        _terminate_process(process)
         raise RcloneWizardError(
             "Browser sign-in timed out. Close any provider sign-in tabs that are still open and try again."
         ) from exc
     except OSError as exc:
         raise RcloneWizardError(f"Could not run rclone: {exc}") from exc
+    finally:
+        with _ACTIVE_CONFIG_LOCK:
+            if _ACTIVE_CONFIG_PROCESSES.get(remote_name) is locals().get("process"):
+                _ACTIVE_CONFIG_PROCESSES.pop(remote_name, None)
 
-    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part.strip())
-    if completed.returncode != 0:
-        raise RcloneWizardError(output.strip() or f"rclone exited with code {completed.returncode}.")
+    output = "\n".join(part for part in (stdout, stderr) if part.strip())
+    if process.returncode != 0:
+        raise RcloneWizardError(output.strip() or f"rclone exited with code {process.returncode}.")
 
     if not output.strip():
         return RcloneConfigStep(state="", option={})
@@ -178,6 +197,17 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
         error=str(data.get("Error", "")),
         result=str(data.get("Result", "")),
     )
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
 
 
 def _ensure_config_parent(config_path: Path) -> None:
@@ -235,6 +265,7 @@ __all__ = [
     "RcloneWizardError",
     "continue_drive_remote",
     "continue_remote",
+    "cancel_remote_config",
     "start_drive_remote",
     "start_remote",
 ]

@@ -8,10 +8,12 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import threading
+import time
 from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
@@ -293,6 +295,31 @@ def _summarize_port_owner(output: str) -> str:
         name, pid = command_match.groups()
         return f"Process using the port: {name} (PID {pid})."
     return f"Port owner: {owner}"
+
+
+def _rclone_port_owner_pid(owner_hint: str) -> int | None:
+    match = re.search(r"Process using the port: rclone \(PID (\d+)\)", owner_hint)
+    return int(match.group(1)) if match else None
+
+
+def _terminate_process_id(pid: int) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    for _attempt in range(20):
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        return False
+    return True
 
 
 def _desktop_session_available() -> tuple[bool, str]:
@@ -1201,8 +1228,7 @@ class NewRemoteWizard:
         self._answer_field: Any | None = None
         self._answer_group: Any | None = None
         self._completed = False
-        self._setup_step = 0
-        self._estimated_steps = 1
+        self._cancelled = False
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
         self._bridge.mount_finished.connect(self._handle_mount_finished)
@@ -1344,15 +1370,6 @@ class NewRemoteWizard:
         self.status.setStyleSheet(_muted_text_style(self.status))
         self.status.setWordWrap(True)
 
-        self.progress_label = self.qt.QLabel("")
-        self.progress_label.setStyleSheet(_muted_text_style(self.progress_label))
-        self.progress_label.setWordWrap(True)
-        self.progress_label.hide()
-        self.progress = self.qt.QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.hide()
-
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
         self.action_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
         self.action_button.clicked.connect(self._next)
@@ -1360,8 +1377,6 @@ class NewRemoteWizard:
 
         root.addWidget(frame)
         root.addWidget(self.question_frame)
-        root.addWidget(self.progress_label)
-        root.addWidget(self.progress)
         root.addWidget(self.status)
         root.addWidget(buttons)
         self._apply_credential_choice()
@@ -1398,6 +1413,7 @@ class NewRemoteWizard:
             self.qt.QMessageBox.warning(self.dialog, "Add remote", f"{name} already exists.")
             return
         self._remote_name = name
+        self._cancelled = False
         self._remote_type = self.fields["provider"].currentData() or "drive"
         self._drive_client_id = self.fields["client_id"].text()
         self._drive_client_secret = self.fields["client_secret"].text()
@@ -1417,6 +1433,9 @@ class NewRemoteWizard:
         else:
             port_available, owner_hint = True, ""
         if not port_available:
+            if self._offer_to_stop_stuck_rclone(owner_hint):
+                port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
+        if not port_available:
             details = f"\n\n{owner_hint}" if owner_hint else ""
             self.qt.QMessageBox.warning(
                 self.dialog,
@@ -1426,9 +1445,6 @@ class NewRemoteWizard:
                 "You can also choose token authorization from another computer.",
             )
             return
-        self._setup_step = 1
-        self._estimated_steps = self._estimated_setup_steps()
-        self._set_progress("Starting rclone setup")
         self._run_rclone(
             lambda: rclone_wizard.start_remote(
                 name,
@@ -1461,6 +1477,8 @@ class NewRemoteWizard:
         threading.Thread(target=worker, daemon=True).start()
 
     def _handle_command_finished(self, step: object, error: object) -> None:
+        if getattr(self, "_cancelled", False):
+            return
         self._set_busy(False)
         if error is not None:
             self._cleanup_incomplete_remote()
@@ -1472,7 +1490,6 @@ class NewRemoteWizard:
         if step.error:
             self.status.setText(step.error)
         if step.complete:
-            self._set_progress("Setup complete", complete=True)
             if not self._created_remote_has_credentials():
                 self._cleanup_incomplete_remote()
                 self.qt.QMessageBox.warning(
@@ -1488,7 +1505,6 @@ class NewRemoteWizard:
             return
         automatic_answer = self._automatic_answer(step)
         if automatic_answer is not None:
-            self._advance_progress(self._question_title(step.option))
             self._state = step.state
             self._run_rclone(
                 lambda: rclone_wizard.continue_remote(
@@ -1500,7 +1516,6 @@ class NewRemoteWizard:
                 )
             )
             return
-        self._advance_progress(self._question_title(step.option))
         self._show_question(step)
 
     def _uses_browser_auth(self) -> bool:
@@ -1583,31 +1598,6 @@ class NewRemoteWizard:
         self._completed = True
         self.dialog.accept()
 
-    def _estimated_setup_steps(self) -> int:
-        if self._remote_type == "drive":
-            return 3
-        if self._remote_type in OAUTH_REMOTE_TYPES:
-            return 4
-        return 6
-
-    def _advance_progress(self, label: str) -> None:
-        self._setup_step = min(self._setup_step + 1, max(self._estimated_steps, self._setup_step + 1))
-        self._set_progress(label)
-
-    def _set_progress(self, label: str, *, complete: bool = False) -> None:
-        if not hasattr(self, "progress"):
-            return
-        if complete:
-            self.progress_label.setText("Setup complete")
-            self.progress.setValue(100)
-        else:
-            step = max(self._setup_step, 1)
-            total = max(self._estimated_steps, step)
-            self.progress_label.setText(f"Step {step} of about {total}: {label}")
-            self.progress.setValue(min(95, round((step / total) * 100)))
-        self.progress_label.show()
-        self.progress.show()
-
     def _set_busy(self, busy: bool, *, message: str | None = None) -> None:
         self.action_button.setEnabled(False if busy else True)
         self.fields["name"].setEnabled(not busy and self._question is None)
@@ -1621,6 +1611,23 @@ class NewRemoteWizard:
         )
         self._apply_credential_choice(enabled=not busy and self._question is None)
         self.status.setText((message or self._busy_message()) if busy else "")
+
+    def _offer_to_stop_stuck_rclone(self, owner_hint: str) -> bool:
+        pid = _rclone_port_owner_pid(owner_hint)
+        if pid is None:
+            return False
+        answer = self.qt.QMessageBox.question(
+            self.dialog,
+            "Add remote",
+            f"rclone is still using sign-in port {RCLONE_OAUTH_LOCAL_PORT}.\n\n"
+            "This usually means a previous browser sign-in is still waiting.\n\n"
+            "Stop that rclone sign-in process and try again?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        if answer != self.qt.QMessageBox.StandardButton.Yes:
+            return False
+        return _terminate_process_id(pid)
 
     def _apply_provider_choice(self) -> None:
         if not self.fields:
@@ -1858,12 +1865,14 @@ class NewRemoteWizard:
         return "Continue"
 
     def _reject(self) -> None:
+        self._cancelled = True
         self._cleanup_incomplete_remote()
         self.dialog.reject()
 
     def _cleanup_incomplete_remote(self) -> None:
         if not self._remote_name or self._completed:
             return
+        rclone_wizard.cancel_remote_config(self._remote_name)
         core.delete_rclone_remote(self._remote_name)
         settings = load_mount_settings()
         if self._remote_name in settings:
