@@ -1318,6 +1318,7 @@ class NewRemoteWizard:
         self._cancelled = False
         self._last_rclone_action: Any | None = None
         self._port_retry_attempted = False
+        self._message_boxes: list[Any] = []
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
         self._bridge.mount_finished.connect(self._handle_mount_finished)
@@ -1493,14 +1494,10 @@ class NewRemoteWizard:
     def _start(self) -> None:
         name = self.fields["name"].text().strip()
         if not self._valid_remote_name(name):
-            self.qt.QMessageBox.warning(
-                self.dialog,
-                "Add remote",
-                "Use a name without ':' or path separators.",
-            )
+            self._warning("Add remote", "Use a name without ':' or path separators.")
             return
         if any(remote.name == name for remote in core.load_remotes()):
-            self.qt.QMessageBox.warning(self.dialog, "Add remote", f"{name} already exists.")
+            self._warning("Add remote", f"{name} already exists.")
             return
         self._remote_name = name
         self._cancelled = False
@@ -1512,11 +1509,7 @@ class NewRemoteWizard:
         self._drive_team_drive = self.fields["shared_drive_id"].text()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
-            self.qt.QMessageBox.warning(
-                self.dialog,
-                "Add remote",
-                "Enter the shared drive ID before connecting, or choose My Drive.",
-            )
+            self._warning("Add remote", "Enter the shared drive ID before connecting, or choose My Drive.")
             return
         if not self._browser_auth_port_ready():
             self._remote_name = ""
@@ -1567,18 +1560,17 @@ class NewRemoteWizard:
             if self._recover_from_rclone_port_error(str(error)):
                 return
             self._cleanup_incomplete_remote()
-            self.qt.QMessageBox.warning(self.dialog, "Add remote", str(error))
+            self._warning("Add remote", str(error))
             return
         if not isinstance(step, rclone_wizard.RcloneConfigStep):
-            self.qt.QMessageBox.warning(self.dialog, "Add remote", "rclone returned an unexpected response.")
+            self._warning("Add remote", "rclone returned an unexpected response.")
             return
         if step.error:
             self.status.setText(step.error)
         if step.complete:
             if not self._created_remote_has_credentials():
                 self._cleanup_incomplete_remote()
-                self.qt.QMessageBox.warning(
-                    self.dialog,
+                self._warning(
                     "Add remote",
                     f"{self._provider_label(self._remote_type)} authorization did not finish. No remote was added.",
                 )
@@ -1624,8 +1616,7 @@ class NewRemoteWizard:
             self.status.setText("")
             return True
         details = f"\n\n{owner_hint}" if owner_hint else ""
-        self.qt.QMessageBox.warning(
-            self.dialog,
+        self._warning(
             "Add remote",
             f"rclone's browser sign-in port {RCLONE_OAUTH_LOCAL_PORT} is already in use.{details}\n\n"
             "Finish or close any other rclone sign-in window, then try again. "
@@ -1637,14 +1628,39 @@ class NewRemoteWizard:
         if not _is_rclone_auth_port_error(message):
             return False
         if self._port_retry_attempted:
-            self.status.setText("The browser sign-in is still finishing. Wait a moment, then try again.")
+            self.status.setText("Use token authorization.")
             return True
         self._port_retry_attempted = True
-        if self._browser_auth_port_ready() and self._last_rclone_action is not None:
-            self._run_rclone(self._last_rclone_action, reset_port_retry=False)
+        return self._switch_to_token_authorization()
+
+    def _switch_to_token_authorization(self) -> bool:
+        if not self._uses_browser_auth():
+            return False
+        self._drive_local_auth = False
+        self.status.setText("Use token authorization.")
+        if self._question and self._option_name(self._question.option) == "config_is_local":
+            self._run_rclone(
+                lambda: rclone_wizard.continue_remote(
+                    self._remote_name,
+                    self._remote_type,
+                    self._state,
+                    "false",
+                    self._initial_config_args(),
+                ),
+                reset_port_retry=False,
+            )
             return True
-        self.status.setText("The browser sign-in is still finishing. Wait a moment, then try again.")
-        return True
+        if self._remote_name:
+            self._run_rclone(
+                lambda: rclone_wizard.start_remote(
+                    self._remote_name,
+                    self._remote_type,
+                    self._initial_config_args(),
+                ),
+                reset_port_retry=False,
+            )
+            return True
+        return False
 
     def _show_setup_view(self, visible: bool) -> None:
         if hasattr(self, "initial_frame"):
@@ -1718,8 +1734,7 @@ class NewRemoteWizard:
     def _handle_mount_finished(self, success: bool, message: str) -> None:
         self._set_busy(False)
         if not success:
-            self.qt.QMessageBox.warning(
-                self.dialog,
+            self._warning(
                 "Add remote",
                 f"{self._remote_name} was created, but Mountlet could not connect it.\n\n{_clean_message(message)}",
             )
@@ -1727,6 +1742,7 @@ class NewRemoteWizard:
 
     def _finish_success(self) -> None:
         self._completed = True
+        self._close_message_boxes()
         _wizard_pending_remote_names.discard(self._remote_name)
         self.dialog.accept()
 
@@ -2001,8 +2017,40 @@ class NewRemoteWizard:
 
     def _reject(self) -> None:
         self._cancelled = True
+        self._close_message_boxes()
         self._cleanup_incomplete_remote()
         self.dialog.reject()
+
+    def _warning(self, title: str, message: str) -> None:
+        try:
+            box = self.qt.QMessageBox(self.dialog)
+            box.setIcon(self.qt.QMessageBox.Icon.Warning)
+            box.setWindowTitle(title)
+            box.setText(message)
+            box.setStandardButtons(self.qt.QMessageBox.StandardButton.Ok)
+            try:
+                box.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
+            except Exception:
+                pass
+            self._message_boxes.append(box)
+            box.finished.connect(lambda _result=0, item=box: self._untrack_message_box(item))
+            box.show()
+            box.raise_()
+            box.activateWindow()
+        except Exception:
+            self.qt.QMessageBox.warning(self.dialog, title, message)
+
+    def _untrack_message_box(self, box: Any) -> None:
+        self._message_boxes = [item for item in getattr(self, "_message_boxes", []) if item is not box]
+
+    def _close_message_boxes(self) -> None:
+        boxes = list(getattr(self, "_message_boxes", []))
+        self._message_boxes = []
+        for box in boxes:
+            try:
+                box.close()
+            except Exception:
+                pass
 
     def _cleanup_incomplete_remote(self) -> None:
         if not self._remote_name or self._completed:
