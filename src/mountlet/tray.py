@@ -1454,6 +1454,7 @@ class NewRemoteWizard:
         form.addRow(connect_after_create)
 
         self.question_frame = self.qt.QFrame()
+        self.question_frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         self.question_layout = self.qt.QFormLayout(self.question_frame)
         self.question_frame.hide()
 
@@ -1864,16 +1865,18 @@ class NewRemoteWizard:
         title_font = title.font()
         title_font.setBold(True)
         title.setFont(title_font)
-        help_text = self.qt.QLabel(self._question_help(option))
-        help_text.setWordWrap(True)
-        help_text.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
-        help_text.setOpenExternalLinks(True)
         self._answer_kind, self._answer_field = self._answer_widget(option)
         self.question_layout.addRow(title)
-        self.question_layout.addRow(help_text)
+        help_message = self._question_help(option)
+        if help_message:
+            help_text = self.qt.QLabel(help_message)
+            help_text.setWordWrap(True)
+            help_text.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+            help_text.setOpenExternalLinks(True)
+            self.question_layout.addRow(help_text)
         self.question_layout.addRow("Answer", self._answer_field)
         self.question_frame.show()
-        self.status.setText("Setup is not complete yet. Finish this prompt to continue.")
+        self.status.setText("")
         self._update_action_button()
         self.dialog.adjustSize()
 
@@ -1992,15 +1995,12 @@ class NewRemoteWizard:
     def _question_help(self, option: dict[str, Any]) -> str:
         option_name = self._option_name(option)
         if option_name == "config_is_local":
-            return (
-                "Mountlet will ask rclone to open the provider sign-in page in your browser. "
-                "Leave this enabled unless you need to authorize from another computer."
-            )
+            return "Use this computer unless browser sign-in is busy."
         if option_name == "config_team_drive":
-            return "Choose whether this remote should use your main Google Drive or a Google shared drive."
+            return "Choose where the files live."
         if option_name == "team_drive":
-            return "Leave blank for My Drive, or enter a shared drive ID."
-        return str(option.get("Help", "")).strip()
+            return "Paste the shared drive ID."
+        return str(option.get("Help", "")).strip().split("\n\n", 1)[0]
 
     def _provider_label(self, remote_type: str) -> str:
         for label, backend_type in REMOTE_PROVIDER_OPTIONS:
@@ -2101,6 +2101,8 @@ class MountletWindow:
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self._make_tray_owned_window()
+        self._close_filter = self._make_close_filter()
+        self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
         self._build_app_menu()
 
@@ -2113,6 +2115,31 @@ class MountletWindow:
             bulk_action_finished = qt.Signal(str, object, object)
 
         return Bridge()
+
+    def _make_close_filter(self) -> Any:
+        qt = self.qt
+        outer = self
+
+        class CloseFilter(qt.QObject):
+            def eventFilter(self, watched: object, event: object) -> bool:
+                try:
+                    if watched is outer.window and event.type() == qt.QEvent.Type.Close:
+                        return outer._handle_window_close(event)
+                except Exception:
+                    return False
+                return False
+
+        return CloseFilter(self.window)
+
+    def _handle_window_close(self, event: Any) -> bool:
+        if self._tray_is_quitting():
+            return False
+        self._hide_window_stack()
+        try:
+            event.ignore()
+        except Exception:
+            pass
+        return True
 
     def _build_app_menu(self) -> None:
         app_menu = self.window.menuBar().addMenu("App")

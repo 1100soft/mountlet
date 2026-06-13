@@ -332,35 +332,30 @@ class TrayTests(unittest.TestCase):
 
     def test_new_remote_wizard_recovers_once_from_rclone_port_error(self):
         wizard = object.__new__(tray.NewRemoteWizard)
-        action = object()
-        wizard._last_rclone_action = action
         wizard._port_retry_attempted = False
 
-        with mock.patch.object(wizard, "_browser_auth_port_ready", return_value=True):
-            with mock.patch.object(wizard, "_run_rclone") as run_rclone:
-                recovered = wizard._recover_from_rclone_port_error(
-                    "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
-                )
+        with mock.patch.object(wizard, "_switch_to_token_authorization", return_value=True) as switch:
+            recovered = wizard._recover_from_rclone_port_error(
+                "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
+            )
 
         self.assertTrue(recovered)
-        run_rclone.assert_called_once_with(action, reset_port_retry=False)
+        switch.assert_called_once_with()
         self.assertTrue(wizard._port_retry_attempted)
 
-    def test_new_remote_wizard_keeps_port_race_recoverable(self):
+    def test_new_remote_wizard_stops_retrying_port_race_after_fallback(self):
         wizard = object.__new__(tray.NewRemoteWizard)
-        wizard._last_rclone_action = object()
-        wizard._port_retry_attempted = False
+        wizard._port_retry_attempted = True
         wizard.status = mock.Mock()
 
-        with mock.patch.object(wizard, "_browser_auth_port_ready", return_value=False):
-            with mock.patch.object(wizard, "_run_rclone") as run_rclone:
-                recovered = wizard._recover_from_rclone_port_error(
-                    "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
-                )
+        with mock.patch.object(wizard, "_switch_to_token_authorization") as switch:
+            recovered = wizard._recover_from_rclone_port_error(
+                "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
+            )
 
         self.assertTrue(recovered)
-        run_rclone.assert_not_called()
-        wizard.status.setText.assert_called_once()
+        switch.assert_not_called()
+        wizard.status.setText.assert_called_once_with("Use token authorization.")
 
     def test_new_remote_wizard_checks_port_before_browser_continue(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -377,7 +372,7 @@ class TrayTests(unittest.TestCase):
         port_ready.assert_called_once_with()
         run_rclone.assert_not_called()
 
-    def test_new_remote_wizard_question_status_says_setup_is_incomplete(self):
+    def test_new_remote_wizard_question_clears_status_text(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard.qt = SimpleNamespace(
             QLabel=mock.Mock(side_effect=lambda text="": mock.Mock()),
@@ -395,7 +390,7 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(wizard, "_update_action_button"):
                     wizard._show_question(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "drive_id"}))
 
-        wizard.status.setText.assert_called_once_with("Setup is not complete yet. Finish this prompt to continue.")
+        wizard.status.setText.assert_called_once_with("")
 
     def test_browser_auth_port_checks_once_before_launch(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -584,6 +579,18 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window.window.hide.assert_called_once_with()
         show.assert_not_called()
+
+    def test_mountlet_window_close_hides_window_stack(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        event = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_tray_is_quitting", return_value=False):
+            with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+                handled = mountlet_window._handle_window_close(event)
+
+        self.assertTrue(handled)
+        hide_stack.assert_called_once_with()
+        event.ignore.assert_called_once_with()
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
