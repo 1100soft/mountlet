@@ -1964,14 +1964,16 @@ class NewRemoteWizard:
         remotes: list[core.RemoteInfo],
     ) -> str:
         existing_names = {remote.name for remote in remotes}
+        if alias not in existing_names:
+            return alias
         provider_name = self._provider_config_name(remote_type)
-        candidate = f"{alias}@{provider_name}"
+        candidate = f"{alias}__{provider_name}"
         if candidate not in existing_names:
             return candidate
         index = 2
-        while f"{alias} {index}@{provider_name}" in existing_names:
+        while f"{alias} {index}__{provider_name}" in existing_names:
             index += 1
-        return f"{alias} {index}@{provider_name}"
+        return f"{alias} {index}__{provider_name}"
 
     def _provider_config_name(self, remote_type: str) -> str:
         return remote_type.strip().lower() or "remote"

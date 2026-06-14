@@ -557,14 +557,14 @@ class TrayTests(unittest.TestCase):
         wizard = object.__new__(tray.NewRemoteWizard)
         remotes = [
             core.RemoteInfo(
-                name="Media@drive",
+                name="Media",
                 alias="Media",
                 provider="drive",
                 backend_type="drive",
                 mount_path="/tmp/drive-media",
             ),
             core.RemoteInfo(
-                name="Media@dropbox",
+                name="Media__dropbox",
                 alias="Media",
                 provider="dropbox",
                 backend_type="dropbox",
@@ -574,7 +574,8 @@ class TrayTests(unittest.TestCase):
 
         self.assertFalse(wizard._display_name_exists("Media", "box", remotes))
         self.assertTrue(wizard._display_name_exists("Media", "dropbox", remotes))
-        self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media@box")
+        self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media__box")
+        self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos")
 
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):
         wizard = object.__new__(tray.NewRemoteWizard)
