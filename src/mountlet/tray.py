@@ -88,6 +88,7 @@ FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
+FORCED_QUIT_SECONDS = 3.0
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Google Drive", "drive"),
     ("Dropbox", "dropbox"),
@@ -1302,6 +1303,7 @@ class NewRemoteWizard:
         self.dialog.resize(520, 280)
         self.fields: dict[str, Any] = {}
         self._remote_name = ""
+        self._remote_alias = ""
         self._state = ""
         self._drive_client_id = ""
         self._drive_client_secret = ""

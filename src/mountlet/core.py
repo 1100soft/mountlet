@@ -146,6 +146,7 @@ class DriveOAuthCredentials:
 
 PIDS: Dict[str, int] = {}
 OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+RCLONE_STATUS_TIMEOUT_SECONDS = 20
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -620,6 +621,7 @@ def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
             [rclone_bin, "about", f"{remote.name}:", "--json"],
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=RCLONE_STATUS_TIMEOUT_SECONDS,
         )
         data = json.loads(output)
         used = int(data.get("used", 0))
