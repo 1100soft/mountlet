@@ -575,7 +575,7 @@ class TrayTests(unittest.TestCase):
         self.assertFalse(wizard._display_name_exists("Media", "box", remotes))
         self.assertTrue(wizard._display_name_exists("Media", "dropbox", remotes))
         self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media__box")
-        self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos")
+        self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos__box")
 
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -589,6 +589,59 @@ class TrayTests(unittest.TestCase):
                     wizard._handle_command_finished(step, None)
 
         mount_created.assert_called_once_with()
+
+    def test_mountlet_window_sorts_remotes_by_name(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        remotes = [
+            core.RemoteInfo("Beta__dropbox", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+            core.RemoteInfo("Alpha__drive", "Alpha", "drive", "drive", "/tmp/alpha"),
+        ]
+
+        sorted_remotes = window._sorted_remotes(remotes, "name")
+
+        self.assertEqual([remote.name for remote in sorted_remotes], ["Alpha__drive", "Beta__dropbox"])
+
+    def test_mountlet_window_sorts_remotes_by_provider(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        remotes = [
+            core.RemoteInfo("Docs__onedrive", "Docs", "onedrive", "onedrive", "/tmp/docs"),
+            core.RemoteInfo("Docs__box", "Docs", "box", "box", "/tmp/docs-box"),
+        ]
+
+        sorted_remotes = window._sorted_remotes(remotes, "provider")
+
+        self.assertEqual([remote.name for remote in sorted_remotes], ["Docs__box", "Docs__onedrive"])
+
+    def test_mountlet_window_sorts_remotes_by_storage_usage(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {
+            "Small": core.StorageUsage("small", used=20, total=100),
+            "Large": core.StorageUsage("large", used=50, total=200),
+            "Unknown": core.StorageUsage("?"),
+        }
+        remotes = [
+            core.RemoteInfo("Small", "Small", "drive", "drive", "/tmp/small"),
+            core.RemoteInfo("Unknown", "Unknown", "drive", "drive", "/tmp/unknown"),
+            core.RemoteInfo("Large", "Large", "drive", "drive", "/tmp/large"),
+        ]
+
+        self.assertEqual(
+            [remote.name for remote in window._sorted_remotes(remotes, "size")],
+            ["Large", "Small", "Unknown"],
+        )
+        self.assertEqual(
+            [remote.name for remote in window._sorted_remotes(remotes, "remaining")],
+            ["Small", "Large", "Unknown"],
+        )
+
+    def test_mountlet_window_disables_manual_move_when_auto_sorted(self):
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta"]
+
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(remote_sort="name")):
+            self.assertFalse(window._can_move_remote("Beta", -1))
 
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)

@@ -19,6 +19,7 @@ class AppSettings:
     start_at_login: bool = False
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
+    remote_sort: str = "registration"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ start_at_login = false
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
+remote_sort = "registration"
 """
 
 
@@ -221,6 +223,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         start_at_login=_bool_value(app.get("start_at_login"), _autostart_file().exists()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        remote_sort=str(tray.get("remote_sort", "registration")).strip() or "registration",
     )
 
 
@@ -275,6 +278,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# default uses the desktop's normal folder opener.",
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
+            f"remote_sort = {_toml_string(settings.remote_sort)}",
             "",
         ]
     )

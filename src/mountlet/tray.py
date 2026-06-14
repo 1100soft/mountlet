@@ -46,6 +46,15 @@ OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("file-manager-service", "Desktop file manager service"),
     ("default", "System default"),
 )
+REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("registration", "Registration / manual order"),
+    ("name", "Name"),
+    ("provider", "Provider"),
+    ("size", "Total size, largest first"),
+    ("used", "Used space, largest first"),
+    ("remaining", "Remaining space, lowest first"),
+)
+STORAGE_SORT_MODES = {"size", "used", "remaining"}
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
@@ -1087,6 +1096,7 @@ class AppConfigDialog(_ConfigDialogBase):
             "start_at_login": self._check(app_settings.start_at_login),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
+            "remote_sort": self._combo(REMOTE_SORT_OPTIONS, app_settings.remote_sort),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
@@ -1098,6 +1108,7 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow(self.fields["auto_mount"])
         form.addRow("Default mount folder", self.fields["mount_base"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
+        form.addRow("Sort remotes", self.fields["remote_sort"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         root.addWidget(frame)
@@ -1118,6 +1129,7 @@ class AppConfigDialog(_ConfigDialogBase):
                 start_at_login=self.fields["start_at_login"].isChecked(),
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
+                remote_sort=self.fields["remote_sort"].currentData() or "registration",
             )
         )
         set_start_at_login(self.fields["start_at_login"].isChecked())
@@ -1964,8 +1976,6 @@ class NewRemoteWizard:
         remotes: list[core.RemoteInfo],
     ) -> str:
         existing_names = {remote.name for remote in remotes}
-        if alias not in existing_names:
-            return alias
         provider_name = self._provider_config_name(remote_type)
         candidate = f"{alias}__{provider_name}"
         if candidate not in existing_names:
@@ -2450,7 +2460,12 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         self._refresh_pending = False
+        sort_mode = self._remote_sort_mode()
         remotes = _load_visible_remotes()
+        if self._sort_uses_storage(sort_mode):
+            for remote in remotes:
+                self._schedule_storage_load(remote)
+        remotes = self._sorted_remotes(remotes, sort_mode)
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
@@ -2458,7 +2473,7 @@ class MountletWindow:
             self._name_column_width = name_width
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
-                if mounted_by_name[remote.name]:
+                if mounted_by_name[remote.name] or self._sort_uses_storage(sort_mode):
                     self._schedule_storage_load(remote)
             return
 
@@ -2480,7 +2495,7 @@ class MountletWindow:
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                if mounted_by_name[remote.name]:
+                if mounted_by_name[remote.name] or self._sort_uses_storage(sort_mode):
                     self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
@@ -2692,6 +2707,8 @@ class MountletWindow:
         button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
 
     def _can_move_remote(self, remote_name: str, delta: int) -> bool:
+        if self._remote_sort_mode() != "registration":
+            return False
         try:
             index = self._current_remote_names.index(remote_name)
         except ValueError:
@@ -2700,6 +2717,8 @@ class MountletWindow:
         return 0 <= target < len(self._current_remote_names)
 
     def _move_remote(self, remote_name: str, delta: int) -> None:
+        if self._remote_sort_mode() != "registration":
+            return
         names = [remote.name for remote in _load_visible_remotes()]
         try:
             index = names.index(remote_name)
@@ -2725,6 +2744,70 @@ class MountletWindow:
                 order=order,
             )
         save_mount_settings(settings)
+
+    def _remote_sort_mode(self) -> str:
+        mode = getattr(load_app_settings(), "remote_sort", "registration")
+        values = {value for value, _label in REMOTE_SORT_OPTIONS}
+        return mode if mode in values else "registration"
+
+    def _sort_uses_storage(self, sort_mode: str) -> bool:
+        return sort_mode in STORAGE_SORT_MODES
+
+    def _sorted_remotes(self, remotes: list[core.RemoteInfo], sort_mode: str | None = None) -> list[core.RemoteInfo]:
+        mode = sort_mode or self._remote_sort_mode()
+        if mode == "registration":
+            return list(remotes)
+        indexed = list(enumerate(remotes))
+        if mode == "name":
+            return [
+                remote
+                for _index, remote in sorted(
+                    indexed,
+                    key=lambda item: (
+                        item[1].alias.casefold(),
+                        item[1].provider.casefold(),
+                        item[1].name.casefold(),
+                        item[0],
+                    ),
+                )
+            ]
+        if mode == "provider":
+            return [
+                remote
+                for _index, remote in sorted(
+                    indexed,
+                    key=lambda item: (
+                        item[1].provider.casefold(),
+                        item[1].alias.casefold(),
+                        item[1].name.casefold(),
+                        item[0],
+                    ),
+                )
+            ]
+        if mode in STORAGE_SORT_MODES:
+            return [remote for _index, remote in sorted(indexed, key=lambda item: self._storage_sort_key(item, mode))]
+        return list(remotes)
+
+    def _storage_sort_key(self, item: tuple[int, core.RemoteInfo], sort_mode: str) -> tuple[bool, int, str, int]:
+        index, remote = item
+        value = self._storage_sort_value(remote, sort_mode)
+        if value is None:
+            return (True, 0, remote.display_name.casefold(), index)
+        if sort_mode in {"size", "used"}:
+            value = -value
+        return (False, value, remote.display_name.casefold(), index)
+
+    def _storage_sort_value(self, remote: core.RemoteInfo, sort_mode: str) -> int | None:
+        usage = self._usage_cache.get(remote.name)
+        if usage is None:
+            return None
+        if sort_mode == "size":
+            return usage.total
+        if sort_mode == "used":
+            return usage.used
+        if sort_mode == "remaining" and usage.total is not None and usage.used is not None:
+            return max(usage.total - usage.used, 0)
+        return None
 
     def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
         if not mounted:
@@ -2942,7 +3025,7 @@ class MountletWindow:
         self._run_bulk_action("Unmount all", core.unmount_all)
 
     def _run_bulk_action(self, title: str, action: Any) -> None:
-        remotes = _load_visible_remotes()
+        remotes = self._sorted_remotes(_load_visible_remotes())
         if not remotes:
             return
         for remote in remotes:
@@ -3260,7 +3343,7 @@ class MountletTray:
             return
         self.remote_menu.clear()
         self.app_menu.clear()
-        remotes = _load_visible_remotes()
+        remotes = self.main_window._sorted_remotes(_load_visible_remotes())
         mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
