@@ -206,6 +206,18 @@ url = https://example.test
 
         self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "ReadyOneDrive", "WebDav"])
 
+    def test_storage_usage_uses_timeout(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.subprocess, "check_output", return_value='{"used": 1}') as check_output:
+                    usage = core.get_storage_usage_details(remote)
+
+            self.assertEqual(usage.used, 1)
+            self.assertEqual(check_output.call_args.kwargs["timeout"], core.RCLONE_STATUS_TIMEOUT_SECONDS)
+
     def test_editable_rclone_fields_are_safe_and_saveable(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(

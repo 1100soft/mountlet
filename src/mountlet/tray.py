@@ -1495,16 +1495,22 @@ class NewRemoteWizard:
         self._continue()
 
     def _start(self) -> None:
-        name = self.fields["name"].text().strip()
-        if not self._valid_remote_name(name):
-            self._warning("Add remote", "Use a name without ':' or path separators.")
+        alias = self.fields["name"].text().strip()
+        if not self._valid_remote_name(alias):
+            self._warning("Add remote", "Use a name without ':', '@', or path separators.")
             return
-        if any(remote.name == name for remote in core.load_remotes()):
-            self._warning("Add remote", f"{name} already exists.")
+        self._remote_type = self.fields["provider"].currentData() or "drive"
+        existing_remotes = core.load_remotes()
+        if self._display_name_exists(alias, self._remote_type, existing_remotes):
+            self._warning("Add remote", f"{alias} already exists for {self._provider_label(self._remote_type)}.")
+            return
+        name = self._config_remote_name(alias, self._remote_type, existing_remotes)
+        if any(remote.name == name for remote in existing_remotes):
+            self._warning("Add remote", f"{self._provider_display_name(alias, self._remote_type)} already exists.")
             return
         self._remote_name = name
+        self._remote_alias = alias
         self._cancelled = False
-        self._remote_type = self.fields["provider"].currentData() or "drive"
         self._drive_client_id = self.fields["client_id"].text()
         self._drive_client_secret = self.fields["client_secret"].text()
         self._drive_local_auth = self.fields["local_auth"].isChecked()
@@ -1516,6 +1522,7 @@ class NewRemoteWizard:
             return
         if not self._browser_auth_port_ready():
             self._remote_name = ""
+            self._remote_alias = ""
             return
         _wizard_pending_remote_names.add(name)
         self._show_setup_view(False)
@@ -1722,7 +1729,7 @@ class NewRemoteWizard:
         return " ".join(parts).lower()
 
     def _mount_created_remote(self) -> None:
-        self._set_busy(True, message=f"Connecting {self._remote_name}...")
+        self._set_busy(True, message=f"Connecting {self._remote_display_name()}...")
 
         def worker() -> None:
             for remote in core.load_remotes():
@@ -1739,7 +1746,8 @@ class NewRemoteWizard:
         if not success:
             self._warning(
                 "Add remote",
-                f"{self._remote_name} was created, but Mountlet could not connect it.\n\n{_clean_message(message)}",
+                f"{self._remote_display_name()} was created, but Mountlet could not connect it.\n\n"
+                f"{_clean_message(message)}",
             )
         self._finish_success()
 
@@ -1933,7 +1941,47 @@ class NewRemoteWizard:
         return self._answer_field.text().strip()
 
     def _valid_remote_name(self, name: str) -> bool:
-        return bool(name) and ":" not in name and "/" not in name and "\\" not in name
+        return bool(name) and all(token not in name for token in (":", "@", "/", "\\"))
+
+    def _display_name_exists(
+        self,
+        alias: str,
+        remote_type: str,
+        remotes: list[core.RemoteInfo],
+    ) -> bool:
+        normalized_alias = alias.casefold()
+        normalized_type = remote_type.casefold()
+        return any(
+            remote.alias.casefold() == normalized_alias
+            and remote.backend_type.casefold() == normalized_type
+            for remote in remotes
+        )
+
+    def _config_remote_name(
+        self,
+        alias: str,
+        remote_type: str,
+        remotes: list[core.RemoteInfo],
+    ) -> str:
+        existing_names = {remote.name for remote in remotes}
+        provider_name = self._provider_config_name(remote_type)
+        candidate = f"{alias}@{provider_name}"
+        if candidate not in existing_names:
+            return candidate
+        index = 2
+        while f"{alias} {index}@{provider_name}" in existing_names:
+            index += 1
+        return f"{alias} {index}@{provider_name}"
+
+    def _provider_config_name(self, remote_type: str) -> str:
+        return remote_type.strip().lower() or "remote"
+
+    def _provider_display_name(self, alias: str, remote_type: str) -> str:
+        return f"{alias} ({self._provider_config_name(remote_type)})"
+
+    def _remote_display_name(self) -> str:
+        alias = getattr(self, "_remote_alias", "") or self._remote_name
+        return self._provider_display_name(alias, self._remote_type)
 
     def _bool_radio_widget(
         self,
@@ -3153,6 +3201,8 @@ class MountletTray:
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setQuitOnLastWindowClosed(False)
         self._quitting = False
+        self._allow_forced_exit = True
+        self._forced_exit_scheduled = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
         self.icon = self._icon()
@@ -3329,10 +3379,25 @@ class MountletTray:
 
     def request_quit(self) -> None:
         self._prepare_quit()
+        self._schedule_forced_exit()
         try:
             self.app.exit(0)
         except Exception:
             self.app.quit()
+
+    def _schedule_forced_exit(self) -> None:
+        if not getattr(self, "_allow_forced_exit", False):
+            return
+        if getattr(self, "_forced_exit_scheduled", False):
+            return
+        self._forced_exit_scheduled = True
+        timer = threading.Timer(FORCED_QUIT_SECONDS, self._force_exit_if_still_quitting)
+        timer.daemon = True
+        timer.start()
+
+    def _force_exit_if_still_quitting(self) -> None:
+        if getattr(self, "_quitting", False):
+            os._exit(0)
 
     def _prepare_quit(self) -> None:
         if getattr(self, "_quitting", False):

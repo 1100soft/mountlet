@@ -553,6 +553,29 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(wizard._initial_config_args(), [])
 
+    def test_new_remote_wizard_allows_same_alias_across_providers(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        remotes = [
+            core.RemoteInfo(
+                name="Media@drive",
+                alias="Media",
+                provider="drive",
+                backend_type="drive",
+                mount_path="/tmp/drive-media",
+            ),
+            core.RemoteInfo(
+                name="Media@dropbox",
+                alias="Media",
+                provider="dropbox",
+                backend_type="dropbox",
+                mount_path="/tmp/dropbox-media",
+            ),
+        ]
+
+        self.assertFalse(wizard._display_name_exists("Media", "box", remotes))
+        self.assertTrue(wizard._display_name_exists("Media", "dropbox", remotes))
+        self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media@box")
+
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._connect_after_create = True
@@ -832,6 +855,20 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window.prepare_quit.assert_called_once_with()
         tray_app.tray.hide.assert_called_once_with()
         tray_app.app.exit.assert_called_once_with(0)
+
+    def test_schedule_forced_exit_uses_daemon_timer(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._allow_forced_exit = True
+        tray_app._forced_exit_scheduled = False
+        timer = mock.Mock()
+
+        with mock.patch.object(tray.threading, "Timer", return_value=timer) as timer_class:
+            tray_app._schedule_forced_exit()
+
+        timer_class.assert_called_once_with(tray.FORCED_QUIT_SECONDS, tray_app._force_exit_if_still_quitting)
+        self.assertTrue(tray_app._forced_exit_scheduled)
+        self.assertTrue(timer.daemon)
+        timer.start.assert_called_once_with()
 
     def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
         completed = SimpleNamespace(returncode=0)
