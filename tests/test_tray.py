@@ -441,11 +441,30 @@ class TrayTests(unittest.TestCase):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "drive"
         wizard._drive_local_auth = True
+        wizard._waiting_for_browser_auth = True
 
         self.assertEqual(
             wizard._busy_message(),
             "Waiting for browser authentication. A sign-in page should open in your browser.",
         )
+
+    def test_new_remote_wizard_local_browser_message_resets_after_auth_step(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._waiting_for_browser_auth = True
+        wizard._cancelled = False
+        wizard.status = mock.Mock()
+        wizard._question = None
+        wizard._remote_type = "drive"
+        step = tray.rclone_wizard.RcloneConfigStep("", {})
+
+        with mock.patch.object(wizard, "_set_busy") as set_busy:
+            with mock.patch.object(wizard, "_created_remote_has_credentials", return_value=False):
+                with mock.patch.object(wizard, "_cleanup_incomplete_remote"):
+                    with mock.patch.object(wizard, "_warning"):
+                        wizard._handle_command_finished(step, None)
+
+        self.assertFalse(wizard._waiting_for_browser_auth)
+        set_busy.assert_called_once_with(False)
 
     def test_new_remote_wizard_can_hide_setup_view(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -617,8 +636,8 @@ class TrayTests(unittest.TestCase):
 
         self.assertFalse(wizard._display_name_exists("Media", "box", remotes))
         self.assertTrue(wizard._display_name_exists("Media", "dropbox", remotes))
-        self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media__box")
-        self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos__box")
+        self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media__Box")
+        self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos__Box")
 
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -679,12 +698,30 @@ class TrayTests(unittest.TestCase):
             ["Small", "Large", "Unknown"],
         )
 
-    def test_mountlet_window_disables_manual_move_when_auto_sorted(self):
+    def test_mountlet_window_keeps_manual_move_available_after_sorting(self):
         window = object.__new__(tray.MountletWindow)
         window._current_remote_names = ["Alpha", "Beta"]
 
-        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(remote_sort="name")):
-            self.assertFalse(window._can_move_remote("Beta", -1))
+        self.assertTrue(window._can_move_remote("Beta", -1))
+
+    def test_mountlet_window_sort_action_saves_order(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        window._sort_reverse = False
+        window._current_remote_names = ["Beta", "Alpha"]
+        window.tray_app = mock.Mock()
+        remotes = [
+            core.RemoteInfo("Beta", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+            core.RemoteInfo("Alpha", "Alpha", "drive", "drive", "/tmp/alpha"),
+        ]
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
+            with mock.patch.object(window, "_save_remote_order") as save:
+                window._sort_remote_order("name")
+
+        save.assert_called_once_with(["Alpha", "Beta"])
+        self.assertEqual(window._current_remote_names, [])
+        window.tray_app.rebuild_menus.assert_called_once_with()
 
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)

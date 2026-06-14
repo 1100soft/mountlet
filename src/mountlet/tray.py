@@ -47,7 +47,6 @@ OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("default", "System default"),
 )
 REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("registration", "Registration / manual order"),
     ("name", "Name"),
     ("provider", "Provider"),
     ("size", "Total size, largest first"),
@@ -108,6 +107,15 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("WebDAV", "webdav"),
 )
 OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+REMOTE_CONFIG_SUFFIXES = {
+    "drive": "Drive",
+    "dropbox": "Dropbox",
+    "onedrive": "OneDrive",
+    "box": "Box",
+    "pcloud": "pCloud",
+    "s3": "S3",
+    "webdav": "WebDAV",
+}
 _wizard_pending_remote_names: set[str] = set()
 
 
@@ -1096,7 +1104,6 @@ class AppConfigDialog(_ConfigDialogBase):
             "start_at_login": self._check(app_settings.start_at_login),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
-            "remote_sort": self._combo(REMOTE_SORT_OPTIONS, app_settings.remote_sort),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
@@ -1108,7 +1115,6 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow(self.fields["auto_mount"])
         form.addRow("Default mount folder", self.fields["mount_base"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
-        form.addRow("Sort remotes", self.fields["remote_sort"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         root.addWidget(frame)
@@ -1129,7 +1135,6 @@ class AppConfigDialog(_ConfigDialogBase):
                 start_at_login=self.fields["start_at_login"].isChecked(),
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
-                remote_sort=self.fields["remote_sort"].currentData() or "registration",
             )
         )
         set_start_at_login(self.fields["start_at_login"].isChecked())
@@ -1334,6 +1339,7 @@ class NewRemoteWizard:
         self._port_retry_attempted = False
         self._browser_port_available = True
         self._browser_port_owner_hint = ""
+        self._waiting_for_browser_auth = False
         self._message_boxes: list[Any] = []
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
@@ -1552,13 +1558,15 @@ class NewRemoteWizard:
                 name,
                 self._remote_type,
                 self._initial_config_args(),
-            )
+            ),
+            browser_auth=self._uses_browser_auth() and self._drive_local_auth,
         )
 
     def _continue(self) -> None:
         answer = self._answer_value()
         if self._answer_opens_browser_auth(answer) and not self._browser_auth_port_ready():
             return
+        opens_browser_auth = self._answer_opens_browser_auth(answer)
         self._run_rclone(
             lambda: rclone_wizard.continue_remote(
                 self._remote_name,
@@ -1566,13 +1574,15 @@ class NewRemoteWizard:
                 self._state,
                 answer,
                 self._initial_config_args(),
-            )
+            ),
+            browser_auth=opens_browser_auth,
         )
 
-    def _run_rclone(self, action: Any, *, reset_port_retry: bool = True) -> None:
+    def _run_rclone(self, action: Any, *, reset_port_retry: bool = True, browser_auth: bool = False) -> None:
         self._last_rclone_action = action
         if reset_port_retry:
             self._port_retry_attempted = False
+        self._waiting_for_browser_auth = browser_auth
         self._set_busy(True)
 
         def worker() -> None:
@@ -1586,6 +1596,7 @@ class NewRemoteWizard:
     def _handle_command_finished(self, step: object, error: object) -> None:
         if getattr(self, "_cancelled", False):
             return
+        self._waiting_for_browser_auth = False
         self._set_busy(False)
         if error is not None:
             if self._recover_from_rclone_port_error(str(error)):
@@ -1623,7 +1634,8 @@ class NewRemoteWizard:
                     self._state,
                     automatic_answer,
                     self._initial_config_args(),
-                )
+                ),
+                browser_auth=self._answer_opens_browser_auth(automatic_answer, step.option),
             )
             return
         self._show_question(step)
@@ -1690,6 +1702,7 @@ class NewRemoteWizard:
         self._question = None
         self._answer_field = None
         self._answer_group = None
+        self._waiting_for_browser_auth = False
         self._browser_port_available = False
         self.status.setText(self._browser_port_wait_message())
         self._update_action_button()
@@ -1913,7 +1926,7 @@ class NewRemoteWizard:
         self.fields["client_secret"].setEnabled(allow_edit)
 
     def _busy_message(self) -> str:
-        if self._uses_browser_auth() and self._drive_local_auth:
+        if getattr(self, "_waiting_for_browser_auth", False):
             return "Waiting for browser authentication. A sign-in page should open in your browser."
         if self._question and self._option_name(self._question.option) == "config_is_local":
             if self._answer_value() == "true":
@@ -2030,7 +2043,8 @@ class NewRemoteWizard:
         return f"{alias} {index}__{provider_name}"
 
     def _provider_config_name(self, remote_type: str) -> str:
-        return remote_type.strip().lower() or "remote"
+        normalized = remote_type.strip().lower()
+        return REMOTE_CONFIG_SUFFIXES.get(normalized, normalized or "Remote")
 
     def _provider_display_name(self, alias: str, remote_type: str) -> str:
         return f"{alias} ({self._provider_config_name(remote_type)})"
@@ -2206,6 +2220,7 @@ class MountletWindow:
         self._child_dialog_owners: dict[Any, Any] = {}
         self._last_child_offsets: dict[Any, tuple[int, int]] = {}
         self._window_stack_hidden = False
+        self._sort_reverse = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -2511,12 +2526,7 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         self._refresh_pending = False
-        sort_mode = self._remote_sort_mode()
         remotes = _load_visible_remotes()
-        if self._sort_uses_storage(sort_mode):
-            for remote in remotes:
-                self._schedule_storage_load(remote)
-        remotes = self._sorted_remotes(remotes, sort_mode)
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
@@ -2524,7 +2534,7 @@ class MountletWindow:
             self._name_column_width = name_width
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
-                if mounted_by_name[remote.name] or self._sort_uses_storage(sort_mode):
+                if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
             return
 
@@ -2532,6 +2542,7 @@ class MountletWindow:
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
+        outer.addWidget(self._sort_toolbar())
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -2546,7 +2557,7 @@ class MountletWindow:
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                if mounted_by_name[remote.name] or self._sort_uses_storage(sort_mode):
+                if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
@@ -2564,6 +2575,57 @@ class MountletWindow:
             return
         self._refresh_pending = True
         self.qt.QTimer.singleShot(25, self.refresh)
+
+    def _sort_toolbar(self) -> Any:
+        widget = self.qt.QWidget()
+        layout = self.qt.QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        sort_button = self.qt.QPushButton("Sort by")
+        sort_menu = self.qt.QMenu(sort_button)
+        for mode, label in REMOTE_SORT_OPTIONS:
+            self.tray_app._add_action(sort_menu, label, lambda selected=mode: self._sort_remote_order(selected))
+        sort_button.setMenu(sort_menu)
+        sort_button.setToolTip("Sort remotes and save the new order.")
+
+        reverse_button = self.qt.QPushButton("Reverse")
+        reverse_button.setCheckable(True)
+        reverse_button.setChecked(bool(getattr(self, "_sort_reverse", False)))
+        reverse_button.setToolTip("Reverse the next predefined sort order.")
+        reverse_button.toggled.connect(lambda checked=False: self._set_sort_reverse(bool(checked), reverse_button))
+        self._set_sort_reverse(bool(getattr(self, "_sort_reverse", False)), reverse_button)
+
+        layout.addWidget(sort_button)
+        layout.addWidget(reverse_button)
+        layout.addStretch(1)
+        return widget
+
+    def _set_sort_reverse(self, enabled: bool, button: Any | None = None) -> None:
+        self._sort_reverse = enabled
+        if button is not None:
+            button.setText("Reverse on" if enabled else "Reverse")
+
+    def _sort_remote_order(self, sort_mode: str) -> None:
+        remotes = _load_visible_remotes()
+        if not remotes:
+            return
+        reverse = bool(getattr(self, "_sort_reverse", False))
+        if self._sort_uses_storage(sort_mode):
+            missing = [remote for remote in remotes if self._storage_sort_value(remote, sort_mode) is None]
+            if missing:
+                for remote in missing:
+                    self._schedule_storage_load(remote)
+                self.tray_app._notify(
+                    "Sort remotes",
+                    "Storage usage is loading. Try again when the values appear.",
+                    success=True,
+                )
+                return
+        sorted_names = [remote.name for remote in self._sorted_remotes(remotes, sort_mode, reverse=reverse)]
+        self._save_remote_order(sorted_names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
 
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._row_usage(remote, mounted)
@@ -2758,8 +2820,6 @@ class MountletWindow:
         button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
 
     def _can_move_remote(self, remote_name: str, delta: int) -> bool:
-        if self._remote_sort_mode() != "registration":
-            return False
         try:
             index = self._current_remote_names.index(remote_name)
         except ValueError:
@@ -2768,8 +2828,6 @@ class MountletWindow:
         return 0 <= target < len(self._current_remote_names)
 
     def _move_remote(self, remote_name: str, delta: int) -> None:
-        if self._remote_sort_mode() != "registration":
-            return
         names = [remote.name for remote in _load_visible_remotes()]
         try:
             index = names.index(remote_name)
@@ -2796,21 +2854,20 @@ class MountletWindow:
             )
         save_mount_settings(settings)
 
-    def _remote_sort_mode(self) -> str:
-        mode = getattr(load_app_settings(), "remote_sort", "registration")
-        values = {value for value, _label in REMOTE_SORT_OPTIONS}
-        return mode if mode in values else "registration"
-
     def _sort_uses_storage(self, sort_mode: str) -> bool:
         return sort_mode in STORAGE_SORT_MODES
 
-    def _sorted_remotes(self, remotes: list[core.RemoteInfo], sort_mode: str | None = None) -> list[core.RemoteInfo]:
-        mode = sort_mode or self._remote_sort_mode()
-        if mode == "registration":
-            return list(remotes)
+    def _sorted_remotes(
+        self,
+        remotes: list[core.RemoteInfo],
+        sort_mode: str,
+        *,
+        reverse: bool = False,
+    ) -> list[core.RemoteInfo]:
+        mode = sort_mode
         indexed = list(enumerate(remotes))
         if mode == "name":
-            return [
+            result = [
                 remote
                 for _index, remote in sorted(
                     indexed,
@@ -2822,8 +2879,9 @@ class MountletWindow:
                     ),
                 )
             ]
+            return list(reversed(result)) if reverse else result
         if mode == "provider":
-            return [
+            result = [
                 remote
                 for _index, remote in sorted(
                     indexed,
@@ -2835,8 +2893,10 @@ class MountletWindow:
                     ),
                 )
             ]
+            return list(reversed(result)) if reverse else result
         if mode in STORAGE_SORT_MODES:
-            return [remote for _index, remote in sorted(indexed, key=lambda item: self._storage_sort_key(item, mode))]
+            result = [remote for _index, remote in sorted(indexed, key=lambda item: self._storage_sort_key(item, mode))]
+            return list(reversed(result)) if reverse else result
         return list(remotes)
 
     def _storage_sort_key(self, item: tuple[int, core.RemoteInfo], sort_mode: str) -> tuple[bool, int, str, int]:
@@ -3076,7 +3136,7 @@ class MountletWindow:
         self._run_bulk_action("Unmount all", core.unmount_all)
 
     def _run_bulk_action(self, title: str, action: Any) -> None:
-        remotes = self._sorted_remotes(_load_visible_remotes())
+        remotes = _load_visible_remotes()
         if not remotes:
             return
         for remote in remotes:
@@ -3394,7 +3454,7 @@ class MountletTray:
             return
         self.remote_menu.clear()
         self.app_menu.clear()
-        remotes = self.main_window._sorted_remotes(_load_visible_remotes())
+        remotes = _load_visible_remotes()
         mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 

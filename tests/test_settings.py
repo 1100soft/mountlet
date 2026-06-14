@@ -26,7 +26,6 @@ start_at_login = true
 [tray]
 open_folder_behavior = "new_window"
 focus_file_manager = false
-remote_sort = "provider"
 """.strip(),
                 encoding="utf-8",
             )
@@ -39,7 +38,6 @@ remote_sort = "provider"
         self.assertTrue(config.start_at_login)
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
-        self.assertEqual(config.remote_sort, "provider")
 
     def test_load_mount_settings_reads_per_remote_overrides(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -115,7 +113,6 @@ order = 2
                     start_at_login=True,
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
-                    remote_sort="used",
                 ),
                 path,
             )
@@ -128,7 +125,6 @@ order = 2
         self.assertTrue(loaded.start_at_login)
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
-        self.assertEqual(loaded.remote_sort, "used")
 
     def test_set_start_at_login_writes_and_removes_desktop_entry(self):
         with tempfile.TemporaryDirectory() as tempdir:
