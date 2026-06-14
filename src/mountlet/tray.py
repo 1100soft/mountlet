@@ -1332,6 +1332,8 @@ class NewRemoteWizard:
         self._cancelled = False
         self._last_rclone_action: Any | None = None
         self._port_retry_attempted = False
+        self._browser_port_available = True
+        self._browser_port_owner_hint = ""
         self._message_boxes: list[Any] = []
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
@@ -1424,6 +1426,8 @@ class NewRemoteWizard:
             ],
             selected="local",
         )
+        local_auth.toggled.connect(lambda _checked=False: self._update_browser_port_status())
+        remote_auth.toggled.connect(lambda _checked=False: self._update_browser_port_status())
         drive_group, my_drive, shared_drive = self._radio_group(
             [
                 ("my_drive", "My Drive"),
@@ -1485,8 +1489,13 @@ class NewRemoteWizard:
         root.addWidget(self.question_frame)
         root.addWidget(self.status)
         root.addWidget(buttons)
+        self._port_timer = self.qt.QTimer(self.dialog)
+        self._port_timer.setInterval(1000)
+        self._port_timer.timeout.connect(self._update_browser_port_status)
+        self._port_timer.start()
         self._apply_credential_choice()
         self._apply_provider_choice()
+        self._update_browser_port_status()
         self._update_action_button()
         self.dialog.adjustSize()
 
@@ -1498,7 +1507,7 @@ class NewRemoteWizard:
             self.action_button.setText(self._question_button_text())
             return
         self.action_button.setText("Create remote")
-        self.action_button.setEnabled(bool(self.fields["name"].text().strip()))
+        self.action_button.setEnabled(bool(self.fields["name"].text().strip()) and self._browser_port_available)
 
     def _next(self) -> None:
         if self._question is None:
@@ -1622,6 +1631,36 @@ class NewRemoteWizard:
     def _uses_browser_auth(self) -> bool:
         return getattr(self, "_remote_type", "") in OAUTH_REMOTE_TYPES
 
+    def _setup_uses_local_browser_auth(self) -> bool:
+        if not self.fields or self._question is not None or self._remote_name:
+            return False
+        remote_type = self.fields["provider"].currentData() or "drive"
+        return remote_type in OAUTH_REMOTE_TYPES and self.fields["local_auth"].isChecked()
+
+    def _update_browser_port_status(self) -> None:
+        if not hasattr(self, "action_button"):
+            return
+        if not self._setup_uses_local_browser_auth():
+            self._browser_port_available = True
+            self._browser_port_owner_hint = ""
+            if self._question is None and not self._remote_name:
+                self.status.setText("")
+            self._update_action_button()
+            return
+        available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
+        self._browser_port_available = available
+        self._browser_port_owner_hint = owner_hint
+        self.status.setText("" if available else self._browser_port_wait_message(owner_hint))
+        self._update_action_button()
+
+    def _browser_port_wait_message(self, owner_hint: str = "") -> str:
+        detail = f" {owner_hint}" if owner_hint else ""
+        return (
+            "Waiting for rclone's browser sign-in port to become available. "
+            "A previous browser sign-in is probably still finishing."
+            f"{detail}"
+        )
+
     def _answer_opens_browser_auth(self, answer: str, option: dict[str, Any] | None = None) -> bool:
         option = option or (self._question.option if self._question else None)
         if not option or self._option_name(option) != "config_is_local":
@@ -1632,28 +1671,29 @@ class NewRemoteWizard:
         if not (self._uses_browser_auth() and self._drive_local_auth):
             return True
         port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
-        if not port_available and self._offer_to_stop_stuck_rclone(owner_hint):
-            port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
         if port_available:
             self.status.setText("")
             return True
-        details = f"\n\n{owner_hint}" if owner_hint else ""
-        self._warning(
-            "Add remote",
-            f"rclone's browser sign-in port {RCLONE_OAUTH_LOCAL_PORT} is already in use.{details}\n\n"
-            "Finish or close any other rclone sign-in window, then try again. "
-            "You can also choose token authorization from another computer.",
-        )
+        self._browser_port_available = False
+        self._browser_port_owner_hint = owner_hint
+        self.status.setText(self._browser_port_wait_message(owner_hint))
+        self._update_action_button()
         return False
 
     def _recover_from_rclone_port_error(self, message: str) -> bool:
         if not _is_rclone_auth_port_error(message):
             return False
-        if self._port_retry_attempted:
-            self.status.setText("Use token authorization.")
-            return True
-        self._port_retry_attempted = True
-        return self._switch_to_token_authorization()
+        self._cleanup_incomplete_remote()
+        self._show_setup_view(True)
+        self._remote_name = ""
+        self._remote_alias = ""
+        self._question = None
+        self._answer_field = None
+        self._answer_group = None
+        self._browser_port_available = False
+        self.status.setText(self._browser_port_wait_message())
+        self._update_action_button()
+        return True
 
     def _switch_to_token_authorization(self) -> bool:
         if not self._uses_browser_auth():
@@ -1765,6 +1805,7 @@ class NewRemoteWizard:
 
     def _finish_success(self) -> None:
         self._completed = True
+        self._stop_port_timer()
         self._close_message_boxes()
         _wizard_pending_remote_names.discard(self._remote_name)
         self.dialog.accept()
@@ -1824,6 +1865,7 @@ class NewRemoteWizard:
             "Mount the new remote immediately after setup succeeds."
         )
         self._apply_credential_choice()
+        self._update_browser_port_status()
         self.dialog.adjustSize()
 
     def _set_form_row_visible(self, widget: Any, visible: bool) -> None:
@@ -1871,9 +1913,11 @@ class NewRemoteWizard:
         self.fields["client_secret"].setEnabled(allow_edit)
 
     def _busy_message(self) -> str:
+        if self._uses_browser_auth() and self._drive_local_auth:
+            return "Waiting for browser authentication. A sign-in page should open in your browser."
         if self._question and self._option_name(self._question.option) == "config_is_local":
             if self._answer_value() == "true":
-                return "Waiting for rclone. Your browser may open for Google sign-in."
+                return "Waiting for browser authentication. A sign-in page should open in your browser."
             return "Waiting for rclone."
         return "Waiting for rclone..."
 
@@ -2079,9 +2123,16 @@ class NewRemoteWizard:
 
     def _reject(self) -> None:
         self._cancelled = True
+        self._stop_port_timer()
         self._close_message_boxes()
         self._cleanup_incomplete_remote()
         self.dialog.reject()
+
+    def _stop_port_timer(self) -> None:
+        try:
+            self._port_timer.stop()
+        except Exception:
+            pass
 
     def _warning(self, title: str, message: str) -> None:
         try:

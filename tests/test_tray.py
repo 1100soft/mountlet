@@ -330,32 +330,42 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(stopped)
         terminate.assert_called_once_with(1234)
 
-    def test_new_remote_wizard_recovers_once_from_rclone_port_error(self):
+    def test_new_remote_wizard_recovers_from_rclone_port_error_by_waiting(self):
         wizard = object.__new__(tray.NewRemoteWizard)
-        wizard._port_retry_attempted = False
-
-        with mock.patch.object(wizard, "_switch_to_token_authorization", return_value=True) as switch:
-            recovered = wizard._recover_from_rclone_port_error(
-                "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
-            )
-
-        self.assertTrue(recovered)
-        switch.assert_called_once_with()
-        self.assertTrue(wizard._port_retry_attempted)
-
-    def test_new_remote_wizard_stops_retrying_port_race_after_fallback(self):
-        wizard = object.__new__(tray.NewRemoteWizard)
-        wizard._port_retry_attempted = True
         wizard.status = mock.Mock()
+        wizard._remote_name = "Docs__drive"
+        wizard._remote_alias = "Docs"
+        wizard._question = tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_is_local"})
+        wizard._answer_field = mock.Mock()
+        wizard._answer_group = mock.Mock()
 
-        with mock.patch.object(wizard, "_switch_to_token_authorization") as switch:
-            recovered = wizard._recover_from_rclone_port_error(
-                "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
-            )
+        with mock.patch.object(wizard, "_cleanup_incomplete_remote") as cleanup:
+            with mock.patch.object(wizard, "_show_setup_view") as show_setup:
+                with mock.patch.object(wizard, "_update_action_button") as update_button:
+                    recovered = wizard._recover_from_rclone_port_error(
+                        "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
+                    )
 
         self.assertTrue(recovered)
-        switch.assert_not_called()
-        wizard.status.setText.assert_called_once_with("Use token authorization.")
+        cleanup.assert_called_once_with()
+        show_setup.assert_called_once_with(True)
+        update_button.assert_called_once_with()
+        self.assertEqual(wizard._remote_name, "")
+        self.assertIsNone(wizard._question)
+        self.assertFalse(wizard._browser_port_available)
+        wizard.status.setText.assert_called_once()
+        self.assertIn("Waiting for rclone's browser sign-in port", wizard.status.setText.call_args.args[0])
+
+    def test_new_remote_wizard_ignores_unrelated_rclone_errors(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        with mock.patch.object(wizard, "_cleanup_incomplete_remote") as cleanup:
+            recovered = wizard._recover_from_rclone_port_error(
+                "failed to authenticate"
+            )
+
+        self.assertFalse(recovered)
+        cleanup.assert_not_called()
 
     def test_new_remote_wizard_checks_port_before_browser_continue(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -403,6 +413,39 @@ class TrayTests(unittest.TestCase):
 
         port_status.assert_called_once_with(tray.RCLONE_OAUTH_LOCAL_PORT)
         wizard.status.setText.assert_called_once_with("")
+
+    def test_browser_auth_port_wait_disables_create_button(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        wizard._remote_name = ""
+        wizard._remote_type = "drive"
+        wizard._browser_port_available = True
+        wizard.status = mock.Mock()
+        wizard.action_button = mock.Mock()
+        provider = mock.Mock()
+        provider.currentData.return_value = "drive"
+        local_auth = mock.Mock()
+        local_auth.isChecked.return_value = True
+        name = mock.Mock()
+        name.text.return_value = "Docs"
+        wizard.fields = {"provider": provider, "local_auth": local_auth, "name": name}
+
+        with mock.patch.object(tray, "_local_port_status", return_value=(False, "Process using the port: rclone.")):
+            wizard._update_browser_port_status()
+
+        self.assertFalse(wizard._browser_port_available)
+        wizard.action_button.setEnabled.assert_called_with(False)
+        self.assertIn("Waiting for rclone's browser sign-in port", wizard.status.setText.call_args.args[0])
+
+    def test_new_remote_wizard_local_browser_busy_message_is_specific(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "drive"
+        wizard._drive_local_auth = True
+
+        self.assertEqual(
+            wizard._busy_message(),
+            "Waiting for browser authentication. A sign-in page should open in your browser.",
+        )
 
     def test_new_remote_wizard_can_hide_setup_view(self):
         wizard = object.__new__(tray.NewRemoteWizard)
