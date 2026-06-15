@@ -86,6 +86,11 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
 
+    def test_remote_browser_tooltip_names_service_not_remote(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        self.assertEqual(tray._remote_browser_tooltip(remote), "Open Drive service in browser")
+
     def test_remote_browser_url_uses_webdav_url_when_available(self):
         remote = core.RemoteInfo(
             "Files__WebDAV",
@@ -744,6 +749,17 @@ class TrayTests(unittest.TestCase):
         self.assertIn("Docs", title)
         self.assertIn("(Drive)", title)
         self.assertIn(tray.PROVIDER_COLORS["drive"], title)
+
+    def test_mountlet_window_browser_button_uses_provider_color(self):
+        window = object.__new__(tray.MountletWindow)
+        button = mock.Mock()
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        window._update_browser_button(button, remote)
+
+        button.setEnabled.assert_called_once_with(True)
+        button.setStyleSheet.assert_called_once_with(f"color: {tray.PROVIDER_COLORS['drive']};")
+        button.setToolTip.assert_called_once_with("Open Drive service in browser")
 
     def test_mountlet_window_remote_title_escapes_rich_text(self):
         window = object.__new__(tray.MountletWindow)

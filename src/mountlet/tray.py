@@ -254,6 +254,20 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
     return None
 
 
+def _provider_color(remote: core.RemoteInfo) -> str:
+    return PROVIDER_COLORS.get(remote.backend_type.casefold(), "#64748b")
+
+
+def _remote_service_label(remote: core.RemoteInfo) -> str:
+    if remote.provider:
+        return remote.provider
+    return REMOTE_CONFIG_SUFFIXES.get(remote.backend_type.casefold(), remote.backend_type or "remote")
+
+
+def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
+    return f"Open {_remote_service_label(remote)} service in browser"
+
+
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
     if not remotes:
         return "Mountlet - no rclone remotes"
@@ -2861,11 +2875,13 @@ class MountletWindow:
     def _update_browser_button(self, button: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
         if url:
-            tooltip = f"Open {remote.display_name} in browser"
+            tooltip = _remote_browser_tooltip(remote)
             button.setEnabled(True)
+            button.setStyleSheet(f"color: {_provider_color(remote)};")
         else:
             tooltip = f"No browser view is configured for {remote.display_name}"
             button.setEnabled(False)
+            button.setStyleSheet("")
         button.setToolTip(tooltip)
         button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
 
@@ -3125,7 +3141,7 @@ class MountletWindow:
         name = html.escape(self._truncated_remote_alias(remote, include_provider=bool(remote.provider)))
         if not remote.provider:
             return name
-        color = PROVIDER_COLORS.get(remote.backend_type.casefold(), "#64748b")
+        color = _provider_color(remote)
         provider = html.escape(remote.provider)
         return f'{name} <span style="color:{color};">({provider})</span>'
 
