@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import html
 import os
 import platform
 import re
@@ -117,6 +118,15 @@ REMOTE_CONFIG_SUFFIXES = {
     "s3": "S3",
     "webdav": "WebDAV",
 }
+PROVIDER_COLORS = {
+    "drive": "#4285f4",
+    "dropbox": "#0061ff",
+    "onedrive": "#0078d4",
+    "box": "#0061d5",
+    "pcloud": "#17a2d4",
+    "s3": "#ff9900",
+    "webdav": "#64748b",
+}
 _wizard_pending_remote_names: set[str] = set()
 
 
@@ -137,7 +147,7 @@ def _packaged_icon_path() -> str | None:
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+        from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
         from PySide6.QtWidgets import (
             QApplication,
@@ -203,6 +213,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QPushButton=QPushButton,
         QRadioButton=QRadioButton,
         QScrollArea=QScrollArea,
+        QSize=QSize,
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
         QSystemTrayIcon=QSystemTrayIcon,
@@ -2298,7 +2309,10 @@ class MountletWindow:
             return
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
-            self._hide_window_stack()
+            if self._window_is_active():
+                self._hide_window_stack()
+            else:
+                self.show()
             return
         self.show()
 
@@ -2322,6 +2336,12 @@ class MountletWindow:
             self.window.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
         except Exception:
             return
+
+    def _window_is_active(self) -> bool:
+        try:
+            return bool(self.window.isActiveWindow())
+        except Exception:
+            return False
 
     def _focus_window(self) -> None:
         _move_x11_window_to_current_desktop(self.window)
@@ -2603,6 +2623,9 @@ class MountletWindow:
         remotes = _load_visible_remotes()
         if not remotes:
             return
+        if sort_mode == "registration":
+            self._restore_registration_order([remote.name for remote in remotes])
+            return
         if self._sort_uses_storage(sort_mode):
             missing = [remote for remote in remotes if self._storage_sort_value(remote, sort_mode) is None]
             if missing:
@@ -2616,6 +2639,23 @@ class MountletWindow:
                 return
         sorted_names = [remote.name for remote in self._sorted_remotes(remotes, sort_mode)]
         self._save_remote_order(sorted_names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
+
+    def _restore_registration_order(self, remote_names: list[str]) -> None:
+        settings = load_mount_settings()
+        for remote_name in remote_names:
+            current = settings.get(remote_name)
+            if current is None or current.order is None:
+                continue
+            settings[remote_name] = MountSettings(
+                mount_path=current.mount_path,
+                mount_flags=list(current.mount_flags),
+                auto_mount=current.auto_mount,
+                enabled=current.enabled,
+                order=None,
+            )
+        save_mount_settings(settings)
         self._current_remote_names = []
         self.tray_app.rebuild_menus()
 
@@ -2659,6 +2699,7 @@ class MountletWindow:
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
+        title.setTextFormat(self.qt.Qt.TextFormat.RichText)
         title.setToolTip(title_tooltip)
         title.setFixedWidth(self._name_column_width)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
@@ -3045,23 +3086,56 @@ class MountletWindow:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
-        name = remote.display_name
-        return name if len(name) <= 20 else name[:17] + "..."
+        name = html.escape(self._truncated_remote_alias(remote, include_provider=bool(remote.provider)))
+        if not remote.provider:
+            return name
+        color = PROVIDER_COLORS.get(remote.backend_type.casefold(), "#64748b")
+        provider = html.escape(remote.provider)
+        return f'{name} <span style="color:{color};">({provider})</span>'
+
+    def _plain_remote_name(self, remote: core.RemoteInfo) -> str:
+        alias = self._truncated_remote_alias(remote, include_provider=bool(remote.provider))
+        if remote.provider:
+            return f"{alias} ({remote.provider})"
+        return alias
+
+    def _truncated_remote_alias(self, remote: core.RemoteInfo, *, include_provider: bool) -> str:
+        name = remote.alias
+        suffix_length = len(f" ({remote.provider})") if include_provider else 0
+        limit = max(4, 20 - suffix_length)
+        return name if len(name) <= limit else name[: limit - 3] + "..."
 
     def _remote_name_width(self, remotes: list[core.RemoteInfo]) -> int:
-        displayed = [self._display_remote_name(remote) for remote in remotes]
+        displayed = [self._plain_remote_name(remote) for remote in remotes]
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
         return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
 
     def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
-        root.layout().activate()
+        layout = root.layout()
+        layout.activate()
         container.layout().activate()
-        root_size = root.sizeHint()
         scroll_frame = scroll.frameWidth() * 2
         menu_height = self.window.menuBar().sizeHint().height()
-        width = root_size.width() + scroll_frame + 2
-        height = menu_height + root_size.height() + scroll_frame + 2
+        margins = layout.contentsMargins()
+        spacing = max(layout.spacing(), 0)
+        toolbar_size = self._layout_item_size(layout, 0)
+        add_row_size = self._layout_item_size(layout, 2)
+        container_size = container.sizeHint()
+        horizontal_padding = margins.left() + margins.right()
+        vertical_padding = margins.top() + margins.bottom()
+        content_width = max(toolbar_size.width(), add_row_size.width(), container_size.width())
+        width = horizontal_padding + content_width + scroll_frame + 2
+        height = (
+            menu_height
+            + vertical_padding
+            + toolbar_size.height()
+            + add_row_size.height()
+            + container_size.height()
+            + scroll_frame
+            + (spacing * 2)
+            + 2
+        )
 
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
@@ -3077,6 +3151,15 @@ class MountletWindow:
             height = max_height
 
         self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
+
+    def _layout_item_size(self, layout: Any, index: int) -> Any:
+        item = layout.itemAt(index)
+        if item is None:
+            return self.qt.QSize(0, 0)
+        widget = item.widget()
+        if widget is None:
+            return item.sizeHint()
+        return widget.sizeHint()
 
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)

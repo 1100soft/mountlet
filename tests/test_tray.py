@@ -706,6 +706,16 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(window._can_move_remote("Beta", -1))
 
+    def test_mountlet_window_remote_title_colors_provider(self):
+        window = object.__new__(tray.MountletWindow)
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        title = window._display_remote_name(remote)
+
+        self.assertIn("Docs", title)
+        self.assertIn("(Drive)", title)
+        self.assertIn(tray.PROVIDER_COLORS["drive"], title)
+
     def test_mountlet_window_sort_action_saves_order(self):
         window = object.__new__(tray.MountletWindow)
         window._usage_cache = {}
@@ -721,6 +731,33 @@ class TrayTests(unittest.TestCase):
                 window._sort_remote_order("name")
 
         save.assert_called_once_with(["Alpha", "Beta"])
+        self.assertEqual(window._current_remote_names, [])
+        window.tray_app.rebuild_menus.assert_called_once_with()
+
+    def test_mountlet_window_registration_sort_clears_manual_order(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        window._current_remote_names = ["Beta", "Alpha"]
+        window.tray_app = mock.Mock()
+        remotes = [
+            core.RemoteInfo("Beta", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+            core.RemoteInfo("Alpha", "Alpha", "drive", "drive", "/tmp/alpha"),
+        ]
+        mount_settings = {
+            "Alpha": settings.MountSettings(order=0, auto_mount=True),
+            "Beta": settings.MountSettings(order=1, mount_path="dropbox/Beta"),
+        }
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
+            with mock.patch.object(tray, "load_mount_settings", return_value=mount_settings):
+                with mock.patch.object(tray, "save_mount_settings") as save:
+                    window._sort_remote_order("registration")
+
+        saved = save.call_args.args[0]
+        self.assertIsNone(saved["Alpha"].order)
+        self.assertTrue(saved["Alpha"].auto_mount)
+        self.assertIsNone(saved["Beta"].order)
+        self.assertEqual(saved["Beta"].mount_path, "dropbox/Beta")
         self.assertEqual(window._current_remote_names, [])
         window.tray_app.rebuild_menus.assert_called_once_with()
 
@@ -745,6 +782,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
         mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = True
         mountlet_window._child_dialogs = []
         mountlet_window._child_dialog_owners = {}
 
@@ -754,6 +792,19 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window.window.hide.assert_called_once_with()
         show.assert_not_called()
+
+    def test_mountlet_window_toggle_raises_visible_unfocused_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = False
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        mountlet_window.window.hide.assert_not_called()
+        show.assert_called_once_with()
 
     def test_mountlet_window_close_hides_window_stack(self):
         mountlet_window = object.__new__(tray.MountletWindow)
