@@ -265,7 +265,7 @@ def _remote_service_label(remote: core.RemoteInfo) -> str:
 
 
 def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
-    return f"Open {_remote_service_label(remote)} service in browser"
+    return f"Open {_remote_service_label(remote)} in browser"
 
 
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
