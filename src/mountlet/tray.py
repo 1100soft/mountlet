@@ -119,13 +119,20 @@ REMOTE_CONFIG_SUFFIXES = {
     "webdav": "WebDAV",
 }
 PROVIDER_COLORS = {
-    "drive": "#4285f4",
+    "drive": "#34a853",
     "dropbox": "#0061ff",
     "onedrive": "#0078d4",
-    "box": "#0061d5",
+    "box": "#0057c2",
     "pcloud": "#17a2d4",
     "s3": "#ff9900",
     "webdav": "#64748b",
+}
+REMOTE_BROWSER_URLS = {
+    "drive": "https://drive.google.com/drive/my-drive",
+    "dropbox": "https://www.dropbox.com/home",
+    "onedrive": "https://onedrive.live.com/",
+    "box": "https://app.box.com/files",
+    "pcloud": "https://my.pcloud.com/",
 }
 _wizard_pending_remote_names: set[str] = set()
 
@@ -234,6 +241,17 @@ def _clean_message(message: str) -> str:
 def _remote_title(remote: core.RemoteInfo, mounted: bool) -> str:
     marker = "Mounted" if mounted else "Unmounted"
     return f"{remote.display_name} - {marker}"
+
+
+def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
+    backend_type = remote.backend_type.casefold()
+    if backend_type in REMOTE_BROWSER_URLS:
+        return REMOTE_BROWSER_URLS[backend_type]
+    if backend_type == "webdav":
+        url = remote.extra_info.get("url", "").strip()
+        if url.startswith(("http://", "https://")):
+            return url
+    return None
 
 
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
@@ -2695,7 +2713,8 @@ class MountletWindow:
         layout.setColumnMinimumWidth(2, 126)
         layout.setColumnMinimumWidth(3, 96)
         layout.setColumnMinimumWidth(4, 36)
-        layout.setColumnMinimumWidth(5, 24)
+        layout.setColumnMinimumWidth(5, 36)
+        layout.setColumnMinimumWidth(6, 24)
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
@@ -2732,6 +2751,9 @@ class MountletWindow:
             widget,
             tooltip,
         )
+        browser_button = self._icon_button("↗", lambda selected=remote: self._open_remote_in_browser(selected))
+        browser_button.setProperty("rowControl", True)
+        self._update_browser_button(browser_button, remote)
         move_controls, up_button, down_button = self._move_button_stack(remote)
 
         layout.addWidget(toggle, 0, 0)
@@ -2739,7 +2761,8 @@ class MountletWindow:
         layout.addWidget(usage_indicator, 0, 2)
         layout.addWidget(status, 0, 3)
         layout.addWidget(config_button, 0, 4)
-        layout.addWidget(move_controls, 0, 5)
+        layout.addWidget(browser_button, 0, 5)
+        layout.addWidget(move_controls, 0, 6)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             title=title,
@@ -2747,6 +2770,7 @@ class MountletWindow:
             toggle=toggle,
             status=status,
             config_button=config_button,
+            browser_button=browser_button,
             up_button=up_button,
             down_button=down_button,
         )
@@ -2830,8 +2854,20 @@ class MountletWindow:
         row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
             self._show_immediate_tooltip(widget, tooltip)
         )
+        self._update_browser_button(row.browser_button, remote)
         self._update_move_button(row.up_button, remote, -1)
         self._update_move_button(row.down_button, remote, 1)
+
+    def _update_browser_button(self, button: Any, remote: core.RemoteInfo) -> None:
+        url = _remote_browser_url(remote)
+        if url:
+            tooltip = f"Open {remote.display_name} in browser"
+            button.setEnabled(True)
+        else:
+            tooltip = f"No browser view is configured for {remote.display_name}"
+            button.setEnabled(False)
+        button.setToolTip(tooltip)
+        button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
 
     def _move_button_stack(self, remote: core.RemoteInfo) -> tuple[Any, Any, Any]:
         widget = self.qt.QWidget()
@@ -3251,6 +3287,9 @@ class MountletWindow:
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         self.tray_app._open_folder(remote)
 
+    def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
+        self.tray_app._open_remote_in_browser(remote)
+
     def _show_app_config_editor(self) -> None:
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
@@ -3579,6 +3618,9 @@ class MountletTray:
             self._add_action(submenu, "Open folder", lambda: self._open_folder(remote))
         else:
             self._add_action(submenu, "Mount", lambda: self._run_remote_action(remote, core.mount_remote))
+        browser_url = _remote_browser_url(remote)
+        if browser_url:
+            self._add_action(submenu, "Open in browser", lambda: self._open_remote_in_browser(remote))
         self._add_action(submenu, "Settings", lambda: self.main_window._show_mount_config_editor(remote))
 
     def _add_action(self, menu: Any, label: str, callback: Any, *, enabled: bool = True) -> Any:
@@ -3644,6 +3686,14 @@ class MountletTray:
             return
         if not _open_folder_default(self.qt, remote.mount_path):
             self._notify("Open folder", "Could not open the mount folder.", success=False)
+
+    def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
+        url = _remote_browser_url(remote)
+        if not url:
+            self._notify("Open in browser", "This remote does not have a known browser view.", success=False)
+            return
+        if not self.qt.QDesktopServices.openUrl(self.qt.QUrl(url)):
+            self._notify("Open in browser", "Could not open the browser.", success=False)
 
     def _notify(self, title: str, message: str, *, success: bool) -> None:
         if getattr(self, "_quitting", False):

@@ -81,6 +81,35 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._remote_title(remote, mounted=True), "Docs (drive) - Mounted")
         self.assertEqual(tray._remote_title(remote, mounted=False), "Docs (drive) - Unmounted")
 
+    def test_remote_browser_url_uses_provider_web_home(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
+
+    def test_remote_browser_url_uses_webdav_url_when_available(self):
+        remote = core.RemoteInfo(
+            "Files__WebDAV",
+            "Files",
+            "WebDAV",
+            "webdav",
+            "/tmp/files",
+            extra_info={"url": "https://cloud.example.com/files"},
+        )
+
+        self.assertEqual(tray._remote_browser_url(remote), "https://cloud.example.com/files")
+
+    def test_remote_browser_url_ignores_generic_s3_endpoint(self):
+        remote = core.RemoteInfo(
+            "Archive__S3",
+            "Archive",
+            "S3",
+            "s3",
+            "/tmp/archive",
+            extra_info={"endpoint": "https://s3.example.com"},
+        )
+
+        self.assertIsNone(tray._remote_browser_url(remote))
+
     def test_status_tooltip_summarizes_mounts(self):
         remotes = [
             core.RemoteInfo(
@@ -715,6 +744,15 @@ class TrayTests(unittest.TestCase):
         self.assertIn("Docs", title)
         self.assertIn("(Drive)", title)
         self.assertIn(tray.PROVIDER_COLORS["drive"], title)
+
+    def test_mountlet_window_remote_title_escapes_rich_text(self):
+        window = object.__new__(tray.MountletWindow)
+        remote = core.RemoteInfo("A < B__Box", "A < B", "Box", "box", "/tmp/box")
+
+        title = window._display_remote_name(remote)
+
+        self.assertIn("A &lt; B", title)
+        self.assertNotIn("A < B", title)
 
     def test_mountlet_window_sort_action_saves_order(self):
         window = object.__new__(tray.MountletWindow)
@@ -1506,6 +1544,35 @@ class TrayTests(unittest.TestCase):
                     tray_app._open_folder(remote)
 
         notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
+
+    def test_open_remote_in_browser_uses_provider_url(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app.qt = mock.Mock()
+        tray_app.qt.QUrl.return_value = "qt-url"
+        tray_app.qt.QDesktopServices.openUrl.return_value = True
+
+        with mock.patch.object(tray_app, "_notify") as notify:
+            tray_app._open_remote_in_browser(remote)
+
+        tray_app.qt.QUrl.assert_called_once_with("https://drive.google.com/drive/my-drive")
+        tray_app.qt.QDesktopServices.openUrl.assert_called_once_with("qt-url")
+        notify.assert_not_called()
+
+    def test_open_remote_in_browser_reports_missing_url(self):
+        remote = core.RemoteInfo("Archive__S3", "Archive", "S3", "s3", "/tmp/archive")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app.qt = mock.Mock()
+
+        with mock.patch.object(tray_app, "_notify") as notify:
+            tray_app._open_remote_in_browser(remote)
+
+        tray_app.qt.QDesktopServices.openUrl.assert_not_called()
+        notify.assert_called_once_with(
+            "Open in browser",
+            "This remote does not have a known browser view.",
+            success=False,
+        )
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
