@@ -660,6 +660,8 @@ class TrayTests(unittest.TestCase):
             core.RemoteInfo("Alpha__drive", "Alpha", "drive", "drive", "/tmp/alpha"),
         ]
 
+        self.assertEqual(window._sorted_remotes(remotes, "registration"), remotes)
+
         sorted_remotes = window._sorted_remotes(remotes, "name")
 
         self.assertEqual([remote.name for remote in sorted_remotes], ["Alpha__drive", "Beta__dropbox"])
@@ -707,7 +709,6 @@ class TrayTests(unittest.TestCase):
     def test_mountlet_window_sort_action_saves_order(self):
         window = object.__new__(tray.MountletWindow)
         window._usage_cache = {}
-        window._sort_reverse = False
         window._current_remote_names = ["Beta", "Alpha"]
         window.tray_app = mock.Mock()
         remotes = [
@@ -720,6 +721,23 @@ class TrayTests(unittest.TestCase):
                 window._sort_remote_order("name")
 
         save.assert_called_once_with(["Alpha", "Beta"])
+        self.assertEqual(window._current_remote_names, [])
+        window.tray_app.rebuild_menus.assert_called_once_with()
+
+    def test_mountlet_window_reverse_action_saves_reversed_order(self):
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta"]
+        window.tray_app = mock.Mock()
+        remotes = [
+            core.RemoteInfo("Alpha", "Alpha", "drive", "drive", "/tmp/alpha"),
+            core.RemoteInfo("Beta", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+        ]
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
+            with mock.patch.object(window, "_save_remote_order") as save:
+                window._reverse_remote_order()
+
+        save.assert_called_once_with(["Beta", "Alpha"])
         self.assertEqual(window._current_remote_names, [])
         window.tray_app.rebuild_menus.assert_called_once_with()
 

@@ -47,6 +47,7 @@ OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("default", "System default"),
 )
 REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("registration", "Registration time"),
     ("name", "Name"),
     ("provider", "Provider"),
     ("size", "Total size, largest first"),
@@ -2220,7 +2221,6 @@ class MountletWindow:
         self._child_dialog_owners: dict[Any, Any] = {}
         self._last_child_offsets: dict[Any, tuple[int, int]] = {}
         self._window_stack_hidden = False
-        self._sort_reverse = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -2561,9 +2561,9 @@ class MountletWindow:
                     self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
-        rows.addWidget(self._add_remote_row())
         scroll.setWidget(container)
         outer.addWidget(scroll)
+        outer.addWidget(self._add_remote_row())
 
         self.window.setCentralWidget(root)
         self._fit_to_content(root, scroll, container)
@@ -2589,28 +2589,20 @@ class MountletWindow:
         sort_button.setMenu(sort_menu)
         sort_button.setToolTip("Sort remotes and save the new order.")
 
-        reverse_button = self.qt.QPushButton("Reverse")
-        reverse_button.setCheckable(True)
-        reverse_button.setChecked(bool(getattr(self, "_sort_reverse", False)))
-        reverse_button.setToolTip("Reverse the next predefined sort order.")
-        reverse_button.toggled.connect(lambda checked=False: self._set_sort_reverse(bool(checked), reverse_button))
-        self._set_sort_reverse(bool(getattr(self, "_sort_reverse", False)), reverse_button)
+        reverse_button = self.qt.QPushButton("↕")
+        reverse_button.setFixedSize(30, 26)
+        reverse_button.setToolTip("Reverse the current remote order.")
+        reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
 
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         return widget
 
-    def _set_sort_reverse(self, enabled: bool, button: Any | None = None) -> None:
-        self._sort_reverse = enabled
-        if button is not None:
-            button.setText("Reverse on" if enabled else "Reverse")
-
     def _sort_remote_order(self, sort_mode: str) -> None:
         remotes = _load_visible_remotes()
         if not remotes:
             return
-        reverse = bool(getattr(self, "_sort_reverse", False))
         if self._sort_uses_storage(sort_mode):
             missing = [remote for remote in remotes if self._storage_sort_value(remote, sort_mode) is None]
             if missing:
@@ -2622,8 +2614,15 @@ class MountletWindow:
                     success=True,
                 )
                 return
-        sorted_names = [remote.name for remote in self._sorted_remotes(remotes, sort_mode, reverse=reverse)]
+        sorted_names = [remote.name for remote in self._sorted_remotes(remotes, sort_mode)]
         self._save_remote_order(sorted_names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
+
+    def _reverse_remote_order(self) -> None:
+        names = [remote.name for remote in _load_visible_remotes()]
+        names.reverse()
+        self._save_remote_order(names)
         self._current_remote_names = []
         self.tray_app.rebuild_menus()
 
@@ -2866,6 +2865,8 @@ class MountletWindow:
     ) -> list[core.RemoteInfo]:
         mode = sort_mode
         indexed = list(enumerate(remotes))
+        if mode == "registration":
+            return list(remotes)
         if mode == "name":
             result = [
                 remote
@@ -3056,12 +3057,11 @@ class MountletWindow:
     def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
         root.layout().activate()
         container.layout().activate()
-        content_size = container.sizeHint()
-        root_margins = root.layout().contentsMargins()
+        root_size = root.sizeHint()
         scroll_frame = scroll.frameWidth() * 2
         menu_height = self.window.menuBar().sizeHint().height()
-        width = root_margins.left() + root_margins.right() + scroll_frame + content_size.width() + 2
-        height = menu_height + root_margins.top() + root_margins.bottom() + scroll_frame + content_size.height() + 2
+        width = root_size.width() + scroll_frame + 2
+        height = menu_height + root_size.height() + scroll_frame + 2
 
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
