@@ -398,7 +398,7 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
             has_keys = bool(values.get("access_key_id", "").strip() and values.get("secret_access_key", "").strip())
             if not provider or not (env_auth or has_keys):
                 return False
-            if provider.lower() in {"minio", "other"} and not values.get("endpoint", "").strip():
+            if provider.lower() != "aws" and not values.get("endpoint", "").strip():
                 return False
             return True
         if backend_type == "webdav":

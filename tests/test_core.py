@@ -198,6 +198,9 @@ drive_type = personal
 
 [PartialS3]
 type = s3
+provider = Cloudflare
+access_key_id = key
+secret_access_key = secret
 
 [ReadyS3]
 type = s3

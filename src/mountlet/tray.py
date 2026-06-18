@@ -1496,6 +1496,7 @@ class NewRemoteWizard:
 
         s3_provider = self.qt.QComboBox()
         for label, value in (
+            ("Cloudflare R2", "Cloudflare"),
             ("MinIO / S3-compatible", "Minio"),
             ("Amazon S3", "AWS"),
             ("Wasabi", "Wasabi"),
@@ -1644,7 +1645,7 @@ class NewRemoteWizard:
         )
         if not has_keys:
             return False
-        if provider.lower() in {"minio", "other"} and not endpoint:
+        if provider.lower() != "aws" and not endpoint:
             return False
         return True
 
@@ -3436,6 +3437,9 @@ class MountletWindow:
 
     def _run_bulk_action(self, title: str, action: Any) -> None:
         remotes = _load_visible_remotes()
+        self._run_bulk_action_for_remotes(title, remotes, action)
+
+    def _run_bulk_action_for_remotes(self, title: str, remotes: list[core.RemoteInfo], action: Any) -> None:
         if not remotes:
             return
         for remote in remotes:
@@ -3832,9 +3836,7 @@ class MountletTray:
     def _auto_mount(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
-        mounted, failures = core.mount_all(remotes)
-        self._report_mount_results("Auto-mount", mounted, failures)
-        self.rebuild_menus()
+        self.main_window._run_bulk_action_for_remotes("Auto-mount", remotes, core.mount_all)
 
     def _report_mount_results(self, title: str, mounted: list[str], failures: list[str]) -> None:
         if failures:

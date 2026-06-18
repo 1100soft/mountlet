@@ -1734,18 +1734,19 @@ class TrayTests(unittest.TestCase):
         qt.QTimer.singleShot.assert_called_once()
         self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 1500)
 
-    def test_auto_mount_reports_results_and_rebuilds_menus(self):
+    def test_auto_mount_delegates_to_threaded_main_window_runner(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
         tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
 
-        with mock.patch.object(tray.core, "mount_all", return_value=(["Docs"], [])) as mount_all:
-            with mock.patch.object(tray_app, "_notify") as notify:
-                with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
-                    tray_app._auto_mount([remote])
+        tray_app._auto_mount([remote])
 
-        mount_all.assert_called_once_with([remote])
-        notify.assert_called_once_with("Auto-mount", "Mounted: Docs", success=True)
-        rebuild.assert_called_once_with()
+        tray_app.main_window._run_bulk_action_for_remotes.assert_called_once_with(
+            "Auto-mount",
+            [remote],
+            tray.core.mount_all,
+        )
 
 
 if __name__ == "__main__":
