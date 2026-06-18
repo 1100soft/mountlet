@@ -176,6 +176,12 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
         "--buffer-size",
         "16M",
     ],
+    "koofr": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+    ],
     "s3": [
         "--vfs-cache-mode",
         "full",
@@ -199,6 +205,7 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
+    "koofr": ("provider", "user", "mountid"),
 }
 S3_PROVIDER_DISPLAY_NAMES = {
     "cloudflare": "Cloudflare R2",
@@ -424,6 +431,8 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
             return True
         if backend_type == "webdav":
             return values.get("url", "").strip().startswith(("http://", "https://"))
+        if backend_type == "koofr":
+            return bool(values.get("provider", "").strip() and values.get("user", "").strip() and values.get("password", "").strip())
         return bool(backend_type)
     if backend_type == "onedrive":
         return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))

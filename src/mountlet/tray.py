@@ -105,6 +105,7 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Microsoft OneDrive", "onedrive"),
     ("Box", "box"),
     ("pCloud", "pcloud"),
+    ("Koofr", "koofr"),
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
 )
@@ -115,6 +116,7 @@ REMOTE_CONFIG_SUFFIXES = {
     "onedrive": "OneDrive",
     "box": "Box",
     "pcloud": "pCloud",
+    "koofr": "Koofr",
     "s3": "S3",
     "webdav": "WebDAV",
 }
@@ -125,23 +127,90 @@ S3_PROVIDER_CONFIG_SUFFIXES = {
     "wasabi": "Wasabi",
     "other": "S3",
 }
-WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
+S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
     {
-        "label": "Koofr",
-        "vendor": "other",
-        "config_name": "Koofr WebDAV",
-        "url": "https://app.koofr.net/dav/Koofr",
-        "user": "Koofr email address",
-        "password": "Koofr app password",
-        "url_tip": "Koofr WebDAV endpoint. Change it only if Koofr changes your endpoint.",
-        "user_tip": "Your Koofr account email address.",
-        "password_tip": "Use a Koofr app password for WebDAV access.",
-        "fixed_url": "true",
+        "label": "Cloudflare R2",
+        "provider": "Cloudflare",
+        "config_name": "Cloudflare R2",
+        "endpoint": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
+        "region": "auto",
+        "access_key": "R2 access key ID",
+        "secret_key": "R2 secret access key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use the default or jurisdiction-specific R2 endpoint from the token page.",
+        "region_tip": "Cloudflare R2 uses auto. us-east-1 also aliases to auto.",
+        "bucket_tip": "Enter the bucket name, especially for bucket-scoped R2 tokens.",
         "instructions": (
-            '<a href="https://rclone.org/koofr/">rclone Koofr guide</a> | '
-            '<a href="https://app.koofr.net/app/admin/preferences/password">Koofr app password</a>'
+            '<a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare R2 token guide</a> | '
+            '<a href="https://developers.cloudflare.com/r2/api/s3/api/">R2 S3 endpoint guide</a>'
         ),
     },
+    {
+        "label": "MinIO / S3-compatible",
+        "provider": "Minio",
+        "config_name": "MinIO",
+        "endpoint": "http://127.0.0.1:9000",
+        "region": "us-east-1",
+        "access_key": "MinIO access key",
+        "secret_key": "MinIO secret key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use your MinIO server endpoint.",
+        "region_tip": "MinIO commonly accepts us-east-1 unless your server is configured otherwise.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "instructions": '<a href="https://min.io/docs/minio/linux/reference/minio-mc/mc-admin-user-svcacct-add.html">MinIO access key guide</a>',
+    },
+    {
+        "label": "Amazon S3",
+        "provider": "AWS",
+        "config_name": "Amazon S3",
+        "endpoint": "",
+        "region": "us-east-1",
+        "access_key": "AWS access key ID",
+        "secret_key": "AWS secret access key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Leave blank for AWS so rclone uses the endpoint for the chosen region.",
+        "region_tip": "Use the AWS region where the bucket lives.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "hide_endpoint": "true",
+        "instructions": (
+            '<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html">'
+            "AWS access key guide</a>"
+        ),
+    },
+    {
+        "label": "Wasabi",
+        "provider": "Wasabi",
+        "config_name": "Wasabi",
+        "endpoint": "https://s3.wasabisys.com",
+        "region": "us-east-1",
+        "access_key": "Wasabi access key ID",
+        "secret_key": "Wasabi secret access key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use the Wasabi service URL for the bucket's storage region.",
+        "region_tip": "Use the Wasabi region where the bucket lives.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "instructions": (
+            '<a href="https://docs.wasabi.com/docs/creating-a-user-account-and-access-key">Wasabi access key guide</a> | '
+            '<a href="https://docs.wasabi.com/docs/what-are-the-service-urls-for-wasabi-s-different-storage-regions">'
+            "Wasabi service URLs</a>"
+        ),
+    },
+    {
+        "label": "Other S3-compatible",
+        "provider": "Other",
+        "config_name": "S3",
+        "endpoint": "https://s3.example.com",
+        "region": "us-east-1",
+        "access_key": "Access key",
+        "secret_key": "Secret key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use the S3-compatible endpoint from your storage provider.",
+        "region_tip": "Use the provider's region, or us-east-1 when the provider does not require one.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "instructions": '<a href="https://rclone.org/s3/">rclone S3 provider guide</a>',
+    },
+)
+WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
     {
         "label": "Nextcloud",
         "vendor": "nextcloud",
@@ -242,6 +311,7 @@ PROVIDER_COLORS = {
     "onedrive": "#0078d4",
     "box": "#0057c2",
     "pcloud": "#17a2d4",
+    "koofr": "#f59e0b",
     "s3": "#ff9900",
     "webdav": "#64748b",
 }
@@ -251,6 +321,7 @@ REMOTE_BROWSER_URLS = {
     "onedrive": "https://onedrive.live.com/",
     "box": "https://app.box.com/files",
     "pcloud": "https://my.pcloud.com/",
+    "koofr": "https://app.koofr.net/",
 }
 _wizard_pending_remote_names: set[str] = set()
 
@@ -412,6 +483,14 @@ def _fixed_webdav_urls() -> set[str]:
         for option in WEBDAV_VENDOR_OPTIONS
         if option.get("fixed_url", "").casefold() in {"true", "1", "yes"}
     }
+
+
+def _default_s3_endpoints() -> set[str]:
+    return {option.get("endpoint", "") for option in S3_PROVIDER_OPTIONS}
+
+
+def _default_s3_regions() -> set[str]:
+    return {option.get("region", "") for option in S3_PROVIDER_OPTIONS}
 
 
 def _load_visible_remotes() -> list[core.RemoteInfo]:
@@ -1633,28 +1712,34 @@ class NewRemoteWizard:
         connect_after_create.setToolTip("Mount the new remote immediately after setup succeeds.")
 
         s3_provider = self.qt.QComboBox()
-        for label, value in (
-            ("Cloudflare R2", "Cloudflare"),
-            ("MinIO / S3-compatible", "Minio"),
-            ("Amazon S3", "AWS"),
-            ("Wasabi", "Wasabi"),
-            ("Other S3-compatible", "Other"),
-        ):
-            s3_provider.addItem(label, value)
-        s3_provider.currentIndexChanged.connect(lambda _index=0: self._update_action_button())
+        for option in S3_PROVIDER_OPTIONS:
+            s3_provider.addItem(option["label"], option)
+        s3_provider.currentIndexChanged.connect(lambda _index=0: self._apply_s3_provider_choice())
         s3_endpoint = self.qt.QLineEdit()
-        s3_endpoint.setPlaceholderText("http://127.0.0.1:9000")
-        s3_endpoint.setToolTip("Required for MinIO and most S3-compatible services.")
         s3_region = self.qt.QLineEdit()
-        s3_region.setText("us-east-1")
         s3_access_key_id = self.qt.QLineEdit()
-        s3_access_key_id.setPlaceholderText("Access key")
         s3_secret_access_key = self.qt.QLineEdit()
-        s3_secret_access_key.setPlaceholderText("Secret key")
         s3_secret_access_key.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
         s3_remote_path = self.qt.QLineEdit()
-        s3_remote_path.setPlaceholderText("Bucket name or bucket/folder")
-        s3_remote_path.setToolTip("For bucket-scoped tokens, enter the bucket name.")
+        s3_help = self.qt.QLabel("")
+        s3_help.setOpenExternalLinks(True)
+        s3_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        s3_help.setStyleSheet(_muted_text_style(s3_help))
+
+        koofr_user = self.qt.QLineEdit()
+        koofr_user.setPlaceholderText("Koofr email address")
+        koofr_user.setToolTip("Your Koofr account email address.")
+        koofr_pass = self.qt.QLineEdit()
+        koofr_pass.setPlaceholderText("Koofr app password")
+        koofr_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        koofr_pass.setToolTip("Generate an app password in Koofr and paste it here.")
+        koofr_help = self.qt.QLabel(
+            '<a href="https://rclone.org/koofr/">rclone Koofr guide</a> | '
+            '<a href="https://app.koofr.net/app/admin/preferences/password">Koofr app password</a>'
+        )
+        koofr_help.setOpenExternalLinks(True)
+        koofr_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        koofr_help.setStyleSheet(_muted_text_style(koofr_help))
 
         webdav_url = self.qt.QLineEdit()
         webdav_vendor = self.qt.QComboBox()
@@ -1675,6 +1760,8 @@ class NewRemoteWizard:
             s3_access_key_id,
             s3_secret_access_key,
             s3_remote_path,
+            koofr_user,
+            koofr_pass,
             webdav_url,
             webdav_user,
             webdav_pass,
@@ -1702,6 +1789,10 @@ class NewRemoteWizard:
             "s3_access_key_id": s3_access_key_id,
             "s3_secret_access_key": s3_secret_access_key,
             "s3_remote_path": s3_remote_path,
+            "s3_help": s3_help,
+            "koofr_user": koofr_user,
+            "koofr_pass": koofr_pass,
+            "koofr_help": koofr_help,
             "webdav_url": webdav_url,
             "webdav_vendor": webdav_vendor,
             "webdav_user": webdav_user,
@@ -1723,6 +1814,10 @@ class NewRemoteWizard:
         form.addRow("S3 access key", s3_access_key_id)
         form.addRow("S3 secret key", s3_secret_access_key)
         form.addRow("S3 bucket/path", s3_remote_path)
+        form.addRow(s3_help)
+        form.addRow("Koofr user", koofr_user)
+        form.addRow("Koofr app password", koofr_pass)
+        form.addRow(koofr_help)
         form.addRow("WebDAV URL", webdav_url)
         form.addRow("WebDAV vendor", webdav_vendor)
         form.addRow(webdav_help)
@@ -1754,6 +1849,7 @@ class NewRemoteWizard:
         self._port_timer.start()
         self._apply_credential_choice()
         self._apply_provider_choice()
+        self._apply_s3_provider_choice()
         self._apply_webdav_vendor_choice()
         self._update_browser_port_status()
         self._update_action_button()
@@ -1775,12 +1871,14 @@ class NewRemoteWizard:
         remote_type = self.fields["provider"].currentData() or "drive"
         if remote_type == "s3":
             return self._s3_fields_are_valid()
+        if remote_type == "koofr":
+            return self._koofr_fields_are_valid()
         if remote_type == "webdav":
             return self._webdav_fields_are_valid()
         return True
 
     def _s3_fields_are_valid(self) -> bool:
-        provider = str(self.fields["s3_provider"].currentData() or "")
+        provider = self._s3_provider_value()
         endpoint = self.fields["s3_endpoint"].text().strip()
         has_keys = bool(
             self.fields["s3_access_key_id"].text().strip()
@@ -1791,6 +1889,9 @@ class NewRemoteWizard:
         if provider.lower() != "aws" and not endpoint:
             return False
         return True
+
+    def _koofr_fields_are_valid(self) -> bool:
+        return bool(self.fields["koofr_user"].text().strip() and self.fields["koofr_pass"].text().strip())
 
     def _webdav_fields_are_valid(self) -> bool:
         url = self.fields["webdav_url"].text().strip()
@@ -1832,6 +1933,9 @@ class NewRemoteWizard:
             return
         if self._remote_type == "s3" and not self._s3_fields_are_valid():
             self._warning("Add remote", "Enter the S3 endpoint, access key, and secret key before creating the remote.")
+            return
+        if self._remote_type == "koofr" and not self._koofr_fields_are_valid():
+            self._warning("Add remote", "Enter the Koofr user and app password before creating the remote.")
             return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
             self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
@@ -2046,12 +2150,14 @@ class NewRemoteWizard:
             return ["config_is_local", "true" if self._drive_local_auth else "false"]
         if self._remote_type == "s3":
             return self._s3_config_args()
+        if self._remote_type == "koofr":
+            return self._koofr_config_args()
         if self._remote_type == "webdav":
             return self._webdav_config_args()
         return []
 
     def _s3_config_args(self) -> list[str]:
-        provider = str(self.fields["s3_provider"].currentData() or "Minio")
+        provider = self._s3_provider_value()
         args = [
             "provider",
             provider,
@@ -2069,6 +2175,16 @@ class NewRemoteWizard:
         if provider.lower() == "cloudflare":
             args.extend(["acl", "private", "no_check_bucket", "true"])
         return args
+
+    def _koofr_config_args(self) -> list[str]:
+        return [
+            "provider",
+            "koofr",
+            "user",
+            self.fields["koofr_user"].text().strip(),
+            "password",
+            self.fields["koofr_pass"].text().strip(),
+        ]
 
     def _webdav_config_args(self) -> list[str]:
         args = [
@@ -2089,6 +2205,22 @@ class NewRemoteWizard:
         if self._remote_type == "s3":
             return self.fields["s3_remote_path"].text().strip().strip("/")
         return ""
+
+    def _s3_provider_choice(self) -> dict[str, str]:
+        choice = self.fields["s3_provider"].currentData()
+        if isinstance(choice, dict):
+            return {str(key): str(value) for key, value in choice.items()}
+        provider = str(choice or "Minio")
+        for option in S3_PROVIDER_OPTIONS:
+            if option["provider"].casefold() == provider.casefold():
+                return dict(option)
+        return dict(S3_PROVIDER_OPTIONS[-1])
+
+    def _s3_provider_value(self) -> str:
+        return self._s3_provider_choice().get("provider", "Minio") or "Minio"
+
+    def _s3_provider_config_name(self) -> str:
+        return self._s3_provider_choice().get("config_name", "S3") or "S3"
 
     def _webdav_vendor_choice(self) -> dict[str, str]:
         choice = self.fields["webdav_vendor"].currentData()
@@ -2126,6 +2258,8 @@ class NewRemoteWizard:
         option_name = self._option_name(step.option)
         if option_name == "config_is_local":
             return "true" if self._drive_local_auth else "false"
+        if option_name in {"config_edit_advanced", "edit_advanced"}:
+            return "false"
         if self._is_drive_shared_drive_choice(step.option):
             return "true" if self._drive_shared_drive else "false"
         if self._is_drive_shared_drive_id(step.option):
@@ -2250,6 +2384,8 @@ class NewRemoteWizard:
             "s3_access_key_id",
             "s3_secret_access_key",
             "s3_remote_path",
+            "koofr_user",
+            "koofr_pass",
             "webdav_url",
             "webdav_vendor",
             "webdav_user",
@@ -2285,6 +2421,7 @@ class NewRemoteWizard:
         is_drive = remote_type == "drive"
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
         is_s3 = remote_type == "s3"
+        is_koofr = remote_type == "koofr"
         is_webdav = remote_type == "webdav"
         for field_name in (
             "credential_source",
@@ -2301,8 +2438,15 @@ class NewRemoteWizard:
             "s3_access_key_id",
             "s3_secret_access_key",
             "s3_remote_path",
+            "s3_help",
         ):
             self._set_form_row_visible(self.fields[field_name], is_s3)
+        for field_name in (
+            "koofr_user",
+            "koofr_pass",
+            "koofr_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_koofr)
         for field_name in (
             "webdav_url",
             "webdav_vendor",
@@ -2318,10 +2462,38 @@ class NewRemoteWizard:
             "Mount the new remote immediately after setup succeeds."
         )
         self._apply_credential_choice()
+        if is_s3:
+            self._apply_s3_provider_choice()
         if is_webdav:
             self._apply_webdav_vendor_choice()
         self._update_browser_port_status()
         self.dialog.adjustSize()
+
+    def _apply_s3_provider_choice(self) -> None:
+        if not getattr(self, "fields", None):
+            return
+        choice = self._s3_provider_choice()
+        endpoint = choice.get("endpoint", "")
+        current_endpoint = self.fields["s3_endpoint"].text().strip()
+        if not current_endpoint or current_endpoint in _default_s3_endpoints():
+            self.fields["s3_endpoint"].setText("" if choice.get("hide_endpoint") else endpoint)
+        region = choice.get("region", "")
+        current_region = self.fields["s3_region"].text().strip()
+        if not current_region or current_region in _default_s3_regions():
+            self.fields["s3_region"].setText(region)
+        self.fields["s3_endpoint"].setPlaceholderText(endpoint or "Optional")
+        self.fields["s3_endpoint"].setToolTip(choice.get("endpoint_tip", "S3 API endpoint."))
+        self.fields["s3_region"].setPlaceholderText(region or "us-east-1")
+        self.fields["s3_region"].setToolTip(choice.get("region_tip", "S3 region."))
+        self.fields["s3_access_key_id"].setPlaceholderText(choice.get("access_key", "Access key"))
+        self.fields["s3_secret_access_key"].setPlaceholderText(choice.get("secret_key", "Secret key"))
+        self.fields["s3_remote_path"].setPlaceholderText(choice.get("bucket", "Bucket name or bucket/folder"))
+        self.fields["s3_remote_path"].setToolTip(choice.get("bucket_tip", "Bucket name or bucket/folder."))
+        self.fields["s3_help"].setText(choice.get("instructions", ""))
+        is_s3 = (self.fields["provider"].currentData() or "drive") == "s3"
+        self._set_form_row_visible(self.fields["s3_endpoint"], is_s3 and not choice.get("hide_endpoint"))
+        self._set_form_row_visible(self.fields["s3_help"], is_s3)
+        self._update_action_button()
 
     def _apply_webdav_vendor_choice(self) -> None:
         if not getattr(self, "fields", None):
@@ -2361,6 +2533,7 @@ class NewRemoteWizard:
             "onedrive": "Personal OneDrive",
             "box": "Work Box",
             "pcloud": "Personal pCloud",
+            "koofr": "Personal Koofr",
             "s3": "Archive S3",
             "webdav": "Nextcloud",
         }
@@ -2522,9 +2695,7 @@ class NewRemoteWizard:
     def _selected_provider_config_name(self, remote_type: str) -> str:
         fields = getattr(self, "fields", None)
         if remote_type.strip().lower() == "s3" and fields:
-            provider = str(self.fields["s3_provider"].currentData() or "")
-            normalized = provider.strip().lower()
-            return S3_PROVIDER_CONFIG_SUFFIXES.get(normalized, provider.strip() or self._provider_config_name(remote_type))
+            return self._s3_provider_config_name()
         if remote_type.strip().lower() == "webdav" and fields:
             return self._webdav_provider_config_name()
         return self._provider_config_name(remote_type)

@@ -638,6 +638,14 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(wizard._automatic_answer(step), "false")
 
+    def test_new_remote_wizard_declines_advanced_config_prompt(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        self.assertEqual(
+            wizard._automatic_answer(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_edit_advanced"})),
+            "false",
+        )
+
     def test_new_remote_wizard_uses_generic_oauth_args_for_non_drive(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "dropbox"
@@ -704,6 +712,65 @@ class TrayTests(unittest.TestCase):
         self.assertIn("acl", args)
         self.assertIn("private", args)
 
+    def test_new_remote_wizard_applies_s3_provider_defaults(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        app_provider = mock.Mock()
+        app_provider.currentData.return_value = "s3"
+        provider = mock.Mock()
+        provider.currentData.return_value = {
+            "label": "Cloudflare R2",
+            "provider": "Cloudflare",
+            "config_name": "Cloudflare R2",
+            "endpoint": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
+            "region": "auto",
+            "access_key": "R2 access key ID",
+            "secret_key": "R2 secret access key",
+            "bucket": "Bucket name or bucket/folder",
+            "instructions": '<a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare R2 token guide</a>',
+        }
+        endpoint = mock.Mock()
+        endpoint.text.return_value = ""
+        region = mock.Mock()
+        region.text.return_value = ""
+        wizard.fields = {
+            "provider": app_provider,
+            "s3_provider": provider,
+            "s3_endpoint": endpoint,
+            "s3_region": region,
+            "s3_access_key_id": mock.Mock(),
+            "s3_secret_access_key": mock.Mock(),
+            "s3_remote_path": mock.Mock(),
+            "s3_help": mock.Mock(),
+        }
+
+        with mock.patch.object(wizard, "_set_form_row_visible") as set_visible:
+            wizard._apply_s3_provider_choice()
+
+        endpoint.setText.assert_called_once_with("https://<ACCOUNT_ID>.r2.cloudflarestorage.com")
+        region.setText.assert_called_once_with("auto")
+        wizard.fields["s3_help"].setText.assert_called_once()
+        set_visible.assert_any_call(endpoint, True)
+
+    def test_new_remote_wizard_uses_koofr_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "koofr"
+        wizard.fields = {
+            "koofr_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "koofr_pass": mock.Mock(text=mock.Mock(return_value="app-password")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "provider",
+                "koofr",
+                "user",
+                "eric@example.com",
+                "password",
+                "app-password",
+            ],
+        )
+
     def test_new_remote_wizard_saves_initial_s3_remote_path(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_name = "Archive__S3"
@@ -740,59 +807,6 @@ class TrayTests(unittest.TestCase):
                 "secret",
             ],
         )
-
-    def test_new_remote_wizard_maps_koofr_webdav_to_other_vendor(self):
-        wizard = object.__new__(tray.NewRemoteWizard)
-        wizard._remote_type = "webdav"
-        wizard.fields = {
-            "webdav_url": mock.Mock(text=mock.Mock(return_value="https://app.koofr.net/dav/Koofr")),
-            "webdav_vendor": mock.Mock(
-                currentData=mock.Mock(
-                    return_value={
-                        "label": "Koofr",
-                        "vendor": "other",
-                        "config_name": "Koofr WebDAV",
-                    }
-                )
-            ),
-            "webdav_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
-            "webdav_pass": mock.Mock(text=mock.Mock(return_value="app-password")),
-        }
-
-        args = wizard._initial_config_args()
-
-        self.assertEqual(args[args.index("vendor") + 1], "other")
-        self.assertEqual(wizard._selected_provider_config_name("webdav"), "Koofr WebDAV")
-
-    def test_new_remote_wizard_prefills_and_hides_fixed_koofr_url(self):
-        wizard = object.__new__(tray.NewRemoteWizard)
-        provider = mock.Mock()
-        provider.currentData.return_value = "webdav"
-        url = mock.Mock()
-        vendor = mock.Mock()
-        vendor.currentData.return_value = {
-            "label": "Koofr",
-            "vendor": "other",
-            "config_name": "Koofr WebDAV",
-            "url": "https://app.koofr.net/dav/Koofr",
-            "fixed_url": "true",
-            "instructions": '<a href="https://rclone.org/koofr/">rclone Koofr guide</a>',
-        }
-        wizard.fields = {
-            "provider": provider,
-            "webdav_url": url,
-            "webdav_vendor": vendor,
-            "webdav_user": mock.Mock(),
-            "webdav_pass": mock.Mock(),
-            "webdav_help": mock.Mock(),
-        }
-
-        with mock.patch.object(wizard, "_set_form_row_visible") as set_visible:
-            wizard._apply_webdav_vendor_choice()
-
-        url.setText.assert_called_once_with("https://app.koofr.net/dav/Koofr")
-        set_visible.assert_any_call(url, False)
-        wizard.fields["webdav_help"].setText.assert_called_once()
 
     def test_new_remote_wizard_failed_mount_cleans_up_remote(self):
         wizard = object.__new__(tray.NewRemoteWizard)

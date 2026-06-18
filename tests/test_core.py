@@ -297,12 +297,26 @@ type = webdav
 [WebDav]
 type = webdav
 url = https://example.test
+
+[PartialKoofr]
+type = koofr
+provider = koofr
+user = eric@example.com
+
+[Koofr]
+type = koofr
+provider = koofr
+user = eric@example.com
+password = REDACTED
 """.strip(),
             )
 
             remotes = core.load_remotes(include_incomplete=False)
 
-        self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav"])
+        self.assertEqual(
+            [remote.name for remote in remotes],
+            ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav", "Koofr"],
+        )
 
     def test_storage_usage_uses_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
