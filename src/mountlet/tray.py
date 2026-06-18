@@ -1905,9 +1905,10 @@ class NewRemoteWizard:
         return []
 
     def _s3_config_args(self) -> list[str]:
+        provider = str(self.fields["s3_provider"].currentData() or "Minio")
         args = [
             "provider",
-            str(self.fields["s3_provider"].currentData() or "Minio"),
+            provider,
             "access_key_id",
             self.fields["s3_access_key_id"].text().strip(),
             "secret_access_key",
@@ -1919,6 +1920,8 @@ class NewRemoteWizard:
             args.extend(["region", region])
         if endpoint:
             args.extend(["endpoint", endpoint])
+        if provider.lower() == "cloudflare":
+            args.extend(["acl", "private", "no_check_bucket", "true"])
         return args
 
     def _webdav_config_args(self) -> list[str]:
@@ -2433,6 +2436,7 @@ class MountletWindow:
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
+        self._bridge.folder_opened.connect(self._handle_folder_opened)
         self.window = self.qt.QMainWindow()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -2449,6 +2453,7 @@ class MountletWindow:
             storage_ready = qt.Signal(str, object)
             action_finished = qt.Signal(str, bool, str)
             bulk_action_finished = qt.Signal(str, object, object)
+            folder_opened = qt.Signal(bool)
 
         return Bridge()
 
@@ -3469,10 +3474,23 @@ class MountletWindow:
         self._request_refresh()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
-        self.tray_app._open_folder(remote)
+        if not os.path.isdir(remote.mount_path):
+            self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
+            return
+
+        def worker() -> None:
+            self._bridge.folder_opened.emit(_open_folder_default(self.qt, remote.mount_path))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
         self.tray_app._open_remote_in_browser(remote)
+
+    def _handle_folder_opened(self, success: bool) -> None:
+        if self._tray_is_quitting():
+            return
+        if not success:
+            self.tray_app._notify("Open folder", "Could not open the mount folder.", success=False)
 
     def _show_app_config_editor(self) -> None:
         old_remotes = _load_visible_remotes()
@@ -3752,8 +3770,8 @@ class MountletTray:
             return
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return
-        self.rebuild_menus()
         self.main_window.toggle_from_tray()
+        self.qt.QTimer.singleShot(25, self.rebuild_menus)
 
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
@@ -3852,19 +3870,20 @@ class MountletTray:
         self.main_window._unmount_all()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
-        if not os.path.isdir(remote.mount_path):
-            self._notify("Open folder", "Mount the remote before opening its folder.", success=False)
+        if getattr(self, "_quitting", False):
             return
-        if not _open_folder_default(self.qt, remote.mount_path):
-            self._notify("Open folder", "Could not open the mount folder.", success=False)
+        self.main_window._open_folder(remote)
 
     def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
         if not url:
             self._notify("Open in browser", "This remote does not have a known browser view.", success=False)
             return
-        if not self.qt.QDesktopServices.openUrl(self.qt.QUrl(url)):
-            self._notify("Open in browser", "Could not open the browser.", success=False)
+        def open_url() -> None:
+            if not self.qt.QDesktopServices.openUrl(self.qt.QUrl(url)):
+                self._notify("Open in browser", "Could not open the browser.", success=False)
+
+        self.qt.QTimer.singleShot(0, open_url)
 
     def _notify(self, title: str, message: str, *, success: bool) -> None:
         if getattr(self, "_quitting", False):

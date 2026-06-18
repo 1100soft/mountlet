@@ -4,7 +4,6 @@ import contextlib
 import io
 import socket
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -224,7 +223,8 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
-        rebuild.assert_called_once_with()
+        rebuild.assert_not_called()
+        fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 1)
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
@@ -680,6 +680,25 @@ class TrayTests(unittest.TestCase):
         }
 
         self.assertFalse(wizard._s3_fields_are_valid())
+
+    def test_new_remote_wizard_adds_cloudflare_r2_safety_options(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "s3"
+        wizard.fields = {
+            "s3_provider": mock.Mock(currentData=mock.Mock(return_value="Cloudflare")),
+            "s3_access_key_id": mock.Mock(text=mock.Mock(return_value="r2-key")),
+            "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="r2-secret")),
+            "s3_region": mock.Mock(text=mock.Mock(return_value="auto")),
+            "s3_endpoint": mock.Mock(text=mock.Mock(return_value="https://account.r2.cloudflarestorage.com")),
+        }
+
+        args = wizard._initial_config_args()
+
+        self.assertIn("Cloudflare", args)
+        self.assertIn("no_check_bucket", args)
+        self.assertIn("true", args)
+        self.assertIn("acl", args)
+        self.assertIn("private", args)
 
     def test_new_remote_wizard_uses_webdav_form_args(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -1598,24 +1617,24 @@ class TrayTests(unittest.TestCase):
 
         popen.assert_not_called()
 
-    def test_open_folder_action_reports_failure_when_default_opener_fails(self):
-        remote = core.RemoteInfo(
-            name="Docs",
-            alias="Docs",
-            provider="drive",
-            backend_type="drive",
-            mount_path="/tmp/missing-docs",
-        )
+    def test_open_folder_action_delegates_to_main_window_runner(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
         tray_app = object.__new__(tray.MountletTray)
-        tray_app.qt = mock.Mock()
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
 
-        with tempfile.TemporaryDirectory() as tempdir:
-            remote.mount_path = tempdir
-            with mock.patch.object(tray, "_open_folder_default", return_value=False):
-                with mock.patch.object(tray_app, "_notify") as notify:
-                    tray_app._open_folder(remote)
+        tray_app._open_folder(remote)
 
-        notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
+        tray_app.main_window._open_folder.assert_called_once_with(remote)
+
+    def test_window_folder_open_failure_reports_notification(self):
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window.tray_app._quitting = False
+
+        window._handle_folder_opened(False)
+
+        window.tray_app._notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
 
     def test_open_remote_in_browser_uses_provider_url(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
@@ -1623,6 +1642,7 @@ class TrayTests(unittest.TestCase):
         tray_app.qt = mock.Mock()
         tray_app.qt.QUrl.return_value = "qt-url"
         tray_app.qt.QDesktopServices.openUrl.return_value = True
+        tray_app.qt.QTimer.singleShot.side_effect = lambda _delay, callback: callback()
 
         with mock.patch.object(tray_app, "_notify") as notify:
             tray_app._open_remote_in_browser(remote)
@@ -1639,6 +1659,7 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray_app, "_notify") as notify:
             tray_app._open_remote_in_browser(remote)
 
+        tray_app.qt.QTimer.singleShot.assert_not_called()
         tray_app.qt.QDesktopServices.openUrl.assert_not_called()
         notify.assert_called_once_with(
             "Open in browser",
@@ -1667,6 +1688,23 @@ class TrayTests(unittest.TestCase):
 
         tray_app.main_window._mount_all.assert_called_once_with()
         tray_app.main_window._unmount_all.assert_called_once_with()
+
+    def test_tray_activation_opens_window_before_scheduling_menu_refresh(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        tray_app.rebuild_menus = mock.Mock()
+        trigger = object()
+        tray_app.qt = SimpleNamespace(
+            QSystemTrayIcon=SimpleNamespace(ActivationReason=SimpleNamespace(Trigger=trigger)),
+            QTimer=mock.Mock(),
+        )
+
+        tray_app._handle_activation(trigger)
+
+        tray_app.main_window.toggle_from_tray.assert_called_once_with()
+        tray_app.rebuild_menus.assert_not_called()
+        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
