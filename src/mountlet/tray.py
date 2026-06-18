@@ -136,6 +136,11 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "Koofr WebDAV endpoint. Change it only if Koofr changes your endpoint.",
         "user_tip": "Your Koofr account email address.",
         "password_tip": "Use a Koofr app password for WebDAV access.",
+        "fixed_url": "true",
+        "instructions": (
+            '<a href="https://rclone.org/koofr/">rclone Koofr guide</a> | '
+            '<a href="https://app.koofr.net/app/admin/preferences/password">Koofr app password</a>'
+        ),
     },
     {
         "label": "Nextcloud",
@@ -147,6 +152,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "Your Nextcloud WebDAV endpoint.",
         "user_tip": "Your Nextcloud username.",
         "password_tip": "Use your password or an app password if your server requires one.",
+        "instructions": '<a href="https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html">Nextcloud WebDAV guide</a>',
     },
     {
         "label": "ownCloud",
@@ -158,6 +164,10 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "Your ownCloud WebDAV endpoint.",
         "user_tip": "Your ownCloud username.",
         "password_tip": "Use your password or an app password if your server requires one.",
+        "instructions": (
+            '<a href="https://doc.owncloud.com/server/latest/user_manual/en/files/access_webdav.html">'
+            "ownCloud WebDAV guide</a>"
+        ),
     },
     {
         "label": "SharePoint Online",
@@ -169,6 +179,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "The SharePoint document library WebDAV URL.",
         "user_tip": "The Microsoft account used for this SharePoint library.",
         "password_tip": "Your SharePoint or Microsoft account password.",
+        "instructions": '<a href="https://rclone.org/webdav/#sharepoint-online">rclone SharePoint WebDAV guide</a>',
     },
     {
         "label": "SharePoint NTLM",
@@ -180,6 +191,10 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "The on-premises SharePoint WebDAV URL.",
         "user_tip": "Use the DOMAIN\\username format for NTLM authentication.",
         "password_tip": "Your domain password.",
+        "instructions": (
+            '<a href="https://rclone.org/webdav/#sharepoint-with-ntlm-authentication">'
+            "rclone SharePoint NTLM guide</a>"
+        ),
     },
     {
         "label": "Fastmail Files",
@@ -191,6 +206,10 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "Fastmail Files WebDAV endpoint.",
         "user_tip": "Your Fastmail email address.",
         "password_tip": "Use a Fastmail app password with Files access.",
+        "instructions": (
+            '<a href="https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords">'
+            "Fastmail app password guide</a>"
+        ),
     },
     {
         "label": "rclone WebDAV server",
@@ -202,6 +221,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "The URL of an rclone serve webdav endpoint.",
         "user_tip": "Leave blank if the server does not require a username.",
         "password_tip": "Leave blank if the server does not require a password.",
+        "instructions": '<a href="https://rclone.org/commands/rclone_serve_webdav/">rclone serve WebDAV guide</a>',
     },
     {
         "label": "Other WebDAV",
@@ -213,6 +233,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "url_tip": "The WebDAV endpoint URL.",
         "user_tip": "Leave blank if the server does not require a username.",
         "password_tip": "Leave blank if the server does not require a password.",
+        "instructions": '<a href="https://rclone.org/webdav/">rclone WebDAV guide</a>',
     },
 )
 PROVIDER_COLORS = {
@@ -383,6 +404,14 @@ def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, uniq
     if unique_count <= 1:
         return "Existing credentials (recommended)"
     return f"Existing: {credentials.remote_name}"
+
+
+def _fixed_webdav_urls() -> set[str]:
+    return {
+        option["url"]
+        for option in WEBDAV_VENDOR_OPTIONS
+        if option.get("fixed_url", "").casefold() in {"true", "1", "yes"}
+    }
 
 
 def _load_visible_remotes() -> list[core.RemoteInfo]:
@@ -1635,6 +1664,10 @@ class NewRemoteWizard:
         webdav_user = self.qt.QLineEdit()
         webdav_pass = self.qt.QLineEdit()
         webdav_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        webdav_help = self.qt.QLabel("")
+        webdav_help.setOpenExternalLinks(True)
+        webdav_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        webdav_help.setStyleSheet(_muted_text_style(webdav_help))
 
         for field in (
             s3_endpoint,
@@ -1673,6 +1706,7 @@ class NewRemoteWizard:
             "webdav_vendor": webdav_vendor,
             "webdav_user": webdav_user,
             "webdav_pass": webdav_pass,
+            "webdav_help": webdav_help,
         }
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
@@ -1691,6 +1725,7 @@ class NewRemoteWizard:
         form.addRow("S3 bucket/path", s3_remote_path)
         form.addRow("WebDAV URL", webdav_url)
         form.addRow("WebDAV vendor", webdav_vendor)
+        form.addRow(webdav_help)
         form.addRow("WebDAV user", webdav_user)
         form.addRow("WebDAV password", webdav_pass)
         form.addRow(connect_after_create)
@@ -2153,10 +2188,12 @@ class NewRemoteWizard:
     def _handle_remote_checked(self, success: bool, message: str) -> None:
         self._set_busy(False)
         if not success:
+            display_name = self._remote_display_name()
             self._cleanup_incomplete_remote()
+            self._reset_after_failed_registration()
             self._warning(
                 "Add remote",
-                f"{self._remote_display_name()} could not be reached.\n\n{_clean_message(message)}",
+                f"{display_name} could not be reached.\n\n{_clean_message(message)}",
             )
             return
         self._finish_success()
@@ -2164,12 +2201,28 @@ class NewRemoteWizard:
     def _handle_mount_finished(self, success: bool, message: str) -> None:
         self._set_busy(False)
         if not success:
+            display_name = self._remote_display_name()
+            self._cleanup_incomplete_remote()
+            self._reset_after_failed_registration()
             self._warning(
                 "Add remote",
-                f"{self._remote_display_name()} was created, but Mountlet could not connect it.\n\n"
+                f"{display_name} was created, but Mountlet could not connect it.\n\n"
                 f"{_clean_message(message)}",
             )
+            return
         self._finish_success()
+
+    def _reset_after_failed_registration(self) -> None:
+        self._show_setup_view(True)
+        self._remote_name = ""
+        self._remote_alias = ""
+        self._state = ""
+        self._question = None
+        self._answer_field = None
+        self._answer_group = None
+        self._waiting_for_browser_auth = False
+        self._update_browser_port_status()
+        self._update_action_button()
 
     def _finish_success(self) -> None:
         self._completed = True
@@ -2253,6 +2306,7 @@ class NewRemoteWizard:
         for field_name in (
             "webdav_url",
             "webdav_vendor",
+            "webdav_help",
             "webdav_user",
             "webdav_pass",
         ):
@@ -2273,12 +2327,22 @@ class NewRemoteWizard:
         if not getattr(self, "fields", None):
             return
         choice = self._webdav_vendor_choice()
-        self.fields["webdav_url"].setPlaceholderText(choice.get("url", "https://cloud.example.com/webdav"))
+        url = choice.get("url", "https://cloud.example.com/webdav")
+        fixed_url = choice.get("fixed_url", "").casefold() in {"true", "1", "yes"}
+        if fixed_url:
+            self.fields["webdav_url"].setText(url)
+        elif self.fields["webdav_url"].text().strip() in _fixed_webdav_urls():
+            self.fields["webdav_url"].clear()
+        self.fields["webdav_url"].setPlaceholderText(url)
         self.fields["webdav_url"].setToolTip(choice.get("url_tip", "The WebDAV endpoint URL."))
         self.fields["webdav_user"].setPlaceholderText(choice.get("user", "Optional"))
         self.fields["webdav_user"].setToolTip(choice.get("user_tip", "Optional WebDAV username."))
         self.fields["webdav_pass"].setPlaceholderText(choice.get("password", "Optional"))
         self.fields["webdav_pass"].setToolTip(choice.get("password_tip", "Optional WebDAV password."))
+        self.fields["webdav_help"].setText(choice.get("instructions", ""))
+        is_webdav = (self.fields["provider"].currentData() or "drive") == "webdav"
+        self._set_form_row_visible(self.fields["webdav_url"], is_webdav and not fixed_url)
+        self._set_form_row_visible(self.fields["webdav_help"], is_webdav)
         self._update_action_button()
 
     def _set_form_row_visible(self, widget: Any, visible: bool) -> None:

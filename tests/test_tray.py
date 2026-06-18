@@ -764,6 +764,56 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(args[args.index("vendor") + 1], "other")
         self.assertEqual(wizard._selected_provider_config_name("webdav"), "Koofr WebDAV")
 
+    def test_new_remote_wizard_prefills_and_hides_fixed_koofr_url(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        provider = mock.Mock()
+        provider.currentData.return_value = "webdav"
+        url = mock.Mock()
+        vendor = mock.Mock()
+        vendor.currentData.return_value = {
+            "label": "Koofr",
+            "vendor": "other",
+            "config_name": "Koofr WebDAV",
+            "url": "https://app.koofr.net/dav/Koofr",
+            "fixed_url": "true",
+            "instructions": '<a href="https://rclone.org/koofr/">rclone Koofr guide</a>',
+        }
+        wizard.fields = {
+            "provider": provider,
+            "webdav_url": url,
+            "webdav_vendor": vendor,
+            "webdav_user": mock.Mock(),
+            "webdav_pass": mock.Mock(),
+            "webdav_help": mock.Mock(),
+        }
+
+        with mock.patch.object(wizard, "_set_form_row_visible") as set_visible:
+            wizard._apply_webdav_vendor_choice()
+
+        url.setText.assert_called_once_with("https://app.koofr.net/dav/Koofr")
+        set_visible.assert_any_call(url, False)
+        wizard.fields["webdav_help"].setText.assert_called_once()
+
+    def test_new_remote_wizard_failed_mount_cleans_up_remote(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Broken__WebDAV"
+        wizard._remote_alias = "Broken"
+        wizard._remote_type = "webdav"
+        wizard.fields = {}
+
+        with mock.patch.object(wizard, "_set_busy") as set_busy:
+            with mock.patch.object(wizard, "_cleanup_incomplete_remote") as cleanup:
+                with mock.patch.object(wizard, "_reset_after_failed_registration") as reset:
+                    with mock.patch.object(wizard, "_warning") as warning:
+                        with mock.patch.object(wizard, "_finish_success") as finish:
+                            wizard._handle_mount_finished(False, "[!] not connected")
+
+        set_busy.assert_called_once_with(False)
+        cleanup.assert_called_once_with()
+        reset.assert_called_once_with()
+        warning.assert_called_once()
+        finish.assert_not_called()
+
     def test_new_remote_wizard_allows_same_alias_across_providers(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         s3_provider = mock.Mock()
