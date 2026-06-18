@@ -148,6 +148,7 @@ class DriveOAuthCredentials:
 PIDS: Dict[str, int] = {}
 OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 RCLONE_STATUS_TIMEOUT_SECONDS = 20
+RCLONE_CONNECT_TIMEOUT_SECONDS = 20
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -564,7 +565,42 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     args = [rclone_bin, "mount", remote_source(remote), remote.mount_path]
     args.extend(remote.flags)
 
-    return _launch_mount_process(remote, args)
+    success, message = _launch_mount_process(remote, args)
+    if not success:
+        return success, message
+
+    connected, connection_message = check_remote_connection(remote, rclone_bin)
+    if connected:
+        return success, message
+
+    unmounted, unmount_message = unmount_remote(remote)
+    if not unmounted:
+        return False, f"{connection_message}\n{unmount_message}"
+    return False, connection_message
+
+
+def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -> Tuple[bool, str]:
+    binary = rclone_bin or find_rclone()
+    if not binary:
+        return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+    source = remote_source(remote)
+    try:
+        result = subprocess.run(
+            [binary, "lsf", source, "--max-depth", "1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=RCLONE_CONNECT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"[!] {remote.display_name} did not respond while checking {source}."
+    except Exception as exc:
+        return False, f"[!] Failed to check {remote.display_name}: {exc}"
+    if result.returncode == 0:
+        return True, f"[*] connected {remote.display_name}."
+    detail = result.stderr.strip()
+    summary = detail.splitlines()[0] if detail else f"exit code {result.returncode}"
+    return False, f"[!] {remote.display_name} is not connected to {source}: {summary}"
 
 
 def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
@@ -718,6 +754,7 @@ __all__ = [
     "editable_rclone_fields",
     "save_rclone_fields",
     "mount_remote",
+    "check_remote_connection",
     "unmount_remote",
     "refresh_remote",
     "mount_all",

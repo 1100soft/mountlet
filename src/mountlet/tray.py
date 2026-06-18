@@ -125,6 +125,96 @@ S3_PROVIDER_CONFIG_SUFFIXES = {
     "wasabi": "Wasabi",
     "other": "S3",
 }
+WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
+    {
+        "label": "Koofr",
+        "vendor": "other",
+        "config_name": "Koofr WebDAV",
+        "url": "https://app.koofr.net/dav/Koofr",
+        "user": "Koofr email address",
+        "password": "Koofr app password",
+        "url_tip": "Koofr WebDAV endpoint. Change it only if Koofr changes your endpoint.",
+        "user_tip": "Your Koofr account email address.",
+        "password_tip": "Use a Koofr app password for WebDAV access.",
+    },
+    {
+        "label": "Nextcloud",
+        "vendor": "nextcloud",
+        "config_name": "Nextcloud",
+        "url": "https://cloud.example.com/remote.php/dav/files/user",
+        "user": "Nextcloud username",
+        "password": "Password or app password",
+        "url_tip": "Your Nextcloud WebDAV endpoint.",
+        "user_tip": "Your Nextcloud username.",
+        "password_tip": "Use your password or an app password if your server requires one.",
+    },
+    {
+        "label": "ownCloud",
+        "vendor": "owncloud",
+        "config_name": "ownCloud",
+        "url": "https://cloud.example.com/remote.php/webdav/",
+        "user": "ownCloud username",
+        "password": "Password or app password",
+        "url_tip": "Your ownCloud WebDAV endpoint.",
+        "user_tip": "Your ownCloud username.",
+        "password_tip": "Use your password or an app password if your server requires one.",
+    },
+    {
+        "label": "SharePoint Online",
+        "vendor": "sharepoint",
+        "config_name": "SharePoint WebDAV",
+        "url": "https://tenant.sharepoint.com/sites/site/Shared%20Documents",
+        "user": "Microsoft account email",
+        "password": "Password",
+        "url_tip": "The SharePoint document library WebDAV URL.",
+        "user_tip": "The Microsoft account used for this SharePoint library.",
+        "password_tip": "Your SharePoint or Microsoft account password.",
+    },
+    {
+        "label": "SharePoint NTLM",
+        "vendor": "sharepoint-ntlm",
+        "config_name": "SharePoint NTLM",
+        "url": "https://sharepoint.example.com/sites/site/Documents",
+        "user": "DOMAIN\\username",
+        "password": "Domain password",
+        "url_tip": "The on-premises SharePoint WebDAV URL.",
+        "user_tip": "Use the DOMAIN\\username format for NTLM authentication.",
+        "password_tip": "Your domain password.",
+    },
+    {
+        "label": "Fastmail Files",
+        "vendor": "fastmail",
+        "config_name": "Fastmail Files",
+        "url": "https://webdav.fastmail.com/",
+        "user": "Fastmail email address",
+        "password": "Fastmail app password",
+        "url_tip": "Fastmail Files WebDAV endpoint.",
+        "user_tip": "Your Fastmail email address.",
+        "password_tip": "Use a Fastmail app password with Files access.",
+    },
+    {
+        "label": "rclone WebDAV server",
+        "vendor": "rclone",
+        "config_name": "rclone WebDAV",
+        "url": "http://127.0.0.1:8080/",
+        "user": "Optional",
+        "password": "Optional",
+        "url_tip": "The URL of an rclone serve webdav endpoint.",
+        "user_tip": "Leave blank if the server does not require a username.",
+        "password_tip": "Leave blank if the server does not require a password.",
+    },
+    {
+        "label": "Other WebDAV",
+        "vendor": "other",
+        "config_name": "WebDAV",
+        "url": "https://cloud.example.com/webdav",
+        "user": "Optional",
+        "password": "Optional",
+        "url_tip": "The WebDAV endpoint URL.",
+        "user_tip": "Leave blank if the server does not require a username.",
+        "password_tip": "Leave blank if the server does not require a password.",
+    },
+)
 PROVIDER_COLORS = {
     "drive": "#34a853",
     "dropbox": "#0061ff",
@@ -1405,6 +1495,7 @@ class NewRemoteWizard:
         self._bridge = self._make_bridge()
         self._bridge.command_finished.connect(self._handle_command_finished)
         self._bridge.mount_finished.connect(self._handle_mount_finished)
+        self._bridge.remote_checked.connect(self._handle_remote_checked)
         self._build()
 
     def exec(self) -> int:
@@ -1416,6 +1507,7 @@ class NewRemoteWizard:
         class Bridge(qt.QObject):
             command_finished = qt.Signal(object, object)
             mount_finished = qt.Signal(bool, str)
+            remote_checked = qt.Signal(bool, str)
 
         return Bridge()
 
@@ -1536,20 +1628,12 @@ class NewRemoteWizard:
         s3_remote_path.setToolTip("For bucket-scoped tokens, enter the bucket name.")
 
         webdav_url = self.qt.QLineEdit()
-        webdav_url.setPlaceholderText("https://cloud.example.com/remote.php/dav/files/user")
-        webdav_url.setToolTip("The WebDAV endpoint URL.")
         webdav_vendor = self.qt.QComboBox()
-        for label, value in (
-            ("Other", "other"),
-            ("Nextcloud", "nextcloud"),
-            ("ownCloud", "owncloud"),
-            ("SharePoint", "sharepoint"),
-        ):
-            webdav_vendor.addItem(label, value)
+        for option in WEBDAV_VENDOR_OPTIONS:
+            webdav_vendor.addItem(option["label"], option)
+        webdav_vendor.currentIndexChanged.connect(lambda _index=0: self._apply_webdav_vendor_choice())
         webdav_user = self.qt.QLineEdit()
-        webdav_user.setPlaceholderText("Optional")
         webdav_pass = self.qt.QLineEdit()
-        webdav_pass.setPlaceholderText("Optional")
         webdav_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
 
         for field in (
@@ -1635,6 +1719,7 @@ class NewRemoteWizard:
         self._port_timer.start()
         self._apply_credential_choice()
         self._apply_provider_choice()
+        self._apply_webdav_vendor_choice()
         self._update_browser_port_status()
         self._update_action_button()
         self.dialog.adjustSize()
@@ -1790,7 +1875,7 @@ class NewRemoteWizard:
             if self._connect_after_create:
                 self._mount_created_remote()
                 return
-            self._finish_success()
+            self._check_created_remote()
             return
         automatic_answer = self._automatic_answer(step)
         if automatic_answer is not None:
@@ -1955,7 +2040,7 @@ class NewRemoteWizard:
             "url",
             self.fields["webdav_url"].text().strip(),
             "vendor",
-            str(self.fields["webdav_vendor"].currentData() or "other"),
+            self._webdav_vendor_value(),
         ]
         user = self.fields["webdav_user"].text().strip()
         password = self.fields["webdav_pass"].text()
@@ -1969,6 +2054,22 @@ class NewRemoteWizard:
         if self._remote_type == "s3":
             return self.fields["s3_remote_path"].text().strip().strip("/")
         return ""
+
+    def _webdav_vendor_choice(self) -> dict[str, str]:
+        choice = self.fields["webdav_vendor"].currentData()
+        if isinstance(choice, dict):
+            return {str(key): str(value) for key, value in choice.items()}
+        vendor = str(choice or "other")
+        for option in WEBDAV_VENDOR_OPTIONS:
+            if option["vendor"] == vendor:
+                return dict(option)
+        return dict(WEBDAV_VENDOR_OPTIONS[-1])
+
+    def _webdav_vendor_value(self) -> str:
+        return self._webdav_vendor_choice().get("vendor", "other") or "other"
+
+    def _webdav_provider_config_name(self) -> str:
+        return self._webdav_vendor_choice().get("config_name", "WebDAV") or "WebDAV"
 
     def _save_initial_mount_settings(self) -> None:
         initial_remote_path = getattr(self, "_initial_remote_path", "")
@@ -2035,6 +2136,30 @@ class NewRemoteWizard:
             self._bridge.mount_finished.emit(False, f"{self._remote_name} was created but could not be found.")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _check_created_remote(self) -> None:
+        self._set_busy(True, message=f"Checking {self._remote_display_name()}...")
+
+        def worker() -> None:
+            for remote in core.load_remotes():
+                if remote.name == self._remote_name:
+                    success, message = core.check_remote_connection(remote)
+                    self._bridge.remote_checked.emit(success, message)
+                    return
+            self._bridge.remote_checked.emit(False, f"{self._remote_name} was created but could not be found.")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_remote_checked(self, success: bool, message: str) -> None:
+        self._set_busy(False)
+        if not success:
+            self._cleanup_incomplete_remote()
+            self._warning(
+                "Add remote",
+                f"{self._remote_display_name()} could not be reached.\n\n{_clean_message(message)}",
+            )
+            return
+        self._finish_success()
 
     def _handle_mount_finished(self, success: bool, message: str) -> None:
         self._set_busy(False)
@@ -2139,8 +2264,22 @@ class NewRemoteWizard:
             "Mount the new remote immediately after setup succeeds."
         )
         self._apply_credential_choice()
+        if is_webdav:
+            self._apply_webdav_vendor_choice()
         self._update_browser_port_status()
         self.dialog.adjustSize()
+
+    def _apply_webdav_vendor_choice(self) -> None:
+        if not getattr(self, "fields", None):
+            return
+        choice = self._webdav_vendor_choice()
+        self.fields["webdav_url"].setPlaceholderText(choice.get("url", "https://cloud.example.com/webdav"))
+        self.fields["webdav_url"].setToolTip(choice.get("url_tip", "The WebDAV endpoint URL."))
+        self.fields["webdav_user"].setPlaceholderText(choice.get("user", "Optional"))
+        self.fields["webdav_user"].setToolTip(choice.get("user_tip", "Optional WebDAV username."))
+        self.fields["webdav_pass"].setPlaceholderText(choice.get("password", "Optional"))
+        self.fields["webdav_pass"].setToolTip(choice.get("password_tip", "Optional WebDAV password."))
+        self._update_action_button()
 
     def _set_form_row_visible(self, widget: Any, visible: bool) -> None:
         try:
@@ -2287,7 +2426,10 @@ class NewRemoteWizard:
         return any(
             remote.alias.casefold() == normalized_alias
             and remote.backend_type.casefold() == normalized_type
-            and (remote_type.casefold() != "s3" or remote.provider.casefold() == normalized_provider)
+            and (
+                remote_type.casefold() not in {"s3", "webdav"}
+                or remote.provider.casefold() == normalized_provider
+            )
             for remote in remotes
         )
 
@@ -2319,6 +2461,8 @@ class NewRemoteWizard:
             provider = str(self.fields["s3_provider"].currentData() or "")
             normalized = provider.strip().lower()
             return S3_PROVIDER_CONFIG_SUFFIXES.get(normalized, provider.strip() or self._provider_config_name(remote_type))
+        if remote_type.strip().lower() == "webdav" and fields:
+            return self._webdav_provider_config_name()
         return self._provider_config_name(remote_type)
 
     def _provider_display_name(self, alias: str, remote_type: str, provider_name: str | None = None) -> str:

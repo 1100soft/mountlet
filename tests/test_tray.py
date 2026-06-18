@@ -741,6 +741,29 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_maps_koofr_webdav_to_other_vendor(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "webdav"
+        wizard.fields = {
+            "webdav_url": mock.Mock(text=mock.Mock(return_value="https://app.koofr.net/dav/Koofr")),
+            "webdav_vendor": mock.Mock(
+                currentData=mock.Mock(
+                    return_value={
+                        "label": "Koofr",
+                        "vendor": "other",
+                        "config_name": "Koofr WebDAV",
+                    }
+                )
+            ),
+            "webdav_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "webdav_pass": mock.Mock(text=mock.Mock(return_value="app-password")),
+        }
+
+        args = wizard._initial_config_args()
+
+        self.assertEqual(args[args.index("vendor") + 1], "other")
+        self.assertEqual(wizard._selected_provider_config_name("webdav"), "Koofr WebDAV")
+
     def test_new_remote_wizard_allows_same_alias_across_providers(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         s3_provider = mock.Mock()
