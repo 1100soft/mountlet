@@ -162,6 +162,25 @@ type = dropbox
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)
 
+    def test_load_remotes_displays_s3_provider_name_without_changing_mount_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Archive__S3]
+type = s3
+provider = Cloudflare
+access_key_id = key
+secret_access_key = secret
+endpoint = https://account.r2.cloudflarestorage.com
+""".strip(),
+            )
+
+            remote = core.load_remotes()[0]
+
+        self.assertEqual(remote.provider, "Cloudflare R2")
+        self.assertTrue(remote.mount_path.endswith("/s3/Archive"))
+
     def test_load_remotes_uses_mountlet_order_when_configured(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_dir = Path(tempdir) / "config" / "mountlet"

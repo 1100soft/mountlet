@@ -118,6 +118,13 @@ REMOTE_CONFIG_SUFFIXES = {
     "s3": "S3",
     "webdav": "WebDAV",
 }
+S3_PROVIDER_CONFIG_SUFFIXES = {
+    "cloudflare": "Cloudflare R2",
+    "minio": "MinIO",
+    "aws": "Amazon S3",
+    "wasabi": "Wasabi",
+    "other": "S3",
+}
 PROVIDER_COLORS = {
     "drive": "#34a853",
     "dropbox": "#0061ff",
@@ -1681,13 +1688,14 @@ class NewRemoteWizard:
             self._warning("Add remote", "Use a name without ':', '@', or path separators.")
             return
         self._remote_type = self.fields["provider"].currentData() or "drive"
+        provider_name = self._selected_provider_config_name(self._remote_type)
         existing_remotes = core.load_remotes()
-        if self._display_name_exists(alias, self._remote_type, existing_remotes):
-            self._warning("Add remote", f"{alias} already exists for {self._provider_label(self._remote_type)}.")
+        if self._display_name_exists(alias, self._remote_type, existing_remotes, provider_name=provider_name):
+            self._warning("Add remote", f"{alias} already exists for {provider_name}.")
             return
-        name = self._config_remote_name(alias, self._remote_type, existing_remotes)
+        name = self._config_remote_name(alias, self._remote_type, existing_remotes, provider_name=provider_name)
         if any(remote.name == name for remote in existing_remotes):
-            self._warning("Add remote", f"{self._provider_display_name(alias, self._remote_type)} already exists.")
+            self._warning("Add remote", f"{self._provider_display_name(alias, self._remote_type, provider_name)} already exists.")
             return
         self._remote_name = name
         self._remote_alias = alias
@@ -2270,12 +2278,16 @@ class NewRemoteWizard:
         alias: str,
         remote_type: str,
         remotes: list[core.RemoteInfo],
+        *,
+        provider_name: str | None = None,
     ) -> bool:
         normalized_alias = alias.casefold()
         normalized_type = remote_type.casefold()
+        normalized_provider = (provider_name or self._provider_config_name(remote_type)).casefold()
         return any(
             remote.alias.casefold() == normalized_alias
             and remote.backend_type.casefold() == normalized_type
+            and (remote_type.casefold() != "s3" or remote.provider.casefold() == normalized_provider)
             for remote in remotes
         )
 
@@ -2284,9 +2296,11 @@ class NewRemoteWizard:
         alias: str,
         remote_type: str,
         remotes: list[core.RemoteInfo],
+        *,
+        provider_name: str | None = None,
     ) -> str:
         existing_names = {remote.name for remote in remotes}
-        provider_name = self._provider_config_name(remote_type)
+        provider_name = provider_name or self._provider_config_name(remote_type)
         candidate = f"{alias}__{provider_name}"
         if candidate not in existing_names:
             return candidate
@@ -2299,12 +2313,20 @@ class NewRemoteWizard:
         normalized = remote_type.strip().lower()
         return REMOTE_CONFIG_SUFFIXES.get(normalized, normalized or "Remote")
 
-    def _provider_display_name(self, alias: str, remote_type: str) -> str:
-        return f"{alias} ({self._provider_config_name(remote_type)})"
+    def _selected_provider_config_name(self, remote_type: str) -> str:
+        fields = getattr(self, "fields", None)
+        if remote_type.strip().lower() == "s3" and fields:
+            provider = str(self.fields["s3_provider"].currentData() or "")
+            normalized = provider.strip().lower()
+            return S3_PROVIDER_CONFIG_SUFFIXES.get(normalized, provider.strip() or self._provider_config_name(remote_type))
+        return self._provider_config_name(remote_type)
+
+    def _provider_display_name(self, alias: str, remote_type: str, provider_name: str | None = None) -> str:
+        return f"{alias} ({provider_name or self._provider_config_name(remote_type)})"
 
     def _remote_display_name(self) -> str:
         alias = getattr(self, "_remote_alias", "") or self._remote_name
-        return self._provider_display_name(alias, self._remote_type)
+        return self._provider_display_name(alias, self._remote_type, self._selected_provider_config_name(self._remote_type))
 
     def _bool_radio_widget(
         self,

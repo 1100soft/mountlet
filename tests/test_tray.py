@@ -743,6 +743,9 @@ class TrayTests(unittest.TestCase):
 
     def test_new_remote_wizard_allows_same_alias_across_providers(self):
         wizard = object.__new__(tray.NewRemoteWizard)
+        s3_provider = mock.Mock()
+        s3_provider.currentData.return_value = "Cloudflare"
+        wizard.fields = {"s3_provider": s3_provider}
         remotes = [
             core.RemoteInfo(
                 name="Media",
@@ -758,11 +761,24 @@ class TrayTests(unittest.TestCase):
                 backend_type="dropbox",
                 mount_path="/tmp/dropbox-media",
             ),
+            core.RemoteInfo(
+                name="Media__Wasabi",
+                alias="Media",
+                provider="Wasabi",
+                backend_type="s3",
+                mount_path="/tmp/wasabi-media",
+            ),
         ]
 
         self.assertFalse(wizard._display_name_exists("Media", "box", remotes))
         self.assertTrue(wizard._display_name_exists("Media", "dropbox", remotes))
+        self.assertFalse(wizard._display_name_exists("Media", "s3", remotes, provider_name="Cloudflare R2"))
+        self.assertTrue(wizard._display_name_exists("Media", "s3", remotes, provider_name="Wasabi"))
         self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media__Box")
+        self.assertEqual(
+            wizard._config_remote_name("Media", "s3", remotes, provider_name="Cloudflare R2"),
+            "Media__Cloudflare R2",
+        )
         self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos__Box")
 
     def test_new_remote_wizard_mounts_created_remote_when_requested(self):

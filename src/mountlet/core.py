@@ -199,6 +199,13 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
 }
+S3_PROVIDER_DISPLAY_NAMES = {
+    "cloudflare": "Cloudflare R2",
+    "minio": "MinIO",
+    "aws": "Amazon S3",
+    "wasabi": "Wasabi",
+    "other": "S3",
+}
 
 
 def _parse_remote_name(name: str, backend_type: str) -> Tuple[str, str]:
@@ -340,6 +347,11 @@ def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
     return flags
 
 
+def _s3_provider_display_name(provider: str, fallback: str = "S3") -> str:
+    normalized = provider.strip().lower()
+    return S3_PROVIDER_DISPLAY_NAMES.get(normalized, provider.strip() or fallback)
+
+
 def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
     config = _load_config()
     app_settings = load_app_settings()
@@ -354,6 +366,12 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
         if not include_incomplete and not _remote_section_is_configured(backend_type, dict(section.items())):
             continue
         alias, provider = _parse_remote_name(name, backend_type)
+        mount_provider = provider
+        display_provider = (
+            _s3_provider_display_name(section.get("provider", ""), provider)
+            if backend_type == "s3"
+            else provider
+        )
         extra_flags_str = section.get("mount_flags", "").strip()
         extra_flags = shlex.split(extra_flags_str) if extra_flags_str else []
         if remote_settings:
@@ -361,7 +379,7 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
         mount_path = (
             _resolve_configured_mount_path(remote_settings.mount_path)
             if remote_settings and remote_settings.mount_path
-            else _build_mount_path(provider, alias)
+            else _build_mount_path(mount_provider, alias)
         )
         auto_mount = (
             remote_settings.auto_mount
@@ -371,7 +389,7 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
         info = RemoteInfo(
             name=name,
             alias=alias,
-            provider=provider,
+            provider=display_provider,
             backend_type=backend_type,
             mount_path=mount_path,
             remote_path=remote_settings.remote_path if remote_settings and remote_settings.remote_path else "",
