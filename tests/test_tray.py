@@ -238,6 +238,7 @@ class TrayTests(unittest.TestCase):
         original = {
             "Docs": settings.MountSettings(
                 mount_path="docs",
+                remote_path="bucket/docs",
                 mount_flags=["--read-only"],
                 auto_mount=True,
                 enabled=True,
@@ -258,6 +259,7 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(saved["Photos"].order, 0)
         self.assertEqual(saved["Docs"].order, 1)
         self.assertEqual(saved["Docs"].mount_path, "docs")
+        self.assertEqual(saved["Docs"].remote_path, "bucket/docs")
         self.assertEqual(saved["Docs"].mount_flags, ["--read-only"])
         self.assertTrue(saved["Docs"].auto_mount)
         self.assertFalse(saved["Photos"].enabled)
@@ -652,6 +654,7 @@ class TrayTests(unittest.TestCase):
             "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="miniosecret")),
             "s3_region": mock.Mock(text=mock.Mock(return_value="us-east-1")),
             "s3_endpoint": mock.Mock(text=mock.Mock(return_value="http://127.0.0.1:9000")),
+            "s3_remote_path": mock.Mock(text=mock.Mock(return_value="")),
         }
 
         self.assertEqual(
@@ -690,6 +693,7 @@ class TrayTests(unittest.TestCase):
             "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="r2-secret")),
             "s3_region": mock.Mock(text=mock.Mock(return_value="auto")),
             "s3_endpoint": mock.Mock(text=mock.Mock(return_value="https://account.r2.cloudflarestorage.com")),
+            "s3_remote_path": mock.Mock(text=mock.Mock(return_value="bucket")),
         }
 
         args = wizard._initial_config_args()
@@ -699,6 +703,19 @@ class TrayTests(unittest.TestCase):
         self.assertIn("true", args)
         self.assertIn("acl", args)
         self.assertIn("private", args)
+
+    def test_new_remote_wizard_saves_initial_s3_remote_path(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Archive__S3"
+        wizard._initial_remote_path = "bucket/prefix"
+
+        with mock.patch.object(tray, "load_mount_settings", return_value={}) as load_settings:
+            with mock.patch.object(tray, "save_mount_settings") as save:
+                wizard._save_initial_mount_settings()
+
+        load_settings.assert_called_once_with()
+        saved = save.call_args.args[0]["Archive__S3"]
+        self.assertEqual(saved.remote_path, "bucket/prefix")
 
     def test_new_remote_wizard_uses_webdav_form_args(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -874,7 +891,7 @@ class TrayTests(unittest.TestCase):
         ]
         mount_settings = {
             "Alpha": settings.MountSettings(order=0, auto_mount=True),
-            "Beta": settings.MountSettings(order=1, mount_path="dropbox/Beta"),
+            "Beta": settings.MountSettings(order=1, mount_path="dropbox/Beta", remote_path="bucket/beta"),
         }
 
         with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
@@ -887,6 +904,7 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(saved["Alpha"].auto_mount)
         self.assertIsNone(saved["Beta"].order)
         self.assertEqual(saved["Beta"].mount_path, "dropbox/Beta")
+        self.assertEqual(saved["Beta"].remote_path, "bucket/beta")
         self.assertEqual(window._current_remote_names, [])
         window.tray_app.rebuild_menus.assert_called_once_with()
 

@@ -46,6 +46,7 @@ focus_file_manager = false
                 """
 [remotes."Work__Drive"]
 mount_path = "~/Cloud/Work"
+remote_path = "bucket/prefix"
 mount_flags = "--read-only --dir-cache-time 10m"
 auto_mount = true
 enabled = false
@@ -58,6 +59,7 @@ order = 2
 
         remote = remotes["Work__Drive"]
         self.assertTrue(remote.mount_path.endswith("/Cloud/Work"))
+        self.assertEqual(remote.remote_path, "bucket/prefix")
         self.assertEqual(remote.mount_flags, ["--read-only", "--dir-cache-time", "10m"])
         self.assertTrue(remote.auto_mount)
         self.assertFalse(remote.enabled)
@@ -144,6 +146,7 @@ order = 2
                 {
                     "Docs": settings.MountSettings(
                         mount_path="~/Docs",
+                        remote_path="bucket/docs",
                         mount_flags=["--read-only", "--dir-cache-time", "10m"],
                         auto_mount=True,
                         enabled=False,
@@ -156,6 +159,7 @@ order = 2
             loaded = settings.load_mount_settings(path)["Docs"]
 
         self.assertTrue(loaded.mount_path.endswith("/Docs"))
+        self.assertEqual(loaded.remote_path, "bucket/docs")
         self.assertEqual(loaded.mount_flags, ["--read-only", "--dir-cache-time", "10m"])
         self.assertTrue(loaded.auto_mount)
         self.assertFalse(loaded.enabled)

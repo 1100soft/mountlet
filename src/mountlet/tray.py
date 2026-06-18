@@ -1230,6 +1230,10 @@ class MountConfigDialog(_ConfigDialogBase):
                 _path_relative_to_base(mount_settings.mount_path if mount_settings else None, self._mount_base),
                 default=default_relative_path,
             ),
+            "remote_path": self._line(
+                mount_settings.remote_path if mount_settings and mount_settings.remote_path else "",
+                default="bucket or bucket/folder",
+            ),
         }
 
         path_row = self.qt.QWidget()
@@ -1244,6 +1248,10 @@ class MountConfigDialog(_ConfigDialogBase):
             "Local folder name for this remote. Leave blank to use Mountlet's default name."
         )
         form.addRow("Local folder name", path_row)
+        self.fields["remote_path"].setToolTip(
+            "Optional path inside the rclone remote. For S3/R2, use a bucket name or bucket/folder."
+        )
+        form.addRow("Remote path", self.fields["remote_path"])
 
         options_frame = self.qt.QFrame()
         options_layout = self.qt.QVBoxLayout(options_frame)
@@ -1284,6 +1292,7 @@ class MountConfigDialog(_ConfigDialogBase):
         settings = load_mount_settings()
         settings[self.remote.name] = MountSettings(
             mount_path=self.fields["mount_path"].text().strip() or None,
+            remote_path=self.fields["remote_path"].text().strip().strip("/") or None,
             mount_flags=[
                 flag
                 for field, tokens in self.flag_fields
@@ -1371,6 +1380,7 @@ class NewRemoteWizard:
         self._drive_local_auth = True
         self._drive_shared_drive = False
         self._drive_team_drive = ""
+        self._initial_remote_path = ""
         self._remote_type = "drive"
         self._connect_after_create = True
         self._question: rclone_wizard.RcloneConfigStep | None = None
@@ -1514,6 +1524,9 @@ class NewRemoteWizard:
         s3_secret_access_key = self.qt.QLineEdit()
         s3_secret_access_key.setPlaceholderText("Secret key")
         s3_secret_access_key.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        s3_remote_path = self.qt.QLineEdit()
+        s3_remote_path.setPlaceholderText("Bucket name or bucket/folder")
+        s3_remote_path.setToolTip("For bucket-scoped tokens, enter the bucket name.")
 
         webdav_url = self.qt.QLineEdit()
         webdav_url.setPlaceholderText("https://cloud.example.com/remote.php/dav/files/user")
@@ -1537,6 +1550,7 @@ class NewRemoteWizard:
             s3_region,
             s3_access_key_id,
             s3_secret_access_key,
+            s3_remote_path,
             webdav_url,
             webdav_user,
             webdav_pass,
@@ -1563,6 +1577,7 @@ class NewRemoteWizard:
             "s3_region": s3_region,
             "s3_access_key_id": s3_access_key_id,
             "s3_secret_access_key": s3_secret_access_key,
+            "s3_remote_path": s3_remote_path,
             "webdav_url": webdav_url,
             "webdav_vendor": webdav_vendor,
             "webdav_user": webdav_user,
@@ -1582,6 +1597,7 @@ class NewRemoteWizard:
         form.addRow("S3 region", s3_region)
         form.addRow("S3 access key", s3_access_key_id)
         form.addRow("S3 secret key", s3_secret_access_key)
+        form.addRow("S3 bucket/path", s3_remote_path)
         form.addRow("WebDAV URL", webdav_url)
         form.addRow("WebDAV vendor", webdav_vendor)
         form.addRow("WebDAV user", webdav_user)
@@ -1681,6 +1697,7 @@ class NewRemoteWizard:
         self._drive_local_auth = self.fields["local_auth"].isChecked()
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
+        self._initial_remote_path = self._initial_mount_remote_path()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
             self._warning("Add remote", "Enter the shared drive ID before connecting, or choose My Drive.")
@@ -1761,6 +1778,7 @@ class NewRemoteWizard:
                     f"{self._provider_label(self._remote_type)} authorization did not finish. No remote was added.",
                 )
                 return
+            self._save_initial_mount_settings()
             if self._connect_after_create:
                 self._mount_created_remote()
                 return
@@ -1939,6 +1957,27 @@ class NewRemoteWizard:
             args.extend(["pass", password])
         return args
 
+    def _initial_mount_remote_path(self) -> str:
+        if self._remote_type == "s3":
+            return self.fields["s3_remote_path"].text().strip().strip("/")
+        return ""
+
+    def _save_initial_mount_settings(self) -> None:
+        initial_remote_path = getattr(self, "_initial_remote_path", "")
+        if not initial_remote_path:
+            return
+        settings = load_mount_settings()
+        current = settings.get(self._remote_name) or MountSettings()
+        settings[self._remote_name] = MountSettings(
+            mount_path=current.mount_path,
+            remote_path=initial_remote_path,
+            mount_flags=list(current.mount_flags),
+            auto_mount=current.auto_mount,
+            enabled=current.enabled,
+            order=current.order,
+        )
+        save_mount_settings(settings)
+
     def _automatic_answer(self, step: rclone_wizard.RcloneConfigStep) -> str | None:
         option_name = self._option_name(step.option)
         if option_name == "config_is_local":
@@ -2024,6 +2063,7 @@ class NewRemoteWizard:
             "s3_region",
             "s3_access_key_id",
             "s3_secret_access_key",
+            "s3_remote_path",
             "webdav_url",
             "webdav_vendor",
             "webdav_user",
@@ -2074,6 +2114,7 @@ class NewRemoteWizard:
             "s3_region",
             "s3_access_key_id",
             "s3_secret_access_key",
+            "s3_remote_path",
         ):
             self._set_form_row_visible(self.fields[field_name], is_s3)
         for field_name in (
@@ -2852,6 +2893,7 @@ class MountletWindow:
                 continue
             settings[remote_name] = MountSettings(
                 mount_path=current.mount_path,
+                remote_path=current.remote_path,
                 mount_flags=list(current.mount_flags),
                 auto_mount=current.auto_mount,
                 enabled=current.enabled,
@@ -3109,6 +3151,7 @@ class MountletWindow:
             current = settings.get(remote_name) or MountSettings()
             settings[remote_name] = MountSettings(
                 mount_path=current.mount_path,
+                remote_path=current.remote_path,
                 mount_flags=list(current.mount_flags),
                 auto_mount=current.auto_mount,
                 enabled=current.enabled,

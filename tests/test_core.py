@@ -87,6 +87,24 @@ type = dropbox
             self.assertEqual(args[3], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
 
+    def test_mount_remote_can_mount_remote_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config" / "mountlet"
+            config_dir.mkdir(parents=True)
+            (config_dir / "mounts.toml").write_text(
+                '[remotes."R2__S3"]\nremote_path = "bucket/prefix"\n',
+                encoding="utf-8",
+            )
+            core = self.load_core(tempdir, "[R2__S3]\ntype = s3\n", set_mount_base=False)
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")) as launch:
+                    success, _message = core.mount_remote(remote)
+
+            self.assertTrue(success)
+            self.assertEqual(launch.call_args.args[1][:3], ["/usr/bin/rclone", "mount", "R2__S3:bucket/prefix"])
+
     def test_mount_remote_rejects_non_empty_mount_directory(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
@@ -114,6 +132,7 @@ type = dropbox
                 """
 [remotes."Docs"]
 mount_path = "custom-docs"
+remote_path = "bucket/docs"
 mount_flags = "--read-only"
 auto_mount = false
 
@@ -138,6 +157,7 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Docs"])
         self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertEqual(remotes[0].remote_path, "bucket/docs")
         self.assertTrue(Path(remotes[0].mount_path).is_absolute())
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)

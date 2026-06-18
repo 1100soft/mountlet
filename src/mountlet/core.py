@@ -114,6 +114,7 @@ class RemoteInfo:
     flags: List[str] = field(default_factory=list)
     extra_info: Dict[str, str] = field(default_factory=dict)
     auto_mount: bool = False
+    remote_path: str = ""
 
     @property
     def display_name(self) -> str:
@@ -373,6 +374,7 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
             provider=provider,
             backend_type=backend_type,
             mount_path=mount_path,
+            remote_path=remote_settings.remote_path if remote_settings and remote_settings.remote_path else "",
             flags=_build_flags(backend_type, extra_flags),
             extra_info=dict(section.items()),
             auto_mount=auto_mount,
@@ -425,6 +427,11 @@ def find_rclone() -> str | None:
 
 def mount_path(remote: RemoteInfo) -> str:
     return remote.mount_path
+
+
+def remote_source(remote: RemoteInfo) -> str:
+    path = remote.remote_path.strip().lstrip("/")
+    return f"{remote.name}:{path}" if path else f"{remote.name}:"
 
 
 def is_mounted_windows(path: str) -> bool:
@@ -536,7 +543,7 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
 
-    args = [rclone_bin, "mount", f"{remote.name}:", remote.mount_path]
+    args = [rclone_bin, "mount", remote_source(remote), remote.mount_path]
     args.extend(remote.flags)
 
     return _launch_mount_process(remote, args)
@@ -629,7 +636,7 @@ def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
         return StorageUsage("?")
     try:
         output = subprocess.check_output(
-            [rclone_bin, "about", f"{remote.name}:", "--json"],
+            [rclone_bin, "about", remote_source(remote), "--json"],
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=RCLONE_STATUS_TIMEOUT_SECONDS,
@@ -656,7 +663,7 @@ def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
         return False, "[!] rclone not found."
     try:
         result = subprocess.run(
-            [rclone_bin, "about", f"{remote.name}:"],
+            [rclone_bin, "about", remote_source(remote)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
