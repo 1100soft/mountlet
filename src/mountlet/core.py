@@ -392,6 +392,17 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
 
 def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> bool:
     if backend_type not in OAUTH_BACKEND_TYPES:
+        if backend_type == "s3":
+            provider = values.get("provider", "").strip()
+            env_auth = values.get("env_auth", "").strip().lower() in {"true", "1", "yes", "on"}
+            has_keys = bool(values.get("access_key_id", "").strip() and values.get("secret_access_key", "").strip())
+            if not provider or not (env_auth or has_keys):
+                return False
+            if provider.lower() in {"minio", "other"} and not values.get("endpoint", "").strip():
+                return False
+            return True
+        if backend_type == "webdav":
+            return values.get("url", "").strip().startswith(("http://", "https://"))
         return bool(backend_type)
     if backend_type == "onedrive":
         return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))

@@ -643,11 +643,67 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(wizard._initial_config_args(), ["config_is_local", "false"])
 
-    def test_new_remote_wizard_uses_no_initial_args_for_webdav(self):
+    def test_new_remote_wizard_uses_s3_form_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "s3"
+        wizard.fields = {
+            "s3_provider": mock.Mock(currentData=mock.Mock(return_value="Minio")),
+            "s3_access_key_id": mock.Mock(text=mock.Mock(return_value="minioadmin")),
+            "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="miniosecret")),
+            "s3_region": mock.Mock(text=mock.Mock(return_value="us-east-1")),
+            "s3_endpoint": mock.Mock(text=mock.Mock(return_value="http://127.0.0.1:9000")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "provider",
+                "Minio",
+                "access_key_id",
+                "minioadmin",
+                "secret_access_key",
+                "miniosecret",
+                "region",
+                "us-east-1",
+                "endpoint",
+                "http://127.0.0.1:9000",
+            ],
+        )
+
+    def test_new_remote_wizard_requires_s3_endpoint_for_minio(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.fields = {
+            "s3_provider": mock.Mock(currentData=mock.Mock(return_value="Minio")),
+            "s3_access_key_id": mock.Mock(text=mock.Mock(return_value="minioadmin")),
+            "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="miniosecret")),
+            "s3_endpoint": mock.Mock(text=mock.Mock(return_value="")),
+        }
+
+        self.assertFalse(wizard._s3_fields_are_valid())
+
+    def test_new_remote_wizard_uses_webdav_form_args(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "webdav"
+        wizard.fields = {
+            "webdav_url": mock.Mock(text=mock.Mock(return_value="https://cloud.example.com/dav")),
+            "webdav_vendor": mock.Mock(currentData=mock.Mock(return_value="nextcloud")),
+            "webdav_user": mock.Mock(text=mock.Mock(return_value="eric")),
+            "webdav_pass": mock.Mock(text=mock.Mock(return_value="secret")),
+        }
 
-        self.assertEqual(wizard._initial_config_args(), [])
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "url",
+                "https://cloud.example.com/dav",
+                "vendor",
+                "nextcloud",
+                "user",
+                "eric",
+                "pass",
+                "secret",
+            ],
+        )
 
     def test_new_remote_wizard_allows_same_alias_across_providers(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -1589,6 +1645,28 @@ class TrayTests(unittest.TestCase):
             "This remote does not have a known browser view.",
             success=False,
         )
+
+    def test_tray_remote_action_delegates_to_threaded_main_window_runner(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+
+        tray_app._run_remote_action(remote, core.mount_remote)
+
+        tray_app.main_window._run_remote_action.assert_called_once_with(remote, core.mount_remote)
+
+    def test_tray_bulk_actions_delegate_to_threaded_main_window_runner(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+
+        tray_app._mount_all([remote])
+        tray_app._unmount_all([remote])
+
+        tray_app.main_window._mount_all.assert_called_once_with()
+        tray_app.main_window._unmount_all.assert_called_once_with()
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")

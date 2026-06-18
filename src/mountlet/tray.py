@@ -1492,7 +1492,55 @@ class NewRemoteWizard:
         shared_drive.toggled.connect(lambda _checked=False: shared_drive_id.setEnabled(shared_drive.isChecked()))
         connect_after_create = self.qt.QCheckBox("Connect this remote after creating it")
         connect_after_create.setChecked(True)
-        connect_after_create.setToolTip("Mount the new remote immediately after Google authorization succeeds.")
+        connect_after_create.setToolTip("Mount the new remote immediately after setup succeeds.")
+
+        s3_provider = self.qt.QComboBox()
+        for label, value in (
+            ("MinIO / S3-compatible", "Minio"),
+            ("Amazon S3", "AWS"),
+            ("Wasabi", "Wasabi"),
+            ("Other S3-compatible", "Other"),
+        ):
+            s3_provider.addItem(label, value)
+        s3_provider.currentIndexChanged.connect(lambda _index=0: self._update_action_button())
+        s3_endpoint = self.qt.QLineEdit()
+        s3_endpoint.setPlaceholderText("http://127.0.0.1:9000")
+        s3_endpoint.setToolTip("Required for MinIO and most S3-compatible services.")
+        s3_region = self.qt.QLineEdit()
+        s3_region.setText("us-east-1")
+        s3_access_key_id = self.qt.QLineEdit()
+        s3_access_key_id.setPlaceholderText("Access key")
+        s3_secret_access_key = self.qt.QLineEdit()
+        s3_secret_access_key.setPlaceholderText("Secret key")
+        s3_secret_access_key.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+
+        webdav_url = self.qt.QLineEdit()
+        webdav_url.setPlaceholderText("https://cloud.example.com/remote.php/dav/files/user")
+        webdav_url.setToolTip("The WebDAV endpoint URL.")
+        webdav_vendor = self.qt.QComboBox()
+        for label, value in (
+            ("Other", "other"),
+            ("Nextcloud", "nextcloud"),
+            ("ownCloud", "owncloud"),
+            ("SharePoint", "sharepoint"),
+        ):
+            webdav_vendor.addItem(label, value)
+        webdav_user = self.qt.QLineEdit()
+        webdav_user.setPlaceholderText("Optional")
+        webdav_pass = self.qt.QLineEdit()
+        webdav_pass.setPlaceholderText("Optional")
+        webdav_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+
+        for field in (
+            s3_endpoint,
+            s3_region,
+            s3_access_key_id,
+            s3_secret_access_key,
+            webdav_url,
+            webdav_user,
+            webdav_pass,
+        ):
+            field.textChanged.connect(self._update_action_button)
 
         self.fields = {
             "provider": provider,
@@ -1509,6 +1557,15 @@ class NewRemoteWizard:
             "shared_drive": shared_drive,
             "shared_drive_id": shared_drive_id,
             "connect_after_create": connect_after_create,
+            "s3_provider": s3_provider,
+            "s3_endpoint": s3_endpoint,
+            "s3_region": s3_region,
+            "s3_access_key_id": s3_access_key_id,
+            "s3_secret_access_key": s3_secret_access_key,
+            "webdav_url": webdav_url,
+            "webdav_vendor": webdav_vendor,
+            "webdav_user": webdav_user,
+            "webdav_pass": webdav_pass,
         }
         form.addRow("Storage type", provider)
         form.addRow("Name", name)
@@ -1519,6 +1576,15 @@ class NewRemoteWizard:
         form.addRow("Authorization", auth_group)
         form.addRow("Drive", drive_group)
         form.addRow("Shared drive ID", shared_drive_id)
+        form.addRow("S3 provider", s3_provider)
+        form.addRow("S3 endpoint", s3_endpoint)
+        form.addRow("S3 region", s3_region)
+        form.addRow("S3 access key", s3_access_key_id)
+        form.addRow("S3 secret key", s3_secret_access_key)
+        form.addRow("WebDAV URL", webdav_url)
+        form.addRow("WebDAV vendor", webdav_vendor)
+        form.addRow("WebDAV user", webdav_user)
+        form.addRow("WebDAV password", webdav_pass)
         form.addRow(connect_after_create)
 
         self.question_frame = self.qt.QFrame()
@@ -1557,7 +1623,34 @@ class NewRemoteWizard:
             self.action_button.setText(self._question_button_text())
             return
         self.action_button.setText("Create remote")
-        self.action_button.setEnabled(bool(self.fields["name"].text().strip()) and self._browser_port_available)
+        self.action_button.setEnabled(self._setup_fields_are_valid() and self._browser_port_available)
+
+    def _setup_fields_are_valid(self) -> bool:
+        if not self.fields["name"].text().strip():
+            return False
+        remote_type = self.fields["provider"].currentData() or "drive"
+        if remote_type == "s3":
+            return self._s3_fields_are_valid()
+        if remote_type == "webdav":
+            return self._webdav_fields_are_valid()
+        return True
+
+    def _s3_fields_are_valid(self) -> bool:
+        provider = str(self.fields["s3_provider"].currentData() or "")
+        endpoint = self.fields["s3_endpoint"].text().strip()
+        has_keys = bool(
+            self.fields["s3_access_key_id"].text().strip()
+            and self.fields["s3_secret_access_key"].text().strip()
+        )
+        if not has_keys:
+            return False
+        if provider.lower() in {"minio", "other"} and not endpoint:
+            return False
+        return True
+
+    def _webdav_fields_are_valid(self) -> bool:
+        url = self.fields["webdav_url"].text().strip()
+        return url.startswith(("http://", "https://"))
 
     def _next(self) -> None:
         if self._question is None:
@@ -1590,6 +1683,12 @@ class NewRemoteWizard:
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
             self._warning("Add remote", "Enter the shared drive ID before connecting, or choose My Drive.")
+            return
+        if self._remote_type == "s3" and not self._s3_fields_are_valid():
+            self._warning("Add remote", "Enter the S3 endpoint, access key, and secret key before creating the remote.")
+            return
+        if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
+            self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
             return
         if not self._browser_auth_port_ready():
             self._remote_name = ""
@@ -1798,7 +1897,43 @@ class NewRemoteWizard:
             )
         if self._remote_type in OAUTH_REMOTE_TYPES:
             return ["config_is_local", "true" if self._drive_local_auth else "false"]
+        if self._remote_type == "s3":
+            return self._s3_config_args()
+        if self._remote_type == "webdav":
+            return self._webdav_config_args()
         return []
+
+    def _s3_config_args(self) -> list[str]:
+        args = [
+            "provider",
+            str(self.fields["s3_provider"].currentData() or "Minio"),
+            "access_key_id",
+            self.fields["s3_access_key_id"].text().strip(),
+            "secret_access_key",
+            self.fields["s3_secret_access_key"].text().strip(),
+        ]
+        region = self.fields["s3_region"].text().strip()
+        endpoint = self.fields["s3_endpoint"].text().strip()
+        if region:
+            args.extend(["region", region])
+        if endpoint:
+            args.extend(["endpoint", endpoint])
+        return args
+
+    def _webdav_config_args(self) -> list[str]:
+        args = [
+            "url",
+            self.fields["webdav_url"].text().strip(),
+            "vendor",
+            str(self.fields["webdav_vendor"].currentData() or "other"),
+        ]
+        user = self.fields["webdav_user"].text().strip()
+        password = self.fields["webdav_pass"].text()
+        if user:
+            args.extend(["user", user])
+        if password:
+            args.extend(["pass", password])
+        return args
 
     def _automatic_answer(self, step: rclone_wizard.RcloneConfigStep) -> str | None:
         option_name = self._option_name(step.option)
@@ -1879,6 +2014,18 @@ class NewRemoteWizard:
         self.fields["shared_drive_id"].setEnabled(
             setup_editable and self.fields["shared_drive"].isChecked()
         )
+        for field_name in (
+            "s3_provider",
+            "s3_endpoint",
+            "s3_region",
+            "s3_access_key_id",
+            "s3_secret_access_key",
+            "webdav_url",
+            "webdav_vendor",
+            "webdav_user",
+            "webdav_pass",
+        ):
+            self.fields[field_name].setEnabled(setup_editable)
         self._apply_credential_choice(enabled=setup_editable)
         self.status.setText((message or self._busy_message()) if busy else "")
 
@@ -1907,6 +2054,8 @@ class NewRemoteWizard:
         self._remote_type = remote_type
         is_drive = remote_type == "drive"
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
+        is_s3 = remote_type == "s3"
+        is_webdav = remote_type == "webdav"
         for field_name in (
             "credential_source",
             "client_id",
@@ -1915,6 +2064,21 @@ class NewRemoteWizard:
             "shared_drive_id",
         ):
             self._set_form_row_visible(self.fields[field_name], is_drive)
+        for field_name in (
+            "s3_provider",
+            "s3_endpoint",
+            "s3_region",
+            "s3_access_key_id",
+            "s3_secret_access_key",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_s3)
+        for field_name in (
+            "webdav_url",
+            "webdav_vendor",
+            "webdav_user",
+            "webdav_pass",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_webdav)
         self._set_form_row_visible(self.fields["credential_help"], is_drive)
         self._set_form_row_visible(self.fields["auth_group"], uses_browser_auth)
         self.fields["name"].setPlaceholderText(self._remote_name_placeholder(remote_type))
@@ -3649,16 +3813,12 @@ class MountletTray:
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
         if getattr(self, "_quitting", False):
             return
-        success, message = action(remote)
-        self._notify("Mountlet", _clean_message(message), success=success)
-        self.rebuild_menus()
+        self.main_window._run_remote_action(remote, action)
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
-        mounted, failures = core.mount_all(remotes)
-        self._report_mount_results("Mount all", mounted, failures)
-        self.rebuild_menus()
+        self.main_window._mount_all()
 
     def _schedule_auto_mounts(self) -> None:
         if getattr(self, "_quitting", False):
@@ -3687,14 +3847,7 @@ class MountletTray:
     def _unmount_all(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
-        unmounted, failures = core.unmount_all(remotes)
-        if failures:
-            self._notify("Unmount all", "\n".join(_clean_message(item) for item in failures), success=False)
-        elif unmounted:
-            self._notify("Unmount all", "Unmounted: " + ", ".join(unmounted), success=True)
-        else:
-            self._notify("Unmount all", "Nothing to unmount.", success=True)
-        self.rebuild_menus()
+        self.main_window._unmount_all()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         if not os.path.isdir(remote.mount_path):

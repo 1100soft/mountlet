@@ -196,6 +196,19 @@ token = REDACTED
 drive_id = drive
 drive_type = personal
 
+[PartialS3]
+type = s3
+
+[ReadyS3]
+type = s3
+provider = Minio
+access_key_id = minioadmin
+secret_access_key = minioadmin
+endpoint = http://127.0.0.1:9000
+
+[PartialWebDav]
+type = webdav
+
 [WebDav]
 type = webdav
 url = https://example.test
@@ -204,7 +217,7 @@ url = https://example.test
 
             remotes = core.load_remotes(include_incomplete=False)
 
-        self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "ReadyOneDrive", "WebDav"])
+        self.assertEqual([remote.name for remote in remotes], ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav"])
 
     def test_storage_usage_uses_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
