@@ -4631,6 +4631,12 @@ class MountletTray:
         self.main_window.toggle_from_tray()
         self.qt.QTimer.singleShot(25, self.rebuild_menus)
 
+    def _show_app_settings_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_app_config_editor)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
@@ -4654,7 +4660,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
-        self._add_action(self.app_menu, "App settings", self.main_window._show_app_config_editor)
+        self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
         self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)

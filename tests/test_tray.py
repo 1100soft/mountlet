@@ -2024,6 +2024,26 @@ class TrayTests(unittest.TestCase):
         tray_app.rebuild_menus.assert_not_called()
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
 
+    def test_tray_app_settings_shows_main_window_before_dialog(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        tray_app.qt = mock.Mock()
+        events: list[str] = []
+        tray_app.main_window.show.side_effect = lambda: events.append("window")
+
+        def single_shot(delay: int, callback: object) -> None:
+            self.assertEqual(delay, 0)
+            events.append("timer")
+            callback()
+
+        tray_app.qt.QTimer.singleShot.side_effect = single_shot
+        tray_app.main_window._show_app_config_editor.side_effect = lambda: events.append("dialog")
+
+        tray_app._show_app_settings_from_tray()
+
+        self.assertEqual(events, ["window", "timer", "dialog"])
+
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")

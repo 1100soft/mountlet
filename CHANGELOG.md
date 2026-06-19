@@ -12,6 +12,8 @@
 - Added cross-platform file-manager discovery and an app-specific selector,
   with platform defaults and automatic fallback when a selected manager is no
   longer installed.
+- Opening App settings from the tray now positions and focuses the main window
+  at the tray before showing the settings dialog.
 
 ## 0.2.2 - 2026-06-19
 
