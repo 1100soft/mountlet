@@ -48,6 +48,68 @@ For a local checkout:
 python -m pip install .
 ```
 
+## Install a GitHub Preview
+
+GitHub previews are source snapshots from the `wip` branch, not signed native
+installers. They may be unstable and can change without notice. Linux is the
+current supported platform; Windows and macOS builds are available for early
+testing while their mount integration is developed.
+
+All three options below use a separate virtual environment, so they do not
+replace a stable `pipx` or PyPI installation. Install Python 3.10 or newer and
+[`rclone`](https://rclone.org/install/) first.
+
+### Linux
+
+Install FUSE 3 through your distribution. On Ubuntu or Debian:
+
+```bash
+sudo apt install rclone fuse3 python3-venv
+```
+
+Install and start the preview:
+
+```bash
+PREVIEW="$HOME/.local/share/mountlet-preview"
+python3 -m venv "$PREVIEW"
+"$PREVIEW/bin/python" -m pip install --upgrade pip
+"$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
+  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+"$PREVIEW/bin/mountlet" tray
+```
+
+### Windows (Experimental)
+
+Install [`rclone`](https://rclone.org/install/) and
+[`WinFsp`](https://winfsp.dev/rel/), then run these commands in PowerShell:
+
+```powershell
+$Preview = "$env:LOCALAPPDATA\Mountlet\preview"
+py -3 -m venv $Preview
+& "$Preview\Scripts\python.exe" -m pip install --upgrade pip
+& "$Preview\Scripts\python.exe" -m pip install --upgrade --force-reinstall `
+  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+& "$Preview\Scripts\mountlet.exe" tray
+```
+
+### macOS (Experimental)
+
+Install [`rclone`](https://rclone.org/install/) and
+[`macFUSE`](https://macfuse.github.io/), then run:
+
+```bash
+PREVIEW="$HOME/Library/Application Support/Mountlet/preview"
+python3 -m venv "$PREVIEW"
+"$PREVIEW/bin/python" -m pip install --upgrade pip
+"$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
+  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+"$PREVIEW/bin/mountlet" tray
+```
+
+Run the same install command again to update an existing preview. To test a
+specific tagged pre-release instead, replace `refs/heads/wip.zip` with
+`refs/tags/vX.Y.Z.zip`.
+
 ## Use
 
 Open Mountlet:
