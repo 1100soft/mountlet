@@ -1260,9 +1260,10 @@ class TrayTests(unittest.TestCase):
 
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             with mock.patch.dict(tray.os.environ, {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}, clear=True):
-                with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/xprop"):
-                    with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
-                        self.assertTrue(tray._set_x11_window_desktop(window, 3))
+                with mock.patch.object(tray, "_send_x11_window_desktop_request", return_value=False):
+                    with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/xprop"):
+                        with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                            self.assertTrue(tray._set_x11_window_desktop(window, 3))
 
         self.assertEqual(
             run.call_args.args[0],
@@ -1278,6 +1279,29 @@ class TrayTests(unittest.TestCase):
                 "3",
             ],
         )
+
+    def test_send_x11_window_desktop_request_uses_ewmh_client_message(self):
+        x11 = SimpleNamespace(
+            XOpenDisplay=mock.Mock(return_value=123),
+            XDefaultRootWindow=mock.Mock(return_value=456),
+            XInternAtom=mock.Mock(return_value=789),
+            XSendEvent=mock.Mock(return_value=1),
+            XFlush=mock.Mock(),
+            XCloseDisplay=mock.Mock(),
+        )
+
+        with mock.patch.object(tray.ctypes.util, "find_library", return_value="libX11.so"):
+            with mock.patch.object(tray.ctypes, "CDLL", return_value=x11):
+                self.assertTrue(tray._send_x11_window_desktop_request(12345, 3))
+
+        event = x11.XSendEvent.call_args.args[4]._obj
+        self.assertEqual(event.xclient.window, 12345)
+        self.assertEqual(event.xclient.message_type, 789)
+        self.assertEqual(event.xclient.format, 32)
+        self.assertEqual(event.xclient.data.l[0], 3)
+        self.assertEqual(event.xclient.data.l[1], 2)
+        x11.XFlush.assert_called_once_with(123)
+        x11.XCloseDisplay.assert_called_once_with(123)
 
     def test_set_x11_window_desktop_skips_wayland(self):
         window = mock.Mock()

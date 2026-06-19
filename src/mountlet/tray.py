@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
 import errno
 import html
 import os
@@ -1010,6 +1012,85 @@ def _x11_qt_window_is_on_current_desktop(window: Any) -> bool | None:
     return window_desktop in {current_desktop, 0xFFFFFFFF}
 
 
+class _XClientMessageData(ctypes.Union):
+    _fields_ = [
+        ("b", ctypes.c_char * 20),
+        ("s", ctypes.c_short * 10),
+        ("l", ctypes.c_long * 5),
+    ]
+
+
+class _XClientMessageEvent(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("serial", ctypes.c_ulong),
+        ("send_event", ctypes.c_int),
+        ("display", ctypes.c_void_p),
+        ("window", ctypes.c_ulong),
+        ("message_type", ctypes.c_ulong),
+        ("format", ctypes.c_int),
+        ("data", _XClientMessageData),
+    ]
+
+
+class _XEvent(ctypes.Union):
+    _fields_ = [
+        ("xclient", _XClientMessageEvent),
+        ("pad", ctypes.c_long * 24),
+    ]
+
+
+def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
+    library = ctypes.util.find_library("X11")
+    if not library:
+        return False
+    try:
+        x11 = ctypes.CDLL(library)
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XSendEvent.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_long,
+            ctypes.POINTER(_XEvent),
+        ]
+        x11.XSendEvent.restype = ctypes.c_int
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        display = x11.XOpenDisplay(None)
+    except (AttributeError, OSError):
+        return False
+    if not display:
+        return False
+    try:
+        root = x11.XDefaultRootWindow(display)
+        message_type = x11.XInternAtom(display, b"_NET_WM_DESKTOP", 0)
+        if not root or not message_type:
+            return False
+        event = _XEvent()
+        event.xclient.type = 33  # ClientMessage
+        event.xclient.send_event = 1
+        event.xclient.display = display
+        event.xclient.window = window_id
+        event.xclient.message_type = message_type
+        event.xclient.format = 32
+        event.xclient.data.l[0] = desktop
+        event.xclient.data.l[1] = 2  # Pager source indication
+        event_mask = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
+        sent = x11.XSendEvent(display, root, 0, event_mask, ctypes.byref(event))
+        x11.XFlush(display)
+        return bool(sent)
+    except (AttributeError, OSError):
+        return False
+    finally:
+        x11.XCloseDisplay(display)
+
+
 def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
     if platform.system() != "Linux":
         return False
@@ -1017,11 +1098,13 @@ def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
         return False
     if not os.environ.get("DISPLAY"):
         return False
-    xprop = shutil.which("xprop")
-    if not xprop:
-        return False
     window_id = _x11_qt_window_id(window)
     if window_id is None:
+        return False
+    if _send_x11_window_desktop_request(window_id, desktop):
+        return True
+    xprop = shutil.which("xprop")
+    if not xprop:
         return False
     try:
         result = subprocess.run(
