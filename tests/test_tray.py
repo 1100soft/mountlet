@@ -1338,6 +1338,18 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_focus_window_restores_x11_keep_above_after_desktop_move(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isMinimized.return_value = False
+        mountlet_window._keep_above = True
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop"):
+            with mock.patch.object(tray, "_set_x11_keep_above", return_value=True) as set_above:
+                mountlet_window._focus_window()
+
+        set_above.assert_called_once_with(mountlet_window.window, True)
+
     def test_focus_window_restores_modal_child_z_order(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         child = mock.Mock()

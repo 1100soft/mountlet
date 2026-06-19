@@ -3230,6 +3230,7 @@ class MountletWindow:
         else:
             self.window.show()
         _move_x11_window_to_current_desktop(self.window)
+        self._restore_x11_keep_above()
         if self._has_visible_child_dialog():
             self._raise_child_windows()
             self._schedule_child_window_raises()
@@ -3255,7 +3256,12 @@ class MountletWindow:
         _move_x11_window_to_current_desktop(self.window)
         if _x11_qt_window_is_on_current_desktop(self.window) is False:
             return
+        self._restore_x11_keep_above()
         self._activate_main_window()
+
+    def _restore_x11_keep_above(self) -> None:
+        if getattr(self, "_keep_above", False):
+            _set_x11_keep_above(self.window, True)
 
     def _activate_main_window(self) -> None:
         self.window.raise_()
