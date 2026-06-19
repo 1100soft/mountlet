@@ -1085,6 +1085,23 @@ class TrayTests(unittest.TestCase):
         hide_stack.assert_called_once_with()
         event.ignore.assert_called_once_with()
 
+    def test_mountlet_window_close_raises_child_dialog_when_open(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        event = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_tray_is_quitting", return_value=False):
+            with mock.patch.object(mountlet_window, "_has_visible_child_dialog", return_value=True):
+                with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
+                    with mock.patch.object(mountlet_window, "_schedule_child_window_raises") as schedule:
+                        with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+                            handled = mountlet_window._handle_window_close(event)
+
+        self.assertTrue(handled)
+        raise_child.assert_called_once_with()
+        schedule.assert_called_once_with()
+        hide_stack.assert_not_called()
+        event.ignore.assert_called_once_with()
+
     def test_mountlet_main_window_close_event_uses_shared_close_handler(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         qt = SimpleNamespace(QMainWindow=type("BaseMainWindow", (), {"closeEvent": lambda self, event: None}))
@@ -1096,6 +1113,22 @@ class TrayTests(unittest.TestCase):
             window.closeEvent(event)
 
         handle.assert_called_once_with(event)
+
+    def test_mountlet_window_removes_minimize_and_maximize_buttons(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        window_type = SimpleNamespace(
+            Window=1,
+            WindowTitleHint=2,
+            WindowCloseButtonHint=4,
+            WindowMinimizeButtonHint=8,
+            WindowMaximizeButtonHint=16,
+        )
+        mountlet_window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowType=window_type))
+        mountlet_window.window = mock.Mock()
+
+        mountlet_window._set_window_buttons()
+
+        mountlet_window.window.setWindowFlags.assert_called_once_with(7)
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)

@@ -2936,6 +2936,7 @@ class MountletWindow:
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self._make_tray_owned_window()
+        self._set_window_buttons()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -2988,7 +2989,11 @@ class MountletWindow:
     def _handle_window_close(self, event: Any) -> bool:
         if self._tray_is_quitting():
             return False
-        self._hide_window_stack()
+        if self._has_visible_child_dialog():
+            self._raise_child_windows()
+            self._schedule_child_window_raises()
+        else:
+            self._hide_window_stack()
         try:
             event.ignore()
         except Exception:
@@ -3051,6 +3056,21 @@ class MountletWindow:
             self.window.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
         except Exception:
             return
+
+    def _set_window_buttons(self) -> None:
+        try:
+            flags = (
+                self.qt.Qt.WindowType.Window
+                | self.qt.Qt.WindowType.WindowTitleHint
+                | self.qt.Qt.WindowType.WindowCloseButtonHint
+            )
+            self.window.setWindowFlags(flags)
+        except Exception:
+            try:
+                self.window.setWindowFlag(self.qt.Qt.WindowType.WindowMinimizeButtonHint, False)
+                self.window.setWindowFlag(self.qt.Qt.WindowType.WindowMaximizeButtonHint, False)
+            except Exception:
+                pass
 
     def _window_is_active(self) -> bool:
         try:
