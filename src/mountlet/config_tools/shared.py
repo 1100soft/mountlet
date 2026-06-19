@@ -5,13 +5,13 @@ from __future__ import annotations
 import configparser
 import datetime as _dt
 import os
-import platform
 import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+from ..platform_services import get_platform
 
 APP_NAME = "mountlet"
 LEGACY_APP_NAMES = ("cloud-mount-manager",)
@@ -21,35 +21,12 @@ def default_config_path() -> Path:
     env_config = os.environ.get("RCLONE_CONFIG")
     if env_config:
         return Path(env_config).expanduser()
-    if platform.system() == "Windows":
-        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        return base / "rclone" / "rclone.conf"
-    return Path.home() / ".config" / "rclone" / "rclone.conf"
+    return get_platform().default_rclone_config()
 
 
 def _platform_user_dir_for(kind: str, app_name: str) -> Path:
-    system = platform.system()
-    if system == "Windows":
-        env_name = "APPDATA" if kind == "config" else "LOCALAPPDATA"
-        fallback = Path.home() / "AppData" / ("Roaming" if kind == "config" else "Local")
-        return Path(os.environ.get(env_name, fallback)) / app_name
-    if system == "Darwin":
-        if kind == "cache":
-            return Path.home() / "Library" / "Caches" / app_name
-        return Path.home() / "Library" / "Application Support" / app_name
-
-    env_names = {
-        "config": "XDG_CONFIG_HOME",
-        "state": "XDG_STATE_HOME",
-        "cache": "XDG_CACHE_HOME",
-    }
-    defaults = {
-        "config": Path.home() / ".config",
-        "state": Path.home() / ".local" / "state",
-        "cache": Path.home() / ".cache",
-    }
-    base = Path(os.environ.get(env_names[kind], defaults[kind])).expanduser()
-    return base / app_name
+    directories = get_platform().user_directories(app_name)
+    return getattr(directories, kind)
 
 
 def _platform_user_dir(kind: str) -> Path:
@@ -106,8 +83,7 @@ def backup_file(path: Path) -> Path:
 
 
 def apply_permissions(path: Path) -> None:
-    if platform.system() != "Windows":
-        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    get_platform().apply_private_permissions(path)
 
 
 def copy_file(src: Path, dest: Path, *, backup: bool, dry_run: bool) -> Path | None:
@@ -134,26 +110,8 @@ def find_rclone() -> str | None:
     if _RCLONE_CACHED is not None:
         return _RCLONE_CACHED
 
-    candidates: List[Path] = []
-    env_path = os.environ.get("RCLONE_PATH")
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-
-    exe_name = "rclone.exe" if platform.system() == "Windows" else "rclone"
-    which_path = shutil.which(exe_name)
-    if which_path:
-        candidates.append(Path(which_path))
-
-    if platform.system() == "Windows":
-        candidates.append(Path("C:/Program Files/rclone/rclone.exe"))
-
-    for candidate in candidates:
-        if candidate and candidate.exists():
-            _RCLONE_CACHED = str(candidate)
-            return _RCLONE_CACHED
-
-    _RCLONE_CACHED = None
-    return None
+    _RCLONE_CACHED = get_platform().find_rclone()
+    return _RCLONE_CACHED
 
 
 def run_rclone_version() -> str:
