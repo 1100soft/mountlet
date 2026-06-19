@@ -3414,8 +3414,13 @@ class MountletWindow:
         try:
             if self._keep_above:
                 button.setToolTip("Stop keeping Mountlet above other windows")
+                button.setStyleSheet(
+                    "QPushButton { background: #2563eb; color: #ffffff; "
+                    "border: 1px solid #93c5fd; border-radius: 4px; }"
+                )
             else:
                 button.setToolTip("Keep Mountlet above other windows")
+                button.setStyleSheet("")
         except Exception:
             pass
 
@@ -3447,8 +3452,8 @@ class MountletWindow:
 
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
-        layout.addWidget(self._pin_button())
         layout.addStretch(1)
+        layout.addWidget(self._pin_button())
         return widget
 
     def _sort_remote_order(self, sort_mode: str) -> None:
