@@ -1104,7 +1104,16 @@ class TrayTests(unittest.TestCase):
 
     def test_mountlet_main_window_close_event_uses_shared_close_handler(self):
         mountlet_window = object.__new__(tray.MountletWindow)
-        qt = SimpleNamespace(QMainWindow=type("BaseMainWindow", (), {"closeEvent": lambda self, event: None}))
+        window_type = SimpleNamespace(
+            Tool=1,
+            WindowTitleHint=2,
+            WindowSystemMenuHint=4,
+            WindowCloseButtonHint=8,
+        )
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(WindowType=window_type),
+            QMainWindow=type("BaseMainWindow", (), {"closeEvent": lambda self, event: None}),
+        )
         mountlet_window.qt = qt
         event = mock.Mock()
 
@@ -1114,20 +1123,19 @@ class TrayTests(unittest.TestCase):
 
         handle.assert_called_once_with(event)
 
-    def test_mountlet_window_removes_minimize_and_maximize_buttons(self):
-        mountlet_window = object.__new__(tray.MountletWindow)
+    def test_apply_close_only_window_flags_uses_title_system_and_close(self):
         window_type = SimpleNamespace(
-            WindowCloseButtonHint=4,
-            WindowMinimizeButtonHint=8,
-            WindowMaximizeButtonHint=16,
+            Dialog=1,
+            WindowTitleHint=2,
+            WindowSystemMenuHint=4,
+            WindowCloseButtonHint=8,
         )
-        mountlet_window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowType=window_type))
-        mountlet_window.window = mock.Mock()
-        mountlet_window.window.windowFlags.return_value = 8 | 16
+        qt = SimpleNamespace(Qt=SimpleNamespace(WindowType=window_type))
+        window = mock.Mock()
 
-        mountlet_window._remove_minimize_maximize_buttons(mountlet_window.window)
+        tray._apply_close_only_window_flags(qt, window, base_name="Dialog")
 
-        mountlet_window.window.setWindowFlags.assert_called_once_with(4)
+        window.setWindowFlags.assert_called_once_with(15)
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1342,14 +1350,14 @@ class TrayTests(unittest.TestCase):
             Qt=SimpleNamespace(
                 WindowModality=SimpleNamespace(WindowModal="window-modal"),
                 WindowType=SimpleNamespace(
-                    WindowCloseButtonHint=4,
-                    WindowMinimizeButtonHint=8,
-                    WindowMaximizeButtonHint=16,
+                    Dialog=1,
+                    WindowTitleHint=2,
+                    WindowSystemMenuHint=4,
+                    WindowCloseButtonHint=8,
                 ),
             )
         )
         owner = SimpleNamespace(dialog=mock.Mock())
-        owner.dialog.windowFlags.return_value = 8
         on_accepted = mock.Mock()
 
         with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
@@ -1359,7 +1367,7 @@ class TrayTests(unittest.TestCase):
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
-        owner.dialog.setWindowFlags.assert_called_once()
+        owner.dialog.setWindowFlags.assert_called_once_with(15)
         owner.dialog.setModal.assert_called_once_with(True)
         owner.dialog.setWindowModality.assert_called_once_with("window-modal")
         owner.dialog.show.assert_called_once_with()

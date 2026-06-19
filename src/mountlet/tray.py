@@ -538,6 +538,46 @@ def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: st
             pass
 
 
+def _close_only_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
+    try:
+        window_type = qt.Qt.WindowType
+        return (
+            getattr(window_type, base_name)
+            | window_type.WindowTitleHint
+            | window_type.WindowSystemMenuHint
+            | window_type.WindowCloseButtonHint
+        )
+    except Exception:
+        return None
+
+
+def _create_close_only_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
+    flags = _close_only_window_flags(qt, "Dialog")
+    if flags is not None:
+        try:
+            return qt.QDialog(parent, flags)
+        except Exception:
+            pass
+    dialog = qt.QDialog(parent)
+    _apply_close_only_window_flags(qt, dialog, base_name="Dialog")
+    return dialog
+
+
+def _apply_close_only_window_flags(qt: SimpleNamespace, window: Any, *, base_name: str = "Window") -> None:
+    flags = _close_only_window_flags(qt, base_name)
+    if flags is not None:
+        try:
+            window.setWindowFlags(flags)
+            return
+        except Exception:
+            pass
+    try:
+        window.setWindowFlag(qt.Qt.WindowType.WindowMinimizeButtonHint, False)
+        window.setWindowFlag(qt.Qt.WindowType.WindowMaximizeButtonHint, False)
+    except Exception:
+        pass
+
+
 def _load_visible_remotes() -> list[core.RemoteInfo]:
     return [
         remote
@@ -1315,7 +1355,7 @@ def _config_bool(value: str) -> bool:
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = qt.QDialog(parent)
+        self.dialog = _create_close_only_dialog(qt, parent)
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
@@ -1618,7 +1658,7 @@ class MountConfigDialog(_ConfigDialogBase):
 class NewRemoteWizard:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = qt.QDialog(parent)
+        self.dialog = _create_close_only_dialog(qt, parent)
         self.dialog.setWindowTitle("Add remote")
         self.dialog.resize(520, 280)
         self.fields: dict[str, Any] = {}
@@ -2935,8 +2975,6 @@ class MountletWindow:
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
-        self._make_tray_owned_window()
-        self._remove_minimize_maximize_buttons(self.window)
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -2958,6 +2996,17 @@ class MountletWindow:
         outer = self
 
         class MainWindow(qt.QMainWindow):
+            def __init__(self) -> None:
+                flags = _close_only_window_flags(qt, "Tool")
+                if flags is not None:
+                    try:
+                        super().__init__(None, flags)
+                        return
+                    except Exception:
+                        pass
+                super().__init__()
+                _apply_close_only_window_flags(qt, self, base_name="Tool")
+
             def closeEvent(self, event: object) -> None:
                 try:
                     if outer._handle_window_close(event):
@@ -3047,26 +3096,6 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._focus_window()
 
-    def _make_tray_owned_window(self) -> None:
-        try:
-            self.window.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
-        except Exception:
-            return
-
-    def _remove_minimize_maximize_buttons(self, window: Any) -> None:
-        try:
-            flags = window.windowFlags()
-            flags &= ~self.qt.Qt.WindowType.WindowMinimizeButtonHint
-            flags &= ~self.qt.Qt.WindowType.WindowMaximizeButtonHint
-            flags |= self.qt.Qt.WindowType.WindowCloseButtonHint
-            window.setWindowFlags(flags)
-        except Exception:
-            try:
-                window.setWindowFlag(self.qt.Qt.WindowType.WindowMinimizeButtonHint, False)
-                window.setWindowFlag(self.qt.Qt.WindowType.WindowMaximizeButtonHint, False)
-            except Exception:
-                pass
-
     def _window_is_active(self) -> bool:
         try:
             return bool(self.window.isActiveWindow())
@@ -3150,7 +3179,7 @@ class MountletWindow:
     def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
-        self._remove_minimize_maximize_buttons(dialog)
+        _apply_close_only_window_flags(self.qt, dialog, base_name="Dialog")
         try:
             dialog.setModal(True)
             dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
