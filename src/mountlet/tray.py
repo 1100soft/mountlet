@@ -3397,6 +3397,15 @@ class MountletWindow:
         if on_accepted is not None:
             dialog.accepted.connect(on_accepted)
         dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
+        if not self.is_visible():
+            self.show()
+            self.qt.QTimer.singleShot(0, lambda child=dialog: self._show_tracked_child_dialog(child))
+            return
+        self._show_tracked_child_dialog(dialog)
+
+    def _show_tracked_child_dialog(self, dialog: Any) -> None:
+        if dialog not in getattr(self, "_child_dialogs", []) or self._tray_is_quitting():
+            return
         dialog.show()
         self._raise_child_windows()
 

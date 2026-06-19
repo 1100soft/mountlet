@@ -1460,6 +1460,38 @@ class TrayTests(unittest.TestCase):
         owner.dialog.show.assert_called_once_with()
         raise_child.assert_called_once_with()
 
+    def test_open_child_dialog_shows_main_window_before_hidden_parent_dialog(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = False
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowModality=SimpleNamespace(WindowModal="window-modal"),
+                WindowType=SimpleNamespace(Dialog=1, FramelessWindowHint=2),
+            ),
+            QTimer=mock.Mock(),
+        )
+        owner = SimpleNamespace(dialog=mock.Mock())
+        events: list[str] = []
+
+        with mock.patch.object(mountlet_window, "show", side_effect=lambda: events.append("main")):
+            with mock.patch.object(
+                mountlet_window,
+                "_show_tracked_child_dialog",
+                side_effect=lambda _dialog: events.append("child"),
+            ):
+                mountlet_window.qt.QTimer.singleShot.side_effect = lambda _delay, callback: (
+                    events.append("timer"),
+                    callback(),
+                )
+                mountlet_window._open_child_dialog(owner)
+
+        self.assertEqual(events, ["main", "timer", "child"])
+        owner.dialog.show.assert_not_called()
+
     def test_restore_child_offsets_moves_subwindow_with_main_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()

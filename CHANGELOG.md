@@ -14,6 +14,8 @@
   longer installed.
 - Opening App settings from the tray now positions and focuses the main window
   at the tray before showing the settings dialog.
+- Child dialogs, including Add Remote, now establish their positioned main
+  window before appearing when launched directly from the tray.
 
 ## 0.2.2 - 2026-06-19
 
