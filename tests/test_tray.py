@@ -1154,6 +1154,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window._keep_above_button.setToolTip.assert_called_once_with(
             "Stop keeping Mountlet above other windows"
         )
+        mountlet_window._keep_above_button.setStyleSheet.assert_called_once()
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
