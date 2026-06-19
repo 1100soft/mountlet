@@ -1206,6 +1206,8 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.isMinimized.return_value = False
         mountlet_window._child_dialogs = []
         mountlet_window._child_dialog_owners = {}
+        qt = mock.Mock()
+        mountlet_window.qt = qt
 
         with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
             with mock.patch.object(mountlet_window, "refresh") as refresh:
@@ -1216,8 +1218,21 @@ class TrayTests(unittest.TestCase):
         refresh.assert_called_once_with()
         position.assert_called_once_with()
         mountlet_window.window.show.assert_called_once_with()
-        mountlet_window.window.raise_.assert_called_once_with()
-        mountlet_window.window.activateWindow.assert_called_once_with()
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
+        self.assertEqual(qt.QTimer.singleShot.call_count, 6)
+
+    def test_activate_main_window_skips_when_window_still_on_other_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop") as move:
+            with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
+                mountlet_window._activate_main_window_if_current_desktop()
+
+        move.assert_called_once_with(mountlet_window.window)
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
 
     def test_x11_qt_window_is_on_current_desktop_compares_window_desktop(self):
         window = mock.Mock()

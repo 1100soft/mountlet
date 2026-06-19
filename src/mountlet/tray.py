@@ -3082,7 +3082,8 @@ class MountletWindow:
             return
         was_visible = self.is_visible()
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
-        if was_visible and visible_on_current_desktop is False:
+        reopened_from_other_desktop = was_visible and visible_on_current_desktop is False
+        if reopened_from_other_desktop:
             self._close_child_dialogs()
             self.window.hide()
             was_visible = False
@@ -3090,7 +3091,7 @@ class MountletWindow:
         if not was_visible:
             self._position_near_tray()
         self._window_stack_hidden = False
-        self._focus_window()
+        self._focus_window(defer_activation=reopened_from_other_desktop)
 
     def _window_is_active(self) -> bool:
         try:
@@ -3098,7 +3099,7 @@ class MountletWindow:
         except Exception:
             return False
 
-    def _focus_window(self) -> None:
+    def _focus_window(self, *, defer_activation: bool = False) -> None:
         self._apply_keep_above()
         _move_x11_window_to_current_desktop(self.window)
         if self.window.isMinimized():
@@ -3110,10 +3111,32 @@ class MountletWindow:
             self._raise_child_windows()
             self._schedule_child_window_raises()
             return
-        self.window.raise_()
-        self.window.activateWindow()
+        if defer_activation:
+            self._schedule_main_window_activation()
+            self._raise_child_windows()
+            self._schedule_child_window_raises()
+            return
+        self._activate_main_window()
         self._raise_child_windows()
         self._schedule_child_window_raises()
+
+    def _schedule_main_window_activation(self) -> None:
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            return
+        timer.singleShot(50, self._activate_main_window_if_current_desktop)
+        timer.singleShot(150, self._activate_main_window_if_current_desktop)
+        timer.singleShot(300, self._activate_main_window_if_current_desktop)
+
+    def _activate_main_window_if_current_desktop(self) -> None:
+        _move_x11_window_to_current_desktop(self.window)
+        if _x11_qt_window_is_on_current_desktop(self.window) is False:
+            return
+        self._activate_main_window()
+
+    def _activate_main_window(self) -> None:
+        self.window.raise_()
+        self.window.activateWindow()
 
     def _schedule_child_window_raises(self) -> None:
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
