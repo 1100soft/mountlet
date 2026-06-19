@@ -3100,7 +3100,6 @@ class MountletWindow:
             return False
 
     def _focus_window(self, *, defer_activation: bool = False) -> None:
-        self._apply_keep_above()
         _move_x11_window_to_current_desktop(self.window)
         if self.window.isMinimized():
             self.window.showNormal()

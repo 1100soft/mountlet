@@ -1206,7 +1206,14 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.isMinimized.return_value = False
         mountlet_window._child_dialogs = []
         mountlet_window._child_dialog_owners = {}
-        qt = mock.Mock()
+        single_shot = mock.Mock()
+        qt = SimpleNamespace(
+            QApplication=SimpleNamespace(
+                activeModalWidget=lambda: None,
+                activeWindow=lambda: None,
+            ),
+            QTimer=SimpleNamespace(singleShot=single_shot),
+        )
         mountlet_window.qt = qt
 
         with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
@@ -1220,7 +1227,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.show.assert_called_once_with()
         mountlet_window.window.raise_.assert_not_called()
         mountlet_window.window.activateWindow.assert_not_called()
-        self.assertEqual(qt.QTimer.singleShot.call_count, 6)
+        self.assertEqual(single_shot.call_count, 6)
 
     def test_activate_main_window_skips_when_window_still_on_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
