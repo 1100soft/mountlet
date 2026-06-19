@@ -1085,7 +1085,7 @@ class TrayTests(unittest.TestCase):
         hide_stack.assert_called_once_with()
         event.ignore.assert_called_once_with()
 
-    def test_mountlet_window_close_raises_child_dialog_when_open(self):
+    def test_mountlet_window_close_hides_window_stack_when_child_is_open(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         event = mock.Mock()
 
@@ -1097,9 +1097,9 @@ class TrayTests(unittest.TestCase):
                             handled = mountlet_window._handle_window_close(event)
 
         self.assertTrue(handled)
-        raise_child.assert_called_once_with()
-        schedule.assert_called_once_with()
-        hide_stack.assert_not_called()
+        raise_child.assert_not_called()
+        schedule.assert_not_called()
+        hide_stack.assert_called_once_with()
         event.ignore.assert_called_once_with()
 
     def test_mountlet_main_window_close_event_uses_shared_close_handler(self):
@@ -1117,18 +1117,17 @@ class TrayTests(unittest.TestCase):
     def test_mountlet_window_removes_minimize_and_maximize_buttons(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         window_type = SimpleNamespace(
-            Window=1,
-            WindowTitleHint=2,
             WindowCloseButtonHint=4,
             WindowMinimizeButtonHint=8,
             WindowMaximizeButtonHint=16,
         )
         mountlet_window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowType=window_type))
         mountlet_window.window = mock.Mock()
+        mountlet_window.window.windowFlags.return_value = 8 | 16
 
-        mountlet_window._set_window_buttons()
+        mountlet_window._remove_minimize_maximize_buttons(mountlet_window.window)
 
-        mountlet_window.window.setWindowFlags.assert_called_once_with(7)
+        mountlet_window.window.setWindowFlags.assert_called_once_with(4)
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1342,9 +1341,15 @@ class TrayTests(unittest.TestCase):
         mountlet_window.qt = SimpleNamespace(
             Qt=SimpleNamespace(
                 WindowModality=SimpleNamespace(WindowModal="window-modal"),
+                WindowType=SimpleNamespace(
+                    WindowCloseButtonHint=4,
+                    WindowMinimizeButtonHint=8,
+                    WindowMaximizeButtonHint=16,
+                ),
             )
         )
         owner = SimpleNamespace(dialog=mock.Mock())
+        owner.dialog.windowFlags.return_value = 8
         on_accepted = mock.Mock()
 
         with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
@@ -1354,6 +1359,7 @@ class TrayTests(unittest.TestCase):
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
+        owner.dialog.setWindowFlags.assert_called_once()
         owner.dialog.setModal.assert_called_once_with(True)
         owner.dialog.setWindowModality.assert_called_once_with("window-modal")
         owner.dialog.show.assert_called_once_with()

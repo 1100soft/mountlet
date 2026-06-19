@@ -2936,7 +2936,7 @@ class MountletWindow:
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self._make_tray_owned_window()
-        self._set_window_buttons()
+        self._remove_minimize_maximize_buttons(self.window)
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -2989,11 +2989,7 @@ class MountletWindow:
     def _handle_window_close(self, event: Any) -> bool:
         if self._tray_is_quitting():
             return False
-        if self._has_visible_child_dialog():
-            self._raise_child_windows()
-            self._schedule_child_window_raises()
-        else:
-            self._hide_window_stack()
+        self._hide_window_stack()
         try:
             event.ignore()
         except Exception:
@@ -3057,18 +3053,17 @@ class MountletWindow:
         except Exception:
             return
 
-    def _set_window_buttons(self) -> None:
+    def _remove_minimize_maximize_buttons(self, window: Any) -> None:
         try:
-            flags = (
-                self.qt.Qt.WindowType.Window
-                | self.qt.Qt.WindowType.WindowTitleHint
-                | self.qt.Qt.WindowType.WindowCloseButtonHint
-            )
-            self.window.setWindowFlags(flags)
+            flags = window.windowFlags()
+            flags &= ~self.qt.Qt.WindowType.WindowMinimizeButtonHint
+            flags &= ~self.qt.Qt.WindowType.WindowMaximizeButtonHint
+            flags |= self.qt.Qt.WindowType.WindowCloseButtonHint
+            window.setWindowFlags(flags)
         except Exception:
             try:
-                self.window.setWindowFlag(self.qt.Qt.WindowType.WindowMinimizeButtonHint, False)
-                self.window.setWindowFlag(self.qt.Qt.WindowType.WindowMaximizeButtonHint, False)
+                window.setWindowFlag(self.qt.Qt.WindowType.WindowMinimizeButtonHint, False)
+                window.setWindowFlag(self.qt.Qt.WindowType.WindowMaximizeButtonHint, False)
             except Exception:
                 pass
 
@@ -3155,6 +3150,7 @@ class MountletWindow:
     def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
+        self._remove_minimize_maximize_buttons(dialog)
         try:
             dialog.setModal(True)
             dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
