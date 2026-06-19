@@ -2,8 +2,8 @@
 
 ## 0.2.2 - 2026-06-19
 
-- Added provider status labels in the new-remote wizard to distinguish locally
-  tested providers from untested setup paths.
+- Added provider status colors in the new-remote wizard to distinguish locally
+  tested providers from untested setup paths without adding extra label text.
 - Added a dedicated Koofr setup path using rclone's Koofr backend instead of
   routing Koofr through WebDAV.
 - Added provider-specific S3 setup hints and links for Cloudflare R2, MinIO,

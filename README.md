@@ -130,9 +130,9 @@ Available but not yet locally tested:
 - Wasabi
 - WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files
 
-Untested providers are shown that way in the setup window. They may work through
-rclone, but expect rough edges until the wizard path is tested with a real
-account.
+In the setup window, tested options are shown in white and untested options in
+yellow. Untested providers may work through rclone, but expect rough edges until
+the wizard path is tested with a real account.
 
 ## Extra Commands
 

@@ -26,7 +26,7 @@ python -m pip wheel . -w /tmp/mountlet-release --no-deps --no-build-isolation
 Confirm:
 
 - `README.md` describes the user flow.
-- `README.md` marks tested and untested provider setup paths.
+- `README.md` documents the tested and untested provider setup paths.
 - `CHANGELOG.md` has a section for the version being released.
 - `pyproject.toml` and `src/mountlet/__init__.py` have the same version.
 - `SECURITY.md` has an active security reporting path or GitHub private vulnerability reporting is enabled.

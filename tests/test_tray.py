@@ -1043,6 +1043,23 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.hide.assert_called_once_with()
         show.assert_not_called()
 
+    def test_mountlet_window_toggle_hides_window_stack_when_child_is_open(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = False
+        child = mock.Mock()
+        child.isVisible.return_value = True
+        mountlet_window._child_dialogs = [child]
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
+            with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+                with mock.patch.object(mountlet_window, "show") as show:
+                    mountlet_window.toggle_from_tray()
+
+        hide_stack.assert_called_once_with()
+        show.assert_not_called()
+
     def test_mountlet_window_toggle_raises_visible_unfocused_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
@@ -1254,6 +1271,23 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.hide.assert_called_once_with()
         self.assertEqual(mountlet_window._child_dialogs, [])
         self.assertEqual(mountlet_window._child_dialog_owners, {})
+
+    def test_hide_window_stack_closes_active_untracked_child_dialog(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        child = mock.Mock()
+        child.parentWidget.return_value = mountlet_window.window
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        qt = mock.Mock()
+        qt.QApplication.activeModalWidget.return_value = child
+        qt.QApplication.activeWindow.return_value = None
+        mountlet_window.qt = qt
+
+        mountlet_window._hide_window_stack()
+
+        child.reject.assert_called_once_with()
+        mountlet_window.window.hide.assert_called_once_with()
 
     def test_open_child_dialog_tracks_owner_and_uses_modeless_show(self):
         mountlet_window = object.__new__(tray.MountletWindow)

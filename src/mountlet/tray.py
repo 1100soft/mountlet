@@ -100,15 +100,30 @@ DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
 FORCED_QUIT_SECONDS = 3.0
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("Google Drive (tested locally)", "drive"),
-    ("Dropbox (tested locally)", "dropbox"),
-    ("Microsoft OneDrive (tested locally)", "onedrive"),
-    ("Box (tested locally)", "box"),
-    ("pCloud (tested locally)", "pcloud"),
-    ("Koofr (tested locally)", "koofr"),
-    ("S3-compatible storage (partly tested)", "s3"),
-    ("WebDAV (untested)", "webdav"),
+    ("Google Drive", "drive"),
+    ("Dropbox", "dropbox"),
+    ("Microsoft OneDrive", "onedrive"),
+    ("Box", "box"),
+    ("pCloud", "pcloud"),
+    ("Koofr", "koofr"),
+    ("S3-compatible storage", "s3"),
+    ("WebDAV", "webdav"),
 )
+PROVIDER_STATUS_COLORS = {
+    "tested": "#ffffff",
+    "partial": "#ffffff",
+    "untested": "#facc15",
+}
+REMOTE_PROVIDER_STATUSES = {
+    "drive": "tested",
+    "dropbox": "tested",
+    "onedrive": "tested",
+    "box": "tested",
+    "pcloud": "tested",
+    "koofr": "tested",
+    "s3": "partial",
+    "webdav": "untested",
+}
 OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 REMOTE_CONFIG_SUFFIXES = {
     "drive": "Drive",
@@ -129,7 +144,8 @@ S3_PROVIDER_CONFIG_SUFFIXES = {
 }
 S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
     {
-        "label": "Cloudflare R2 (tested locally)",
+        "label": "Cloudflare R2",
+        "status": "tested",
         "provider": "Cloudflare",
         "config_name": "Cloudflare R2",
         "endpoint": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
@@ -146,7 +162,8 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "MinIO / S3-compatible (untested)",
+        "label": "MinIO / S3-compatible",
+        "status": "untested",
         "provider": "Minio",
         "config_name": "MinIO",
         "endpoint": "http://127.0.0.1:9000",
@@ -160,7 +177,8 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://min.io/docs/minio/linux/reference/minio-mc/mc-admin-user-svcacct-add.html">MinIO access key guide</a>',
     },
     {
-        "label": "Amazon S3 (untested)",
+        "label": "Amazon S3",
+        "status": "untested",
         "provider": "AWS",
         "config_name": "Amazon S3",
         "endpoint": "",
@@ -178,7 +196,8 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "Wasabi (untested)",
+        "label": "Wasabi",
+        "status": "untested",
         "provider": "Wasabi",
         "config_name": "Wasabi",
         "endpoint": "https://s3.wasabisys.com",
@@ -196,7 +215,8 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "Other S3-compatible (untested)",
+        "label": "Other S3-compatible",
+        "status": "untested",
         "provider": "Other",
         "config_name": "S3",
         "endpoint": "https://s3.example.com",
@@ -212,7 +232,8 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
 )
 WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
     {
-        "label": "Nextcloud (untested)",
+        "label": "Nextcloud",
+        "status": "untested",
         "vendor": "nextcloud",
         "config_name": "Nextcloud",
         "url": "https://cloud.example.com/remote.php/dav/files/user",
@@ -224,7 +245,8 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html">Nextcloud WebDAV guide</a>',
     },
     {
-        "label": "ownCloud (untested)",
+        "label": "ownCloud",
+        "status": "untested",
         "vendor": "owncloud",
         "config_name": "ownCloud",
         "url": "https://cloud.example.com/remote.php/webdav/",
@@ -239,7 +261,8 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "SharePoint Online (untested)",
+        "label": "SharePoint Online",
+        "status": "untested",
         "vendor": "sharepoint",
         "config_name": "SharePoint WebDAV",
         "url": "https://tenant.sharepoint.com/sites/site/Shared%20Documents",
@@ -251,7 +274,8 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://rclone.org/webdav/#sharepoint-online">rclone SharePoint WebDAV guide</a>',
     },
     {
-        "label": "SharePoint NTLM (untested)",
+        "label": "SharePoint NTLM",
+        "status": "untested",
         "vendor": "sharepoint-ntlm",
         "config_name": "SharePoint NTLM",
         "url": "https://sharepoint.example.com/sites/site/Documents",
@@ -266,7 +290,8 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "Fastmail Files (untested)",
+        "label": "Fastmail Files",
+        "status": "untested",
         "vendor": "fastmail",
         "config_name": "Fastmail Files",
         "url": "https://webdav.fastmail.com/",
@@ -281,7 +306,8 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "rclone WebDAV server (untested)",
+        "label": "rclone WebDAV server",
+        "status": "untested",
         "vendor": "rclone",
         "config_name": "rclone WebDAV",
         "url": "http://127.0.0.1:8080/",
@@ -293,7 +319,8 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://rclone.org/commands/rclone_serve_webdav/">rclone serve WebDAV guide</a>',
     },
     {
-        "label": "Other WebDAV (untested)",
+        "label": "Other WebDAV",
+        "status": "untested",
         "vendor": "other",
         "config_name": "WebDAV",
         "url": "https://cloud.example.com/webdav",
@@ -491,6 +518,24 @@ def _default_s3_endpoints() -> set[str]:
 
 def _default_s3_regions() -> set[str]:
     return {option.get("region", "") for option in S3_PROVIDER_OPTIONS}
+
+
+def _provider_status_color(status: str) -> str:
+    return PROVIDER_STATUS_COLORS.get(status, PROVIDER_STATUS_COLORS["untested"])
+
+
+def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: str) -> None:
+    try:
+        value = qt.QColor(color)
+    except Exception:
+        value = color
+    try:
+        combo.setItemData(index, value, 9)
+    except Exception:
+        try:
+            combo.setItemData(index, value)
+        except Exception:
+            pass
 
 
 def _load_visible_remotes() -> list[core.RemoteInfo]:
@@ -1648,8 +1693,14 @@ class NewRemoteWizard:
         self.form = form
 
         provider = self.qt.QComboBox()
-        for label, backend_type in REMOTE_PROVIDER_OPTIONS:
+        for index, (label, backend_type) in enumerate(REMOTE_PROVIDER_OPTIONS):
             provider.addItem(label, backend_type)
+            _set_combo_item_color(
+                self.qt,
+                provider,
+                index,
+                _provider_status_color(REMOTE_PROVIDER_STATUSES.get(backend_type, "untested")),
+            )
         provider.currentIndexChanged.connect(lambda _index=0: self._apply_provider_choice())
 
         name = self.qt.QLineEdit()
@@ -1712,8 +1763,9 @@ class NewRemoteWizard:
         connect_after_create.setToolTip("Mount the new remote immediately after setup succeeds.")
 
         s3_provider = self.qt.QComboBox()
-        for option in S3_PROVIDER_OPTIONS:
+        for index, option in enumerate(S3_PROVIDER_OPTIONS):
             s3_provider.addItem(option["label"], option)
+            _set_combo_item_color(self.qt, s3_provider, index, _provider_status_color(option.get("status", "untested")))
         s3_provider.currentIndexChanged.connect(lambda _index=0: self._apply_s3_provider_choice())
         s3_endpoint = self.qt.QLineEdit()
         s3_region = self.qt.QLineEdit()
@@ -1743,8 +1795,9 @@ class NewRemoteWizard:
 
         webdav_url = self.qt.QLineEdit()
         webdav_vendor = self.qt.QComboBox()
-        for option in WEBDAV_VENDOR_OPTIONS:
+        for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
             webdav_vendor.addItem(option["label"], option)
+            _set_combo_item_color(self.qt, webdav_vendor, index, _provider_status_color(option.get("status", "untested")))
         webdav_vendor.currentIndexChanged.connect(lambda _index=0: self._apply_webdav_vendor_choice())
         webdav_user = self.qt.QLineEdit()
         webdav_pass = self.qt.QLineEdit()
@@ -2953,7 +3006,7 @@ class MountletWindow:
             return
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
-            if self._window_is_active():
+            if self._window_is_active() or self._has_visible_child_dialog():
                 self._hide_window_stack()
             else:
                 self.show()
@@ -3084,9 +3137,17 @@ class MountletWindow:
             pass
 
     def _close_child_dialogs(self) -> None:
-        dialogs = list(reversed(getattr(self, "_child_dialogs", [])))
+        dialogs = []
+        active_child = self._active_child_window()
+        if active_child is not None:
+            dialogs.append(active_child)
+        dialogs.extend(reversed(getattr(self, "_child_dialogs", [])))
         owners = dict(getattr(self, "_child_dialog_owners", {}))
+        seen: set[int] = set()
         for child in dialogs:
+            if id(child) in seen:
+                continue
+            seen.add(id(child))
             owner = owners.get(child)
             try:
                 if owner is not None and hasattr(owner, "_reject"):
