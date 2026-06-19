@@ -23,4 +23,5 @@ can be reviewed before public disclosure.
 
 ## Supported Versions
 
-No public stable version is supported yet.
+Mountlet is still pre-1.0. Security fixes are intended for the latest public
+0.2.x release line.

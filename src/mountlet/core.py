@@ -114,6 +114,7 @@ class RemoteInfo:
     flags: List[str] = field(default_factory=list)
     extra_info: Dict[str, str] = field(default_factory=dict)
     auto_mount: bool = False
+    remote_path: str = ""
 
     @property
     def display_name(self) -> str:
@@ -136,7 +137,18 @@ class StorageUsage:
         return min(round((used / self.total) * 100), 100)
 
 
+@dataclass(frozen=True)
+class DriveOAuthCredentials:
+    remote_name: str
+    client_id: str
+    client_secret: str
+    remote_names: Tuple[str, ...] = ()
+
+
 PIDS: Dict[str, int] = {}
+OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+RCLONE_STATUS_TIMEOUT_SECONDS = 20
+RCLONE_CONNECT_TIMEOUT_SECONDS = 20
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -159,6 +171,12 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
         "--vfs-fast-fingerprint",
     ],
     "dropbox": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+    ],
+    "koofr": [
         "--vfs-cache-mode",
         "full",
         "--buffer-size",
@@ -187,6 +205,14 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
+    "koofr": ("provider", "user", "mountid"),
+}
+S3_PROVIDER_DISPLAY_NAMES = {
+    "cloudflare": "Cloudflare R2",
+    "minio": "MinIO",
+    "aws": "Amazon S3",
+    "wasabi": "Wasabi",
+    "other": "S3",
 }
 
 
@@ -280,6 +306,47 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
     _save_config(config)
 
 
+def drive_oauth_credentials() -> List[DriveOAuthCredentials]:
+    config = _load_config()
+    groups: Dict[Tuple[str, str], List[str]] = {}
+    for remote_name in config.sections():
+        section = config[remote_name]
+        if section.get("type", "").lower() != "drive":
+            continue
+        client_id = section.get("client_id", "").strip()
+        client_secret = section.get("client_secret", "").strip()
+        if client_id and client_secret:
+            groups.setdefault((client_id, client_secret), []).append(remote_name)
+    credentials: List[DriveOAuthCredentials] = []
+    for (client_id, client_secret), remote_names in groups.items():
+        names = tuple(remote_names)
+        credentials.append(
+            DriveOAuthCredentials(
+                remote_name=_drive_credential_group_label(names),
+                client_id=client_id,
+                client_secret=client_secret,
+                remote_names=names,
+            )
+        )
+    return credentials
+
+
+def _drive_credential_group_label(remote_names: Tuple[str, ...]) -> str:
+    if not remote_names:
+        return "existing remote"
+    if len(remote_names) == 1:
+        return remote_names[0]
+    return f"{remote_names[0]}, +{len(remote_names) - 1}"
+
+
+def delete_rclone_remote(remote_name: str) -> bool:
+    config = _load_config()
+    if not config.remove_section(remote_name):
+        return False
+    _save_config(config)
+    return True
+
+
 def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
     flags = list(TYPE_FLAG_PRESETS.get(backend_type, DEFAULT_FLAGS))
     if backend_type == "drive" and "--links" not in flags:
@@ -288,18 +355,31 @@ def _build_flags(backend_type: str, extra_flags: List[str]) -> List[str]:
     return flags
 
 
-def load_remotes() -> List[RemoteInfo]:
+def _s3_provider_display_name(provider: str, fallback: str = "S3") -> str:
+    normalized = provider.strip().lower()
+    return S3_PROVIDER_DISPLAY_NAMES.get(normalized, provider.strip() or fallback)
+
+
+def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
     config = _load_config()
     app_settings = load_app_settings()
     mount_settings = load_mount_settings()
-    remotes: List[RemoteInfo] = []
-    for name in config.sections():
+    remotes: List[Tuple[int | None, int, RemoteInfo]] = []
+    for config_index, name in enumerate(config.sections()):
         section = config[name]
         remote_settings = mount_settings.get(name)
         if remote_settings and not remote_settings.enabled:
             continue
         backend_type = section.get("type", "").lower()
+        if not include_incomplete and not _remote_section_is_configured(backend_type, dict(section.items())):
+            continue
         alias, provider = _parse_remote_name(name, backend_type)
+        mount_provider = provider
+        display_provider = (
+            _s3_provider_display_name(section.get("provider", ""), provider)
+            if backend_type == "s3"
+            else provider
+        )
         extra_flags_str = section.get("mount_flags", "").strip()
         extra_flags = shlex.split(extra_flags_str) if extra_flags_str else []
         if remote_settings:
@@ -307,7 +387,7 @@ def load_remotes() -> List[RemoteInfo]:
         mount_path = (
             _resolve_configured_mount_path(remote_settings.mount_path)
             if remote_settings and remote_settings.mount_path
-            else _build_mount_path(provider, alias)
+            else _build_mount_path(mount_provider, alias)
         )
         auto_mount = (
             remote_settings.auto_mount
@@ -317,15 +397,46 @@ def load_remotes() -> List[RemoteInfo]:
         info = RemoteInfo(
             name=name,
             alias=alias,
-            provider=provider,
+            provider=display_provider,
             backend_type=backend_type,
             mount_path=mount_path,
+            remote_path=remote_settings.remote_path if remote_settings and remote_settings.remote_path else "",
             flags=_build_flags(backend_type, extra_flags),
             extra_info=dict(section.items()),
             auto_mount=auto_mount,
         )
-        remotes.append(info)
-    return remotes
+        order = remote_settings.order if remote_settings else None
+        remotes.append((order, config_index, info))
+    if any(order is not None for order, _config_index, _info in remotes):
+        remotes.sort(
+            key=lambda item: (
+                item[0] is None,
+                item[0] if item[0] is not None else item[1],
+                item[1],
+            )
+        )
+    return [info for _order, _config_index, info in remotes]
+
+
+def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> bool:
+    if backend_type not in OAUTH_BACKEND_TYPES:
+        if backend_type == "s3":
+            provider = values.get("provider", "").strip()
+            env_auth = values.get("env_auth", "").strip().lower() in {"true", "1", "yes", "on"}
+            has_keys = bool(values.get("access_key_id", "").strip() and values.get("secret_access_key", "").strip())
+            if not provider or not (env_auth or has_keys):
+                return False
+            if provider.lower() != "aws" and not values.get("endpoint", "").strip():
+                return False
+            return True
+        if backend_type == "webdav":
+            return values.get("url", "").strip().startswith(("http://", "https://"))
+        if backend_type == "koofr":
+            return bool(values.get("provider", "").strip() and values.get("user", "").strip() and values.get("password", "").strip())
+        return bool(backend_type)
+    if backend_type == "onedrive":
+        return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))
+    return bool(values.get("token") or values.get("service_account_file"))
 
 
 def find_rclone() -> str | None:
@@ -344,6 +455,11 @@ def find_rclone() -> str | None:
 
 def mount_path(remote: RemoteInfo) -> str:
     return remote.mount_path
+
+
+def remote_source(remote: RemoteInfo) -> str:
+    path = remote.remote_path.strip().lstrip("/")
+    return f"{remote.name}:{path}" if path else f"{remote.name}:"
 
 
 def is_mounted_windows(path: str) -> bool:
@@ -455,10 +571,45 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
 
-    args = [rclone_bin, "mount", f"{remote.name}:", remote.mount_path]
+    args = [rclone_bin, "mount", remote_source(remote), remote.mount_path]
     args.extend(remote.flags)
 
-    return _launch_mount_process(remote, args)
+    success, message = _launch_mount_process(remote, args)
+    if not success:
+        return success, message
+
+    connected, connection_message = check_remote_connection(remote, rclone_bin)
+    if connected:
+        return success, message
+
+    unmounted, unmount_message = unmount_remote(remote)
+    if not unmounted:
+        return False, f"{connection_message}\n{unmount_message}"
+    return False, connection_message
+
+
+def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -> Tuple[bool, str]:
+    binary = rclone_bin or find_rclone()
+    if not binary:
+        return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+    source = remote_source(remote)
+    try:
+        result = subprocess.run(
+            [binary, "lsf", source, "--max-depth", "1"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=RCLONE_CONNECT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"[!] {remote.display_name} did not respond while checking {source}."
+    except Exception as exc:
+        return False, f"[!] Failed to check {remote.display_name}: {exc}"
+    if result.returncode == 0:
+        return True, f"[*] connected {remote.display_name}."
+    detail = result.stderr.strip()
+    summary = detail.splitlines()[0] if detail else f"exit code {result.returncode}"
+    return False, f"[!] {remote.display_name} is not connected to {source}: {summary}"
 
 
 def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
@@ -548,9 +699,10 @@ def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
         return StorageUsage("?")
     try:
         output = subprocess.check_output(
-            [rclone_bin, "about", f"{remote.name}:", "--json"],
+            [rclone_bin, "about", remote_source(remote), "--json"],
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=RCLONE_STATUS_TIMEOUT_SECONDS,
         )
         data = json.loads(output)
         used = int(data.get("used", 0))
@@ -574,7 +726,7 @@ def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
         return False, "[!] rclone not found."
     try:
         result = subprocess.run(
-            [rclone_bin, "about", f"{remote.name}:"],
+            [rclone_bin, "about", remote_source(remote)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -611,6 +763,7 @@ __all__ = [
     "editable_rclone_fields",
     "save_rclone_fields",
     "mount_remote",
+    "check_remote_connection",
     "unmount_remote",
     "refresh_remote",
     "mount_all",

@@ -99,14 +99,51 @@ pipx inject mountlet PySide6
 The tray app uses the tray icon this way:
 
 - Hover shows a short mounted/unmounted summary.
-- Left-click opens the Mountlet window with compact remote strips, storage
-  usage, mount-state toggles, click-to-open behavior, and config actions.
+- Left-click opens or closes the Mountlet window. If it is behind another
+  window, the first click brings it forward. On Plasma X11, opening it from a
+  different desktop moves it to the current desktop.
 - Right-click shows app-level actions such as mount all, unmount all, update
   status, app settings, raw app, mount, rclone, and FUSE config files, and
   quit.
 
+The Mountlet window provides:
+
+- Compact remote strips with storage usage and mount-state toggles.
+- Click-to-open folders, provider website shortcuts, and per-remote settings.
+- A guided `+` flow for adding supported cloud remotes through rclone.
+- Sorting by registration time, name, provider, total size, used space, or
+  remaining space, with manual move controls for final adjustments.
+- A pin control that keeps the window above other windows without tying it to
+  one desktop.
+
 If your desktop session does not expose a system tray, use the terminal menu
 instead.
+
+## Provider Support
+
+Mountlet uses `rclone` under the hood, so provider support depends on both
+Mountlet's setup UI and rclone's backend behavior.
+
+Locally tested with the current GUI flow and/or active local remotes:
+
+- Google Drive
+- Dropbox
+- Microsoft OneDrive
+- Box
+- pCloud
+- Cloudflare R2 through the S3-compatible wizard
+- Koofr through rclone's dedicated Koofr backend
+
+Available but not yet locally tested:
+
+- Amazon S3
+- MinIO and other S3-compatible providers
+- Wasabi
+- WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files
+
+In the setup window, tested options are shown in white and untested options in
+yellow. Untested providers may work through rclone, but expect rough edges until
+the wizard path is tested with a real account.
 
 ## Extra Commands
 
@@ -159,7 +196,7 @@ export MOUNTLET_MOUNT_BASE=/path/to/mounts
 ### App Settings
 
 In the tray app, use `Config` > `App settings` to edit app-wide behavior. Use
-the `Config` button on a remote strip to edit only that mount. The settings
+the gear button on a remote strip to edit only that mount. The settings
 windows show the available fields with text boxes, checkboxes, and dropdowns,
 then write `config.toml` and `mounts.toml` for you.
 

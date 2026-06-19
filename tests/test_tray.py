@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import socket
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mountlet import core, tray
+from mountlet import core, settings, tray
 
 
 class _FakeWindow:
@@ -29,6 +29,7 @@ class _FakeWindow:
 class TrayTests(unittest.TestCase):
     def setUp(self) -> None:
         tray._dolphin_tab_target_cache = None
+        tray._wizard_pending_remote_names.clear()
 
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
         with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
@@ -79,6 +80,40 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._remote_title(remote, mounted=True), "Docs (drive) - Mounted")
         self.assertEqual(tray._remote_title(remote, mounted=False), "Docs (drive) - Unmounted")
 
+    def test_remote_browser_url_uses_provider_web_home(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
+
+    def test_remote_browser_tooltip_names_service_not_remote(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        self.assertEqual(tray._remote_browser_tooltip(remote), "Open Drive in browser")
+
+    def test_remote_browser_url_uses_webdav_url_when_available(self):
+        remote = core.RemoteInfo(
+            "Files__WebDAV",
+            "Files",
+            "WebDAV",
+            "webdav",
+            "/tmp/files",
+            extra_info={"url": "https://cloud.example.com/files"},
+        )
+
+        self.assertEqual(tray._remote_browser_url(remote), "https://cloud.example.com/files")
+
+    def test_remote_browser_url_ignores_generic_s3_endpoint(self):
+        remote = core.RemoteInfo(
+            "Archive__S3",
+            "Archive",
+            "S3",
+            "s3",
+            "/tmp/archive",
+            extra_info={"endpoint": "https://s3.example.com"},
+        )
+
+        self.assertIsNone(tray._remote_browser_url(remote))
+
     def test_status_tooltip_summarizes_mounts(self):
         remotes = [
             core.RemoteInfo(
@@ -116,6 +151,53 @@ class TrayTests(unittest.TestCase):
 
         self.assertNotIn("--allow-non-empty", tokens)
 
+    def test_local_port_available_detects_bound_port(self):
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        except PermissionError:
+            self.skipTest("socket creation is blocked in this environment")
+        server.bind(("127.0.0.1", 0))
+        port = server.getsockname()[1]
+        try:
+            self.assertFalse(tray._local_port_available(port))
+        finally:
+            server.close()
+        self.assertTrue(tray._local_port_available(port))
+
+    def test_local_port_status_reports_owner_hint_when_busy(self):
+        fake_socket = mock.Mock()
+        fake_socket.bind.side_effect = OSError("busy")
+
+        with mock.patch.object(tray.socket, "socket", return_value=fake_socket):
+            with mock.patch.object(tray, "_local_port_owner_hint", return_value="Process using the port: rclone (PID 123)."):
+                self.assertEqual(
+                    tray._local_port_status(53682),
+                    (False, "Process using the port: rclone (PID 123)."),
+                )
+
+        fake_socket.close.assert_called_once_with()
+
+    def test_summarize_port_owner_parses_ss_output(self):
+        output = (
+            "State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess\n"
+            'LISTEN 0 4096 127.0.0.1:53682 0.0.0.0:* users:(("rclone",pid=1767993,fd=7))'
+        )
+
+        self.assertEqual(
+            tray._summarize_port_owner(output),
+            "Process using the port: rclone (PID 1767993).",
+        )
+
+    def test_proc_listening_socket_inodes_finds_listening_port(self):
+        tcp = (
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0100007F:D1B2 00000000:0000 0A 00000000:00000000 00:00000000 "
+            "00000000 1000 0 98765 1 0000000000000000 100 0 0 10 0\n"
+        )
+
+        with mock.patch.object(Path, "read_text", side_effect=[tcp, ""]):
+            self.assertEqual(tray._proc_listening_socket_inodes(53682), {"98765"})
+
     def test_config_bool_accepts_common_true_values(self):
         for value in ("true", "True", "1", "yes", "on"):
             self.assertTrue(tray._config_bool(value))
@@ -141,7 +223,8 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
-        rebuild.assert_called_once_with()
+        rebuild.assert_not_called()
+        fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 1)
 
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
@@ -150,10 +233,808 @@ class TrayTests(unittest.TestCase):
         rebuild.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 1)
 
+    def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        original = {
+            "Docs": settings.MountSettings(
+                mount_path="docs",
+                remote_path="bucket/docs",
+                mount_flags=["--read-only"],
+                auto_mount=True,
+                enabled=True,
+            ),
+            "Photos": settings.MountSettings(
+                mount_path="photos",
+                mount_flags=[],
+                auto_mount=False,
+                enabled=False,
+            ),
+        }
+
+        with mock.patch.object(tray, "load_mount_settings", return_value=original):
+            with mock.patch.object(tray, "save_mount_settings") as save:
+                mountlet_window._save_remote_order(["Photos", "Docs"])
+
+        saved = save.call_args.args[0]
+        self.assertEqual(saved["Photos"].order, 0)
+        self.assertEqual(saved["Docs"].order, 1)
+        self.assertEqual(saved["Docs"].mount_path, "docs")
+        self.assertEqual(saved["Docs"].remote_path, "bucket/docs")
+        self.assertEqual(saved["Docs"].mount_flags, ["--read-only"])
+        self.assertTrue(saved["Docs"].auto_mount)
+        self.assertFalse(saved["Photos"].enabled)
+
+    def test_new_remote_wizard_requires_drive_credentials_after_completion(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Docs"
+        remote_without_token = core.RemoteInfo(
+            name="Docs",
+            alias="Docs",
+            provider="drive",
+            backend_type="drive",
+            mount_path="/tmp/docs",
+            extra_info={"type": "drive"},
+        )
+        remote_with_token = core.RemoteInfo(
+            name="Docs",
+            alias="Docs",
+            provider="drive",
+            backend_type="drive",
+            mount_path="/tmp/docs",
+            extra_info={"type": "drive", "token": "{}"},
+        )
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_without_token]):
+            self.assertFalse(wizard._created_remote_has_credentials())
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_with_token]):
+            self.assertTrue(wizard._created_remote_has_credentials())
+
+    def test_new_remote_wizard_requires_oauth_credentials_after_completion(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Cloud"
+        remote_without_token = core.RemoteInfo(
+            name="Cloud",
+            alias="Cloud",
+            provider="onedrive",
+            backend_type="onedrive",
+            mount_path="/tmp/cloud",
+            extra_info={"type": "onedrive"},
+        )
+        remote_with_token = core.RemoteInfo(
+            name="Cloud",
+            alias="Cloud",
+            provider="onedrive",
+            backend_type="onedrive",
+            mount_path="/tmp/cloud",
+            extra_info={"type": "onedrive", "token": "{}", "drive_id": "drive", "drive_type": "personal"},
+        )
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_without_token]):
+            self.assertFalse(wizard._created_remote_has_credentials())
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote_with_token]):
+            self.assertTrue(wizard._created_remote_has_credentials())
+
+    def test_load_visible_remotes_hides_incomplete_entries(self):
+        with mock.patch.object(tray.core, "load_remotes", return_value=[]) as load_remotes:
+            self.assertEqual(tray._load_visible_remotes(), [])
+
+        load_remotes.assert_called_once_with(include_incomplete=False)
+
+    def test_load_visible_remotes_hides_pending_wizard_entries(self):
+        remote = core.RemoteInfo(
+            name="Cloud",
+            alias="Cloud",
+            provider="onedrive",
+            backend_type="onedrive",
+            mount_path="/tmp/cloud",
+            extra_info={"type": "onedrive", "token": "{}", "drive_id": "drive", "drive_type": "personal"},
+        )
+        tray._wizard_pending_remote_names.add("Cloud")
+        self.addCleanup(tray._wizard_pending_remote_names.clear)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote]):
+            self.assertEqual(tray._load_visible_remotes(), [])
+
+    def test_rclone_port_owner_pid_only_matches_rclone(self):
+        self.assertEqual(tray._rclone_port_owner_pid("Process using the port: rclone (PID 1234)."), 1234)
+        self.assertIsNone(tray._rclone_port_owner_pid("Process using the port: python (PID 1234)."))
+
+    def test_is_rclone_auth_port_error_matches_rclone_bind_failure(self):
+        self.assertTrue(
+            tray._is_rclone_auth_port_error(
+                "config failed to refresh token: failed to start auth webserver: "
+                "listen tcp 127.0.0.1:53682: bind: address already in use"
+            )
+        )
+        self.assertFalse(tray._is_rclone_auth_port_error("listen tcp 127.0.0.1:12345: bind: address already in use"))
+
+    def test_new_remote_wizard_can_offer_to_stop_stuck_rclone(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.dialog = mock.Mock()
+        yes = 1
+        no = 2
+        wizard.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=yes, No=no),
+                question=mock.Mock(return_value=yes),
+            )
+        )
+
+        with mock.patch.object(tray, "_terminate_process_id", return_value=True) as terminate:
+            stopped = wizard._offer_to_stop_stuck_rclone("Process using the port: rclone (PID 1234).")
+
+        self.assertTrue(stopped)
+        terminate.assert_called_once_with(1234)
+
+    def test_new_remote_wizard_recovers_from_rclone_port_error_by_waiting(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.status = mock.Mock()
+        wizard._remote_name = "Docs__drive"
+        wizard._remote_alias = "Docs"
+        wizard._question = tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_is_local"})
+        wizard._answer_field = mock.Mock()
+        wizard._answer_group = mock.Mock()
+
+        with mock.patch.object(wizard, "_cleanup_incomplete_remote") as cleanup:
+            with mock.patch.object(wizard, "_show_setup_view") as show_setup:
+                with mock.patch.object(wizard, "_update_action_button") as update_button:
+                    recovered = wizard._recover_from_rclone_port_error(
+                        "failed to start auth webserver: listen tcp 127.0.0.1:53682: bind: address already in use"
+                    )
+
+        self.assertTrue(recovered)
+        cleanup.assert_called_once_with()
+        show_setup.assert_called_once_with(True)
+        update_button.assert_called_once_with()
+        self.assertEqual(wizard._remote_name, "")
+        self.assertIsNone(wizard._question)
+        self.assertFalse(wizard._browser_port_available)
+        wizard.status.setText.assert_called_once()
+        self.assertIn("Waiting for rclone's browser sign-in port", wizard.status.setText.call_args.args[0])
+
+    def test_new_remote_wizard_ignores_unrelated_rclone_errors(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        with mock.patch.object(wizard, "_cleanup_incomplete_remote") as cleanup:
+            recovered = wizard._recover_from_rclone_port_error(
+                "failed to authenticate"
+            )
+
+        self.assertFalse(recovered)
+        cleanup.assert_not_called()
+
+    def test_new_remote_wizard_checks_port_before_browser_continue(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Docs"
+        wizard._remote_type = "drive"
+        wizard._state = "state"
+        wizard._question = tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_is_local"})
+
+        with mock.patch.object(wizard, "_answer_value", return_value="true"):
+            with mock.patch.object(wizard, "_browser_auth_port_ready", return_value=False) as port_ready:
+                with mock.patch.object(wizard, "_run_rclone") as run_rclone:
+                    wizard._continue()
+
+        port_ready.assert_called_once_with()
+        run_rclone.assert_not_called()
+
+    def test_new_remote_wizard_question_clears_status_text(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.qt = SimpleNamespace(
+            QLabel=mock.Mock(side_effect=lambda text="": mock.Mock()),
+            Qt=SimpleNamespace(TextInteractionFlag=SimpleNamespace(TextBrowserInteraction=1)),
+        )
+        wizard.question_layout = mock.Mock()
+        wizard.question_frame = mock.Mock()
+        wizard.status = mock.Mock()
+        wizard.dialog = mock.Mock()
+        wizard._answer_kind = ""
+        wizard._answer_field = mock.Mock()
+
+        with mock.patch.object(wizard, "_clear_layout"):
+            with mock.patch.object(wizard, "_answer_widget", return_value=("text", wizard._answer_field)):
+                with mock.patch.object(wizard, "_update_action_button"):
+                    wizard._show_question(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "drive_id"}))
+
+        wizard.status.setText.assert_called_once_with("")
+
+    def test_browser_auth_port_checks_once_before_launch(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "onedrive"
+        wizard._drive_local_auth = True
+        wizard.status = mock.Mock()
+
+        with mock.patch.object(tray, "_local_port_status", return_value=(True, "")) as port_status:
+            self.assertTrue(wizard._browser_auth_port_ready())
+
+        port_status.assert_called_once_with(tray.RCLONE_OAUTH_LOCAL_PORT)
+        wizard.status.setText.assert_called_once_with("")
+
+    def test_browser_auth_port_wait_disables_create_button(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        wizard._remote_name = ""
+        wizard._remote_type = "drive"
+        wizard._browser_port_available = True
+        wizard.status = mock.Mock()
+        wizard.action_button = mock.Mock()
+        provider = mock.Mock()
+        provider.currentData.return_value = "drive"
+        local_auth = mock.Mock()
+        local_auth.isChecked.return_value = True
+        name = mock.Mock()
+        name.text.return_value = "Docs"
+        wizard.fields = {"provider": provider, "local_auth": local_auth, "name": name}
+
+        with mock.patch.object(tray, "_local_port_status", return_value=(False, "Process using the port: rclone.")):
+            wizard._update_browser_port_status()
+
+        self.assertFalse(wizard._browser_port_available)
+        wizard.action_button.setEnabled.assert_called_with(False)
+        self.assertIn("Waiting for rclone's browser sign-in port", wizard.status.setText.call_args.args[0])
+
+    def test_new_remote_wizard_local_browser_busy_message_is_specific(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "drive"
+        wizard._drive_local_auth = True
+        wizard._waiting_for_browser_auth = True
+
+        self.assertEqual(
+            wizard._busy_message(),
+            "Waiting for browser authentication. A sign-in page should open in your browser.",
+        )
+
+    def test_new_remote_wizard_local_browser_message_resets_after_auth_step(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._waiting_for_browser_auth = True
+        wizard._cancelled = False
+        wizard.status = mock.Mock()
+        wizard._question = None
+        wizard._remote_type = "drive"
+        step = tray.rclone_wizard.RcloneConfigStep("", {})
+
+        with mock.patch.object(wizard, "_set_busy") as set_busy:
+            with mock.patch.object(wizard, "_created_remote_has_credentials", return_value=False):
+                with mock.patch.object(wizard, "_cleanup_incomplete_remote"):
+                    with mock.patch.object(wizard, "_warning"):
+                        wizard._handle_command_finished(step, None)
+
+        self.assertFalse(wizard._waiting_for_browser_auth)
+        set_busy.assert_called_once_with(False)
+
+    def test_new_remote_wizard_can_hide_setup_view(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.initial_frame = mock.Mock()
+        wizard.question_frame = mock.Mock()
+
+        wizard._show_setup_view(False)
+        wizard.initial_frame.setVisible.assert_called_once_with(False)
+        wizard.question_frame.hide.assert_not_called()
+
+        wizard._show_setup_view(True)
+        wizard.question_frame.hide.assert_called_once_with()
+
+    def test_new_remote_wizard_labels_drive_boolean_choices(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        self.assertEqual(
+            wizard._bool_radio_options("config_is_local", []),
+            [
+                ("true", "Open the browser on this computer"),
+                ("false", "Authorize from another computer"),
+            ],
+        )
+        self.assertEqual(
+            wizard._bool_radio_options("config_team_drive", []),
+            [
+                ("false", "My Drive"),
+                ("true", "Shared drive"),
+            ],
+        )
+
+    def test_new_remote_wizard_applies_reused_drive_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        credential_source = mock.Mock()
+        credential_source.currentData.return_value = core.DriveOAuthCredentials(
+            remote_name="Docs",
+            client_id="docs-client",
+            client_secret="docs-secret",
+        )
+        client_id = mock.Mock()
+        client_secret = mock.Mock()
+        wizard.fields = {
+            "credential_source": credential_source,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+
+        wizard._apply_credential_choice()
+
+        client_id.setText.assert_called_once_with("docs-client")
+        client_secret.setText.assert_called_once_with("docs-secret")
+        client_id.setEnabled.assert_called_once_with(False)
+        client_secret.setEnabled.assert_called_once_with(False)
+
+    def test_drive_credential_option_label_prefers_existing_credentials(self):
+        credentials = core.DriveOAuthCredentials("Docs, +1", "client", "secret", ("Docs", "Photos"))
+
+        self.assertEqual(
+            tray._drive_credential_option_label(credentials, 1),
+            "Existing credentials (recommended)",
+        )
+        self.assertEqual(
+            tray._drive_credential_option_label(credentials, 2),
+            "Existing: Docs, +1",
+        )
+
+    def test_new_remote_wizard_uses_builtin_drive_client_by_default(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        credential_source = mock.Mock()
+        credential_source.currentData.return_value = tray.DRIVE_CREDENTIAL_SOURCE_BUILTIN
+        client_id = mock.Mock()
+        client_secret = mock.Mock()
+        wizard.fields = {
+            "credential_source": credential_source,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+
+        wizard._apply_credential_choice()
+
+        client_id.clear.assert_called_once_with()
+        client_secret.clear.assert_called_once_with()
+        client_id.setEnabled.assert_called_once_with(False)
+        client_secret.setEnabled.assert_called_once_with(False)
+
+    def test_new_remote_wizard_allows_custom_drive_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._question = None
+        credential_source = mock.Mock()
+        credential_source.currentData.return_value = tray.DRIVE_CREDENTIAL_SOURCE_CUSTOM
+        client_id = mock.Mock()
+        client_secret = mock.Mock()
+        wizard.fields = {
+            "credential_source": credential_source,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+
+        wizard._apply_credential_choice()
+
+        client_id.setText.assert_not_called()
+        client_secret.setText.assert_not_called()
+        client_id.setEnabled.assert_called_once_with(True)
+        client_secret.setEnabled.assert_called_once_with(True)
+
+    def test_new_remote_wizard_answers_known_drive_questions_from_form(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._drive_local_auth = True
+        wizard._drive_shared_drive = False
+        wizard._drive_team_drive = ""
+
+        self.assertEqual(
+            wizard._automatic_answer(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_is_local"})),
+            "true",
+        )
+        self.assertEqual(
+            wizard._automatic_answer(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_team_drive"})),
+            "false",
+        )
+
+    def test_new_remote_wizard_answers_shared_drive_prompt_by_help_text(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._drive_shared_drive = False
+        wizard._drive_team_drive = ""
+        step = tray.rclone_wizard.RcloneConfigStep(
+            "state",
+            {
+                "Name": "drive_kind",
+                "Type": "bool",
+                "Help": "Configure this as a Shared Drive?",
+            },
+        )
+
+        self.assertEqual(wizard._automatic_answer(step), "false")
+
+    def test_new_remote_wizard_declines_advanced_config_prompt(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        self.assertEqual(
+            wizard._automatic_answer(tray.rclone_wizard.RcloneConfigStep("state", {"Name": "config_edit_advanced"})),
+            "false",
+        )
+
+    def test_new_remote_wizard_uses_generic_oauth_args_for_non_drive(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "dropbox"
+        wizard._drive_local_auth = False
+
+        self.assertEqual(wizard._initial_config_args(), ["config_is_local", "false"])
+
+    def test_new_remote_wizard_uses_s3_form_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "s3"
+        wizard.fields = {
+            "s3_provider": mock.Mock(currentData=mock.Mock(return_value="Minio")),
+            "s3_access_key_id": mock.Mock(text=mock.Mock(return_value="minioadmin")),
+            "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="miniosecret")),
+            "s3_region": mock.Mock(text=mock.Mock(return_value="us-east-1")),
+            "s3_endpoint": mock.Mock(text=mock.Mock(return_value="http://127.0.0.1:9000")),
+            "s3_remote_path": mock.Mock(text=mock.Mock(return_value="")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "provider",
+                "Minio",
+                "access_key_id",
+                "minioadmin",
+                "secret_access_key",
+                "miniosecret",
+                "region",
+                "us-east-1",
+                "endpoint",
+                "http://127.0.0.1:9000",
+            ],
+        )
+
+    def test_new_remote_wizard_requires_s3_endpoint_for_minio(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.fields = {
+            "s3_provider": mock.Mock(currentData=mock.Mock(return_value="Minio")),
+            "s3_access_key_id": mock.Mock(text=mock.Mock(return_value="minioadmin")),
+            "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="miniosecret")),
+            "s3_endpoint": mock.Mock(text=mock.Mock(return_value="")),
+        }
+
+        self.assertFalse(wizard._s3_fields_are_valid())
+
+    def test_new_remote_wizard_adds_cloudflare_r2_safety_options(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "s3"
+        wizard.fields = {
+            "s3_provider": mock.Mock(currentData=mock.Mock(return_value="Cloudflare")),
+            "s3_access_key_id": mock.Mock(text=mock.Mock(return_value="r2-key")),
+            "s3_secret_access_key": mock.Mock(text=mock.Mock(return_value="r2-secret")),
+            "s3_region": mock.Mock(text=mock.Mock(return_value="auto")),
+            "s3_endpoint": mock.Mock(text=mock.Mock(return_value="https://account.r2.cloudflarestorage.com")),
+            "s3_remote_path": mock.Mock(text=mock.Mock(return_value="bucket")),
+        }
+
+        args = wizard._initial_config_args()
+
+        self.assertIn("Cloudflare", args)
+        self.assertIn("no_check_bucket", args)
+        self.assertIn("true", args)
+        self.assertIn("acl", args)
+        self.assertIn("private", args)
+
+    def test_new_remote_wizard_applies_s3_provider_defaults(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        app_provider = mock.Mock()
+        app_provider.currentData.return_value = "s3"
+        provider = mock.Mock()
+        provider.currentData.return_value = {
+            "label": "Cloudflare R2",
+            "provider": "Cloudflare",
+            "config_name": "Cloudflare R2",
+            "endpoint": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
+            "region": "auto",
+            "access_key": "R2 access key ID",
+            "secret_key": "R2 secret access key",
+            "bucket": "Bucket name or bucket/folder",
+            "instructions": '<a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare R2 token guide</a>',
+        }
+        endpoint = mock.Mock()
+        endpoint.text.return_value = ""
+        region = mock.Mock()
+        region.text.return_value = ""
+        wizard.fields = {
+            "provider": app_provider,
+            "s3_provider": provider,
+            "s3_endpoint": endpoint,
+            "s3_region": region,
+            "s3_access_key_id": mock.Mock(),
+            "s3_secret_access_key": mock.Mock(),
+            "s3_remote_path": mock.Mock(),
+            "s3_help": mock.Mock(),
+        }
+
+        with mock.patch.object(wizard, "_set_form_row_visible") as set_visible:
+            wizard._apply_s3_provider_choice()
+
+        endpoint.setText.assert_called_once_with("https://<ACCOUNT_ID>.r2.cloudflarestorage.com")
+        region.setText.assert_called_once_with("auto")
+        wizard.fields["s3_help"].setText.assert_called_once()
+        set_visible.assert_any_call(endpoint, True)
+
+    def test_new_remote_wizard_uses_koofr_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "koofr"
+        wizard.fields = {
+            "koofr_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "koofr_pass": mock.Mock(text=mock.Mock(return_value="app-password")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "provider",
+                "koofr",
+                "user",
+                "eric@example.com",
+                "password",
+                "app-password",
+            ],
+        )
+
+    def test_new_remote_wizard_saves_initial_s3_remote_path(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Archive__S3"
+        wizard._initial_remote_path = "bucket/prefix"
+
+        with mock.patch.object(tray, "load_mount_settings", return_value={}) as load_settings:
+            with mock.patch.object(tray, "save_mount_settings") as save:
+                wizard._save_initial_mount_settings()
+
+        load_settings.assert_called_once_with()
+        saved = save.call_args.args[0]["Archive__S3"]
+        self.assertEqual(saved.remote_path, "bucket/prefix")
+
+    def test_new_remote_wizard_uses_webdav_form_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "webdav"
+        wizard.fields = {
+            "webdav_url": mock.Mock(text=mock.Mock(return_value="https://cloud.example.com/dav")),
+            "webdav_vendor": mock.Mock(currentData=mock.Mock(return_value="nextcloud")),
+            "webdav_user": mock.Mock(text=mock.Mock(return_value="eric")),
+            "webdav_pass": mock.Mock(text=mock.Mock(return_value="secret")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "url",
+                "https://cloud.example.com/dav",
+                "vendor",
+                "nextcloud",
+                "user",
+                "eric",
+                "pass",
+                "secret",
+            ],
+        )
+
+    def test_new_remote_wizard_failed_mount_cleans_up_remote(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_name = "Broken__WebDAV"
+        wizard._remote_alias = "Broken"
+        wizard._remote_type = "webdav"
+        wizard.fields = {}
+
+        with mock.patch.object(wizard, "_set_busy") as set_busy:
+            with mock.patch.object(wizard, "_cleanup_incomplete_remote") as cleanup:
+                with mock.patch.object(wizard, "_reset_after_failed_registration") as reset:
+                    with mock.patch.object(wizard, "_warning") as warning:
+                        with mock.patch.object(wizard, "_finish_success") as finish:
+                            wizard._handle_mount_finished(False, "[!] not connected")
+
+        set_busy.assert_called_once_with(False)
+        cleanup.assert_called_once_with()
+        reset.assert_called_once_with()
+        warning.assert_called_once()
+        finish.assert_not_called()
+
+    def test_new_remote_wizard_allows_same_alias_across_providers(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        s3_provider = mock.Mock()
+        s3_provider.currentData.return_value = "Cloudflare"
+        wizard.fields = {"s3_provider": s3_provider}
+        remotes = [
+            core.RemoteInfo(
+                name="Media",
+                alias="Media",
+                provider="drive",
+                backend_type="drive",
+                mount_path="/tmp/drive-media",
+            ),
+            core.RemoteInfo(
+                name="Media__dropbox",
+                alias="Media",
+                provider="dropbox",
+                backend_type="dropbox",
+                mount_path="/tmp/dropbox-media",
+            ),
+            core.RemoteInfo(
+                name="Media__Wasabi",
+                alias="Media",
+                provider="Wasabi",
+                backend_type="s3",
+                mount_path="/tmp/wasabi-media",
+            ),
+        ]
+
+        self.assertFalse(wizard._display_name_exists("Media", "box", remotes))
+        self.assertTrue(wizard._display_name_exists("Media", "dropbox", remotes))
+        self.assertFalse(wizard._display_name_exists("Media", "s3", remotes, provider_name="Cloudflare R2"))
+        self.assertTrue(wizard._display_name_exists("Media", "s3", remotes, provider_name="Wasabi"))
+        self.assertEqual(wizard._config_remote_name("Media", "box", remotes), "Media__Box")
+        self.assertEqual(
+            wizard._config_remote_name("Media", "s3", remotes, provider_name="Cloudflare R2"),
+            "Media__Cloudflare R2",
+        )
+        self.assertEqual(wizard._config_remote_name("Photos", "box", remotes), "Photos__Box")
+
+    def test_new_remote_wizard_mounts_created_remote_when_requested(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._connect_after_create = True
+        wizard._remote_name = "Docs"
+        step = tray.rclone_wizard.RcloneConfigStep("", {})
+
+        with mock.patch.object(wizard, "_created_remote_has_credentials", return_value=True):
+            with mock.patch.object(wizard, "_mount_created_remote") as mount_created:
+                with mock.patch.object(wizard, "_set_busy"):
+                    wizard._handle_command_finished(step, None)
+
+        mount_created.assert_called_once_with()
+
+    def test_mountlet_window_sorts_remotes_by_name(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        remotes = [
+            core.RemoteInfo("Beta__dropbox", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+            core.RemoteInfo("Alpha__drive", "Alpha", "drive", "drive", "/tmp/alpha"),
+        ]
+
+        self.assertEqual(window._sorted_remotes(remotes, "registration"), remotes)
+
+        sorted_remotes = window._sorted_remotes(remotes, "name")
+
+        self.assertEqual([remote.name for remote in sorted_remotes], ["Alpha__drive", "Beta__dropbox"])
+
+    def test_mountlet_window_sorts_remotes_by_provider(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        remotes = [
+            core.RemoteInfo("Docs__onedrive", "Docs", "onedrive", "onedrive", "/tmp/docs"),
+            core.RemoteInfo("Docs__box", "Docs", "box", "box", "/tmp/docs-box"),
+        ]
+
+        sorted_remotes = window._sorted_remotes(remotes, "provider")
+
+        self.assertEqual([remote.name for remote in sorted_remotes], ["Docs__box", "Docs__onedrive"])
+
+    def test_mountlet_window_sorts_remotes_by_storage_usage(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {
+            "Small": core.StorageUsage("small", used=20, total=100),
+            "Large": core.StorageUsage("large", used=50, total=200),
+            "Unknown": core.StorageUsage("?"),
+        }
+        remotes = [
+            core.RemoteInfo("Small", "Small", "drive", "drive", "/tmp/small"),
+            core.RemoteInfo("Unknown", "Unknown", "drive", "drive", "/tmp/unknown"),
+            core.RemoteInfo("Large", "Large", "drive", "drive", "/tmp/large"),
+        ]
+
+        self.assertEqual(
+            [remote.name for remote in window._sorted_remotes(remotes, "size")],
+            ["Large", "Small", "Unknown"],
+        )
+        self.assertEqual(
+            [remote.name for remote in window._sorted_remotes(remotes, "remaining")],
+            ["Small", "Large", "Unknown"],
+        )
+
+    def test_mountlet_window_keeps_manual_move_available_after_sorting(self):
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta"]
+
+        self.assertTrue(window._can_move_remote("Beta", -1))
+
+    def test_mountlet_window_remote_title_colors_provider(self):
+        window = object.__new__(tray.MountletWindow)
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        title = window._display_remote_name(remote)
+
+        self.assertIn("Docs", title)
+        self.assertIn("(Drive)", title)
+        self.assertIn(tray.PROVIDER_COLORS["drive"], title)
+
+    def test_mountlet_window_browser_button_uses_provider_color(self):
+        window = object.__new__(tray.MountletWindow)
+        button = mock.Mock()
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        window._update_browser_button(button, remote)
+
+        button.setEnabled.assert_called_once_with(True)
+        button.setStyleSheet.assert_called_once_with(f"color: {tray.PROVIDER_COLORS['drive']};")
+        button.setToolTip.assert_called_once_with("Open Drive in browser")
+
+    def test_mountlet_window_remote_title_escapes_rich_text(self):
+        window = object.__new__(tray.MountletWindow)
+        remote = core.RemoteInfo("A < B__Box", "A < B", "Box", "box", "/tmp/box")
+
+        title = window._display_remote_name(remote)
+
+        self.assertIn("A &lt; B", title)
+        self.assertNotIn("A < B", title)
+
+    def test_mountlet_window_sort_action_saves_order(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        window._current_remote_names = ["Beta", "Alpha"]
+        window.tray_app = mock.Mock()
+        remotes = [
+            core.RemoteInfo("Beta", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+            core.RemoteInfo("Alpha", "Alpha", "drive", "drive", "/tmp/alpha"),
+        ]
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
+            with mock.patch.object(window, "_save_remote_order") as save:
+                window._sort_remote_order("name")
+
+        save.assert_called_once_with(["Alpha", "Beta"])
+        self.assertEqual(window._current_remote_names, [])
+        window.tray_app.rebuild_menus.assert_called_once_with()
+
+    def test_mountlet_window_registration_sort_clears_manual_order(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        window._current_remote_names = ["Beta", "Alpha"]
+        window.tray_app = mock.Mock()
+        remotes = [
+            core.RemoteInfo("Beta", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+            core.RemoteInfo("Alpha", "Alpha", "drive", "drive", "/tmp/alpha"),
+        ]
+        mount_settings = {
+            "Alpha": settings.MountSettings(order=0, auto_mount=True),
+            "Beta": settings.MountSettings(order=1, mount_path="dropbox/Beta", remote_path="bucket/beta"),
+        }
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
+            with mock.patch.object(tray, "load_mount_settings", return_value=mount_settings):
+                with mock.patch.object(tray, "save_mount_settings") as save:
+                    window._sort_remote_order("registration")
+
+        saved = save.call_args.args[0]
+        self.assertIsNone(saved["Alpha"].order)
+        self.assertTrue(saved["Alpha"].auto_mount)
+        self.assertIsNone(saved["Beta"].order)
+        self.assertEqual(saved["Beta"].mount_path, "dropbox/Beta")
+        self.assertEqual(saved["Beta"].remote_path, "bucket/beta")
+        self.assertEqual(window._current_remote_names, [])
+        window.tray_app.rebuild_menus.assert_called_once_with()
+
+    def test_mountlet_window_reverse_action_saves_reversed_order(self):
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta"]
+        window.tray_app = mock.Mock()
+        remotes = [
+            core.RemoteInfo("Alpha", "Alpha", "drive", "drive", "/tmp/alpha"),
+            core.RemoteInfo("Beta", "Beta", "dropbox", "dropbox", "/tmp/beta"),
+        ]
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=remotes):
+            with mock.patch.object(window, "_save_remote_order") as save:
+                window._reverse_remote_order()
+
+        save.assert_called_once_with(["Beta", "Alpha"])
+        self.assertEqual(window._current_remote_names, [])
+        window.tray_app.rebuild_menus.assert_called_once_with()
+
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
         mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = True
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
 
         with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
             with mock.patch.object(mountlet_window, "show") as show:
@@ -161,6 +1042,120 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window.window.hide.assert_called_once_with()
         show.assert_not_called()
+
+    def test_mountlet_window_toggle_hides_window_stack_when_child_is_open(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = False
+        child = mock.Mock()
+        child.isVisible.return_value = True
+        mountlet_window._child_dialogs = [child]
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
+            with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+                with mock.patch.object(mountlet_window, "show") as show:
+                    mountlet_window.toggle_from_tray()
+
+        hide_stack.assert_called_once_with()
+        show.assert_not_called()
+
+    def test_mountlet_window_toggle_raises_visible_unfocused_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = False
+
+        with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=True):
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        mountlet_window.window.hide.assert_not_called()
+        show.assert_called_once_with()
+
+    def test_mountlet_window_close_hides_window_stack(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        event = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_tray_is_quitting", return_value=False):
+            with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+                handled = mountlet_window._handle_window_close(event)
+
+        self.assertTrue(handled)
+        hide_stack.assert_called_once_with()
+        event.ignore.assert_called_once_with()
+
+    def test_mountlet_window_close_hides_window_stack_when_child_is_open(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        event = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_tray_is_quitting", return_value=False):
+            with mock.patch.object(mountlet_window, "_has_visible_child_dialog", return_value=True):
+                with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
+                    with mock.patch.object(mountlet_window, "_schedule_child_window_raises") as schedule:
+                        with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+                            handled = mountlet_window._handle_window_close(event)
+
+        self.assertTrue(handled)
+        raise_child.assert_not_called()
+        schedule.assert_not_called()
+        hide_stack.assert_called_once_with()
+        event.ignore.assert_called_once_with()
+
+    def test_mountlet_main_window_close_event_uses_shared_close_handler(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        window_type = SimpleNamespace(
+            Tool=1,
+            FramelessWindowHint=2,
+        )
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(WindowType=window_type),
+            QMainWindow=type("BaseMainWindow", (), {"closeEvent": lambda self, event: None}),
+        )
+        mountlet_window.qt = qt
+        event = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_handle_window_close", return_value=True) as handle:
+            window = mountlet_window._make_main_window()
+            window.closeEvent(event)
+
+        handle.assert_called_once_with(event)
+
+    def test_apply_frameless_window_flags_uses_frameless_hint(self):
+        window_type = SimpleNamespace(
+            Dialog=1,
+            FramelessWindowHint=2,
+        )
+        qt = SimpleNamespace(Qt=SimpleNamespace(WindowType=window_type))
+        window = mock.Mock()
+
+        tray._apply_frameless_window_flags(qt, window, base_name="Dialog")
+
+        window.setWindowFlags.assert_called_once_with(3)
+
+    def test_toggle_keep_above_uses_x11_state_without_remapping_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(WindowType=SimpleNamespace(WindowStaysOnTopHint="top"))
+        )
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window._keep_above = False
+        mountlet_window._keep_above_button = mock.Mock()
+
+        with mock.patch.object(tray, "_set_x11_keep_above", return_value=True) as set_above:
+            mountlet_window._toggle_keep_above(True)
+
+        self.assertTrue(mountlet_window._keep_above)
+        set_above.assert_called_once_with(mountlet_window.window, True)
+        mountlet_window.window.setWindowFlag.assert_not_called()
+        mountlet_window.window.move.assert_not_called()
+        mountlet_window.window.show.assert_not_called()
+        mountlet_window._keep_above_button.setChecked.assert_called_once_with(True)
+        mountlet_window._keep_above_button.setToolTip.assert_called_once_with(
+            "Stop keeping Mountlet above other windows"
+        )
+        mountlet_window._keep_above_button.setStyleSheet.assert_called_once()
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -210,6 +1205,17 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window = mock.Mock()
         mountlet_window.window.isVisible.return_value = True
         mountlet_window.window.isMinimized.return_value = False
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        single_shot = mock.Mock()
+        qt = SimpleNamespace(
+            QApplication=SimpleNamespace(
+                activeModalWidget=lambda: None,
+                activeWindow=lambda: None,
+            ),
+            QTimer=SimpleNamespace(singleShot=single_shot),
+        )
+        mountlet_window.qt = qt
 
         with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
             with mock.patch.object(mountlet_window, "refresh") as refresh:
@@ -220,8 +1226,21 @@ class TrayTests(unittest.TestCase):
         refresh.assert_called_once_with()
         position.assert_called_once_with()
         mountlet_window.window.show.assert_called_once_with()
-        mountlet_window.window.raise_.assert_called_once_with()
-        mountlet_window.window.activateWindow.assert_called_once_with()
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
+        self.assertEqual(single_shot.call_count, 6)
+
+    def test_activate_main_window_skips_when_window_still_on_other_desktop(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop") as move:
+            with mock.patch.object(tray, "_x11_qt_window_is_on_current_desktop", return_value=False):
+                mountlet_window._activate_main_window_if_current_desktop()
+
+        move.assert_called_once_with(mountlet_window.window)
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
 
     def test_x11_qt_window_is_on_current_desktop_compares_window_desktop(self):
         window = mock.Mock()
@@ -242,9 +1261,10 @@ class TrayTests(unittest.TestCase):
 
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             with mock.patch.dict(tray.os.environ, {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}, clear=True):
-                with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/xprop"):
-                    with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
-                        self.assertTrue(tray._set_x11_window_desktop(window, 3))
+                with mock.patch.object(tray, "_send_x11_window_desktop_request", return_value=False):
+                    with mock.patch.object(tray.shutil, "which", return_value="/usr/bin/xprop"):
+                        with mock.patch.object(tray.subprocess, "run", return_value=completed) as run:
+                            self.assertTrue(tray._set_x11_window_desktop(window, 3))
 
         self.assertEqual(
             run.call_args.args[0],
@@ -259,6 +1279,40 @@ class TrayTests(unittest.TestCase):
                 "_NET_WM_DESKTOP",
                 "3",
             ],
+        )
+
+    def test_send_x11_window_desktop_request_uses_ewmh_client_message(self):
+        x11 = SimpleNamespace(
+            XOpenDisplay=mock.Mock(return_value=123),
+            XDefaultRootWindow=mock.Mock(return_value=456),
+            XInternAtom=mock.Mock(return_value=789),
+            XSendEvent=mock.Mock(return_value=1),
+            XFlush=mock.Mock(),
+            XCloseDisplay=mock.Mock(),
+        )
+
+        with mock.patch.object(tray.ctypes.util, "find_library", return_value="libX11.so"):
+            with mock.patch.object(tray.ctypes, "CDLL", return_value=x11):
+                self.assertTrue(tray._send_x11_window_desktop_request(12345, 3))
+
+        event = x11.XSendEvent.call_args.args[4]._obj
+        self.assertEqual(event.xclient.window, 12345)
+        self.assertEqual(event.xclient.message_type, 789)
+        self.assertEqual(event.xclient.format, 32)
+        self.assertEqual(event.xclient.data.l[0], 3)
+        self.assertEqual(event.xclient.data.l[1], 2)
+        x11.XFlush.assert_called_once_with(123)
+        x11.XCloseDisplay.assert_called_once_with(123)
+
+    def test_send_x11_keep_above_request_uses_net_wm_state_above(self):
+        with mock.patch.object(tray, "_send_x11_client_message", return_value=True) as send:
+            self.assertTrue(tray._send_x11_keep_above_request(12345, True))
+
+        send.assert_called_once_with(
+            12345,
+            b"_NET_WM_STATE",
+            [1, 0, 0, 2],
+            atom_data={1: b"_NET_WM_STATE_ABOVE"},
         )
 
     def test_set_x11_window_desktop_skips_wayland(self):
@@ -284,6 +1338,139 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_focus_window_restores_x11_keep_above_after_desktop_move(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isMinimized.return_value = False
+        mountlet_window._keep_above = True
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop"):
+            with mock.patch.object(tray, "_set_x11_keep_above", return_value=True) as set_above:
+                mountlet_window._focus_window()
+
+        set_above.assert_called_once_with(mountlet_window.window, True)
+
+    def test_focus_window_restores_modal_child_z_order(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        child = mock.Mock()
+        child.isMinimized.return_value = False
+        child.isVisible.return_value = True
+        child.parentWidget.return_value = mock.Mock()
+        mountlet_window.window = child.parentWidget.return_value
+        mountlet_window.window.isMinimized.return_value = False
+        qt = mock.Mock()
+        qt.QApplication.activeModalWidget.return_value = child
+        qt.QApplication.activeWindow.return_value = None
+        mountlet_window.qt = qt
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop", return_value=True):
+            mountlet_window._focus_window()
+
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
+        child.show.assert_called_once_with()
+        child.raise_.assert_called_once_with()
+        child.activateWindow.assert_called_once_with()
+
+    def test_focus_window_restores_tracked_child_z_order(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        child = mock.Mock()
+        child.isMinimized.return_value = False
+        child.isVisible.return_value = True
+        child.parentWidget.return_value = mock.Mock()
+        mountlet_window.window = child.parentWidget.return_value
+        mountlet_window.window.isMinimized.return_value = False
+        mountlet_window._child_dialogs = [child]
+        qt = mock.Mock()
+        qt.QApplication.activeModalWidget.return_value = None
+        qt.QApplication.activeWindow.return_value = mountlet_window.window
+        mountlet_window.qt = qt
+
+        with mock.patch.object(tray, "_move_x11_window_to_current_desktop", return_value=True):
+            mountlet_window._focus_window()
+
+        child.show.assert_called_once_with()
+        child.raise_.assert_called_once_with()
+        child.activateWindow.assert_called_once_with()
+        mountlet_window.window.raise_.assert_not_called()
+        mountlet_window.window.activateWindow.assert_not_called()
+        self.assertEqual(qt.QTimer.singleShot.call_count, 3)
+
+    def test_hide_window_stack_rejects_child_dialogs(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        child = mock.Mock()
+        owner = mock.Mock()
+        mountlet_window._child_dialogs = [child]
+        mountlet_window._child_dialog_owners = {child: owner}
+
+        mountlet_window._hide_window_stack()
+
+        owner._reject.assert_called_once_with()
+        child.hide.assert_not_called()
+        mountlet_window.window.hide.assert_called_once_with()
+        self.assertEqual(mountlet_window._child_dialogs, [])
+        self.assertEqual(mountlet_window._child_dialog_owners, {})
+
+    def test_hide_window_stack_closes_active_untracked_child_dialog(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        child = mock.Mock()
+        child.parentWidget.return_value = mountlet_window.window
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        qt = mock.Mock()
+        qt.QApplication.activeModalWidget.return_value = child
+        qt.QApplication.activeWindow.return_value = None
+        mountlet_window.qt = qt
+
+        mountlet_window._hide_window_stack()
+
+        child.reject.assert_called_once_with()
+        mountlet_window.window.hide.assert_called_once_with()
+
+    def test_open_child_dialog_tracks_owner_and_uses_window_modal_show(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowModality=SimpleNamespace(WindowModal="window-modal"),
+                WindowType=SimpleNamespace(
+                    Dialog=1,
+                    FramelessWindowHint=2,
+                ),
+            )
+        )
+        owner = SimpleNamespace(dialog=mock.Mock())
+        on_accepted = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
+            mountlet_window._open_child_dialog(owner, on_accepted)
+
+        self.assertEqual(mountlet_window._child_dialogs, [owner.dialog])
+        self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
+        owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
+        owner.dialog.finished.connect.assert_called_once()
+        owner.dialog.setWindowFlags.assert_called_once_with(3)
+        owner.dialog.setModal.assert_called_once_with(True)
+        owner.dialog.setWindowModality.assert_called_once_with("window-modal")
+        owner.dialog.show.assert_called_once_with()
+        raise_child.assert_called_once_with()
+
+    def test_restore_child_offsets_moves_subwindow_with_main_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        child = mock.Mock()
+        mountlet_window._child_dialogs = [child]
+
+        with mock.patch.object(mountlet_window, "_window_position", side_effect=[(300, 400)]):
+            mountlet_window._restore_child_offsets({child: (25, 35)})
+
+        child.move.assert_called_once_with(325, 435)
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
@@ -292,13 +1479,29 @@ class TrayTests(unittest.TestCase):
         tray_app.tray = mock.Mock()
         tray_app.app = mock.Mock()
 
-        tray_app.request_quit()
+        with mock.patch.object(tray.rclone_wizard, "cancel_all_remote_configs") as cancel_configs:
+            tray_app.request_quit()
 
         self.assertTrue(tray_app._quitting)
+        cancel_configs.assert_called_once_with()
         tray_app.timer.stop.assert_called_once_with()
         tray_app.main_window.prepare_quit.assert_called_once_with()
         tray_app.tray.hide.assert_called_once_with()
         tray_app.app.exit.assert_called_once_with(0)
+
+    def test_schedule_forced_exit_uses_daemon_timer(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._allow_forced_exit = True
+        tray_app._forced_exit_scheduled = False
+        timer = mock.Mock()
+
+        with mock.patch.object(tray.threading, "Timer", return_value=timer) as timer_class:
+            tray_app._schedule_forced_exit()
+
+        timer_class.assert_called_once_with(tray.FORCED_QUIT_SECONDS, tray_app._force_exit_if_still_quitting)
+        self.assertTrue(tray_app._forced_exit_scheduled)
+        self.assertTrue(timer.daemon)
+        timer.start.assert_called_once_with()
 
     def test_show_folder_uses_file_manager_dbus_service_on_linux(self):
         completed = SimpleNamespace(returncode=0)
@@ -715,24 +1918,94 @@ class TrayTests(unittest.TestCase):
 
         popen.assert_not_called()
 
-    def test_open_folder_action_reports_failure_when_default_opener_fails(self):
-        remote = core.RemoteInfo(
-            name="Docs",
-            alias="Docs",
-            provider="drive",
-            backend_type="drive",
-            mount_path="/tmp/missing-docs",
-        )
+    def test_open_folder_action_delegates_to_main_window_runner(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+
+        tray_app._open_folder(remote)
+
+        tray_app.main_window._open_folder.assert_called_once_with(remote)
+
+    def test_window_folder_open_failure_reports_notification(self):
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window.tray_app._quitting = False
+
+        window._handle_folder_opened(False)
+
+        window.tray_app._notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
+
+    def test_open_remote_in_browser_uses_provider_url(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app.qt = mock.Mock()
+        tray_app.qt.QUrl.return_value = "qt-url"
+        tray_app.qt.QDesktopServices.openUrl.return_value = True
+        tray_app.qt.QTimer.singleShot.side_effect = lambda _delay, callback: callback()
+
+        with mock.patch.object(tray_app, "_notify") as notify:
+            tray_app._open_remote_in_browser(remote)
+
+        tray_app.qt.QUrl.assert_called_once_with("https://drive.google.com/drive/my-drive")
+        tray_app.qt.QDesktopServices.openUrl.assert_called_once_with("qt-url")
+        notify.assert_not_called()
+
+    def test_open_remote_in_browser_reports_missing_url(self):
+        remote = core.RemoteInfo("Archive__S3", "Archive", "S3", "s3", "/tmp/archive")
         tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = mock.Mock()
 
-        with tempfile.TemporaryDirectory() as tempdir:
-            remote.mount_path = tempdir
-            with mock.patch.object(tray, "_open_folder_default", return_value=False):
-                with mock.patch.object(tray_app, "_notify") as notify:
-                    tray_app._open_folder(remote)
+        with mock.patch.object(tray_app, "_notify") as notify:
+            tray_app._open_remote_in_browser(remote)
 
-        notify.assert_called_once_with("Open folder", "Could not open the mount folder.", success=False)
+        tray_app.qt.QTimer.singleShot.assert_not_called()
+        tray_app.qt.QDesktopServices.openUrl.assert_not_called()
+        notify.assert_called_once_with(
+            "Open in browser",
+            "This remote does not have a known browser view.",
+            success=False,
+        )
+
+    def test_tray_remote_action_delegates_to_threaded_main_window_runner(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+
+        tray_app._run_remote_action(remote, core.mount_remote)
+
+        tray_app.main_window._run_remote_action.assert_called_once_with(remote, core.mount_remote)
+
+    def test_tray_bulk_actions_delegate_to_threaded_main_window_runner(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+
+        tray_app._mount_all([remote])
+        tray_app._unmount_all([remote])
+
+        tray_app.main_window._mount_all.assert_called_once_with()
+        tray_app.main_window._unmount_all.assert_called_once_with()
+
+    def test_tray_activation_opens_window_before_scheduling_menu_refresh(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        tray_app.rebuild_menus = mock.Mock()
+        trigger = object()
+        tray_app.qt = SimpleNamespace(
+            QSystemTrayIcon=SimpleNamespace(ActivationReason=SimpleNamespace(Trigger=trigger)),
+            QTimer=mock.Mock(),
+        )
+
+        tray_app._handle_activation(trigger)
+
+        tray_app.main_window.toggle_from_tray.assert_called_once_with()
+        tray_app.rebuild_menus.assert_not_called()
+        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
@@ -800,18 +2073,19 @@ class TrayTests(unittest.TestCase):
         qt.QTimer.singleShot.assert_called_once()
         self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 1500)
 
-    def test_auto_mount_reports_results_and_rebuilds_menus(self):
+    def test_auto_mount_delegates_to_threaded_main_window_runner(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
         tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
 
-        with mock.patch.object(tray.core, "mount_all", return_value=(["Docs"], [])) as mount_all:
-            with mock.patch.object(tray_app, "_notify") as notify:
-                with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
-                    tray_app._auto_mount([remote])
+        tray_app._auto_mount([remote])
 
-        mount_all.assert_called_once_with([remote])
-        notify.assert_called_once_with("Auto-mount", "Mounted: Docs", success=True)
-        rebuild.assert_called_once_with()
+        tray_app.main_window._run_bulk_action_for_remotes.assert_called_once_with(
+            "Auto-mount",
+            [remote],
+            tray.core.mount_all,
+        )
 
 
 if __name__ == "__main__":

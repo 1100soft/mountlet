@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
+import errno
+import html
 import os
 import platform
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import threading
+import time
 from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import core
+from . import core, rclone_wizard
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .settings import (
@@ -43,6 +49,15 @@ OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("file-manager-service", "Desktop file manager service"),
     ("default", "System default"),
 )
+REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("registration", "Registration time"),
+    ("name", "Name"),
+    ("provider", "Provider"),
+    ("size", "Total size, largest first"),
+    ("used", "Used space, largest first"),
+    ("remaining", "Remaining space, lowest first"),
+)
+STORAGE_SORT_MODES = {"size", "used", "remaining"}
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
@@ -82,6 +97,262 @@ RCLONE_SELECT_FIELDS = {
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
+DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
+DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
+RCLONE_OAUTH_LOCAL_PORT = 53682
+FORCED_QUIT_SECONDS = 3.0
+REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("Google Drive", "drive"),
+    ("Dropbox", "dropbox"),
+    ("Microsoft OneDrive", "onedrive"),
+    ("Box", "box"),
+    ("pCloud", "pcloud"),
+    ("Koofr", "koofr"),
+    ("S3-compatible storage", "s3"),
+    ("WebDAV", "webdav"),
+)
+PROVIDER_STATUS_COLORS = {
+    "tested": "#ffffff",
+    "partial": "#ffffff",
+    "untested": "#facc15",
+}
+REMOTE_PROVIDER_STATUSES = {
+    "drive": "tested",
+    "dropbox": "tested",
+    "onedrive": "tested",
+    "box": "tested",
+    "pcloud": "tested",
+    "koofr": "tested",
+    "s3": "partial",
+    "webdav": "untested",
+}
+OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+REMOTE_CONFIG_SUFFIXES = {
+    "drive": "Drive",
+    "dropbox": "Dropbox",
+    "onedrive": "OneDrive",
+    "box": "Box",
+    "pcloud": "pCloud",
+    "koofr": "Koofr",
+    "s3": "S3",
+    "webdav": "WebDAV",
+}
+S3_PROVIDER_CONFIG_SUFFIXES = {
+    "cloudflare": "Cloudflare R2",
+    "minio": "MinIO",
+    "aws": "Amazon S3",
+    "wasabi": "Wasabi",
+    "other": "S3",
+}
+S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
+    {
+        "label": "Cloudflare R2",
+        "status": "tested",
+        "provider": "Cloudflare",
+        "config_name": "Cloudflare R2",
+        "endpoint": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
+        "region": "auto",
+        "access_key": "R2 access key ID",
+        "secret_key": "R2 secret access key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use the default or jurisdiction-specific R2 endpoint from the token page.",
+        "region_tip": "Cloudflare R2 uses auto. us-east-1 also aliases to auto.",
+        "bucket_tip": "Enter the bucket name, especially for bucket-scoped R2 tokens.",
+        "instructions": (
+            '<a href="https://developers.cloudflare.com/r2/api/tokens/">Cloudflare R2 token guide</a> | '
+            '<a href="https://developers.cloudflare.com/r2/api/s3/api/">R2 S3 endpoint guide</a>'
+        ),
+    },
+    {
+        "label": "MinIO / S3-compatible",
+        "status": "untested",
+        "provider": "Minio",
+        "config_name": "MinIO",
+        "endpoint": "http://127.0.0.1:9000",
+        "region": "us-east-1",
+        "access_key": "MinIO access key",
+        "secret_key": "MinIO secret key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use your MinIO server endpoint.",
+        "region_tip": "MinIO commonly accepts us-east-1 unless your server is configured otherwise.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "instructions": '<a href="https://min.io/docs/minio/linux/reference/minio-mc/mc-admin-user-svcacct-add.html">MinIO access key guide</a>',
+    },
+    {
+        "label": "Amazon S3",
+        "status": "untested",
+        "provider": "AWS",
+        "config_name": "Amazon S3",
+        "endpoint": "",
+        "region": "us-east-1",
+        "access_key": "AWS access key ID",
+        "secret_key": "AWS secret access key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Leave blank for AWS so rclone uses the endpoint for the chosen region.",
+        "region_tip": "Use the AWS region where the bucket lives.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "hide_endpoint": "true",
+        "instructions": (
+            '<a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html">'
+            "AWS access key guide</a>"
+        ),
+    },
+    {
+        "label": "Wasabi",
+        "status": "untested",
+        "provider": "Wasabi",
+        "config_name": "Wasabi",
+        "endpoint": "https://s3.wasabisys.com",
+        "region": "us-east-1",
+        "access_key": "Wasabi access key ID",
+        "secret_key": "Wasabi secret access key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use the Wasabi service URL for the bucket's storage region.",
+        "region_tip": "Use the Wasabi region where the bucket lives.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "instructions": (
+            '<a href="https://docs.wasabi.com/docs/creating-a-user-account-and-access-key">Wasabi access key guide</a> | '
+            '<a href="https://docs.wasabi.com/docs/what-are-the-service-urls-for-wasabi-s-different-storage-regions">'
+            "Wasabi service URLs</a>"
+        ),
+    },
+    {
+        "label": "Other S3-compatible",
+        "status": "untested",
+        "provider": "Other",
+        "config_name": "S3",
+        "endpoint": "https://s3.example.com",
+        "region": "us-east-1",
+        "access_key": "Access key",
+        "secret_key": "Secret key",
+        "bucket": "Bucket name or bucket/folder",
+        "endpoint_tip": "Use the S3-compatible endpoint from your storage provider.",
+        "region_tip": "Use the provider's region, or us-east-1 when the provider does not require one.",
+        "bucket_tip": "Enter the bucket name to mount.",
+        "instructions": '<a href="https://rclone.org/s3/">rclone S3 provider guide</a>',
+    },
+)
+WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
+    {
+        "label": "Nextcloud",
+        "status": "untested",
+        "vendor": "nextcloud",
+        "config_name": "Nextcloud",
+        "url": "https://cloud.example.com/remote.php/dav/files/user",
+        "user": "Nextcloud username",
+        "password": "Password or app password",
+        "url_tip": "Your Nextcloud WebDAV endpoint.",
+        "user_tip": "Your Nextcloud username.",
+        "password_tip": "Use your password or an app password if your server requires one.",
+        "instructions": '<a href="https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html">Nextcloud WebDAV guide</a>',
+    },
+    {
+        "label": "ownCloud",
+        "status": "untested",
+        "vendor": "owncloud",
+        "config_name": "ownCloud",
+        "url": "https://cloud.example.com/remote.php/webdav/",
+        "user": "ownCloud username",
+        "password": "Password or app password",
+        "url_tip": "Your ownCloud WebDAV endpoint.",
+        "user_tip": "Your ownCloud username.",
+        "password_tip": "Use your password or an app password if your server requires one.",
+        "instructions": (
+            '<a href="https://doc.owncloud.com/server/latest/user_manual/en/files/access_webdav.html">'
+            "ownCloud WebDAV guide</a>"
+        ),
+    },
+    {
+        "label": "SharePoint Online",
+        "status": "untested",
+        "vendor": "sharepoint",
+        "config_name": "SharePoint WebDAV",
+        "url": "https://tenant.sharepoint.com/sites/site/Shared%20Documents",
+        "user": "Microsoft account email",
+        "password": "Password",
+        "url_tip": "The SharePoint document library WebDAV URL.",
+        "user_tip": "The Microsoft account used for this SharePoint library.",
+        "password_tip": "Your SharePoint or Microsoft account password.",
+        "instructions": '<a href="https://rclone.org/webdav/#sharepoint-online">rclone SharePoint WebDAV guide</a>',
+    },
+    {
+        "label": "SharePoint NTLM",
+        "status": "untested",
+        "vendor": "sharepoint-ntlm",
+        "config_name": "SharePoint NTLM",
+        "url": "https://sharepoint.example.com/sites/site/Documents",
+        "user": "DOMAIN\\username",
+        "password": "Domain password",
+        "url_tip": "The on-premises SharePoint WebDAV URL.",
+        "user_tip": "Use the DOMAIN\\username format for NTLM authentication.",
+        "password_tip": "Your domain password.",
+        "instructions": (
+            '<a href="https://rclone.org/webdav/#sharepoint-with-ntlm-authentication">'
+            "rclone SharePoint NTLM guide</a>"
+        ),
+    },
+    {
+        "label": "Fastmail Files",
+        "status": "untested",
+        "vendor": "fastmail",
+        "config_name": "Fastmail Files",
+        "url": "https://webdav.fastmail.com/",
+        "user": "Fastmail email address",
+        "password": "Fastmail app password",
+        "url_tip": "Fastmail Files WebDAV endpoint.",
+        "user_tip": "Your Fastmail email address.",
+        "password_tip": "Use a Fastmail app password with Files access.",
+        "instructions": (
+            '<a href="https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords">'
+            "Fastmail app password guide</a>"
+        ),
+    },
+    {
+        "label": "rclone WebDAV server",
+        "status": "untested",
+        "vendor": "rclone",
+        "config_name": "rclone WebDAV",
+        "url": "http://127.0.0.1:8080/",
+        "user": "Optional",
+        "password": "Optional",
+        "url_tip": "The URL of an rclone serve webdav endpoint.",
+        "user_tip": "Leave blank if the server does not require a username.",
+        "password_tip": "Leave blank if the server does not require a password.",
+        "instructions": '<a href="https://rclone.org/commands/rclone_serve_webdav/">rclone serve WebDAV guide</a>',
+    },
+    {
+        "label": "Other WebDAV",
+        "status": "untested",
+        "vendor": "other",
+        "config_name": "WebDAV",
+        "url": "https://cloud.example.com/webdav",
+        "user": "Optional",
+        "password": "Optional",
+        "url_tip": "The WebDAV endpoint URL.",
+        "user_tip": "Leave blank if the server does not require a username.",
+        "password_tip": "Leave blank if the server does not require a password.",
+        "instructions": '<a href="https://rclone.org/webdav/">rclone WebDAV guide</a>',
+    },
+)
+PROVIDER_COLORS = {
+    "drive": "#34a853",
+    "dropbox": "#0061ff",
+    "onedrive": "#0078d4",
+    "box": "#0057c2",
+    "pcloud": "#17a2d4",
+    "koofr": "#f59e0b",
+    "s3": "#ff9900",
+    "webdav": "#64748b",
+}
+REMOTE_BROWSER_URLS = {
+    "drive": "https://drive.google.com/drive/my-drive",
+    "dropbox": "https://www.dropbox.com/home",
+    "onedrive": "https://onedrive.live.com/",
+    "box": "https://app.box.com/files",
+    "pcloud": "https://my.pcloud.com/",
+    "koofr": "https://app.koofr.net/",
+}
+_wizard_pending_remote_names: set[str] = set()
 
 
 class TrayDependencyError(RuntimeError):
@@ -101,10 +372,11 @@ def _packaged_icon_path() -> str | None:
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+        from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
         from PySide6.QtWidgets import (
             QApplication,
+            QButtonGroup,
             QCheckBox,
             QComboBox,
             QDialog,
@@ -118,8 +390,10 @@ def _load_qt_bindings() -> SimpleNamespace:
             QMainWindow,
             QMenu,
             QMessageBox,
+            QPlainTextEdit,
             QProgressBar,
             QPushButton,
+            QRadioButton,
             QScrollArea,
             QSizePolicy,
             QStyle,
@@ -139,6 +413,7 @@ def _load_qt_bindings() -> SimpleNamespace:
     return SimpleNamespace(
         QAction=QAction,
         QApplication=QApplication,
+        QButtonGroup=QButtonGroup,
         QColor=QColor,
         QCheckBox=QCheckBox,
         QComboBox=QComboBox,
@@ -156,11 +431,14 @@ def _load_qt_bindings() -> SimpleNamespace:
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
+        QPlainTextEdit=QPlainTextEdit,
         QObject=QObject,
         QPainter=QPainter,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
+        QRadioButton=QRadioButton,
         QScrollArea=QScrollArea,
+        QSize=QSize,
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
         QSystemTrayIcon=QSystemTrayIcon,
@@ -183,6 +461,31 @@ def _remote_title(remote: core.RemoteInfo, mounted: bool) -> str:
     return f"{remote.display_name} - {marker}"
 
 
+def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
+    backend_type = remote.backend_type.casefold()
+    if backend_type in REMOTE_BROWSER_URLS:
+        return REMOTE_BROWSER_URLS[backend_type]
+    if backend_type == "webdav":
+        url = remote.extra_info.get("url", "").strip()
+        if url.startswith(("http://", "https://")):
+            return url
+    return None
+
+
+def _provider_color(remote: core.RemoteInfo) -> str:
+    return PROVIDER_COLORS.get(remote.backend_type.casefold(), "#64748b")
+
+
+def _remote_service_label(remote: core.RemoteInfo) -> str:
+    if remote.provider:
+        return remote.provider
+    return REMOTE_CONFIG_SUFFIXES.get(remote.backend_type.casefold(), remote.backend_type or "remote")
+
+
+def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
+    return f"Open {_remote_service_label(remote)} in browser"
+
+
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
     if not remotes:
         return "Mountlet - no rclone remotes"
@@ -197,6 +500,88 @@ def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) ->
     return f"Mountlet - mounted: {names}"
 
 
+def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, unique_count: int) -> str:
+    if unique_count <= 1:
+        return "Existing credentials (recommended)"
+    return f"Existing: {credentials.remote_name}"
+
+
+def _fixed_webdav_urls() -> set[str]:
+    return {
+        option["url"]
+        for option in WEBDAV_VENDOR_OPTIONS
+        if option.get("fixed_url", "").casefold() in {"true", "1", "yes"}
+    }
+
+
+def _default_s3_endpoints() -> set[str]:
+    return {option.get("endpoint", "") for option in S3_PROVIDER_OPTIONS}
+
+
+def _default_s3_regions() -> set[str]:
+    return {option.get("region", "") for option in S3_PROVIDER_OPTIONS}
+
+
+def _provider_status_color(status: str) -> str:
+    return PROVIDER_STATUS_COLORS.get(status, PROVIDER_STATUS_COLORS["untested"])
+
+
+def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: str) -> None:
+    try:
+        value = qt.QColor(color)
+    except Exception:
+        value = color
+    try:
+        combo.setItemData(index, value, 9)
+    except Exception:
+        try:
+            combo.setItemData(index, value)
+        except Exception:
+            pass
+
+
+def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
+    try:
+        window_type = qt.Qt.WindowType
+        return getattr(window_type, base_name) | window_type.FramelessWindowHint
+    except Exception:
+        return None
+
+
+def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
+    flags = _frameless_window_flags(qt, "Dialog")
+    if flags is not None:
+        try:
+            return qt.QDialog(parent, flags)
+        except Exception:
+            pass
+    dialog = qt.QDialog(parent)
+    _apply_frameless_window_flags(qt, dialog, base_name="Dialog")
+    return dialog
+
+
+def _apply_frameless_window_flags(qt: SimpleNamespace, window: Any, *, base_name: str = "Window") -> None:
+    flags = _frameless_window_flags(qt, base_name)
+    if flags is not None:
+        try:
+            window.setWindowFlags(flags)
+            return
+        except Exception:
+            pass
+    try:
+        window.setWindowFlag(qt.Qt.WindowType.FramelessWindowHint, True)
+    except Exception:
+        pass
+
+
+def _load_visible_remotes() -> list[core.RemoteInfo]:
+    return [
+        remote
+        for remote in core.load_remotes(include_incomplete=False)
+        if remote.name not in _wizard_pending_remote_names
+    ]
+
+
 def _can_connect_unix_socket(path: str) -> bool:
     client = socket.socket(socket.AF_UNIX)
     try:
@@ -207,6 +592,169 @@ def _can_connect_unix_socket(path: str) -> bool:
         return False
     finally:
         client.close()
+
+
+def _local_port_available(port: int, host: str = "127.0.0.1") -> bool:
+    available, _owner_hint = _local_port_status(port, host)
+    return available
+
+
+def _local_port_status(port: int, host: str = "127.0.0.1") -> tuple[bool, str]:
+    for family, address in _loopback_bind_addresses(port, host):
+        server = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            server.bind(address)
+        except OSError as exc:
+            if family == socket.AF_INET6 and exc.errno not in {errno.EADDRINUSE, errno.EACCES}:
+                continue
+            return False, _local_port_owner_hint(port)
+        finally:
+            server.close()
+    return True, ""
+
+
+def _loopback_bind_addresses(port: int, host: str) -> list[tuple[int, tuple[Any, ...]]]:
+    addresses: list[tuple[int, tuple[Any, ...]]] = [(socket.AF_INET, (host, port))]
+    if host in {"127.0.0.1", "localhost"} and socket.has_ipv6:
+        addresses.append((socket.AF_INET6, ("::1", port)))
+    return addresses
+
+
+def _local_port_owner_hint(port: int) -> str:
+    if platform.system() != "Linux":
+        return ""
+    for command in (
+        ["ss", "-ltnp", f"sport = :{port}"],
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+    ):
+        if not shutil.which(command[0]):
+            continue
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=1,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        output = completed.stdout.strip()
+        if completed.returncode == 0 and output:
+            return _summarize_port_owner(output)
+    return _proc_local_port_owner_hint(port)
+
+
+def _summarize_port_owner(output: str) -> str:
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return ""
+    owner = lines[-1]
+    process_match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', owner)
+    if process_match:
+        name, pid = process_match.groups()
+        return f"Process using the port: {name} (PID {pid})."
+    command_match = re.match(r"(\S+)\s+(\d+)\s+", owner)
+    if command_match:
+        name, pid = command_match.groups()
+        return f"Process using the port: {name} (PID {pid})."
+    return f"Port owner: {owner}"
+
+
+def _proc_local_port_owner_hint(port: int) -> str:
+    inodes = _proc_listening_socket_inodes(port)
+    if not inodes:
+        return ""
+    for proc_entry in Path("/proc").iterdir():
+        if not proc_entry.name.isdigit():
+            continue
+        fd_dir = proc_entry / "fd"
+        try:
+            fds = list(fd_dir.iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            match = re.fullmatch(r"socket:\[(\d+)\]", target)
+            if not match or match.group(1) not in inodes:
+                continue
+            return f"Process using the port: {_proc_comm(proc_entry)} (PID {proc_entry.name})."
+    return ""
+
+
+def _proc_listening_socket_inodes(port: int) -> set[str]:
+    inodes: set[str] = set()
+    port_hex = f"{port:04X}"
+    for path in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            columns = line.split()
+            if len(columns) <= 9:
+                continue
+            local_address = columns[1]
+            state = columns[3]
+            if state != "0A":
+                continue
+            if not local_address.upper().endswith(f":{port_hex}"):
+                continue
+            inodes.add(columns[9])
+    return inodes
+
+
+def _proc_comm(proc_entry: Path) -> str:
+    try:
+        return (proc_entry / "comm").read_text(encoding="utf-8").strip() or proc_entry.name
+    except OSError:
+        return proc_entry.name
+
+
+def _port_owner_from_hint(owner_hint: str) -> tuple[str, int] | None:
+    match = re.search(r"Process using the port: (.+?) \(PID (\d+)\)", owner_hint)
+    if not match:
+        return None
+    name, pid = match.groups()
+    return name, int(pid)
+
+
+def _rclone_port_owner_pid(owner_hint: str) -> int | None:
+    owner = _port_owner_from_hint(owner_hint)
+    if owner is None:
+        return None
+    name, pid = owner
+    return pid if "rclone" in name.lower() else None
+
+
+def _is_rclone_auth_port_error(message: str) -> bool:
+    text = message.lower()
+    return "auth webserver" in text and "53682" in text and (
+        "already in use" in text or "operation not permitted" in text
+    )
+
+
+def _terminate_process_id(pid: int) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    for _attempt in range(20):
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        return False
+    return True
 
 
 def _desktop_session_available() -> tuple[bool, str]:
@@ -464,6 +1012,126 @@ def _x11_qt_window_is_on_current_desktop(window: Any) -> bool | None:
     return window_desktop in {current_desktop, 0xFFFFFFFF}
 
 
+class _XClientMessageData(ctypes.Union):
+    _fields_ = [
+        ("b", ctypes.c_char * 20),
+        ("s", ctypes.c_short * 10),
+        ("l", ctypes.c_long * 5),
+    ]
+
+
+class _XClientMessageEvent(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("serial", ctypes.c_ulong),
+        ("send_event", ctypes.c_int),
+        ("display", ctypes.c_void_p),
+        ("window", ctypes.c_ulong),
+        ("message_type", ctypes.c_ulong),
+        ("format", ctypes.c_int),
+        ("data", _XClientMessageData),
+    ]
+
+
+class _XEvent(ctypes.Union):
+    _fields_ = [
+        ("xclient", _XClientMessageEvent),
+        ("pad", ctypes.c_long * 24),
+    ]
+
+
+def _send_x11_client_message(
+    window_id: int,
+    message_name: bytes,
+    data: list[int],
+    *,
+    atom_data: dict[int, bytes] | None = None,
+) -> bool:
+    library = ctypes.util.find_library("X11")
+    if not library:
+        return False
+    try:
+        x11 = ctypes.CDLL(library)
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XSendEvent.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_long,
+            ctypes.POINTER(_XEvent),
+        ]
+        x11.XSendEvent.restype = ctypes.c_int
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        display = x11.XOpenDisplay(None)
+    except (AttributeError, OSError):
+        return False
+    if not display:
+        return False
+    try:
+        root = x11.XDefaultRootWindow(display)
+        message_type = x11.XInternAtom(display, message_name, 0)
+        if not root or not message_type:
+            return False
+        event = _XEvent()
+        event.xclient.type = 33  # ClientMessage
+        event.xclient.send_event = 1
+        event.xclient.display = display
+        event.xclient.window = window_id
+        event.xclient.message_type = message_type
+        event.xclient.format = 32
+        for index, value in enumerate(data[:5]):
+            event.xclient.data.l[index] = value
+        for index, atom_name in (atom_data or {}).items():
+            atom = x11.XInternAtom(display, atom_name, 0)
+            if not atom:
+                return False
+            event.xclient.data.l[index] = atom
+        event_mask = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
+        sent = x11.XSendEvent(display, root, 0, event_mask, ctypes.byref(event))
+        x11.XFlush(display)
+        return bool(sent)
+    except (AttributeError, OSError):
+        return False
+    finally:
+        x11.XCloseDisplay(display)
+
+
+def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
+    return _send_x11_client_message(
+        window_id,
+        b"_NET_WM_DESKTOP",
+        [desktop, 2],
+    )
+
+
+def _send_x11_keep_above_request(window_id: int, enabled: bool) -> bool:
+    return _send_x11_client_message(
+        window_id,
+        b"_NET_WM_STATE",
+        [1 if enabled else 0, 0, 0, 2],
+        atom_data={1: b"_NET_WM_STATE_ABOVE"},
+    )
+
+
+def _set_x11_keep_above(window: Any, enabled: bool) -> bool:
+    if platform.system() != "Linux":
+        return False
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return False
+    if not os.environ.get("DISPLAY"):
+        return False
+    window_id = _x11_qt_window_id(window)
+    if window_id is None:
+        return False
+    return _send_x11_keep_above_request(window_id, enabled)
+
+
 def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
     if platform.system() != "Linux":
         return False
@@ -471,11 +1139,13 @@ def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
         return False
     if not os.environ.get("DISPLAY"):
         return False
-    xprop = shutil.which("xprop")
-    if not xprop:
-        return False
     window_id = _x11_qt_window_id(window)
     if window_id is None:
+        return False
+    if _send_x11_window_desktop_request(window_id, desktop):
+        return True
+    xprop = shutil.which("xprop")
+    if not xprop:
         return False
     try:
         result = subprocess.run(
@@ -803,7 +1473,7 @@ def _config_bool(value: str) -> bool:
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = qt.QDialog(parent)
+        self.dialog = _create_frameless_dialog(qt, parent)
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
@@ -931,12 +1601,14 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.resize(520, 220)
         self.fields: dict[str, Any] = {}
         self.rclone_fields: dict[str, tuple[str, Any]] = {}
+        self.deleted = False
         self._build()
 
     def _build(self) -> None:
         ensure_default_config_files()
         app_settings = load_app_settings()
         mount_settings = load_mount_settings().get(self.remote.name)
+        self._saved_order = mount_settings.order if mount_settings else None
         root = self.qt.QVBoxLayout(self.dialog)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
@@ -966,6 +1638,10 @@ class MountConfigDialog(_ConfigDialogBase):
                 _path_relative_to_base(mount_settings.mount_path if mount_settings else None, self._mount_base),
                 default=default_relative_path,
             ),
+            "remote_path": self._line(
+                mount_settings.remote_path if mount_settings and mount_settings.remote_path else "",
+                default="bucket or bucket/folder",
+            ),
         }
 
         path_row = self.qt.QWidget()
@@ -980,6 +1656,10 @@ class MountConfigDialog(_ConfigDialogBase):
             "Local folder name for this remote. Leave blank to use Mountlet's default name."
         )
         form.addRow("Local folder name", path_row)
+        self.fields["remote_path"].setToolTip(
+            "Optional path inside the rclone remote. For S3/R2, use a bucket name or bucket/folder."
+        )
+        form.addRow("Remote path", self.fields["remote_path"])
 
         options_frame = self.qt.QFrame()
         options_layout = self.qt.QVBoxLayout(options_frame)
@@ -1020,6 +1700,7 @@ class MountConfigDialog(_ConfigDialogBase):
         settings = load_mount_settings()
         settings[self.remote.name] = MountSettings(
             mount_path=self.fields["mount_path"].text().strip() or None,
+            remote_path=self.fields["remote_path"].text().strip().strip("/") or None,
             mount_flags=[
                 flag
                 for field, tokens in self.flag_fields
@@ -1029,6 +1710,7 @@ class MountConfigDialog(_ConfigDialogBase):
             + self._preserved_mount_flags,
             auto_mount=self.fields["auto_mount"].isChecked(),
             enabled=self._saved_enabled,
+            order=self._saved_order,
         )
         save_mount_settings(settings)
         if self.rclone_fields:
@@ -1036,6 +1718,44 @@ class MountConfigDialog(_ConfigDialogBase):
                 self.remote.name,
                 {key: self._rclone_config_value(kind, field) for key, (kind, field) in self.rclone_fields.items()},
             )
+        self.dialog.accept()
+
+    def _buttons(self) -> Any:
+        buttons = self.qt.QDialogButtonBox(
+            self.qt.QDialogButtonBox.StandardButton.Save | self.qt.QDialogButtonBox.StandardButton.Cancel
+        )
+        delete_button = buttons.addButton("Delete remote", self.qt.QDialogButtonBox.ButtonRole.DestructiveRole)
+        delete_button.setStyleSheet("QPushButton { color: #ffffff; background: #dc2626; }")
+        delete_button.clicked.connect(self._delete_remote)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.dialog.reject)
+        return buttons
+
+    def _delete_remote(self) -> None:
+        if core.is_mounted(self.remote):
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Delete remote",
+                "Unmount this remote before deleting it.",
+            )
+            return
+        reply = self.qt.QMessageBox.question(
+            self.dialog,
+            "Delete remote?",
+            f"Delete {self.remote.display_name} from rclone.conf?\n\nThis does not delete files in cloud storage.",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        if not core.delete_rclone_remote(self.remote.name):
+            self.qt.QMessageBox.warning(self.dialog, "Delete remote", f"{self.remote.name} was not found in rclone.conf.")
+            return
+        settings = load_mount_settings()
+        if self.remote.name in settings:
+            settings.pop(self.remote.name)
+            save_mount_settings(settings)
+        self.deleted = True
         self.dialog.accept()
 
     def _rclone_config_field(self, key: str, value: str) -> tuple[str, Any]:
@@ -1053,6 +1773,1303 @@ class MountConfigDialog(_ConfigDialogBase):
         return field.text().strip()
 
 
+class NewRemoteWizard:
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        self.qt = qt
+        self.dialog = _create_frameless_dialog(qt, parent)
+        self.dialog.setWindowTitle("Add remote")
+        self.dialog.resize(520, 280)
+        self.fields: dict[str, Any] = {}
+        self._remote_name = ""
+        self._remote_alias = ""
+        self._state = ""
+        self._drive_client_id = ""
+        self._drive_client_secret = ""
+        self._drive_local_auth = True
+        self._drive_shared_drive = False
+        self._drive_team_drive = ""
+        self._initial_remote_path = ""
+        self._remote_type = "drive"
+        self._connect_after_create = True
+        self._question: rclone_wizard.RcloneConfigStep | None = None
+        self._answer_kind = ""
+        self._answer_field: Any | None = None
+        self._answer_group: Any | None = None
+        self._completed = False
+        self._cancelled = False
+        self._last_rclone_action: Any | None = None
+        self._port_retry_attempted = False
+        self._browser_port_available = True
+        self._browser_port_owner_hint = ""
+        self._waiting_for_browser_auth = False
+        self._message_boxes: list[Any] = []
+        self._bridge = self._make_bridge()
+        self._bridge.command_finished.connect(self._handle_command_finished)
+        self._bridge.mount_finished.connect(self._handle_mount_finished)
+        self._bridge.remote_checked.connect(self._handle_remote_checked)
+        self._build()
+
+    def exec(self) -> int:
+        return int(self.dialog.exec() or 0)
+
+    def _make_bridge(self) -> Any:
+        qt = self.qt
+
+        class Bridge(qt.QObject):
+            command_finished = qt.Signal(object, object)
+            mount_finished = qt.Signal(bool, str)
+            remote_checked = qt.Signal(bool, str)
+
+        return Bridge()
+
+    def _radio_group(self, options: list[tuple[str, str]], *, selected: str) -> tuple[Any, Any, Any]:
+        widget = self.qt.QWidget()
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        group = self.qt.QButtonGroup(widget)
+        buttons = []
+        for index, (value, label) in enumerate(options):
+            button = self.qt.QRadioButton(label)
+            button.setProperty("answerValue", value)
+            button.setChecked(value == selected)
+            group.addButton(button, index)
+            layout.addWidget(button)
+            buttons.append(button)
+        return widget, buttons[0], buttons[1]
+
+    def _build(self) -> None:
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+        self.root = root
+
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        self.initial_frame = frame
+        self.form = form
+
+        provider = self.qt.QComboBox()
+        for index, (label, backend_type) in enumerate(REMOTE_PROVIDER_OPTIONS):
+            provider.addItem(label, backend_type)
+            _set_combo_item_color(
+                self.qt,
+                provider,
+                index,
+                _provider_status_color(REMOTE_PROVIDER_STATUSES.get(backend_type, "untested")),
+            )
+        provider.currentIndexChanged.connect(lambda _index=0: self._apply_provider_choice())
+
+        name = self.qt.QLineEdit()
+        name.setPlaceholderText("Personal Drive")
+        name.textChanged.connect(self._update_action_button)
+
+        client_id = self.qt.QLineEdit()
+        client_id.setPlaceholderText("Optional")
+        client_id.setToolTip("Google OAuth client ID. Leave blank to let rclone use its built-in client.")
+        client_secret = self.qt.QLineEdit()
+        client_secret.setPlaceholderText("Optional")
+        client_secret.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
+
+        credential_source = self.qt.QComboBox()
+        existing_credentials = core.drive_oauth_credentials()
+        if existing_credentials:
+            for credentials in existing_credentials:
+                credential_source.addItem(_drive_credential_option_label(credentials, len(existing_credentials)), credentials)
+            credential_source.addItem("Built-in rclone client", DRIVE_CREDENTIAL_SOURCE_BUILTIN)
+        else:
+            credential_source.addItem("Built-in rclone client", DRIVE_CREDENTIAL_SOURCE_BUILTIN)
+        credential_source.addItem("Enter client ID and secret", DRIVE_CREDENTIAL_SOURCE_CUSTOM)
+        credential_source.currentIndexChanged.connect(lambda _index=0: self._apply_credential_choice())
+        credential_help = self.qt.QLabel(
+            "The built-in rclone client is usually easiest. Custom Google OAuth clients can fail with 403 "
+            "unless the consent screen, scopes, redirect URI, and test users are configured. "
+            '<a href="https://rclone.org/drive/#making-your-own-client-id">rclone guide</a> | '
+            '<a href="https://developers.google.com/workspace/guides/configure-oauth-consent">'
+            "Google OAuth setup</a>"
+        )
+        credential_help.setWordWrap(True)
+        credential_help.setOpenExternalLinks(True)
+        credential_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        credential_help.setStyleSheet(_muted_text_style(credential_help))
+
+        auth_group, local_auth, remote_auth = self._radio_group(
+            [
+                ("local", "Open browser on this computer"),
+                ("remote", "Paste a token from another computer"),
+            ],
+            selected="local",
+        )
+        local_auth.toggled.connect(lambda _checked=False: self._update_browser_port_status())
+        remote_auth.toggled.connect(lambda _checked=False: self._update_browser_port_status())
+        drive_group, my_drive, shared_drive = self._radio_group(
+            [
+                ("my_drive", "My Drive"),
+                ("shared_drive", "Shared drive"),
+            ],
+            selected="my_drive",
+        )
+        shared_drive_id = self.qt.QLineEdit()
+        shared_drive_id.setPlaceholderText("Shared drive ID")
+        shared_drive_id.setEnabled(False)
+        shared_drive_id.setToolTip("Only needed when using a Google shared drive.")
+        shared_drive.toggled.connect(lambda _checked=False: shared_drive_id.setEnabled(shared_drive.isChecked()))
+        connect_after_create = self.qt.QCheckBox("Connect this remote after creating it")
+        connect_after_create.setChecked(True)
+        connect_after_create.setToolTip("Mount the new remote immediately after setup succeeds.")
+
+        s3_provider = self.qt.QComboBox()
+        for index, option in enumerate(S3_PROVIDER_OPTIONS):
+            s3_provider.addItem(option["label"], option)
+            _set_combo_item_color(self.qt, s3_provider, index, _provider_status_color(option.get("status", "untested")))
+        s3_provider.currentIndexChanged.connect(lambda _index=0: self._apply_s3_provider_choice())
+        s3_endpoint = self.qt.QLineEdit()
+        s3_region = self.qt.QLineEdit()
+        s3_access_key_id = self.qt.QLineEdit()
+        s3_secret_access_key = self.qt.QLineEdit()
+        s3_secret_access_key.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        s3_remote_path = self.qt.QLineEdit()
+        s3_help = self.qt.QLabel("")
+        s3_help.setOpenExternalLinks(True)
+        s3_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        s3_help.setStyleSheet(_muted_text_style(s3_help))
+
+        koofr_user = self.qt.QLineEdit()
+        koofr_user.setPlaceholderText("Koofr email address")
+        koofr_user.setToolTip("Your Koofr account email address.")
+        koofr_pass = self.qt.QLineEdit()
+        koofr_pass.setPlaceholderText("Koofr app password")
+        koofr_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        koofr_pass.setToolTip("Generate an app password in Koofr and paste it here.")
+        koofr_help = self.qt.QLabel(
+            '<a href="https://rclone.org/koofr/">rclone Koofr guide</a> | '
+            '<a href="https://app.koofr.net/app/admin/preferences/password">Koofr app password</a>'
+        )
+        koofr_help.setOpenExternalLinks(True)
+        koofr_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        koofr_help.setStyleSheet(_muted_text_style(koofr_help))
+
+        webdav_url = self.qt.QLineEdit()
+        webdav_vendor = self.qt.QComboBox()
+        for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
+            webdav_vendor.addItem(option["label"], option)
+            _set_combo_item_color(self.qt, webdav_vendor, index, _provider_status_color(option.get("status", "untested")))
+        webdav_vendor.currentIndexChanged.connect(lambda _index=0: self._apply_webdav_vendor_choice())
+        webdav_user = self.qt.QLineEdit()
+        webdav_pass = self.qt.QLineEdit()
+        webdav_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        webdav_help = self.qt.QLabel("")
+        webdav_help.setOpenExternalLinks(True)
+        webdav_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        webdav_help.setStyleSheet(_muted_text_style(webdav_help))
+
+        for field in (
+            s3_endpoint,
+            s3_region,
+            s3_access_key_id,
+            s3_secret_access_key,
+            s3_remote_path,
+            koofr_user,
+            koofr_pass,
+            webdav_url,
+            webdav_user,
+            webdav_pass,
+        ):
+            field.textChanged.connect(self._update_action_button)
+
+        self.fields = {
+            "provider": provider,
+            "name": name,
+            "credential_source": credential_source,
+            "credential_help": credential_help,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_group": auth_group,
+            "local_auth": local_auth,
+            "remote_auth": remote_auth,
+            "drive_group": drive_group,
+            "my_drive": my_drive,
+            "shared_drive": shared_drive,
+            "shared_drive_id": shared_drive_id,
+            "connect_after_create": connect_after_create,
+            "s3_provider": s3_provider,
+            "s3_endpoint": s3_endpoint,
+            "s3_region": s3_region,
+            "s3_access_key_id": s3_access_key_id,
+            "s3_secret_access_key": s3_secret_access_key,
+            "s3_remote_path": s3_remote_path,
+            "s3_help": s3_help,
+            "koofr_user": koofr_user,
+            "koofr_pass": koofr_pass,
+            "koofr_help": koofr_help,
+            "webdav_url": webdav_url,
+            "webdav_vendor": webdav_vendor,
+            "webdav_user": webdav_user,
+            "webdav_pass": webdav_pass,
+            "webdav_help": webdav_help,
+        }
+        form.addRow("Storage type", provider)
+        form.addRow("Name", name)
+        form.addRow("Google credentials", credential_source)
+        form.addRow(credential_help)
+        form.addRow("Google client ID", client_id)
+        form.addRow("Google client secret", client_secret)
+        form.addRow("Authorization", auth_group)
+        form.addRow("Drive", drive_group)
+        form.addRow("Shared drive ID", shared_drive_id)
+        form.addRow("S3 provider", s3_provider)
+        form.addRow("S3 endpoint", s3_endpoint)
+        form.addRow("S3 region", s3_region)
+        form.addRow("S3 access key", s3_access_key_id)
+        form.addRow("S3 secret key", s3_secret_access_key)
+        form.addRow("S3 bucket/path", s3_remote_path)
+        form.addRow(s3_help)
+        form.addRow("Koofr user", koofr_user)
+        form.addRow("Koofr app password", koofr_pass)
+        form.addRow(koofr_help)
+        form.addRow("WebDAV URL", webdav_url)
+        form.addRow("WebDAV vendor", webdav_vendor)
+        form.addRow(webdav_help)
+        form.addRow("WebDAV user", webdav_user)
+        form.addRow("WebDAV password", webdav_pass)
+        form.addRow(connect_after_create)
+
+        self.question_frame = self.qt.QFrame()
+        self.question_frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        self.question_layout = self.qt.QFormLayout(self.question_frame)
+        self.question_frame.hide()
+
+        self.status = self.qt.QLabel("")
+        self.status.setStyleSheet(_muted_text_style(self.status))
+        self.status.setWordWrap(True)
+
+        buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+        self.action_button = buttons.addButton("Create remote", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
+        self.action_button.clicked.connect(self._next)
+        buttons.rejected.connect(self._reject)
+
+        root.addWidget(frame)
+        root.addWidget(self.question_frame)
+        root.addWidget(self.status)
+        root.addWidget(buttons)
+        self._port_timer = self.qt.QTimer(self.dialog)
+        self._port_timer.setInterval(1000)
+        self._port_timer.timeout.connect(self._update_browser_port_status)
+        self._port_timer.start()
+        self._apply_credential_choice()
+        self._apply_provider_choice()
+        self._apply_s3_provider_choice()
+        self._apply_webdav_vendor_choice()
+        self._update_browser_port_status()
+        self._update_action_button()
+        self.dialog.adjustSize()
+
+    def _update_action_button(self) -> None:
+        if not hasattr(self, "action_button"):
+            return
+        if self._question is not None:
+            self.action_button.setEnabled(True)
+            self.action_button.setText(self._question_button_text())
+            return
+        self.action_button.setText("Create remote")
+        self.action_button.setEnabled(self._setup_fields_are_valid() and self._browser_port_available)
+
+    def _setup_fields_are_valid(self) -> bool:
+        if not self.fields["name"].text().strip():
+            return False
+        remote_type = self.fields["provider"].currentData() or "drive"
+        if remote_type == "s3":
+            return self._s3_fields_are_valid()
+        if remote_type == "koofr":
+            return self._koofr_fields_are_valid()
+        if remote_type == "webdav":
+            return self._webdav_fields_are_valid()
+        return True
+
+    def _s3_fields_are_valid(self) -> bool:
+        provider = self._s3_provider_value()
+        endpoint = self.fields["s3_endpoint"].text().strip()
+        has_keys = bool(
+            self.fields["s3_access_key_id"].text().strip()
+            and self.fields["s3_secret_access_key"].text().strip()
+        )
+        if not has_keys:
+            return False
+        if provider.lower() != "aws" and not endpoint:
+            return False
+        return True
+
+    def _koofr_fields_are_valid(self) -> bool:
+        return bool(self.fields["koofr_user"].text().strip() and self.fields["koofr_pass"].text().strip())
+
+    def _webdav_fields_are_valid(self) -> bool:
+        url = self.fields["webdav_url"].text().strip()
+        return url.startswith(("http://", "https://"))
+
+    def _next(self) -> None:
+        if self._question is None:
+            self._start()
+            return
+        self._continue()
+
+    def _start(self) -> None:
+        alias = self.fields["name"].text().strip()
+        if not self._valid_remote_name(alias):
+            self._warning("Add remote", "Use a name without ':', '@', or path separators.")
+            return
+        self._remote_type = self.fields["provider"].currentData() or "drive"
+        provider_name = self._selected_provider_config_name(self._remote_type)
+        existing_remotes = core.load_remotes()
+        if self._display_name_exists(alias, self._remote_type, existing_remotes, provider_name=provider_name):
+            self._warning("Add remote", f"{alias} already exists for {provider_name}.")
+            return
+        name = self._config_remote_name(alias, self._remote_type, existing_remotes, provider_name=provider_name)
+        if any(remote.name == name for remote in existing_remotes):
+            self._warning("Add remote", f"{self._provider_display_name(alias, self._remote_type, provider_name)} already exists.")
+            return
+        self._remote_name = name
+        self._remote_alias = alias
+        self._cancelled = False
+        self._drive_client_id = self.fields["client_id"].text()
+        self._drive_client_secret = self.fields["client_secret"].text()
+        self._drive_local_auth = self.fields["local_auth"].isChecked()
+        self._drive_shared_drive = self.fields["shared_drive"].isChecked()
+        self._drive_team_drive = self.fields["shared_drive_id"].text()
+        self._initial_remote_path = self._initial_mount_remote_path()
+        self._connect_after_create = self.fields["connect_after_create"].isChecked()
+        if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
+            self._warning("Add remote", "Enter the shared drive ID before connecting, or choose My Drive.")
+            return
+        if self._remote_type == "s3" and not self._s3_fields_are_valid():
+            self._warning("Add remote", "Enter the S3 endpoint, access key, and secret key before creating the remote.")
+            return
+        if self._remote_type == "koofr" and not self._koofr_fields_are_valid():
+            self._warning("Add remote", "Enter the Koofr user and app password before creating the remote.")
+            return
+        if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
+            self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
+            return
+        if not self._browser_auth_port_ready():
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
+        _wizard_pending_remote_names.add(name)
+        self._show_setup_view(False)
+        self._run_rclone(
+            lambda: rclone_wizard.start_remote(
+                name,
+                self._remote_type,
+                self._initial_config_args(),
+            ),
+            browser_auth=self._uses_browser_auth() and self._drive_local_auth,
+        )
+
+    def _continue(self) -> None:
+        answer = self._answer_value()
+        if self._answer_opens_browser_auth(answer) and not self._browser_auth_port_ready():
+            return
+        opens_browser_auth = self._answer_opens_browser_auth(answer)
+        self._run_rclone(
+            lambda: rclone_wizard.continue_remote(
+                self._remote_name,
+                self._remote_type,
+                self._state,
+                answer,
+                self._initial_config_args(),
+            ),
+            browser_auth=opens_browser_auth,
+        )
+
+    def _run_rclone(self, action: Any, *, reset_port_retry: bool = True, browser_auth: bool = False) -> None:
+        self._last_rclone_action = action
+        if reset_port_retry:
+            self._port_retry_attempted = False
+        self._waiting_for_browser_auth = browser_auth
+        self._set_busy(True)
+
+        def worker() -> None:
+            try:
+                self._bridge.command_finished.emit(action(), None)
+            except Exception as exc:
+                self._bridge.command_finished.emit(None, exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_command_finished(self, step: object, error: object) -> None:
+        if getattr(self, "_cancelled", False):
+            return
+        self._waiting_for_browser_auth = False
+        self._set_busy(False)
+        if error is not None:
+            if self._recover_from_rclone_port_error(str(error)):
+                return
+            self._cleanup_incomplete_remote()
+            self._warning("Add remote", str(error))
+            return
+        if not isinstance(step, rclone_wizard.RcloneConfigStep):
+            self._warning("Add remote", "rclone returned an unexpected response.")
+            return
+        if step.error:
+            self.status.setText(step.error)
+        if step.complete:
+            if not self._created_remote_has_credentials():
+                self._cleanup_incomplete_remote()
+                self._warning(
+                    "Add remote",
+                    f"{self._provider_label(self._remote_type)} authorization did not finish. No remote was added.",
+                )
+                return
+            self._save_initial_mount_settings()
+            if self._connect_after_create:
+                self._mount_created_remote()
+                return
+            self._check_created_remote()
+            return
+        automatic_answer = self._automatic_answer(step)
+        if automatic_answer is not None:
+            if self._answer_opens_browser_auth(automatic_answer, step.option) and not self._browser_auth_port_ready():
+                return
+            self._state = step.state
+            self._run_rclone(
+                lambda: rclone_wizard.continue_remote(
+                    self._remote_name,
+                    self._remote_type,
+                    self._state,
+                    automatic_answer,
+                    self._initial_config_args(),
+                ),
+                browser_auth=self._answer_opens_browser_auth(automatic_answer, step.option),
+            )
+            return
+        self._show_question(step)
+
+    def _uses_browser_auth(self) -> bool:
+        return getattr(self, "_remote_type", "") in OAUTH_REMOTE_TYPES
+
+    def _setup_uses_local_browser_auth(self) -> bool:
+        if not self.fields or self._question is not None or self._remote_name:
+            return False
+        remote_type = self.fields["provider"].currentData() or "drive"
+        return remote_type in OAUTH_REMOTE_TYPES and self.fields["local_auth"].isChecked()
+
+    def _update_browser_port_status(self) -> None:
+        if not hasattr(self, "action_button"):
+            return
+        if not self._setup_uses_local_browser_auth():
+            self._browser_port_available = True
+            self._browser_port_owner_hint = ""
+            if self._question is None and not self._remote_name:
+                self.status.setText("")
+            self._update_action_button()
+            return
+        available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
+        self._browser_port_available = available
+        self._browser_port_owner_hint = owner_hint
+        self.status.setText("" if available else self._browser_port_wait_message(owner_hint))
+        self._update_action_button()
+
+    def _browser_port_wait_message(self, owner_hint: str = "") -> str:
+        detail = f" {owner_hint}" if owner_hint else ""
+        return (
+            "Waiting for rclone's browser sign-in port to become available. "
+            "A previous browser sign-in is probably still finishing."
+            f"{detail}"
+        )
+
+    def _answer_opens_browser_auth(self, answer: str, option: dict[str, Any] | None = None) -> bool:
+        option = option or (self._question.option if self._question else None)
+        if not option or self._option_name(option) != "config_is_local":
+            return False
+        return answer.lower() in {"true", "1", "yes", "y"}
+
+    def _browser_auth_port_ready(self) -> bool:
+        if not (self._uses_browser_auth() and self._drive_local_auth):
+            return True
+        port_available, owner_hint = _local_port_status(RCLONE_OAUTH_LOCAL_PORT)
+        if port_available:
+            self.status.setText("")
+            return True
+        self._browser_port_available = False
+        self._browser_port_owner_hint = owner_hint
+        self.status.setText(self._browser_port_wait_message(owner_hint))
+        self._update_action_button()
+        return False
+
+    def _recover_from_rclone_port_error(self, message: str) -> bool:
+        if not _is_rclone_auth_port_error(message):
+            return False
+        self._cleanup_incomplete_remote()
+        self._show_setup_view(True)
+        self._remote_name = ""
+        self._remote_alias = ""
+        self._question = None
+        self._answer_field = None
+        self._answer_group = None
+        self._waiting_for_browser_auth = False
+        self._browser_port_available = False
+        self.status.setText(self._browser_port_wait_message())
+        self._update_action_button()
+        return True
+
+    def _switch_to_token_authorization(self) -> bool:
+        if not self._uses_browser_auth():
+            return False
+        self._drive_local_auth = False
+        self.status.setText("Use token authorization.")
+        if self._question and self._option_name(self._question.option) == "config_is_local":
+            self._run_rclone(
+                lambda: rclone_wizard.continue_remote(
+                    self._remote_name,
+                    self._remote_type,
+                    self._state,
+                    "false",
+                    self._initial_config_args(),
+                ),
+                reset_port_retry=False,
+            )
+            return True
+        if self._remote_name:
+            self._run_rclone(
+                lambda: rclone_wizard.start_remote(
+                    self._remote_name,
+                    self._remote_type,
+                    self._initial_config_args(),
+                ),
+                reset_port_retry=False,
+            )
+            return True
+        return False
+
+    def _show_setup_view(self, visible: bool) -> None:
+        if hasattr(self, "initial_frame"):
+            self.initial_frame.setVisible(visible)
+        if visible:
+            self.question_frame.hide()
+
+    def _initial_config_args(self) -> list[str]:
+        if self._remote_type == "drive":
+            return rclone_wizard._drive_config_args(
+                client_id=self._drive_client_id,
+                client_secret=self._drive_client_secret,
+                local_auth=self._drive_local_auth,
+                shared_drive=self._drive_shared_drive,
+                team_drive=self._drive_team_drive,
+            )
+        if self._remote_type in OAUTH_REMOTE_TYPES:
+            return ["config_is_local", "true" if self._drive_local_auth else "false"]
+        if self._remote_type == "s3":
+            return self._s3_config_args()
+        if self._remote_type == "koofr":
+            return self._koofr_config_args()
+        if self._remote_type == "webdav":
+            return self._webdav_config_args()
+        return []
+
+    def _s3_config_args(self) -> list[str]:
+        provider = self._s3_provider_value()
+        args = [
+            "provider",
+            provider,
+            "access_key_id",
+            self.fields["s3_access_key_id"].text().strip(),
+            "secret_access_key",
+            self.fields["s3_secret_access_key"].text().strip(),
+        ]
+        region = self.fields["s3_region"].text().strip()
+        endpoint = self.fields["s3_endpoint"].text().strip()
+        if region:
+            args.extend(["region", region])
+        if endpoint:
+            args.extend(["endpoint", endpoint])
+        if provider.lower() == "cloudflare":
+            args.extend(["acl", "private", "no_check_bucket", "true"])
+        return args
+
+    def _koofr_config_args(self) -> list[str]:
+        return [
+            "provider",
+            "koofr",
+            "user",
+            self.fields["koofr_user"].text().strip(),
+            "password",
+            self.fields["koofr_pass"].text().strip(),
+        ]
+
+    def _webdav_config_args(self) -> list[str]:
+        args = [
+            "url",
+            self.fields["webdav_url"].text().strip(),
+            "vendor",
+            self._webdav_vendor_value(),
+        ]
+        user = self.fields["webdav_user"].text().strip()
+        password = self.fields["webdav_pass"].text()
+        if user:
+            args.extend(["user", user])
+        if password:
+            args.extend(["pass", password])
+        return args
+
+    def _initial_mount_remote_path(self) -> str:
+        if self._remote_type == "s3":
+            return self.fields["s3_remote_path"].text().strip().strip("/")
+        return ""
+
+    def _s3_provider_choice(self) -> dict[str, str]:
+        choice = self.fields["s3_provider"].currentData()
+        if isinstance(choice, dict):
+            return {str(key): str(value) for key, value in choice.items()}
+        provider = str(choice or "Minio")
+        for option in S3_PROVIDER_OPTIONS:
+            if option["provider"].casefold() == provider.casefold():
+                return dict(option)
+        return dict(S3_PROVIDER_OPTIONS[-1])
+
+    def _s3_provider_value(self) -> str:
+        return self._s3_provider_choice().get("provider", "Minio") or "Minio"
+
+    def _s3_provider_config_name(self) -> str:
+        return self._s3_provider_choice().get("config_name", "S3") or "S3"
+
+    def _webdav_vendor_choice(self) -> dict[str, str]:
+        choice = self.fields["webdav_vendor"].currentData()
+        if isinstance(choice, dict):
+            return {str(key): str(value) for key, value in choice.items()}
+        vendor = str(choice or "other")
+        for option in WEBDAV_VENDOR_OPTIONS:
+            if option["vendor"] == vendor:
+                return dict(option)
+        return dict(WEBDAV_VENDOR_OPTIONS[-1])
+
+    def _webdav_vendor_value(self) -> str:
+        return self._webdav_vendor_choice().get("vendor", "other") or "other"
+
+    def _webdav_provider_config_name(self) -> str:
+        return self._webdav_vendor_choice().get("config_name", "WebDAV") or "WebDAV"
+
+    def _save_initial_mount_settings(self) -> None:
+        initial_remote_path = getattr(self, "_initial_remote_path", "")
+        if not initial_remote_path:
+            return
+        settings = load_mount_settings()
+        current = settings.get(self._remote_name) or MountSettings()
+        settings[self._remote_name] = MountSettings(
+            mount_path=current.mount_path,
+            remote_path=initial_remote_path,
+            mount_flags=list(current.mount_flags),
+            auto_mount=current.auto_mount,
+            enabled=current.enabled,
+            order=current.order,
+        )
+        save_mount_settings(settings)
+
+    def _automatic_answer(self, step: rclone_wizard.RcloneConfigStep) -> str | None:
+        option_name = self._option_name(step.option)
+        if option_name == "config_is_local":
+            return "true" if self._drive_local_auth else "false"
+        if option_name in {"config_edit_advanced", "edit_advanced"}:
+            return "false"
+        if self._is_drive_shared_drive_choice(step.option):
+            return "true" if self._drive_shared_drive else "false"
+        if self._is_drive_shared_drive_id(step.option):
+            return self._drive_team_drive
+        return None
+
+    def _is_drive_shared_drive_choice(self, option: dict[str, Any]) -> bool:
+        option_name = self._option_name(option)
+        if option_name in {"config_team_drive", "config_shared_drive"}:
+            return True
+        text = self._option_search_text(option)
+        if "shared drive" not in text and "team drive" not in text:
+            return False
+        option_type = str(option.get("Type", "")).lower()
+        examples = option.get("Examples") if isinstance(option.get("Examples"), list) else []
+        example_values = {str(example.get("Value", "")).lower() for example in examples}
+        return option_type == "bool" or {"true", "false"}.issubset(example_values)
+
+    def _is_drive_shared_drive_id(self, option: dict[str, Any]) -> bool:
+        option_name = self._option_name(option)
+        if option_name in {"team_drive", "shared_drive_id", "team_drive_id"}:
+            return True
+        text = self._option_search_text(option)
+        return ("shared drive" in text or "team drive" in text) and "id" in text
+
+    def _option_search_text(self, option: dict[str, Any]) -> str:
+        parts = [self._option_name(option)]
+        for key in ("Help", "ShortOpt", "DefaultStr"):
+            value = option.get(key)
+            if value is not None:
+                parts.append(str(value))
+        return " ".join(parts).lower()
+
+    def _mount_created_remote(self) -> None:
+        self._set_busy(True, message=f"Connecting {self._remote_display_name()}...")
+
+        def worker() -> None:
+            for remote in core.load_remotes():
+                if remote.name == self._remote_name:
+                    success, message = core.mount_remote(remote)
+                    self._bridge.mount_finished.emit(success, message)
+                    return
+            self._bridge.mount_finished.emit(False, f"{self._remote_name} was created but could not be found.")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _check_created_remote(self) -> None:
+        self._set_busy(True, message=f"Checking {self._remote_display_name()}...")
+
+        def worker() -> None:
+            for remote in core.load_remotes():
+                if remote.name == self._remote_name:
+                    success, message = core.check_remote_connection(remote)
+                    self._bridge.remote_checked.emit(success, message)
+                    return
+            self._bridge.remote_checked.emit(False, f"{self._remote_name} was created but could not be found.")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_remote_checked(self, success: bool, message: str) -> None:
+        self._set_busy(False)
+        if not success:
+            display_name = self._remote_display_name()
+            self._cleanup_incomplete_remote()
+            self._reset_after_failed_registration()
+            self._warning(
+                "Add remote",
+                f"{display_name} could not be reached.\n\n{_clean_message(message)}",
+            )
+            return
+        self._finish_success()
+
+    def _handle_mount_finished(self, success: bool, message: str) -> None:
+        self._set_busy(False)
+        if not success:
+            display_name = self._remote_display_name()
+            self._cleanup_incomplete_remote()
+            self._reset_after_failed_registration()
+            self._warning(
+                "Add remote",
+                f"{display_name} was created, but Mountlet could not connect it.\n\n"
+                f"{_clean_message(message)}",
+            )
+            return
+        self._finish_success()
+
+    def _reset_after_failed_registration(self) -> None:
+        self._show_setup_view(True)
+        self._remote_name = ""
+        self._remote_alias = ""
+        self._state = ""
+        self._question = None
+        self._answer_field = None
+        self._answer_group = None
+        self._waiting_for_browser_auth = False
+        self._update_browser_port_status()
+        self._update_action_button()
+
+    def _finish_success(self) -> None:
+        self._completed = True
+        self._stop_port_timer()
+        self._close_message_boxes()
+        _wizard_pending_remote_names.discard(self._remote_name)
+        self.dialog.accept()
+
+    def _set_busy(self, busy: bool, *, message: str | None = None) -> None:
+        self.action_button.setEnabled(False if busy else True)
+        setup_editable = not busy and self._question is None and self._remote_name == ""
+        self.fields["name"].setEnabled(setup_editable)
+        self.fields["provider"].setEnabled(setup_editable)
+        self.fields["credential_source"].setEnabled(setup_editable)
+        self.fields["auth_group"].setEnabled(setup_editable)
+        self.fields["drive_group"].setEnabled(setup_editable)
+        self.fields["connect_after_create"].setEnabled(setup_editable)
+        self.fields["shared_drive_id"].setEnabled(
+            setup_editable and self.fields["shared_drive"].isChecked()
+        )
+        for field_name in (
+            "s3_provider",
+            "s3_endpoint",
+            "s3_region",
+            "s3_access_key_id",
+            "s3_secret_access_key",
+            "s3_remote_path",
+            "koofr_user",
+            "koofr_pass",
+            "webdav_url",
+            "webdav_vendor",
+            "webdav_user",
+            "webdav_pass",
+        ):
+            self.fields[field_name].setEnabled(setup_editable)
+        self._apply_credential_choice(enabled=setup_editable)
+        self.status.setText((message or self._busy_message()) if busy else "")
+
+    def _offer_to_stop_stuck_rclone(self, owner_hint: str) -> bool:
+        owner = _port_owner_from_hint(owner_hint)
+        if owner is None:
+            return False
+        name, pid = owner
+        answer = self.qt.QMessageBox.question(
+            self.dialog,
+            "Add remote",
+            f"{name} is using sign-in port {RCLONE_OAUTH_LOCAL_PORT}.\n\n"
+            "If this is a previous rclone sign-in attempt, stopping it should free the port.\n\n"
+            f"Stop process {pid} and try again?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        if answer != self.qt.QMessageBox.StandardButton.Yes:
+            return False
+        return _terminate_process_id(pid)
+
+    def _apply_provider_choice(self) -> None:
+        if not self.fields:
+            return
+        remote_type = self.fields["provider"].currentData() or "drive"
+        self._remote_type = remote_type
+        is_drive = remote_type == "drive"
+        uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
+        is_s3 = remote_type == "s3"
+        is_koofr = remote_type == "koofr"
+        is_webdav = remote_type == "webdav"
+        for field_name in (
+            "credential_source",
+            "client_id",
+            "client_secret",
+            "drive_group",
+            "shared_drive_id",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_drive)
+        for field_name in (
+            "s3_provider",
+            "s3_endpoint",
+            "s3_region",
+            "s3_access_key_id",
+            "s3_secret_access_key",
+            "s3_remote_path",
+            "s3_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_s3)
+        for field_name in (
+            "koofr_user",
+            "koofr_pass",
+            "koofr_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_koofr)
+        for field_name in (
+            "webdav_url",
+            "webdav_vendor",
+            "webdav_help",
+            "webdav_user",
+            "webdav_pass",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_webdav)
+        self._set_form_row_visible(self.fields["credential_help"], is_drive)
+        self._set_form_row_visible(self.fields["auth_group"], uses_browser_auth)
+        self.fields["name"].setPlaceholderText(self._remote_name_placeholder(remote_type))
+        self.fields["connect_after_create"].setToolTip(
+            "Mount the new remote immediately after setup succeeds."
+        )
+        self._apply_credential_choice()
+        if is_s3:
+            self._apply_s3_provider_choice()
+        if is_webdav:
+            self._apply_webdav_vendor_choice()
+        self._update_browser_port_status()
+        self.dialog.adjustSize()
+
+    def _apply_s3_provider_choice(self) -> None:
+        if not getattr(self, "fields", None):
+            return
+        choice = self._s3_provider_choice()
+        endpoint = choice.get("endpoint", "")
+        current_endpoint = self.fields["s3_endpoint"].text().strip()
+        if not current_endpoint or current_endpoint in _default_s3_endpoints():
+            self.fields["s3_endpoint"].setText("" if choice.get("hide_endpoint") else endpoint)
+        region = choice.get("region", "")
+        current_region = self.fields["s3_region"].text().strip()
+        if not current_region or current_region in _default_s3_regions():
+            self.fields["s3_region"].setText(region)
+        self.fields["s3_endpoint"].setPlaceholderText(endpoint or "Optional")
+        self.fields["s3_endpoint"].setToolTip(choice.get("endpoint_tip", "S3 API endpoint."))
+        self.fields["s3_region"].setPlaceholderText(region or "us-east-1")
+        self.fields["s3_region"].setToolTip(choice.get("region_tip", "S3 region."))
+        self.fields["s3_access_key_id"].setPlaceholderText(choice.get("access_key", "Access key"))
+        self.fields["s3_secret_access_key"].setPlaceholderText(choice.get("secret_key", "Secret key"))
+        self.fields["s3_remote_path"].setPlaceholderText(choice.get("bucket", "Bucket name or bucket/folder"))
+        self.fields["s3_remote_path"].setToolTip(choice.get("bucket_tip", "Bucket name or bucket/folder."))
+        self.fields["s3_help"].setText(choice.get("instructions", ""))
+        is_s3 = (self.fields["provider"].currentData() or "drive") == "s3"
+        self._set_form_row_visible(self.fields["s3_endpoint"], is_s3 and not choice.get("hide_endpoint"))
+        self._set_form_row_visible(self.fields["s3_help"], is_s3)
+        self._update_action_button()
+
+    def _apply_webdav_vendor_choice(self) -> None:
+        if not getattr(self, "fields", None):
+            return
+        choice = self._webdav_vendor_choice()
+        url = choice.get("url", "https://cloud.example.com/webdav")
+        fixed_url = choice.get("fixed_url", "").casefold() in {"true", "1", "yes"}
+        if fixed_url:
+            self.fields["webdav_url"].setText(url)
+        elif self.fields["webdav_url"].text().strip() in _fixed_webdav_urls():
+            self.fields["webdav_url"].clear()
+        self.fields["webdav_url"].setPlaceholderText(url)
+        self.fields["webdav_url"].setToolTip(choice.get("url_tip", "The WebDAV endpoint URL."))
+        self.fields["webdav_user"].setPlaceholderText(choice.get("user", "Optional"))
+        self.fields["webdav_user"].setToolTip(choice.get("user_tip", "Optional WebDAV username."))
+        self.fields["webdav_pass"].setPlaceholderText(choice.get("password", "Optional"))
+        self.fields["webdav_pass"].setToolTip(choice.get("password_tip", "Optional WebDAV password."))
+        self.fields["webdav_help"].setText(choice.get("instructions", ""))
+        is_webdav = (self.fields["provider"].currentData() or "drive") == "webdav"
+        self._set_form_row_visible(self.fields["webdav_url"], is_webdav and not fixed_url)
+        self._set_form_row_visible(self.fields["webdav_help"], is_webdav)
+        self._update_action_button()
+
+    def _set_form_row_visible(self, widget: Any, visible: bool) -> None:
+        try:
+            widget.setVisible(visible)
+            label = self.form.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+        except Exception:
+            pass
+
+    def _remote_name_placeholder(self, remote_type: str) -> str:
+        placeholders = {
+            "drive": "Personal Drive",
+            "dropbox": "Personal Dropbox",
+            "onedrive": "Personal OneDrive",
+            "box": "Work Box",
+            "pcloud": "Personal pCloud",
+            "koofr": "Personal Koofr",
+            "s3": "Archive S3",
+            "webdav": "Nextcloud",
+        }
+        return placeholders.get(remote_type, "Cloud storage")
+
+    def _apply_credential_choice(self, *, enabled: bool | None = None) -> None:
+        if not self.fields:
+            return
+        if getattr(self, "_remote_type", "drive") != "drive":
+            self.fields["client_id"].clear()
+            self.fields["client_secret"].clear()
+            self.fields["client_id"].setEnabled(False)
+            self.fields["client_secret"].setEnabled(False)
+            return
+        choice = self.fields["credential_source"].currentData()
+        using_builtin = choice == DRIVE_CREDENTIAL_SOURCE_BUILTIN
+        using_custom = choice == DRIVE_CREDENTIAL_SOURCE_CUSTOM
+        using_existing = isinstance(choice, core.DriveOAuthCredentials)
+        if using_existing:
+            self.fields["client_id"].setText(choice.client_id)
+            self.fields["client_secret"].setText(choice.client_secret)
+        elif using_builtin:
+            self.fields["client_id"].clear()
+            self.fields["client_secret"].clear()
+        allow_edit = (enabled if enabled is not None else self._question is None) and using_custom
+        self.fields["client_id"].setEnabled(allow_edit)
+        self.fields["client_secret"].setEnabled(allow_edit)
+
+    def _busy_message(self) -> str:
+        if getattr(self, "_waiting_for_browser_auth", False):
+            return "Waiting for browser authentication. A sign-in page should open in your browser."
+        if self._question and self._option_name(self._question.option) == "config_is_local":
+            if self._answer_value() == "true":
+                return "Waiting for browser authentication. A sign-in page should open in your browser."
+            return "Waiting for rclone."
+        return "Waiting for rclone..."
+
+    def _show_question(self, step: rclone_wizard.RcloneConfigStep) -> None:
+        self._question = step
+        self._state = step.state
+        self._clear_layout(self.question_layout)
+        self._answer_group = None
+        option = step.option
+        title = self.qt.QLabel(self._question_title(option))
+        title_font = title.font()
+        title_font.setBold(True)
+        title.setFont(title_font)
+        self._answer_kind, self._answer_field = self._answer_widget(option)
+        self.question_layout.addRow(title)
+        help_message = self._question_help(option)
+        if help_message:
+            help_text = self.qt.QLabel(help_message)
+            help_text.setWordWrap(True)
+            help_text.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+            help_text.setOpenExternalLinks(True)
+            self.question_layout.addRow(help_text)
+        self.question_layout.addRow("Answer", self._answer_field)
+        self.question_frame.show()
+        self.status.setText("")
+        self._update_action_button()
+        self.dialog.adjustSize()
+
+    def _answer_widget(self, option: dict[str, Any]) -> tuple[str, Any]:
+        option_type = str(option.get("Type", "")).lower()
+        option_name = self._option_name(option)
+        default = option.get("DefaultStr")
+        if default is None:
+            default = option.get("Default", "")
+        default_text = str(default).lower() if isinstance(default, bool) else str(default or "")
+        examples = option.get("Examples") if isinstance(option.get("Examples"), list) else []
+        if option_type == "bool":
+            return self._bool_radio_widget(option_name, default_text, examples)
+        if examples and option.get("Exclusive"):
+            field = self.qt.QComboBox()
+            selected = 0
+            for index, example in enumerate(examples):
+                value = str(example.get("Value", ""))
+                label = str(example.get("Help", "")).strip().splitlines()[0] if example.get("Help") else value
+                field.addItem(label, value)
+                if value == default_text:
+                    selected = index
+            field.setCurrentIndex(selected)
+            return "combo", field
+        if option.get("IsPassword"):
+            field = self.qt.QLineEdit()
+            field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+            field.setText(default_text)
+            return "text", field
+        if option_name.endswith("token"):
+            field = self.qt.QPlainTextEdit()
+            field.setPlainText(default_text)
+            field.setMinimumHeight(76)
+            return "plain", field
+        field = self.qt.QLineEdit()
+        field.setText(default_text)
+        return "text", field
+
+    def _answer_value(self) -> str:
+        if self._answer_field is None:
+            return ""
+        if self._answer_kind == "bool":
+            return "true" if self._answer_field.isChecked() else "false"
+        if self._answer_kind == "radio":
+            if self._answer_group is None or self._answer_group.checkedButton() is None:
+                return ""
+            return str(self._answer_group.checkedButton().property("answerValue") or "")
+        if self._answer_kind == "combo":
+            return str(self._answer_field.currentData() or "")
+        if self._answer_kind == "plain":
+            return self._answer_field.toPlainText().strip()
+        return self._answer_field.text().strip()
+
+    def _valid_remote_name(self, name: str) -> bool:
+        return bool(name) and all(token not in name for token in (":", "@", "/", "\\"))
+
+    def _display_name_exists(
+        self,
+        alias: str,
+        remote_type: str,
+        remotes: list[core.RemoteInfo],
+        *,
+        provider_name: str | None = None,
+    ) -> bool:
+        normalized_alias = alias.casefold()
+        normalized_type = remote_type.casefold()
+        normalized_provider = (provider_name or self._provider_config_name(remote_type)).casefold()
+        return any(
+            remote.alias.casefold() == normalized_alias
+            and remote.backend_type.casefold() == normalized_type
+            and (
+                remote_type.casefold() not in {"s3", "webdav"}
+                or remote.provider.casefold() == normalized_provider
+            )
+            for remote in remotes
+        )
+
+    def _config_remote_name(
+        self,
+        alias: str,
+        remote_type: str,
+        remotes: list[core.RemoteInfo],
+        *,
+        provider_name: str | None = None,
+    ) -> str:
+        existing_names = {remote.name for remote in remotes}
+        provider_name = provider_name or self._provider_config_name(remote_type)
+        candidate = f"{alias}__{provider_name}"
+        if candidate not in existing_names:
+            return candidate
+        index = 2
+        while f"{alias} {index}__{provider_name}" in existing_names:
+            index += 1
+        return f"{alias} {index}__{provider_name}"
+
+    def _provider_config_name(self, remote_type: str) -> str:
+        normalized = remote_type.strip().lower()
+        return REMOTE_CONFIG_SUFFIXES.get(normalized, normalized or "Remote")
+
+    def _selected_provider_config_name(self, remote_type: str) -> str:
+        fields = getattr(self, "fields", None)
+        if remote_type.strip().lower() == "s3" and fields:
+            return self._s3_provider_config_name()
+        if remote_type.strip().lower() == "webdav" and fields:
+            return self._webdav_provider_config_name()
+        return self._provider_config_name(remote_type)
+
+    def _provider_display_name(self, alias: str, remote_type: str, provider_name: str | None = None) -> str:
+        return f"{alias} ({provider_name or self._provider_config_name(remote_type)})"
+
+    def _remote_display_name(self) -> str:
+        alias = getattr(self, "_remote_alias", "") or self._remote_name
+        return self._provider_display_name(alias, self._remote_type, self._selected_provider_config_name(self._remote_type))
+
+    def _bool_radio_widget(
+        self,
+        option_name: str,
+        default_text: str,
+        examples: list[dict[str, Any]],
+    ) -> tuple[str, Any]:
+        widget = self.qt.QWidget()
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        group = self.qt.QButtonGroup(widget)
+        options = self._bool_radio_options(option_name, examples)
+        selected_value = "true" if default_text.lower() in {"true", "1", "yes", "on"} else "false"
+        for index, (value, label) in enumerate(options):
+            button = self.qt.QRadioButton(label)
+            button.setProperty("answerValue", value)
+            group.addButton(button, index)
+            layout.addWidget(button)
+            if value == selected_value:
+                button.setChecked(True)
+        if group.checkedButton() is None and group.buttons():
+            group.buttons()[0].setChecked(True)
+        group.buttonClicked.connect(lambda _button=None: self._update_action_button())
+        self._answer_group = group
+        return "radio", widget
+
+    def _bool_radio_options(self, option_name: str, examples: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        if option_name == "config_is_local":
+            return [
+                ("true", "Open the browser on this computer"),
+                ("false", "Authorize from another computer"),
+            ]
+        if option_name in {"team_drive", "config_team_drive"}:
+            return [
+                ("false", "My Drive"),
+                ("true", "Shared drive"),
+            ]
+        values: list[tuple[str, str]] = []
+        for example in examples:
+            value = str(example.get("Value", "")).lower()
+            if value not in {"true", "false"}:
+                continue
+            label = str(example.get("Help", "")).strip().splitlines()[0] if example.get("Help") else value.title()
+            values.append((value, label))
+        return values or [("true", "Yes"), ("false", "No")]
+
+    def _option_name(self, option: dict[str, Any]) -> str:
+        return str(option.get("Name", "")).strip()
+
+    def _question_title(self, option: dict[str, Any]) -> str:
+        option_name = self._option_name(option)
+        if option_name == "config_is_local":
+            return f"Connect {self._provider_label(self._remote_type)}"
+        if option_name == "config_token":
+            return "Paste authorization token"
+        if option_name in {"team_drive", "config_team_drive"}:
+            return "Shared drive"
+        return _field_label(option_name or "Option")
+
+    def _question_help(self, option: dict[str, Any]) -> str:
+        option_name = self._option_name(option)
+        if option_name == "config_is_local":
+            return "Use this computer unless browser sign-in is busy."
+        if option_name == "config_team_drive":
+            return "Choose where the files live."
+        if option_name == "team_drive":
+            return "Paste the shared drive ID."
+        return str(option.get("Help", "")).strip().split("\n\n", 1)[0]
+
+    def _provider_label(self, remote_type: str) -> str:
+        for label, backend_type in REMOTE_PROVIDER_OPTIONS:
+            if backend_type == remote_type:
+                return label
+        return remote_type
+
+    def _question_button_text(self) -> str:
+        if self._question and self._option_name(self._question.option) == "config_is_local":
+            return "Open browser" if self._answer_value() == "true" else "Continue"
+        if self._question and self._option_name(self._question.option) == "config_token":
+            return "Finish setup"
+        return "Continue"
+
+    def _reject(self) -> None:
+        self._cancelled = True
+        self._stop_port_timer()
+        self._close_message_boxes()
+        self._cleanup_incomplete_remote()
+        self.dialog.reject()
+
+    def _stop_port_timer(self) -> None:
+        try:
+            self._port_timer.stop()
+        except Exception:
+            pass
+
+    def _warning(self, title: str, message: str) -> None:
+        try:
+            box = self.qt.QMessageBox(self.dialog)
+            box.setIcon(self.qt.QMessageBox.Icon.Warning)
+            box.setWindowTitle(title)
+            box.setText(message)
+            box.setStandardButtons(self.qt.QMessageBox.StandardButton.Ok)
+            try:
+                box.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
+            except Exception:
+                pass
+            self._message_boxes.append(box)
+            box.finished.connect(lambda _result=0, item=box: self._untrack_message_box(item))
+            box.show()
+            box.raise_()
+            box.activateWindow()
+        except Exception:
+            self.qt.QMessageBox.warning(self.dialog, title, message)
+
+    def _untrack_message_box(self, box: Any) -> None:
+        self._message_boxes = [item for item in getattr(self, "_message_boxes", []) if item is not box]
+
+    def _close_message_boxes(self) -> None:
+        boxes = list(getattr(self, "_message_boxes", []))
+        self._message_boxes = []
+        for box in boxes:
+            try:
+                box.close()
+            except Exception:
+                pass
+
+    def _cleanup_incomplete_remote(self) -> None:
+        if not self._remote_name or self._completed:
+            return
+        _wizard_pending_remote_names.discard(self._remote_name)
+        rclone_wizard.cancel_remote_config(self._remote_name)
+        core.delete_rclone_remote(self._remote_name)
+        settings = load_mount_settings()
+        if self._remote_name in settings:
+            settings.pop(self._remote_name)
+            save_mount_settings(settings)
+
+    def _created_remote_has_credentials(self) -> bool:
+        for remote in core.load_remotes():
+            if remote.name != self._remote_name:
+                continue
+            return core._remote_section_is_configured(remote.backend_type, remote.extra_info)
+        return False
+
+    def _clear_layout(self, layout: Any) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+
 class MountletWindow:
     def __init__(self, tray_app: "MountletTray") -> None:
         self.tray_app = tray_app
@@ -1064,14 +3081,22 @@ class MountletWindow:
         self._current_remote_names: list[str] = []
         self._name_column_width = 160
         self._refresh_pending = False
+        self._child_dialogs: list[Any] = []
+        self._child_dialog_owners: dict[Any, Any] = {}
+        self._last_child_offsets: dict[Any, tuple[int, int]] = {}
+        self._window_stack_hidden = False
+        self._keep_above = False
+        self._keep_above_button: Any | None = None
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
-        self.window = self.qt.QMainWindow()
+        self._bridge.folder_opened.connect(self._handle_folder_opened)
+        self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
-        self._make_tray_owned_window()
+        self._close_filter = self._make_close_filter()
+        self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
         self._build_app_menu()
 
@@ -1082,8 +3107,63 @@ class MountletWindow:
             storage_ready = qt.Signal(str, object)
             action_finished = qt.Signal(str, bool, str)
             bulk_action_finished = qt.Signal(str, object, object)
+            folder_opened = qt.Signal(bool)
 
         return Bridge()
+
+    def _make_main_window(self) -> Any:
+        qt = self.qt
+        outer = self
+
+        class MainWindow(qt.QMainWindow):
+            def __init__(self) -> None:
+                flags = _frameless_window_flags(qt, "Tool")
+                if flags is not None:
+                    try:
+                        super().__init__(None, flags)
+                        return
+                    except Exception:
+                        pass
+                super().__init__()
+                _apply_frameless_window_flags(qt, self, base_name="Tool")
+
+            def closeEvent(self, event: object) -> None:
+                try:
+                    if outer._handle_window_close(event):
+                        return
+                except Exception:
+                    pass
+                try:
+                    super().closeEvent(event)
+                except Exception:
+                    pass
+
+        return MainWindow()
+
+    def _make_close_filter(self) -> Any:
+        qt = self.qt
+        outer = self
+
+        class CloseFilter(qt.QObject):
+            def eventFilter(self, watched: object, event: object) -> bool:
+                try:
+                    if watched is outer.window and event.type() == qt.QEvent.Type.Close:
+                        return outer._handle_window_close(event)
+                except Exception:
+                    return False
+                return False
+
+        return CloseFilter(self.window)
+
+    def _handle_window_close(self, event: Any) -> bool:
+        if self._tray_is_quitting():
+            return False
+        self._hide_window_stack()
+        try:
+            event.ignore()
+        except Exception:
+            pass
+        return True
 
     def _build_app_menu(self) -> None:
         app_menu = self.window.menuBar().addMenu("App")
@@ -1094,6 +3174,8 @@ class MountletWindow:
         mount_menu = self.window.menuBar().addMenu("Mount")
         self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
         self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
+        mount_menu.addSeparator()
+        self.tray_app._add_action(mount_menu, "Add remote", self._show_new_remote_wizard)
 
         config_menu = self.window.menuBar().addMenu("Config")
         self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
@@ -1112,7 +3194,10 @@ class MountletWindow:
             return
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
-            self.window.hide()
+            if self._window_is_active() or self._has_visible_child_dialog():
+                self._hide_window_stack()
+            else:
+                self.show()
             return
         self.show()
 
@@ -1121,29 +3206,233 @@ class MountletWindow:
             return
         was_visible = self.is_visible()
         visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
-        if was_visible and visible_on_current_desktop is False:
+        reopened_from_other_desktop = was_visible and visible_on_current_desktop is False
+        if reopened_from_other_desktop:
+            self._close_child_dialogs()
             self.window.hide()
             was_visible = False
         self.refresh()
         if not was_visible:
             self._position_near_tray()
-        self._focus_window()
+        self._window_stack_hidden = False
+        self._focus_window(defer_activation=reopened_from_other_desktop)
 
-    def _make_tray_owned_window(self) -> None:
+    def _window_is_active(self) -> bool:
         try:
-            self.window.setWindowFlag(self.qt.Qt.WindowType.Tool, True)
+            return bool(self.window.isActiveWindow())
         except Exception:
-            return
+            return False
 
-    def _focus_window(self) -> None:
+    def _focus_window(self, *, defer_activation: bool = False) -> None:
         _move_x11_window_to_current_desktop(self.window)
         if self.window.isMinimized():
             self.window.showNormal()
         else:
             self.window.show()
         _move_x11_window_to_current_desktop(self.window)
+        self._restore_x11_keep_above()
+        if self._has_visible_child_dialog():
+            self._raise_child_windows()
+            self._schedule_child_window_raises()
+            return
+        if defer_activation:
+            self._schedule_main_window_activation()
+            self._raise_child_windows()
+            self._schedule_child_window_raises()
+            return
+        self._activate_main_window()
+        self._raise_child_windows()
+        self._schedule_child_window_raises()
+
+    def _schedule_main_window_activation(self) -> None:
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            return
+        timer.singleShot(50, self._activate_main_window_if_current_desktop)
+        timer.singleShot(150, self._activate_main_window_if_current_desktop)
+        timer.singleShot(300, self._activate_main_window_if_current_desktop)
+
+    def _activate_main_window_if_current_desktop(self) -> None:
+        _move_x11_window_to_current_desktop(self.window)
+        if _x11_qt_window_is_on_current_desktop(self.window) is False:
+            return
+        self._restore_x11_keep_above()
+        self._activate_main_window()
+
+    def _restore_x11_keep_above(self) -> None:
+        if getattr(self, "_keep_above", False):
+            _set_x11_keep_above(self.window, True)
+
+    def _activate_main_window(self) -> None:
         self.window.raise_()
         self.window.activateWindow()
+
+    def _schedule_child_window_raises(self) -> None:
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is not None:
+            timer.singleShot(0, self._raise_child_windows)
+            timer.singleShot(100, self._raise_child_windows)
+            timer.singleShot(300, self._raise_child_windows)
+
+    def _has_visible_child_dialog(self) -> bool:
+        for child in (self._active_child_window(), *getattr(self, "_child_dialogs", [])):
+            if child is None:
+                continue
+            try:
+                if child.isVisible():
+                    return True
+            except Exception:
+                return True
+        return False
+
+    def _raise_active_child_window(self) -> None:
+        self._raise_child_window(self._active_child_window())
+
+    def _raise_child_windows(self) -> None:
+        seen: set[int] = set()
+        for child in (self._active_child_window(), *getattr(self, "_child_dialogs", [])):
+            if child is None or id(child) in seen:
+                continue
+            seen.add(id(child))
+            self._raise_child_window(child)
+
+    def _raise_child_window(self, child: Any | None) -> None:
+        if child is None:
+            return
+        try:
+            if child.isMinimized():
+                child.showNormal()
+            else:
+                child.show()
+            child.raise_()
+            child.activateWindow()
+        except Exception:
+            return
+
+    def _track_child_dialog(self, dialog: Any, owner: Any | None = None) -> None:
+        self._child_dialogs = [
+            child for child in getattr(self, "_child_dialogs", []) if child is not dialog
+        ]
+        self._child_dialogs.append(dialog)
+        if owner is not None:
+            if not hasattr(self, "_child_dialog_owners"):
+                self._child_dialog_owners = {}
+            self._child_dialog_owners[dialog] = owner
+
+    def _untrack_child_dialog(self, dialog: Any) -> None:
+        self._child_dialogs = [
+            child for child in getattr(self, "_child_dialogs", []) if child is not dialog
+        ]
+        getattr(self, "_child_dialog_owners", {}).pop(dialog, None)
+
+    def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
+        dialog = owner.dialog
+        self._track_child_dialog(dialog, owner)
+        _apply_frameless_window_flags(self.qt, dialog, base_name="Dialog")
+        try:
+            dialog.setModal(True)
+            dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
+        except Exception:
+            pass
+        if on_accepted is not None:
+            dialog.accepted.connect(on_accepted)
+        dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
+        dialog.show()
+        self._raise_child_windows()
+
+    def _hide_window_stack(self) -> None:
+        self._close_child_dialogs()
+        self._window_stack_hidden = True
+        try:
+            self.window.hide()
+        except Exception:
+            pass
+
+    def _close_child_dialogs(self) -> None:
+        dialogs = []
+        active_child = self._active_child_window()
+        if active_child is not None:
+            dialogs.append(active_child)
+        dialogs.extend(reversed(getattr(self, "_child_dialogs", [])))
+        owners = dict(getattr(self, "_child_dialog_owners", {}))
+        seen: set[int] = set()
+        for child in dialogs:
+            if id(child) in seen:
+                continue
+            seen.add(id(child))
+            owner = owners.get(child)
+            try:
+                if owner is not None and hasattr(owner, "_reject"):
+                    owner._reject()
+                elif hasattr(child, "reject"):
+                    child.reject()
+                else:
+                    child.close()
+            except Exception:
+                try:
+                    child.close()
+                except Exception:
+                    pass
+        self._child_dialogs = []
+        self._child_dialog_owners = {}
+
+    def _child_offsets(self) -> dict[Any, tuple[int, int]]:
+        main_position = self._window_position(self.window)
+        if main_position is None:
+            return {}
+        offsets: dict[Any, tuple[int, int]] = {}
+        for child in getattr(self, "_child_dialogs", []):
+            child_position = self._window_position(child)
+            if child_position is None:
+                continue
+            offsets[child] = (
+                child_position[0] - main_position[0],
+                child_position[1] - main_position[1],
+            )
+        return offsets
+
+    def _restore_child_offsets(self, offsets: dict[Any, tuple[int, int]]) -> None:
+        main_position = self._window_position(self.window)
+        if main_position is None:
+            return
+        for child, (x_offset, y_offset) in offsets.items():
+            if child not in getattr(self, "_child_dialogs", []):
+                continue
+            try:
+                child.move(main_position[0] + x_offset, main_position[1] + y_offset)
+            except Exception:
+                pass
+
+    def _window_position(self, window: Any) -> tuple[int, int] | None:
+        try:
+            point = window.frameGeometry().topLeft()
+            return int(point.x()), int(point.y())
+        except Exception:
+            return None
+
+    def _active_child_window(self) -> Any | None:
+        qt = getattr(self, "qt", None)
+        if qt is None:
+            return None
+        for candidate in (
+            qt.QApplication.activeModalWidget(),
+            qt.QApplication.activeWindow(),
+            *reversed(getattr(self, "_child_dialogs", [])),
+        ):
+            if candidate is not None and self._is_child_window(candidate):
+                return candidate
+        return None
+
+    def _is_child_window(self, candidate: Any) -> bool:
+        current = candidate
+        while current is not None:
+            if current is self.window:
+                return candidate is not self.window
+            try:
+                current = current.parentWidget()
+            except Exception:
+                return False
+        return False
 
     def _position_near_tray(self) -> None:
         try:
@@ -1174,7 +3463,7 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         self._refresh_pending = False
-        remotes = core.load_remotes()
+        remotes = _load_visible_remotes()
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
@@ -1190,6 +3479,7 @@ class MountletWindow:
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
+        outer.addWidget(self._sort_toolbar())
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1210,9 +3500,83 @@ class MountletWindow:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
         scroll.setWidget(container)
         outer.addWidget(scroll)
+        outer.addWidget(self._add_remote_row())
 
         self.window.setCentralWidget(root)
         self._fit_to_content(root, scroll, container)
+
+    def _pin_button(self) -> Any:
+        button = self.qt.QPushButton("📌")
+        button.setFixedSize(30, 26)
+        button.setToolTip("Keep Mountlet above other windows")
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 2, 12))
+            button.setFont(font)
+        except Exception:
+            pass
+        try:
+            button.setCheckable(True)
+            button.setChecked(self._keep_above)
+        except Exception:
+            pass
+        button.clicked.connect(lambda checked=False: self._toggle_keep_above(bool(checked)))
+        self._keep_above_button = button
+        self._update_keep_above_button()
+        return button
+
+    def _toggle_keep_above(self, checked: bool | None = None) -> None:
+        self._keep_above = not self._keep_above if checked is None else checked
+        self._apply_keep_above()
+        self._update_keep_above_button()
+
+    def _apply_keep_above(self) -> None:
+        if _set_x11_keep_above(self.window, self._keep_above):
+            return
+        try:
+            flag = self.qt.Qt.WindowType.WindowStaysOnTopHint
+        except Exception:
+            return
+        try:
+            was_visible = self.window.isVisible()
+        except Exception:
+            was_visible = False
+        position = self._window_position(self.window)
+        try:
+            self.window.setWindowFlag(flag, self._keep_above)
+        except Exception:
+            return
+        if position is not None:
+            try:
+                self.window.move(*position)
+            except Exception:
+                pass
+        if was_visible:
+            try:
+                self.window.show()
+            except Exception:
+                pass
+
+    def _update_keep_above_button(self) -> None:
+        button = getattr(self, "_keep_above_button", None)
+        if button is None:
+            return
+        try:
+            button.setChecked(self._keep_above)
+        except Exception:
+            pass
+        try:
+            if self._keep_above:
+                button.setToolTip("Stop keeping Mountlet above other windows")
+                button.setStyleSheet(
+                    "QPushButton { background: #2563eb; color: #ffffff; "
+                    "border: 1px solid #93c5fd; border-radius: 4px; }"
+                )
+            else:
+                button.setToolTip("Keep Mountlet above other windows")
+                button.setStyleSheet("")
+        except Exception:
+            pass
 
     def _request_refresh(self) -> None:
         if self._tray_is_quitting():
@@ -1221,6 +3585,78 @@ class MountletWindow:
             return
         self._refresh_pending = True
         self.qt.QTimer.singleShot(25, self.refresh)
+
+    def _sort_toolbar(self) -> Any:
+        widget = self.qt.QWidget()
+        layout = self.qt.QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        sort_button = self.qt.QPushButton("Sort by")
+        sort_menu = self.qt.QMenu(sort_button)
+        for mode, label in REMOTE_SORT_OPTIONS:
+            self.tray_app._add_action(sort_menu, label, lambda selected=mode: self._sort_remote_order(selected))
+        sort_button.setMenu(sort_menu)
+        sort_button.setToolTip("Sort remotes and save the new order.")
+
+        reverse_button = self.qt.QPushButton("↕")
+        reverse_button.setFixedSize(30, 26)
+        reverse_button.setToolTip("Reverse the current remote order.")
+        reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
+
+        layout.addWidget(sort_button)
+        layout.addWidget(reverse_button)
+        layout.addStretch(1)
+        layout.addWidget(self._pin_button())
+        return widget
+
+    def _sort_remote_order(self, sort_mode: str) -> None:
+        remotes = _load_visible_remotes()
+        if not remotes:
+            return
+        if sort_mode == "registration":
+            self._restore_registration_order([remote.name for remote in remotes])
+            return
+        if self._sort_uses_storage(sort_mode):
+            missing = [remote for remote in remotes if self._storage_sort_value(remote, sort_mode) is None]
+            if missing:
+                for remote in missing:
+                    self._schedule_storage_load(remote)
+                self.tray_app._notify(
+                    "Sort remotes",
+                    "Storage usage is loading. Try again when the values appear.",
+                    success=True,
+                )
+                return
+        sorted_names = [remote.name for remote in self._sorted_remotes(remotes, sort_mode)]
+        self._save_remote_order(sorted_names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
+
+    def _restore_registration_order(self, remote_names: list[str]) -> None:
+        settings = load_mount_settings()
+        for remote_name in remote_names:
+            current = settings.get(remote_name)
+            if current is None or current.order is None:
+                continue
+            settings[remote_name] = MountSettings(
+                mount_path=current.mount_path,
+                remote_path=current.remote_path,
+                mount_flags=list(current.mount_flags),
+                auto_mount=current.auto_mount,
+                enabled=current.enabled,
+                order=None,
+            )
+        save_mount_settings(settings)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
+
+    def _reverse_remote_order(self) -> None:
+        names = [remote.name for remote in _load_visible_remotes()]
+        names.reverse()
+        self._save_remote_order(names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
 
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._row_usage(remote, mounted)
@@ -1251,9 +3687,12 @@ class MountletWindow:
         layout.setColumnMinimumWidth(2, 126)
         layout.setColumnMinimumWidth(3, 96)
         layout.setColumnMinimumWidth(4, 36)
+        layout.setColumnMinimumWidth(5, 36)
+        layout.setColumnMinimumWidth(6, 24)
         layout.setColumnStretch(1, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
+        title.setTextFormat(self.qt.Qt.TextFormat.RichText)
         title.setToolTip(title_tooltip)
         title.setFixedWidth(self._name_column_width)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
@@ -1286,12 +3725,18 @@ class MountletWindow:
             widget,
             tooltip,
         )
+        browser_button = self._icon_button("↗", lambda selected=remote: self._open_remote_in_browser(selected))
+        browser_button.setProperty("rowControl", True)
+        self._update_browser_button(browser_button, remote)
+        move_controls, up_button, down_button = self._move_button_stack(remote)
 
         layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
         layout.addWidget(usage_indicator, 0, 2)
         layout.addWidget(status, 0, 3)
         layout.addWidget(config_button, 0, 4)
+        layout.addWidget(browser_button, 0, 5)
+        layout.addWidget(move_controls, 0, 6)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             title=title,
@@ -1299,7 +3744,34 @@ class MountletWindow:
             toggle=toggle,
             status=status,
             config_button=config_button,
+            browser_button=browser_button,
+            up_button=up_button,
+            down_button=down_button,
         )
+        return frame
+
+    def _add_remote_row(self) -> Any:
+        frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+        tooltip = "Add a new remote"
+        frame.setToolTip(tooltip)
+        frame.mouseReleaseEvent = lambda event: self._show_new_remote_wizard()
+        frame.enterEvent = lambda event, widget=frame: self._show_immediate_tooltip(widget, tooltip)
+
+        layout = self.qt.QHBoxLayout(frame)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
+        add_button = self._icon_button("+", self._show_new_remote_wizard)
+        add_button.setProperty("rowControl", True)
+        add_button.setToolTip(tooltip)
+        add_button.enterEvent = lambda event, widget=add_button: self._show_immediate_tooltip(widget, tooltip)
+        label = self.qt.QLabel("Add remote")
+        label.setStyleSheet(_muted_text_style(label))
+        layout.addWidget(add_button)
+        layout.addWidget(label)
+        layout.addStretch(1)
         return frame
 
     def _update_remote_row(self, remote: core.RemoteInfo, mounted: bool) -> None:
@@ -1356,6 +3828,152 @@ class MountletWindow:
         row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
             self._show_immediate_tooltip(widget, tooltip)
         )
+        self._update_browser_button(row.browser_button, remote)
+        self._update_move_button(row.up_button, remote, -1)
+        self._update_move_button(row.down_button, remote, 1)
+
+    def _update_browser_button(self, button: Any, remote: core.RemoteInfo) -> None:
+        url = _remote_browser_url(remote)
+        if url:
+            tooltip = _remote_browser_tooltip(remote)
+            button.setEnabled(True)
+            button.setStyleSheet(f"color: {_provider_color(remote)};")
+        else:
+            tooltip = f"No browser view is configured for {remote.display_name}"
+            button.setEnabled(False)
+            button.setStyleSheet("")
+        button.setToolTip(tooltip)
+        button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
+
+    def _move_button_stack(self, remote: core.RemoteInfo) -> tuple[Any, Any, Any]:
+        widget = self.qt.QWidget()
+        widget.setProperty("rowControl", True)
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        up_button = self._move_button(remote, -1)
+        down_button = self._move_button(remote, 1)
+        layout.addWidget(up_button)
+        layout.addWidget(down_button)
+        return widget, up_button, down_button
+
+    def _move_button(self, remote: core.RemoteInfo, delta: int) -> Any:
+        button = self._small_icon_button("▲" if delta < 0 else "▼", lambda: self._move_remote(remote.name, delta))
+        button.setProperty("rowControl", True)
+        self._update_move_button(button, remote, delta)
+        return button
+
+    def _update_move_button(self, button: Any, remote: core.RemoteInfo, delta: int) -> None:
+        direction = "up" if delta < 0 else "down"
+        enabled = self._can_move_remote(remote.name, delta)
+        tooltip = f"Move {remote.display_name} {direction}"
+        button.setEnabled(enabled)
+        button.setToolTip(tooltip)
+        button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
+
+    def _can_move_remote(self, remote_name: str, delta: int) -> bool:
+        try:
+            index = self._current_remote_names.index(remote_name)
+        except ValueError:
+            return False
+        target = index + delta
+        return 0 <= target < len(self._current_remote_names)
+
+    def _move_remote(self, remote_name: str, delta: int) -> None:
+        names = [remote.name for remote in _load_visible_remotes()]
+        try:
+            index = names.index(remote_name)
+        except ValueError:
+            return
+        target = index + delta
+        if not 0 <= target < len(names):
+            return
+        names[index], names[target] = names[target], names[index]
+        self._save_remote_order(names)
+        self._current_remote_names = []
+        self.tray_app.rebuild_menus()
+
+    def _save_remote_order(self, remote_names: list[str]) -> None:
+        settings = load_mount_settings()
+        for order, remote_name in enumerate(remote_names):
+            current = settings.get(remote_name) or MountSettings()
+            settings[remote_name] = MountSettings(
+                mount_path=current.mount_path,
+                remote_path=current.remote_path,
+                mount_flags=list(current.mount_flags),
+                auto_mount=current.auto_mount,
+                enabled=current.enabled,
+                order=order,
+            )
+        save_mount_settings(settings)
+
+    def _sort_uses_storage(self, sort_mode: str) -> bool:
+        return sort_mode in STORAGE_SORT_MODES
+
+    def _sorted_remotes(
+        self,
+        remotes: list[core.RemoteInfo],
+        sort_mode: str,
+        *,
+        reverse: bool = False,
+    ) -> list[core.RemoteInfo]:
+        mode = sort_mode
+        indexed = list(enumerate(remotes))
+        if mode == "registration":
+            return list(remotes)
+        if mode == "name":
+            result = [
+                remote
+                for _index, remote in sorted(
+                    indexed,
+                    key=lambda item: (
+                        item[1].alias.casefold(),
+                        item[1].provider.casefold(),
+                        item[1].name.casefold(),
+                        item[0],
+                    ),
+                )
+            ]
+            return list(reversed(result)) if reverse else result
+        if mode == "provider":
+            result = [
+                remote
+                for _index, remote in sorted(
+                    indexed,
+                    key=lambda item: (
+                        item[1].provider.casefold(),
+                        item[1].alias.casefold(),
+                        item[1].name.casefold(),
+                        item[0],
+                    ),
+                )
+            ]
+            return list(reversed(result)) if reverse else result
+        if mode in STORAGE_SORT_MODES:
+            result = [remote for _index, remote in sorted(indexed, key=lambda item: self._storage_sort_key(item, mode))]
+            return list(reversed(result)) if reverse else result
+        return list(remotes)
+
+    def _storage_sort_key(self, item: tuple[int, core.RemoteInfo], sort_mode: str) -> tuple[bool, int, str, int]:
+        index, remote = item
+        value = self._storage_sort_value(remote, sort_mode)
+        if value is None:
+            return (True, 0, remote.display_name.casefold(), index)
+        if sort_mode in {"size", "used"}:
+            value = -value
+        return (False, value, remote.display_name.casefold(), index)
+
+    def _storage_sort_value(self, remote: core.RemoteInfo, sort_mode: str) -> int | None:
+        usage = self._usage_cache.get(remote.name)
+        if usage is None:
+            return None
+        if sort_mode == "size":
+            return usage.total
+        if sort_mode == "used":
+            return usage.used
+        if sort_mode == "remaining" and usage.total is not None and usage.used is not None:
+            return max(usage.total - usage.used, 0)
+        return None
 
     def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
         if not mounted:
@@ -1481,24 +4099,56 @@ class MountletWindow:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
-        name = remote.display_name
-        return name if len(name) <= 20 else name[:17] + "..."
+        name = html.escape(self._truncated_remote_alias(remote, include_provider=bool(remote.provider)))
+        if not remote.provider:
+            return name
+        color = _provider_color(remote)
+        provider = html.escape(remote.provider)
+        return f'{name} <span style="color:{color};">({provider})</span>'
+
+    def _plain_remote_name(self, remote: core.RemoteInfo) -> str:
+        alias = self._truncated_remote_alias(remote, include_provider=bool(remote.provider))
+        if remote.provider:
+            return f"{alias} ({remote.provider})"
+        return alias
+
+    def _truncated_remote_alias(self, remote: core.RemoteInfo, *, include_provider: bool) -> str:
+        name = remote.alias
+        suffix_length = len(f" ({remote.provider})") if include_provider else 0
+        limit = max(4, 20 - suffix_length)
+        return name if len(name) <= limit else name[: limit - 3] + "..."
 
     def _remote_name_width(self, remotes: list[core.RemoteInfo]) -> int:
-        displayed = [self._display_remote_name(remote) for remote in remotes]
+        displayed = [self._plain_remote_name(remote) for remote in remotes]
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
         return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
 
     def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
-        root.layout().activate()
+        layout = root.layout()
+        layout.activate()
         container.layout().activate()
-        content_size = container.sizeHint()
-        root_margins = root.layout().contentsMargins()
         scroll_frame = scroll.frameWidth() * 2
         menu_height = self.window.menuBar().sizeHint().height()
-        width = root_margins.left() + root_margins.right() + scroll_frame + content_size.width() + 2
-        height = menu_height + root_margins.top() + root_margins.bottom() + scroll_frame + content_size.height() + 2
+        margins = layout.contentsMargins()
+        spacing = max(layout.spacing(), 0)
+        toolbar_size = self._layout_item_size(layout, 0)
+        add_row_size = self._layout_item_size(layout, 2)
+        container_size = container.sizeHint()
+        horizontal_padding = margins.left() + margins.right()
+        vertical_padding = margins.top() + margins.bottom()
+        content_width = max(toolbar_size.width(), add_row_size.width(), container_size.width())
+        width = horizontal_padding + content_width + scroll_frame + 2
+        height = (
+            menu_height
+            + vertical_padding
+            + toolbar_size.height()
+            + add_row_size.height()
+            + container_size.height()
+            + scroll_frame
+            + (spacing * 2)
+            + 2
+        )
 
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
@@ -1515,6 +4165,15 @@ class MountletWindow:
 
         self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
 
+    def _layout_item_size(self, layout: Any, index: int) -> Any:
+        item = layout.itemAt(index)
+        if item is None:
+            return self.qt.QSize(0, 0)
+        widget = item.widget()
+        if widget is None:
+            return item.sizeHint()
+        return widget.sizeHint()
+
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)
         button.setEnabled(enabled)
@@ -1529,8 +4188,16 @@ class MountletWindow:
         button.setFont(font)
         return button
 
+    def _small_icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
+        button = self._button(label, callback, enabled=enabled)
+        button.setFixedSize(22, 13)
+        font = button.font()
+        font.setPointSize(max(font.pointSize() - 2, 7))
+        button.setFont(font)
+        return button
+
     def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
-        remote = next((candidate for candidate in core.load_remotes() if candidate.name == remote_name), None)
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
             self.tray_app._notify("Mountlet", f"{remote_name} is no longer available.", success=False)
             self._request_refresh()
@@ -1565,7 +4232,10 @@ class MountletWindow:
         self._run_bulk_action("Unmount all", core.unmount_all)
 
     def _run_bulk_action(self, title: str, action: Any) -> None:
-        remotes = core.load_remotes()
+        remotes = _load_visible_remotes()
+        self._run_bulk_action_for_remotes(title, remotes, action)
+
+    def _run_bulk_action_for_remotes(self, title: str, remotes: list[core.RemoteInfo], action: Any) -> None:
         if not remotes:
             return
         for remote in remotes:
@@ -1595,14 +4265,31 @@ class MountletWindow:
         self._request_refresh()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
-        self.tray_app._open_folder(remote)
+        if not os.path.isdir(remote.mount_path):
+            self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
+            return
+
+        def worker() -> None:
+            self._bridge.folder_opened.emit(_open_folder_default(self.qt, remote.mount_path))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
+        self.tray_app._open_remote_in_browser(remote)
+
+    def _handle_folder_opened(self, success: bool) -> None:
+        if self._tray_is_quitting():
+            return
+        if not success:
+            self.tray_app._notify("Open folder", "Could not open the mount folder.", success=False)
 
     def _show_app_config_editor(self) -> None:
-        old_remotes = core.load_remotes()
+        old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
         dialog = AppConfigDialog(self.qt, self.window)
-        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+
+        def on_accepted() -> None:
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -1611,17 +4298,39 @@ class MountletWindow:
             self.refresh()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
+        self._open_child_dialog(dialog, on_accepted)
+
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
-        old_remotes = core.load_remotes()
+        old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         dialog = MountConfigDialog(self.qt, remote, self.window)
-        if dialog.exec() == int(self.qt.QDialog.DialogCode.Accepted):
+
+        def on_accepted() -> None:
+            if dialog.deleted:
+                self._usage_cache.pop(remote.name, None)
+                self._current_remote_names = []
+                self.tray_app.rebuild_menus()
+                self.refresh()
+                return
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._ask_remount_for_config_changes(changes)
+
+        self._open_child_dialog(dialog, on_accepted)
+
+    def _show_new_remote_wizard(self) -> None:
+        dialog = NewRemoteWizard(self.qt, self.window)
+
+        def on_accepted() -> None:
+            self._usage_cache.clear()
+            self._current_remote_names = []
+            self.tray_app.rebuild_menus()
+            self.refresh()
+
+        self._open_child_dialog(dialog, on_accepted)
 
     def _mounted_remote_names(self, remotes: list[core.RemoteInfo]) -> set[str]:
         return {remote.name for remote in remotes if core.is_mounted(remote)}
@@ -1633,7 +4342,7 @@ class MountletWindow:
     ) -> list[tuple[core.RemoteInfo, core.RemoteInfo]]:
         old_by_name = {remote.name: remote for remote in old_remotes}
         changes: list[tuple[core.RemoteInfo, core.RemoteInfo]] = []
-        for new_remote in core.load_remotes():
+        for new_remote in _load_visible_remotes():
             old_remote = old_by_name.get(new_remote.name)
             if not old_remote or old_remote.name not in mounted_before:
                 continue
@@ -1790,10 +4499,7 @@ class MountletWindow:
         self._refresh_pending = False
         self._usage_pending.clear()
         self._action_pending.clear()
-        try:
-            self.window.hide()
-        except Exception:
-            pass
+        self._hide_window_stack()
 
     def _tray_is_quitting(self) -> bool:
         return bool(getattr(getattr(self, "tray_app", None), "_quitting", False))
@@ -1806,6 +4512,8 @@ class MountletTray:
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setQuitOnLastWindowClosed(False)
         self._quitting = False
+        self._allow_forced_exit = True
+        self._forced_exit_scheduled = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
         self.icon = self._icon()
@@ -1853,15 +4561,15 @@ class MountletTray:
             return
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return
-        self.rebuild_menus()
         self.main_window.toggle_from_tray()
+        self.qt.QTimer.singleShot(25, self.rebuild_menus)
 
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
         self.remote_menu.clear()
         self.app_menu.clear()
-        remotes = core.load_remotes()
+        remotes = _load_visible_remotes()
         mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
@@ -1877,6 +4585,7 @@ class MountletTray:
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
+        self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self._add_action(self.app_menu, "App settings", self.main_window._show_app_config_editor)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
@@ -1902,6 +4611,9 @@ class MountletTray:
             self._add_action(submenu, "Open folder", lambda: self._open_folder(remote))
         else:
             self._add_action(submenu, "Mount", lambda: self._run_remote_action(remote, core.mount_remote))
+        browser_url = _remote_browser_url(remote)
+        if browser_url:
+            self._add_action(submenu, "Open in browser", lambda: self._open_remote_in_browser(remote))
         self._add_action(submenu, "Settings", lambda: self.main_window._show_mount_config_editor(remote))
 
     def _add_action(self, menu: Any, label: str, callback: Any, *, enabled: bool = True) -> Any:
@@ -1914,21 +4626,17 @@ class MountletTray:
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
         if getattr(self, "_quitting", False):
             return
-        success, message = action(remote)
-        self._notify("Mountlet", _clean_message(message), success=success)
-        self.rebuild_menus()
+        self.main_window._run_remote_action(remote, action)
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
-        mounted, failures = core.mount_all(remotes)
-        self._report_mount_results("Mount all", mounted, failures)
-        self.rebuild_menus()
+        self.main_window._mount_all()
 
     def _schedule_auto_mounts(self) -> None:
         if getattr(self, "_quitting", False):
             return
-        remotes = [remote for remote in core.load_remotes() if remote.auto_mount and not core.is_mounted(remote)]
+        remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount and not core.is_mounted(remote)]
         if not remotes:
             return
         delay_ms = int(load_app_settings().auto_mount_delay * 1000)
@@ -1937,9 +4645,7 @@ class MountletTray:
     def _auto_mount(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
-        mounted, failures = core.mount_all(remotes)
-        self._report_mount_results("Auto-mount", mounted, failures)
-        self.rebuild_menus()
+        self.main_window._run_bulk_action_for_remotes("Auto-mount", remotes, core.mount_all)
 
     def _report_mount_results(self, title: str, mounted: list[str], failures: list[str]) -> None:
         if failures:
@@ -1952,21 +4658,23 @@ class MountletTray:
     def _unmount_all(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
-        unmounted, failures = core.unmount_all(remotes)
-        if failures:
-            self._notify("Unmount all", "\n".join(_clean_message(item) for item in failures), success=False)
-        elif unmounted:
-            self._notify("Unmount all", "Unmounted: " + ", ".join(unmounted), success=True)
-        else:
-            self._notify("Unmount all", "Nothing to unmount.", success=True)
-        self.rebuild_menus()
+        self.main_window._unmount_all()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
-        if not os.path.isdir(remote.mount_path):
-            self._notify("Open folder", "Mount the remote before opening its folder.", success=False)
+        if getattr(self, "_quitting", False):
             return
-        if not _open_folder_default(self.qt, remote.mount_path):
-            self._notify("Open folder", "Could not open the mount folder.", success=False)
+        self.main_window._open_folder(remote)
+
+    def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
+        url = _remote_browser_url(remote)
+        if not url:
+            self._notify("Open in browser", "This remote does not have a known browser view.", success=False)
+            return
+        def open_url() -> None:
+            if not self.qt.QDesktopServices.openUrl(self.qt.QUrl(url)):
+                self._notify("Open in browser", "Could not open the browser.", success=False)
+
+        self.qt.QTimer.singleShot(0, open_url)
 
     def _notify(self, title: str, message: str, *, success: bool) -> None:
         if getattr(self, "_quitting", False):
@@ -1981,10 +4689,25 @@ class MountletTray:
 
     def request_quit(self) -> None:
         self._prepare_quit()
+        self._schedule_forced_exit()
         try:
             self.app.exit(0)
         except Exception:
             self.app.quit()
+
+    def _schedule_forced_exit(self) -> None:
+        if not getattr(self, "_allow_forced_exit", False):
+            return
+        if getattr(self, "_forced_exit_scheduled", False):
+            return
+        self._forced_exit_scheduled = True
+        timer = threading.Timer(FORCED_QUIT_SECONDS, self._force_exit_if_still_quitting)
+        timer.daemon = True
+        timer.start()
+
+    def _force_exit_if_still_quitting(self) -> None:
+        if getattr(self, "_quitting", False):
+            os._exit(0)
 
     def _prepare_quit(self) -> None:
         if getattr(self, "_quitting", False):
@@ -1992,6 +4715,10 @@ class MountletTray:
         self._quitting = True
         try:
             self.timer.stop()
+        except Exception:
+            pass
+        try:
+            rclone_wizard.cancel_all_remote_configs()
         except Exception:
             pass
         self.main_window.prepare_quit()

@@ -77,8 +77,9 @@ type = dropbox
             remote = core.load_remotes()[0]
 
             with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
-                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")) as launch:
-                    success, message = core.mount_remote(remote)
+                with mock.patch.object(core, "check_remote_connection", return_value=(True, "connected")):
+                    with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")) as launch:
+                        success, message = core.mount_remote(remote)
 
             self.assertTrue(success)
             self.assertEqual(message, "mounted")
@@ -86,6 +87,66 @@ type = dropbox
             self.assertEqual(args[:3], ["/usr/bin/rclone", "mount", "Docs:"])
             self.assertEqual(args[3], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
+
+    def test_mount_remote_can_mount_remote_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config" / "mountlet"
+            config_dir.mkdir(parents=True)
+            (config_dir / "mounts.toml").write_text(
+                '[remotes."R2__S3"]\nremote_path = "bucket/prefix"\n',
+                encoding="utf-8",
+            )
+            core = self.load_core(tempdir, "[R2__S3]\ntype = s3\n", set_mount_base=False)
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "check_remote_connection", return_value=(True, "connected")):
+                    with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")) as launch:
+                        success, _message = core.mount_remote(remote)
+
+            self.assertTrue(success)
+            self.assertEqual(launch.call_args.args[1][:3], ["/usr/bin/rclone", "mount", "R2__S3:bucket/prefix"])
+
+    def test_mount_remote_unmounts_when_connection_check_fails(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Archive__S3]\ntype = s3\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")):
+                    with mock.patch.object(
+                        core,
+                        "check_remote_connection",
+                        return_value=(False, "[!] Archive (S3) is not connected."),
+                    ):
+                        with mock.patch.object(core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
+                            success, message = core.mount_remote(remote)
+
+            self.assertFalse(success)
+            self.assertIn("not connected", message)
+            unmount.assert_called_once_with(remote)
+
+    def test_check_remote_connection_uses_remote_source(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config" / "mountlet"
+            config_dir.mkdir(parents=True)
+            (config_dir / "mounts.toml").write_text(
+                '[remotes."R2__S3"]\nremote_path = "bucket/prefix"\n',
+                encoding="utf-8",
+            )
+            core = self.load_core(tempdir, "[R2__S3]\ntype = s3\n", set_mount_base=False)
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core.subprocess, "run") as run:
+                run.return_value.returncode = 0
+                success, message = core.check_remote_connection(remote, "/usr/bin/rclone")
+
+            self.assertTrue(success)
+            self.assertIn("connected", message)
+            self.assertEqual(
+                run.call_args.args[0],
+                ["/usr/bin/rclone", "lsf", "R2__S3:bucket/prefix", "--max-depth", "1"],
+            )
 
     def test_mount_remote_rejects_non_empty_mount_directory(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -114,6 +175,7 @@ type = dropbox
                 """
 [remotes."Docs"]
 mount_path = "custom-docs"
+remote_path = "bucket/docs"
 mount_flags = "--read-only"
 auto_mount = false
 
@@ -138,9 +200,135 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Docs"])
         self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertEqual(remotes[0].remote_path, "bucket/docs")
         self.assertTrue(Path(remotes[0].mount_path).is_absolute())
         self.assertFalse(remotes[0].auto_mount)
         self.assertIn("--read-only", remotes[0].flags)
+
+    def test_load_remotes_displays_s3_provider_name_without_changing_mount_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Archive__S3]
+type = s3
+provider = Cloudflare
+access_key_id = key
+secret_access_key = secret
+endpoint = https://account.r2.cloudflarestorage.com
+""".strip(),
+            )
+
+            remote = core.load_remotes()[0]
+
+        self.assertEqual(remote.provider, "Cloudflare R2")
+        self.assertTrue(remote.mount_path.endswith("/s3/Archive"))
+
+    def test_load_remotes_uses_mountlet_order_when_configured(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_dir = Path(tempdir) / "config" / "mountlet"
+            config_dir.mkdir(parents=True)
+            (config_dir / "mounts.toml").write_text(
+                """
+[remotes."Photos"]
+order = 0
+
+[remotes."Docs"]
+order = 1
+""".strip(),
+                encoding="utf-8",
+            )
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+
+[Photos]
+type = dropbox
+""".strip(),
+            )
+
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.name for remote in remotes], ["Photos", "Docs"])
+
+    def test_load_remotes_can_hide_incomplete_oauth_remotes(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[PartialDrive]
+type = drive
+
+[ReadyDrive]
+type = drive
+token = REDACTED
+
+[PartialDropbox]
+type = dropbox
+
+[PartialOneDrive]
+type = onedrive
+token = REDACTED
+
+[ReadyOneDrive]
+type = onedrive
+token = REDACTED
+drive_id = drive
+drive_type = personal
+
+[PartialS3]
+type = s3
+provider = Cloudflare
+access_key_id = key
+secret_access_key = secret
+
+[ReadyS3]
+type = s3
+provider = Minio
+access_key_id = minioadmin
+secret_access_key = minioadmin
+endpoint = http://127.0.0.1:9000
+
+[PartialWebDav]
+type = webdav
+
+[WebDav]
+type = webdav
+url = https://example.test
+
+[PartialKoofr]
+type = koofr
+provider = koofr
+user = eric@example.com
+
+[Koofr]
+type = koofr
+provider = koofr
+user = eric@example.com
+password = REDACTED
+""".strip(),
+            )
+
+            remotes = core.load_remotes(include_incomplete=False)
+
+        self.assertEqual(
+            [remote.name for remote in remotes],
+            ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav", "Koofr"],
+        )
+
+    def test_storage_usage_uses_timeout(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.subprocess, "check_output", return_value='{"used": 1}') as check_output:
+                    usage = core.get_storage_usage_details(remote)
+
+            self.assertEqual(usage.used, 1)
+            self.assertEqual(check_output.call_args.kwargs["timeout"], core.RCLONE_STATUS_TIMEOUT_SECONDS)
 
     def test_editable_rclone_fields_are_safe_and_saveable(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -167,6 +355,82 @@ token = REDACTED
 
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
             self.assertEqual(remote.extra_info["token"], "REDACTED")
+
+    def test_delete_rclone_remote_removes_config_section(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+
+[Photos]
+type = dropbox
+""".strip(),
+            )
+
+            self.assertTrue(core.delete_rclone_remote("Docs"))
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.name for remote in remotes], ["Photos"])
+
+    def test_drive_oauth_credentials_reads_existing_drive_client_values(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+client_id = docs-client
+client_secret = docs-secret
+
+[Blank]
+type = drive
+client_id =
+client_secret =
+
+[Other]
+type = dropbox
+client_id = other-client
+client_secret = other-secret
+""".strip(),
+            )
+
+            credentials = core.drive_oauth_credentials()
+
+        self.assertEqual(len(credentials), 1)
+        self.assertEqual(credentials[0].remote_name, "Docs")
+        self.assertEqual(credentials[0].client_id, "docs-client")
+        self.assertEqual(credentials[0].client_secret, "docs-secret")
+
+    def test_drive_oauth_credentials_groups_duplicate_client_values(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs]
+type = drive
+client_id = shared-client
+client_secret = shared-secret
+
+[Photos]
+type = drive
+client_id = shared-client
+client_secret = shared-secret
+
+[Work]
+type = drive
+client_id = work-client
+client_secret = work-secret
+""".strip(),
+            )
+
+            credentials = core.drive_oauth_credentials()
+
+        self.assertEqual([item.remote_name for item in credentials], ["Docs, +1", "Work"])
+        self.assertEqual(credentials[0].remote_names, ("Docs", "Photos"))
+        self.assertEqual(credentials[0].client_id, "shared-client")
+        self.assertEqual(credentials[1].client_id, "work-client")
 
     def test_get_storage_usage_uses_configured_rclone_binary(self):
         with tempfile.TemporaryDirectory() as tempdir:

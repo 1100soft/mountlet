@@ -51,8 +51,32 @@ ignored by git and must not be part of the installed-user workflow.
 - Build a wheel and install it in a clean virtual environment.
 - Test on a fresh Ubuntu installation with `rclone` and `fuse3`.
 - Verify import/export flows with non-sensitive sample configs.
+- Update the provider support table in the root README after checking real
+  setup paths.
 - Confirm the built wheel and source distribution do not include local secrets.
 - Follow [RELEASE.md](RELEASE.md) when merging `wip` to `main`, tagging, and publishing.
+
+## Provider Test Status
+
+The 0.2.2 release documents provider status based on local remotes in
+`~/.config/rclone/rclone.conf` and recent GUI setup work.
+
+Locally tested:
+
+- Google Drive
+- Dropbox
+- Microsoft OneDrive
+- Box
+- pCloud
+- Cloudflare R2
+- Koofr
+
+Available but untested:
+
+- Amazon S3
+- MinIO and other S3-compatible storage
+- Wasabi
+- WebDAV providers including Nextcloud, ownCloud, SharePoint, and Fastmail Files
 
 ## Release Strategy
 

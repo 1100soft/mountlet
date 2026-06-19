@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.2 - 2026-06-19
+
+- Added a guided new-remote wizard for major cloud providers, with browser and
+  token-based rclone authentication flows, provider-specific fields, official
+  setup links, connection validation, and cleanup of incomplete remotes.
+- Added remote ordering controls, saved one-time sorting by registration time,
+  name, provider, and storage usage, and per-remote move buttons.
+- Added provider-colored labels and browser shortcuts, compact mount controls,
+  dynamic window sizing, and responsive background mount, unmount, usage, and
+  folder-opening operations.
+- Added frameless main and configuration windows, an in-window keep-above
+  control, and reliable current-desktop tray behavior on Plasma X11. Pinning and
+  desktop movement now use EWMH requests without remapping the Qt window.
+- Added provider status colors in the new-remote wizard to distinguish locally
+  tested providers from untested setup paths without adding extra label text.
+- Added a dedicated Koofr setup path using rclone's Koofr backend instead of
+  routing Koofr through WebDAV.
+- Added provider-specific S3 setup hints and links for Cloudflare R2, MinIO,
+  Amazon S3, Wasabi, and other S3-compatible providers.
+- Added post-registration and post-mount connection checks so failed setup does
+  not quietly leave unusable remotes in the app list.
+- Improved remote naming, provider suffixes, credential reuse, OAuth port
+  handling, wizard cancellation, application shutdown, and child-window
+  lifecycle behavior.
+- Documented locally tested providers and untested provider paths.
+
 ## 0.2.1 - 2026-06-02
 
 - Added a cropped transparent Mountlet icon for the tray and window.
