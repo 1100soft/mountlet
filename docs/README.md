@@ -58,7 +58,7 @@ ignored by git and must not be part of the installed-user workflow.
 
 ## Provider Test Status
 
-The next release documents provider status based on local remotes in
+The 0.2.2 release documents provider status based on local remotes in
 `~/.config/rclone/rclone.conf` and recent GUI setup work.
 
 Locally tested:
