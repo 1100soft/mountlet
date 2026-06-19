@@ -1133,7 +1133,7 @@ class TrayTests(unittest.TestCase):
 
         window.setWindowFlags.assert_called_once_with(3)
 
-    def test_toggle_keep_above_applies_window_stays_on_top_hint(self):
+    def test_toggle_keep_above_uses_x11_state_without_remapping_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.qt = SimpleNamespace(
             Qt=SimpleNamespace(WindowType=SimpleNamespace(WindowStaysOnTopHint="top"))
@@ -1143,13 +1143,14 @@ class TrayTests(unittest.TestCase):
         mountlet_window._keep_above = False
         mountlet_window._keep_above_button = mock.Mock()
 
-        with mock.patch.object(mountlet_window, "_window_position", return_value=(12, 34)):
+        with mock.patch.object(tray, "_set_x11_keep_above", return_value=True) as set_above:
             mountlet_window._toggle_keep_above(True)
 
         self.assertTrue(mountlet_window._keep_above)
-        mountlet_window.window.setWindowFlag.assert_called_once_with("top", True)
-        mountlet_window.window.move.assert_called_once_with(12, 34)
-        mountlet_window.window.show.assert_called_once_with()
+        set_above.assert_called_once_with(mountlet_window.window, True)
+        mountlet_window.window.setWindowFlag.assert_not_called()
+        mountlet_window.window.move.assert_not_called()
+        mountlet_window.window.show.assert_not_called()
         mountlet_window._keep_above_button.setChecked.assert_called_once_with(True)
         mountlet_window._keep_above_button.setToolTip.assert_called_once_with(
             "Stop keeping Mountlet above other windows"
@@ -1302,6 +1303,17 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(event.xclient.data.l[1], 2)
         x11.XFlush.assert_called_once_with(123)
         x11.XCloseDisplay.assert_called_once_with(123)
+
+    def test_send_x11_keep_above_request_uses_net_wm_state_above(self):
+        with mock.patch.object(tray, "_send_x11_client_message", return_value=True) as send:
+            self.assertTrue(tray._send_x11_keep_above_request(12345, True))
+
+        send.assert_called_once_with(
+            12345,
+            b"_NET_WM_STATE",
+            [1, 0, 0, 2],
+            atom_data={1: b"_NET_WM_STATE_ABOVE"},
+        )
 
     def test_set_x11_window_desktop_skips_wayland(self):
         window = mock.Mock()

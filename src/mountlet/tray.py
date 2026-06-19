@@ -1040,7 +1040,13 @@ class _XEvent(ctypes.Union):
     ]
 
 
-def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
+def _send_x11_client_message(
+    window_id: int,
+    message_name: bytes,
+    data: list[int],
+    *,
+    atom_data: dict[int, bytes] | None = None,
+) -> bool:
     library = ctypes.util.find_library("X11")
     if not library:
         return False
@@ -1069,7 +1075,7 @@ def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
         return False
     try:
         root = x11.XDefaultRootWindow(display)
-        message_type = x11.XInternAtom(display, b"_NET_WM_DESKTOP", 0)
+        message_type = x11.XInternAtom(display, message_name, 0)
         if not root or not message_type:
             return False
         event = _XEvent()
@@ -1079,8 +1085,13 @@ def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
         event.xclient.window = window_id
         event.xclient.message_type = message_type
         event.xclient.format = 32
-        event.xclient.data.l[0] = desktop
-        event.xclient.data.l[1] = 2  # Pager source indication
+        for index, value in enumerate(data[:5]):
+            event.xclient.data.l[index] = value
+        for index, atom_name in (atom_data or {}).items():
+            atom = x11.XInternAtom(display, atom_name, 0)
+            if not atom:
+                return False
+            event.xclient.data.l[index] = atom
         event_mask = (1 << 20) | (1 << 19)  # SubstructureRedirect | SubstructureNotify
         sent = x11.XSendEvent(display, root, 0, event_mask, ctypes.byref(event))
         x11.XFlush(display)
@@ -1089,6 +1100,36 @@ def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
         return False
     finally:
         x11.XCloseDisplay(display)
+
+
+def _send_x11_window_desktop_request(window_id: int, desktop: int) -> bool:
+    return _send_x11_client_message(
+        window_id,
+        b"_NET_WM_DESKTOP",
+        [desktop, 2],
+    )
+
+
+def _send_x11_keep_above_request(window_id: int, enabled: bool) -> bool:
+    return _send_x11_client_message(
+        window_id,
+        b"_NET_WM_STATE",
+        [1 if enabled else 0, 0, 0, 2],
+        atom_data={1: b"_NET_WM_STATE_ABOVE"},
+    )
+
+
+def _set_x11_keep_above(window: Any, enabled: bool) -> bool:
+    if platform.system() != "Linux":
+        return False
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return False
+    if not os.environ.get("DISPLAY"):
+        return False
+    window_id = _x11_qt_window_id(window)
+    if window_id is None:
+        return False
+    return _send_x11_keep_above_request(window_id, enabled)
 
 
 def _set_x11_window_desktop(window: Any, desktop: int) -> bool:
@@ -3484,6 +3525,8 @@ class MountletWindow:
         self._update_keep_above_button()
 
     def _apply_keep_above(self) -> None:
+        if _set_x11_keep_above(self.window, self._keep_above):
+            return
         try:
             flag = self.qt.Qt.WindowType.WindowStaysOnTopHint
         except Exception:
