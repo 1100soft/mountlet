@@ -5,6 +5,26 @@ user-facing document used for package publication.
 
 ## Development
 
+### Platform architecture
+
+Operating-system behavior belongs in `src/mountlet/platform_services/`. Application
+modules use the platform contract for:
+
+- user config, state, cache, and mount paths;
+- rclone discovery and filesystem-driver readiness;
+- mount process creation, status checks, and unmounting;
+- start-at-login registration and process-tree shutdown;
+- desktop file opening, workspace movement, and keep-above capabilities.
+
+`LinuxPlatformServices`, `WindowsPlatformServices`, and
+`MacOSPlatformServices` provide the OS layer. `DesktopServices` supplies Qt
+fallbacks and accepts optional desktop adapters. KDE/Dolphin/X11 behavior is an
+enhancement on Linux; it must not be required for mounting or opening folders.
+
+The adapters establish implementation boundaries and testable conventions. They
+do not yet mean Windows or macOS releases are supported. Each platform still
+requires native packaging and end-to-end mount testing.
+
 Install from a local checkout:
 
 ```bash

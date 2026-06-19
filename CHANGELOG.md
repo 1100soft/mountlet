@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Refactored paths, prerequisites, mount lifecycle, process handling,
+  start-at-login registration, and desktop integration behind Linux, Windows,
+  macOS, and generic Qt platform services.
+- Kept Dolphin and Plasma X11 behavior as optional Linux enhancements while
+  providing default file-manager and window fallbacks for other environments.
+- Added platform adapter tests and Windows-specific directory mountpoint
+  preparation without claiming Windows or macOS release support yet.
+
 ## 0.2.2 - 2026-06-19
 
 - Added a guided new-remote wizard for major cloud providers, with browser and

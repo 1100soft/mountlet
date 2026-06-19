@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import configparser
-import os
-import signal
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -13,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .config_tools.shared import default_config_path, find_rclone
+from .platform_services import get_platform
+from .platform_services.processes import process_group_options, signal_process_tree, terminate_process
 
 
 class RcloneWizardError(RuntimeError):
@@ -22,6 +22,7 @@ class RcloneWizardError(RuntimeError):
 RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS = 300
 _ACTIVE_CONFIG_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 _ACTIVE_CONFIG_LOCK = threading.Lock()
+PLATFORM = get_platform()
 
 
 @dataclass(frozen=True)
@@ -178,7 +179,7 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,
+            **process_group_options(PLATFORM),
         )
         with _ACTIVE_CONFIG_LOCK:
             _ACTIVE_CONFIG_PROCESSES[remote_name] = process
@@ -212,24 +213,11 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    _signal_process_tree(process, signal.SIGTERM)
-    try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        _signal_process_tree(process, signal.SIGKILL)
-        process.wait(timeout=2)
+    terminate_process(process, PLATFORM)
 
 
 def _signal_process_tree(process: subprocess.Popen[str], sig: int) -> None:
-    try:
-        os.killpg(process.pid, sig)
-    except OSError:
-        try:
-            process.send_signal(sig)
-        except OSError:
-            pass
+    signal_process_tree(process, sig, PLATFORM)
 
 
 def _ensure_config_parent(config_path: Path) -> None:

@@ -22,13 +22,16 @@ class LinuxPlatformServices(PlatformServices):
     def default_mount_base(self) -> Path:
         return Path.home() / "cloud_mounts"
 
-    def unmount_commands(self, path: str) -> tuple[tuple[str, ...], ...]:
+    def legacy_mount_bases(self) -> tuple[Path, ...]:
+        return (Path.home() / "gdrive", Path.home() / "GDrive", Path("/mnt/gdrive"))
+
+    def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         command = shutil.which("fusermount3") or shutil.which("fusermount") or shutil.which("umount")
         if not command:
             return ()
         if Path(command).name == "umount":
-            return ((command, path), (command, "-l", path))
-        return ((command, "-u", path), (command, "-uz", path))
+            return ([command, path], [command, "-l", path])
+        return ([command, "-u", path], [command, "-uz", path])
 
     def autostart_path(self, app_name: str) -> Path:
         config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).expanduser()
@@ -75,5 +78,11 @@ class LinuxPlatformServices(PlatformServices):
     def mount_driver_available(self) -> bool:
         return bool(shutil.which("fusermount3") or shutil.which("fusermount"))
 
+    def mount_driver_config_paths(self) -> tuple[Path, ...]:
+        return (Path("/etc/fuse.conf"),)
+
     def prerequisite_guidance(self) -> tuple[str, ...]:
-        return ("Install rclone.", "Install FUSE 3 (for Ubuntu: sudo apt install fuse3).")
+        return (
+            "Install rclone: sudo apt install rclone",
+            "Install FUSE: sudo apt install fuse3",
+        )

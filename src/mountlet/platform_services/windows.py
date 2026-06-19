@@ -51,6 +51,21 @@ class WindowsPlatformServices(PlatformServices):
             return False
         return result.returncode == 0
 
+    def prepare_mount_path(self, path: str) -> OperationResult:
+        mountpoint = Path(path)
+        try:
+            mountpoint.parent.mkdir(parents=True, exist_ok=True)
+            if mountpoint.exists() and not self.is_mounted(path):
+                if not mountpoint.is_dir() or any(mountpoint.iterdir()):
+                    return OperationResult(
+                        False,
+                        f"Mount folder {path} is not empty. Choose an empty folder or move its files first.",
+                    )
+                mountpoint.rmdir()
+        except OSError as exc:
+            return OperationResult(False, f"Cannot prepare Windows mount folder {path}: {exc}")
+        return OperationResult(True)
+
     def unmount(self, path: str, pid: int | None = None) -> OperationResult:
         if pid:
             try:

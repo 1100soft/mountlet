@@ -5,9 +5,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
-import platform
 import shlex
-import shutil
 import subprocess
 import tempfile
 import time
@@ -15,20 +13,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
+from .config_tools.shared import default_config_path
+from .platform_services import get_platform
 from .settings import load_app_settings, load_mount_settings
 
-_ENV_CONFIG = os.environ.get("RCLONE_CONFIG")
-CONFIG_PATH = (
-    os.path.expanduser(_ENV_CONFIG)
-    if _ENV_CONFIG
-    else (
-        os.path.expanduser("~/.config/rclone/rclone.conf")
-        if platform.system() != "Windows"
-        else os.path.expandvars("%APPDATA%\\rclone\\rclone.conf")
-    )
-)
-IS_WINDOWS = platform.system() == "Windows"
-DEFAULT_HOME_MOUNT = os.path.expanduser("~/cloud_mounts")
+PLATFORM = get_platform()
+CONFIG_PATH = str(default_config_path())
+DEFAULT_HOME_MOUNT = str(PLATFORM.default_mount_base())
 
 ENV_BASE_VARS = ("MOUNTLET_MOUNT_BASE", "CLOUD_MOUNT_BASE", "GDRIVE_MOUNT_BASE")
 PRIMARY_BASE_ENV = ENV_BASE_VARS[0]
@@ -56,14 +47,8 @@ def _mount_dir_candidates() -> List[str]:
     candidates: List[str] = []
     if configured:
         candidates.append(configured)
-    candidates.extend(
-        [
-            DEFAULT_HOME_MOUNT,
-            os.path.expanduser("~/gdrive"),
-            os.path.expanduser("~/GDrive"),
-            "/mnt/gdrive",
-        ]
-    )
+    candidates.append(DEFAULT_HOME_MOUNT)
+    candidates.extend(str(path) for path in PLATFORM.legacy_mount_bases())
     return candidates
 
 
@@ -440,17 +425,7 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
 
 
 def find_rclone() -> str | None:
-    env_path = os.environ.get("RCLONE_PATH")
-    if env_path and os.path.exists(env_path):
-        return env_path
-    which = shutil.which("rclone.exe" if IS_WINDOWS else "rclone")
-    if which:
-        return which
-    if IS_WINDOWS:
-        candidate = r"C:\\Program Files\\rclone\\rclone.exe"
-        if os.path.exists(candidate):
-            return candidate
-    return None
+    return PLATFORM.find_rclone()
 
 
 def mount_path(remote: RemoteInfo) -> str:
@@ -462,25 +437,8 @@ def remote_source(remote: RemoteInfo) -> str:
     return f"{remote.name}:{path}" if path else f"{remote.name}:"
 
 
-def is_mounted_windows(path: str) -> bool:
-    if not os.path.exists(path):
-        return False
-    try:
-        result = subprocess.run(
-            ["fsutil", "reparsepoint", "query", path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return result.returncode == 0
-    except Exception:
-        return True
-
-
 def is_mounted(remote: RemoteInfo) -> bool:
-    path = mount_path(remote)
-    if IS_WINDOWS:
-        return is_mounted_windows(path)
-    return os.path.ismount(path)
+    return PLATFORM.is_mounted(mount_path(remote))
 
 
 def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, interval: float = 0.2) -> bool:
@@ -493,22 +451,12 @@ def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, inter
 
 
 def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
-    popen_kwargs: Dict[str, int] = {}
-    if IS_WINDOWS:
-        CREATE_NO_WINDOW = 0x08000000
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        WIN_FLAGS = CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-        popen_kwargs["creationflags"] = WIN_FLAGS
-    else:
-        popen_kwargs["close_fds"] = True
-
     try:
         proc = subprocess.Popen(
             args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            **popen_kwargs,
+            **PLATFORM.mount_process_options(),
         )
     except Exception as exc:
         return False, f"[!] Failed to mount {remote.name}: {exc}"
@@ -544,22 +492,8 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
 
 def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
     ensure_base_mount_dir()
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception as exc:
-        return False, f"[!] Cannot create mount dir {path}: {exc}"
-    if not os.access(path, os.W_OK | os.X_OK):
-        return False, f"[!] Mount dir {path} is not writable."
-    already_mounted = is_mounted_windows(path) if IS_WINDOWS else os.path.ismount(path)
-    if not already_mounted:
-        try:
-            if os.listdir(path):
-                return False, (
-                    f"[!] Mount dir {path} is not empty. Choose an empty folder or move the existing files first."
-                )
-        except OSError as exc:
-            return False, f"[!] Cannot inspect mount dir {path}: {exc}"
-    return True, None
+    result = PLATFORM.prepare_mount_path(path)
+    return result.success, None if result.success else f"[!] {result.detail}"
 
 
 def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
@@ -614,46 +548,15 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
 
 def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     path = mount_path(remote)
-    if IS_WINDOWS:
-        pid = PIDS.get(remote.name)
-        if pid:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            PIDS.pop(remote.name, None)
-        if os.path.exists(path):
-            subprocess.run(
-                ["cmd", "/c", "rmdir", path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        return True, f"[*] unmounted {remote.name}."
-
     pid = PIDS.get(remote.name)
-    unmount_cmd = shutil.which("fusermount3") or shutil.which("fusermount") or shutil.which("umount")
-    if not unmount_cmd:
-        return False, "[!] No unmount command found. Install fuse3/fuse or unmount manually."
-    unmount_name = os.path.basename(unmount_cmd)
-    commands = (
-        [[unmount_cmd, "-u", path], [unmount_cmd, "-uz", path]]
-        if unmount_name != "umount"
-        else [[unmount_cmd, path], [unmount_cmd, "-l", path]]
-    )
-    last_result = None
-    for args in commands:
-        last_result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if last_result.returncode == 0:
-            break
-    if last_result is None or last_result.returncode != 0:
-        return False, f"[!] Failed to unmount {remote.name} from {path}. Close files or folders using it and try again."
-    if pid:
-        try:
-            os.kill(pid, 15)
-        except Exception:
-            pass
-        PIDS.pop(remote.name, None)
+    result = PLATFORM.unmount(path, pid)
+    if not result.success:
+        detail = f" {result.detail}" if result.detail else ""
+        return False, (
+            f"[!] Failed to unmount {remote.name} from {path}.{detail} "
+            "Close files or folders using it and try again."
+        )
+    PIDS.pop(remote.name, None)
     _cleanup_mount_dir(path)
     return True, f"[*] unmounted {remote.name}."
 

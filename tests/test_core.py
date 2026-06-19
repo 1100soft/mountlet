@@ -474,7 +474,7 @@ client_secret = work-secret
             def which(name: str) -> str | None:
                 return "/usr/bin/fusermount3" if name == "fusermount3" else None
 
-            with mock.patch.object(core.shutil, "which", side_effect=which):
+            with mock.patch("mountlet.platform_services.linux.shutil.which", side_effect=which):
                 with mock.patch.object(core.subprocess, "run") as run:
                     run.return_value.returncode = 0
                     success, _ = core.unmount_remote(remote)
@@ -490,7 +490,7 @@ client_secret = work-secret
             def which(name: str) -> str | None:
                 return "/usr/bin/fusermount3" if name == "fusermount3" else None
 
-            with mock.patch.object(core.shutil, "which", side_effect=which):
+            with mock.patch("mountlet.platform_services.linux.shutil.which", side_effect=which):
                 with mock.patch.object(core.subprocess, "run") as run:
                     run.side_effect = [
                         mock.Mock(returncode=1),

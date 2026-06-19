@@ -36,6 +36,9 @@ class PlatformServices:
     def default_mount_base(self) -> Path:
         return Path.home() / "Mountlet"
 
+    def legacy_mount_bases(self) -> tuple[Path, ...]:
+        return ()
+
     def rclone_executable_names(self) -> tuple[str, ...]:
         return ("rclone",)
 
@@ -66,11 +69,30 @@ class PlatformServices:
     def is_mounted(self, path: str) -> bool:
         return os.path.ismount(path)
 
-    def unmount_commands(self, path: str) -> tuple[tuple[str, ...], ...]:
+    def prepare_mount_path(self, path: str) -> OperationResult:
+        mountpoint = Path(path)
+        try:
+            mountpoint.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return OperationResult(False, f"Cannot create mount folder {path}: {exc}")
+        if not os.access(mountpoint, os.W_OK | os.X_OK):
+            return OperationResult(False, f"Mount folder {path} is not writable.")
+        if not self.is_mounted(path):
+            try:
+                if any(mountpoint.iterdir()):
+                    return OperationResult(
+                        False,
+                        f"Mount folder {path} is not empty. Choose an empty folder or move its files first.",
+                    )
+            except OSError as exc:
+                return OperationResult(False, f"Cannot inspect mount folder {path}: {exc}")
+        return OperationResult(True)
+
+    def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         command = shutil.which("umount")
         if not command:
             return ()
-        return ((command, path), (command, "-l", path))
+        return ([command, path], [command, "-l", path])
 
     def terminate_pid(self, pid: int) -> None:
         try:
@@ -122,6 +144,9 @@ class PlatformServices:
 
     def mount_driver_available(self) -> bool:
         return True
+
+    def mount_driver_config_paths(self) -> tuple[Path, ...]:
+        return ()
 
     def prerequisite_guidance(self) -> tuple[str, ...]:
         return ("Install rclone and the filesystem driver required by your operating system.",)

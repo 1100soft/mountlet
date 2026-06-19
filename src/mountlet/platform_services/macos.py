@@ -19,14 +19,14 @@ class MacOSPlatformServices(PlatformServices):
     def default_mount_base(self) -> Path:
         return Path.home() / "Mountlet"
 
-    def unmount_commands(self, path: str) -> tuple[tuple[str, ...], ...]:
-        commands: list[tuple[str, ...]] = []
+    def unmount_commands(self, path: str) -> tuple[list[str], ...]:
+        commands: list[list[str]] = []
         umount = shutil.which("umount")
         diskutil = shutil.which("diskutil")
         if umount:
-            commands.append((umount, path))
+            commands.append([umount, path])
         if diskutil:
-            commands.extend(((diskutil, "unmount", path), (diskutil, "unmount", "force", path)))
+            commands.extend(([diskutil, "unmount", path], [diskutil, "unmount", "force", path]))
         return tuple(commands)
 
     def autostart_path(self, app_name: str) -> Path:
