@@ -108,6 +108,32 @@ The tray app uses the tray icon this way:
 If your desktop session does not expose a system tray, use the terminal menu
 instead.
 
+## Provider Support
+
+Mountlet uses `rclone` under the hood, so provider support depends on both
+Mountlet's setup UI and rclone's backend behavior.
+
+Locally tested with the current GUI flow and/or active local remotes:
+
+- Google Drive
+- Dropbox
+- Microsoft OneDrive
+- Box
+- pCloud
+- Cloudflare R2 through the S3-compatible wizard
+- Koofr through rclone's dedicated Koofr backend
+
+Available but not yet locally tested:
+
+- Amazon S3
+- MinIO and other S3-compatible providers
+- Wasabi
+- WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files
+
+Untested providers are shown that way in the setup window. They may work through
+rclone, but expect rough edges until the wizard path is tested with a real
+account.
+
 ## Extra Commands
 
 These are useful for backup, troubleshooting, or moving to another computer:

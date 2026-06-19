@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` first:
 
 ```bash
-VERSION=0.2.1
+VERSION=0.2.2
 python -m unittest discover -s tests
 python -m compileall -q src tests
 python -m pip wheel . -w /tmp/mountlet-release --no-deps --no-build-isolation
@@ -26,6 +26,7 @@ python -m pip wheel . -w /tmp/mountlet-release --no-deps --no-build-isolation
 Confirm:
 
 - `README.md` describes the user flow.
+- `README.md` marks tested and untested provider setup paths.
 - `CHANGELOG.md` has a section for the version being released.
 - `pyproject.toml` and `src/mountlet/__init__.py` have the same version.
 - `SECURITY.md` has an active security reporting path or GitHub private vulnerability reporting is enabled.

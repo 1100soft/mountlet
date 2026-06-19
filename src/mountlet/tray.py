@@ -100,14 +100,14 @@ DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
 FORCED_QUIT_SECONDS = 3.0
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("Google Drive", "drive"),
-    ("Dropbox", "dropbox"),
-    ("Microsoft OneDrive", "onedrive"),
-    ("Box", "box"),
-    ("pCloud", "pcloud"),
-    ("Koofr", "koofr"),
-    ("S3-compatible storage", "s3"),
-    ("WebDAV", "webdav"),
+    ("Google Drive (tested locally)", "drive"),
+    ("Dropbox (tested locally)", "dropbox"),
+    ("Microsoft OneDrive (tested locally)", "onedrive"),
+    ("Box (tested locally)", "box"),
+    ("pCloud (tested locally)", "pcloud"),
+    ("Koofr (tested locally)", "koofr"),
+    ("S3-compatible storage (partly tested)", "s3"),
+    ("WebDAV (untested)", "webdav"),
 )
 OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 REMOTE_CONFIG_SUFFIXES = {
@@ -129,7 +129,7 @@ S3_PROVIDER_CONFIG_SUFFIXES = {
 }
 S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
     {
-        "label": "Cloudflare R2",
+        "label": "Cloudflare R2 (tested locally)",
         "provider": "Cloudflare",
         "config_name": "Cloudflare R2",
         "endpoint": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
@@ -146,7 +146,7 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "MinIO / S3-compatible",
+        "label": "MinIO / S3-compatible (untested)",
         "provider": "Minio",
         "config_name": "MinIO",
         "endpoint": "http://127.0.0.1:9000",
@@ -160,7 +160,7 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://min.io/docs/minio/linux/reference/minio-mc/mc-admin-user-svcacct-add.html">MinIO access key guide</a>',
     },
     {
-        "label": "Amazon S3",
+        "label": "Amazon S3 (untested)",
         "provider": "AWS",
         "config_name": "Amazon S3",
         "endpoint": "",
@@ -178,7 +178,7 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "Wasabi",
+        "label": "Wasabi (untested)",
         "provider": "Wasabi",
         "config_name": "Wasabi",
         "endpoint": "https://s3.wasabisys.com",
@@ -196,7 +196,7 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "Other S3-compatible",
+        "label": "Other S3-compatible (untested)",
         "provider": "Other",
         "config_name": "S3",
         "endpoint": "https://s3.example.com",
@@ -212,7 +212,7 @@ S3_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
 )
 WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
     {
-        "label": "Nextcloud",
+        "label": "Nextcloud (untested)",
         "vendor": "nextcloud",
         "config_name": "Nextcloud",
         "url": "https://cloud.example.com/remote.php/dav/files/user",
@@ -224,7 +224,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html">Nextcloud WebDAV guide</a>',
     },
     {
-        "label": "ownCloud",
+        "label": "ownCloud (untested)",
         "vendor": "owncloud",
         "config_name": "ownCloud",
         "url": "https://cloud.example.com/remote.php/webdav/",
@@ -239,7 +239,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "SharePoint Online",
+        "label": "SharePoint Online (untested)",
         "vendor": "sharepoint",
         "config_name": "SharePoint WebDAV",
         "url": "https://tenant.sharepoint.com/sites/site/Shared%20Documents",
@@ -251,7 +251,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://rclone.org/webdav/#sharepoint-online">rclone SharePoint WebDAV guide</a>',
     },
     {
-        "label": "SharePoint NTLM",
+        "label": "SharePoint NTLM (untested)",
         "vendor": "sharepoint-ntlm",
         "config_name": "SharePoint NTLM",
         "url": "https://sharepoint.example.com/sites/site/Documents",
@@ -266,7 +266,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "Fastmail Files",
+        "label": "Fastmail Files (untested)",
         "vendor": "fastmail",
         "config_name": "Fastmail Files",
         "url": "https://webdav.fastmail.com/",
@@ -281,7 +281,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "label": "rclone WebDAV server",
+        "label": "rclone WebDAV server (untested)",
         "vendor": "rclone",
         "config_name": "rclone WebDAV",
         "url": "http://127.0.0.1:8080/",
@@ -293,7 +293,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://rclone.org/commands/rclone_serve_webdav/">rclone serve WebDAV guide</a>',
     },
     {
-        "label": "Other WebDAV",
+        "label": "Other WebDAV (untested)",
         "vendor": "other",
         "config_name": "WebDAV",
         "url": "https://cloud.example.com/webdav",
