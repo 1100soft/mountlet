@@ -3327,7 +3327,6 @@ class MountletWindow:
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
-        outer.addWidget(self._window_header())
         outer.addWidget(self._sort_toolbar())
 
         scroll = self.qt.QScrollArea()
@@ -3354,20 +3353,16 @@ class MountletWindow:
         self.window.setCentralWidget(root)
         self._fit_to_content(root, scroll, container)
 
-    def _window_header(self) -> Any:
-        widget = self.qt.QWidget()
-        layout = self.qt.QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addStretch(1)
-        keep_above = self._pin_button()
-        layout.addWidget(keep_above)
-        return widget
-
     def _pin_button(self) -> Any:
-        button = self.qt.QPushButton("Pin")
-        button.setFixedSize(42, 22)
+        button = self.qt.QPushButton("📌")
+        button.setFixedSize(30, 26)
         button.setToolTip("Keep Mountlet above other windows")
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 2, 12))
+            button.setFont(font)
+        except Exception:
+            pass
         try:
             button.setCheckable(True)
             button.setChecked(self._keep_above)
@@ -3417,7 +3412,10 @@ class MountletWindow:
         except Exception:
             pass
         try:
-            button.setText("Pinned" if self._keep_above else "Pin")
+            if self._keep_above:
+                button.setToolTip("Stop keeping Mountlet above other windows")
+            else:
+                button.setToolTip("Keep Mountlet above other windows")
         except Exception:
             pass
 
@@ -3449,6 +3447,7 @@ class MountletWindow:
 
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
+        layout.addWidget(self._pin_button())
         layout.addStretch(1)
         return widget
 
