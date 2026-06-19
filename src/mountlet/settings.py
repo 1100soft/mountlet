@@ -10,6 +10,7 @@ from typing import Any
 
 from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ensure_app_directories, legacy_app_config_dirs
 from .platform_services import get_platform
+from .platform_services.file_managers import default_file_manager_id
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class AppSettings:
     auto_mount: bool = False
     auto_mount_delay: float = 2.0
     start_at_login: bool = False
+    file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
 
@@ -45,6 +47,9 @@ auto_mount_delay = 2.0
 start_at_login = false
 
 [tray]
+# Leave empty to use this platform's default file manager.
+file_manager = ""
+
 # current_desktop reuses a supported file-manager window on the current desktop when possible.
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
@@ -229,6 +234,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         auto_mount=_bool_value(app.get("auto_mount"), False),
         auto_mount_delay=max(_float_value(app.get("auto_mount_delay"), 2.0), 0.0),
         start_at_login=_bool_value(app.get("start_at_login"), _autostart_file().exists()),
+        file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
     )
@@ -282,6 +288,9 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"start_at_login = {_toml_bool(settings.start_at_login)}",
             "",
             "[tray]",
+            "# File-manager identifier discovered by Mountlet.",
+            f"file_manager = {_toml_string(settings.file_manager)}",
+            "",
             "# current_desktop reuses a supported file-manager window on the current desktop when possible.",
             "# default uses the desktop's normal folder opener.",
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",

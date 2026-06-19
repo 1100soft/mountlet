@@ -115,6 +115,10 @@ The Mountlet window provides:
   remaining space, with manual move controls for final adjustments.
 - A pin control that keeps the window above other windows without tying it to
   one desktop.
+- A file-manager selector in App settings. Mountlet follows the Linux desktop
+  default, uses File Explorer by default on Windows, and Finder on macOS; other
+  detected managers can be selected without changing the operating-system
+  default.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.

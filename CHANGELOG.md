@@ -9,6 +9,9 @@
   providing default file-manager and window fallbacks for other environments.
 - Added platform adapter tests and Windows-specific directory mountpoint
   preparation without claiming Windows or macOS release support yet.
+- Added cross-platform file-manager discovery and an app-specific selector,
+  with platform defaults and automatic fallback when a selected manager is no
+  longer installed.
 
 ## 0.2.2 - 2026-06-19
 

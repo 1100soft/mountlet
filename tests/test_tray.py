@@ -1902,6 +1902,23 @@ class TrayTests(unittest.TestCase):
         qt.QUrl.fromLocalFile.assert_not_called()
         qt.QDesktopServices.openUrl.assert_not_called()
 
+    def test_open_folder_explicit_manager_overrides_desktop_service(self):
+        qt = mock.Mock()
+        manager = SimpleNamespace(identifier="org.example.Files.desktop")
+        settings = SimpleNamespace(
+            file_manager=manager.identifier,
+            open_folder_behavior="file-manager-service",
+            focus_file_manager=True,
+        )
+        with mock.patch.object(tray, "load_app_settings", return_value=settings):
+            with mock.patch.object(tray, "resolve_file_manager", return_value=manager):
+                with mock.patch.object(tray, "_show_folder_with_file_manager") as service:
+                    with mock.patch.object(tray, "open_with_file_manager", return_value=True) as opener:
+                        self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+
+        service.assert_not_called()
+        opener.assert_called_once_with(manager, "/tmp/docs", new_window=False)
+
     def test_open_text_file_focused_opens_known_editor(self):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             with mock.patch.object(tray.shutil, "which", side_effect=lambda name: "/usr/bin/kate" if name == "kate" else None):

@@ -28,6 +28,12 @@ from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .platform_services import get_platform
 from .platform_services.desktop import DesktopServices
+from .platform_services.file_managers import (
+    SYSTEM_FILE_MANAGER_ID,
+    discover_file_managers,
+    open_with_file_manager,
+    resolve_file_manager,
+)
 from .settings import (
     AppSettings,
     MountSettings,
@@ -844,20 +850,9 @@ def _file_manager_label() -> str:
     global _file_manager_label_cache
     if _file_manager_label_cache is not None:
         return _file_manager_label_cache
-    app = _default_directory_app()
-    if not app:
-        system = platform.system()
-        if system == "Windows":
-            _file_manager_label_cache = "File Explorer"
-        elif system == "Darwin":
-            _file_manager_label_cache = "Finder"
-        else:
-            _file_manager_label_cache = "the file manager"
-        return _file_manager_label_cache
-    name = app.rsplit("/", 1)[-1].removesuffix(".desktop")
-    name = re.sub(r"^(org|com|net)\.", "", name)
-    name = name.rsplit(".", 1)[-1]
-    _file_manager_label_cache = name.replace("-", " ").replace("_", " ").title() or "the file manager"
+    settings = load_app_settings()
+    manager = resolve_file_manager(get_platform(), settings.file_manager)
+    _file_manager_label_cache = manager.label
     return _file_manager_label_cache
 
 
@@ -1403,9 +1398,15 @@ def _open_folder_in_dolphin_tab(path: str, *, current_desktop: bool = True, focu
     return False
 
 
-def _open_folder_with_known_file_manager(path: str, *, behavior: str, focus: bool) -> bool:
-    default_app = _default_directory_app().lower()
-    if "dolphin" in default_app:
+def _open_folder_with_known_file_manager(
+    path: str,
+    *,
+    behavior: str,
+    focus: bool,
+    manager_id: str | None = None,
+) -> bool:
+    selected = (manager_id or _default_directory_app()).lower()
+    if "dolphin" in selected:
         if behavior == "new_window":
             return False
         if _open_folder_in_dolphin_tab(path, current_desktop=behavior == "current_desktop", focus=focus):
@@ -1417,18 +1418,32 @@ def _open_folder_with_known_file_manager(path: str, *, behavior: str, focus: boo
 
 def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "default") -> bool:
     settings = load_app_settings()
+    manager = resolve_file_manager(get_platform(), settings.file_manager)
     behavior = settings.open_folder_behavior
     if strategy == "default":
         strategy = behavior
-    if strategy == "file-manager-service" and _show_folder_with_file_manager(path):
+    if (
+        strategy == "file-manager-service"
+        and manager.identifier == SYSTEM_FILE_MANAGER_ID
+        and _show_folder_with_file_manager(path)
+    ):
         return True
     if strategy in {"current_desktop", "existing_window"} and _open_folder_with_known_file_manager(
         path,
         behavior=strategy,
         focus=settings.focus_file_manager,
+        manager_id=(
+            _default_directory_app()
+            if manager.identifier == SYSTEM_FILE_MANAGER_ID
+            else manager.identifier
+        ),
     ):
         return True
-    if strategy == "new_window" and _open_folder_in_dolphin_new_window(path):
+    if manager.identifier != SYSTEM_FILE_MANAGER_ID and open_with_file_manager(
+        manager,
+        path,
+        new_window=strategy == "new_window",
+    ):
         return True
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
@@ -1575,18 +1590,26 @@ class AppConfigDialog(_ConfigDialogBase):
             "auto_mount": self._check(app_settings.auto_mount),
             "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
             "start_at_login": self._check(app_settings.start_at_login),
+            "file_manager": self._combo(
+                tuple(
+                    (manager.identifier, manager.label)
+                    for manager in discover_file_managers(get_platform(), refresh=True)
+                ),
+                app_settings.file_manager,
+            ),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
         self.fields["start_at_login"].setText("Start Mountlet when I log in")
-        self.fields["start_at_login"].setToolTip("Create a Linux desktop autostart entry for Mountlet.")
+        self.fields["start_at_login"].setToolTip("Start Mountlet automatically after signing in.")
         self.fields["focus_file_manager"].setText("Focus file manager")
         self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("Default mount folder", self.fields["mount_base"])
+        form.addRow("File manager", self.fields["file_manager"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
@@ -1606,10 +1629,13 @@ class AppConfigDialog(_ConfigDialogBase):
                 auto_mount=self.fields["auto_mount"].isChecked(),
                 auto_mount_delay=max(delay, 0.0),
                 start_at_login=self.fields["start_at_login"].isChecked(),
+                file_manager=self.fields["file_manager"].currentData() or "",
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
             )
         )
+        global _file_manager_label_cache
+        _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
 

@@ -10,12 +10,23 @@ from unittest import mock
 from mountlet.platform_services import get_platform
 from mountlet.platform_services.console import ConsoleServices
 from mountlet.platform_services.desktop import DesktopServices
+from mountlet.platform_services.file_managers import (
+    FileManager,
+    clear_file_manager_cache,
+    default_file_manager_id,
+    discover_file_managers,
+    open_with_file_manager,
+    resolve_file_manager,
+)
 from mountlet.platform_services.linux import LinuxPlatformServices
 from mountlet.platform_services.macos import MacOSPlatformServices
 from mountlet.platform_services.windows import WindowsPlatformServices
 
 
 class PlatformServicesTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_file_manager_cache()
+
     def test_factory_selects_supported_platform_adapters(self):
         self.assertIsInstance(get_platform("Linux"), LinuxPlatformServices)
         self.assertIsInstance(get_platform("Windows"), WindowsPlatformServices)
@@ -54,6 +65,73 @@ class PlatformServicesTests(unittest.TestCase):
         self.assertEqual(paths.config, root / "Roaming" / "mountlet")
         self.assertEqual(paths.state, root / "Local" / "mountlet" / "State")
         self.assertEqual(rclone_config, root / "Roaming" / "rclone" / "rclone.conf")
+
+    def test_windows_defaults_to_explorer(self):
+        platform = WindowsPlatformServices()
+
+        managers = discover_file_managers(platform)
+
+        self.assertEqual(default_file_manager_id(platform), "explorer")
+        self.assertEqual(managers[0].identifier, "explorer")
+        self.assertEqual(managers[0].label, "File Explorer")
+
+    def test_macos_defaults_to_finder(self):
+        platform = MacOSPlatformServices()
+
+        managers = discover_file_managers(platform)
+
+        self.assertEqual(default_file_manager_id(platform), "finder")
+        self.assertEqual(managers[0].identifier, "finder")
+        self.assertEqual(managers[0].label, "Finder")
+
+    def test_missing_saved_manager_falls_back_to_platform_default(self):
+        manager = resolve_file_manager(WindowsPlatformServices(), "removed-manager")
+
+        self.assertEqual(manager.identifier, "explorer")
+
+    def test_linux_discovers_registered_directory_handlers(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            applications = Path(tempdir) / "applications"
+            applications.mkdir()
+            (applications / "org.example.Files.desktop").write_text(
+                """
+[Desktop Entry]
+Type=Application
+Name=Example Files
+Exec=example-files %U
+TryExec=example-files
+MimeType=inode/directory;
+Categories=Utility;FileManager;
+""".strip(),
+                encoding="utf-8",
+            )
+            completed = SimpleNamespace(returncode=0, stdout="org.example.Files.desktop\n")
+            with mock.patch.dict(
+                "os.environ",
+                {"XDG_DATA_HOME": tempdir, "XDG_DATA_DIRS": ""},
+                clear=False,
+            ):
+                with mock.patch(
+                    "mountlet.platform_services.file_managers.shutil.which",
+                    side_effect=lambda name: f"/usr/bin/{name}",
+                ):
+                    with mock.patch(
+                        "mountlet.platform_services.file_managers.subprocess.run",
+                        return_value=completed,
+                    ):
+                        managers = discover_file_managers(LinuxPlatformServices(), refresh=True)
+
+        self.assertEqual(managers[0].identifier, "system")
+        self.assertEqual(managers[0].label, "System default (Example Files)")
+        self.assertEqual(managers[1].identifier, "org.example.Files.desktop")
+
+    def test_file_manager_command_expands_desktop_path_placeholder(self):
+        manager = FileManager("example", "Example", ("example-files", "%U"))
+
+        with mock.patch("mountlet.platform_services.file_managers.subprocess.Popen") as popen:
+            self.assertTrue(open_with_file_manager(manager, "/tmp/docs"))
+
+        self.assertEqual(popen.call_args.args[0], ["example-files", "/tmp/docs"])
 
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
