@@ -538,33 +538,28 @@ def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: st
             pass
 
 
-def _close_only_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
+def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
     try:
         window_type = qt.Qt.WindowType
-        return (
-            getattr(window_type, base_name)
-            | window_type.WindowTitleHint
-            | window_type.WindowSystemMenuHint
-            | window_type.WindowCloseButtonHint
-        )
+        return getattr(window_type, base_name) | window_type.FramelessWindowHint
     except Exception:
         return None
 
 
-def _create_close_only_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
-    flags = _close_only_window_flags(qt, "Dialog")
+def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
+    flags = _frameless_window_flags(qt, "Dialog")
     if flags is not None:
         try:
             return qt.QDialog(parent, flags)
         except Exception:
             pass
     dialog = qt.QDialog(parent)
-    _apply_close_only_window_flags(qt, dialog, base_name="Dialog")
+    _apply_frameless_window_flags(qt, dialog, base_name="Dialog")
     return dialog
 
 
-def _apply_close_only_window_flags(qt: SimpleNamespace, window: Any, *, base_name: str = "Window") -> None:
-    flags = _close_only_window_flags(qt, base_name)
+def _apply_frameless_window_flags(qt: SimpleNamespace, window: Any, *, base_name: str = "Window") -> None:
+    flags = _frameless_window_flags(qt, base_name)
     if flags is not None:
         try:
             window.setWindowFlags(flags)
@@ -572,8 +567,7 @@ def _apply_close_only_window_flags(qt: SimpleNamespace, window: Any, *, base_nam
         except Exception:
             pass
     try:
-        window.setWindowFlag(qt.Qt.WindowType.WindowMinimizeButtonHint, False)
-        window.setWindowFlag(qt.Qt.WindowType.WindowMaximizeButtonHint, False)
+        window.setWindowFlag(qt.Qt.WindowType.FramelessWindowHint, True)
     except Exception:
         pass
 
@@ -1355,7 +1349,7 @@ def _config_bool(value: str) -> bool:
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = _create_close_only_dialog(qt, parent)
+        self.dialog = _create_frameless_dialog(qt, parent)
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
@@ -1658,7 +1652,7 @@ class MountConfigDialog(_ConfigDialogBase):
 class NewRemoteWizard:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = _create_close_only_dialog(qt, parent)
+        self.dialog = _create_frameless_dialog(qt, parent)
         self.dialog.setWindowTitle("Add remote")
         self.dialog.resize(520, 280)
         self.fields: dict[str, Any] = {}
@@ -2997,7 +2991,7 @@ class MountletWindow:
 
         class MainWindow(qt.QMainWindow):
             def __init__(self) -> None:
-                flags = _close_only_window_flags(qt, "Tool")
+                flags = _frameless_window_flags(qt, "Tool")
                 if flags is not None:
                     try:
                         super().__init__(None, flags)
@@ -3005,7 +2999,7 @@ class MountletWindow:
                     except Exception:
                         pass
                 super().__init__()
-                _apply_close_only_window_flags(qt, self, base_name="Tool")
+                _apply_frameless_window_flags(qt, self, base_name="Tool")
 
             def closeEvent(self, event: object) -> None:
                 try:
@@ -3179,7 +3173,7 @@ class MountletWindow:
     def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
-        _apply_close_only_window_flags(self.qt, dialog, base_name="Dialog")
+        _apply_frameless_window_flags(self.qt, dialog, base_name="Dialog")
         try:
             dialog.setModal(True)
             dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
@@ -3330,6 +3324,7 @@ class MountletWindow:
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
+        outer.addWidget(self._window_header())
         outer.addWidget(self._sort_toolbar())
 
         scroll = self.qt.QScrollArea()
@@ -3355,6 +3350,24 @@ class MountletWindow:
 
         self.window.setCentralWidget(root)
         self._fit_to_content(root, scroll, container)
+
+    def _window_header(self) -> Any:
+        widget = self.qt.QWidget()
+        layout = self.qt.QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        title = self.qt.QLabel("Mountlet")
+        try:
+            font = title.font()
+            font.setBold(True)
+            title.setFont(font)
+        except Exception:
+            pass
+        layout.addWidget(title, 1)
+        close_button = self._small_icon_button("×", self._hide_window_stack)
+        close_button.setToolTip("Close Mountlet window")
+        layout.addWidget(close_button)
+        return widget
 
     def _request_refresh(self) -> None:
         if self._tray_is_quitting():

@@ -1106,9 +1106,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window = object.__new__(tray.MountletWindow)
         window_type = SimpleNamespace(
             Tool=1,
-            WindowTitleHint=2,
-            WindowSystemMenuHint=4,
-            WindowCloseButtonHint=8,
+            FramelessWindowHint=2,
         )
         qt = SimpleNamespace(
             Qt=SimpleNamespace(WindowType=window_type),
@@ -1123,19 +1121,17 @@ class TrayTests(unittest.TestCase):
 
         handle.assert_called_once_with(event)
 
-    def test_apply_close_only_window_flags_uses_title_system_and_close(self):
+    def test_apply_frameless_window_flags_uses_frameless_hint(self):
         window_type = SimpleNamespace(
             Dialog=1,
-            WindowTitleHint=2,
-            WindowSystemMenuHint=4,
-            WindowCloseButtonHint=8,
+            FramelessWindowHint=2,
         )
         qt = SimpleNamespace(Qt=SimpleNamespace(WindowType=window_type))
         window = mock.Mock()
 
-        tray._apply_close_only_window_flags(qt, window, base_name="Dialog")
+        tray._apply_frameless_window_flags(qt, window, base_name="Dialog")
 
-        window.setWindowFlags.assert_called_once_with(15)
+        window.setWindowFlags.assert_called_once_with(3)
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1351,9 +1347,7 @@ class TrayTests(unittest.TestCase):
                 WindowModality=SimpleNamespace(WindowModal="window-modal"),
                 WindowType=SimpleNamespace(
                     Dialog=1,
-                    WindowTitleHint=2,
-                    WindowSystemMenuHint=4,
-                    WindowCloseButtonHint=8,
+                    FramelessWindowHint=2,
                 ),
             )
         )
@@ -1367,7 +1361,7 @@ class TrayTests(unittest.TestCase):
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
-        owner.dialog.setWindowFlags.assert_called_once_with(15)
+        owner.dialog.setWindowFlags.assert_called_once_with(3)
         owner.dialog.setModal.assert_called_once_with(True)
         owner.dialog.setWindowModality.assert_called_once_with("window-modal")
         owner.dialog.show.assert_called_once_with()
