@@ -1085,6 +1085,18 @@ class TrayTests(unittest.TestCase):
         hide_stack.assert_called_once_with()
         event.ignore.assert_called_once_with()
 
+    def test_mountlet_main_window_close_event_uses_shared_close_handler(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        qt = SimpleNamespace(QMainWindow=type("BaseMainWindow", (), {"closeEvent": lambda self, event: None}))
+        mountlet_window.qt = qt
+        event = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_handle_window_close", return_value=True) as handle:
+            window = mountlet_window._make_main_window()
+            window.closeEvent(event)
+
+        handle.assert_called_once_with(event)
+
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
@@ -1289,14 +1301,14 @@ class TrayTests(unittest.TestCase):
         child.reject.assert_called_once_with()
         mountlet_window.window.hide.assert_called_once_with()
 
-    def test_open_child_dialog_tracks_owner_and_uses_modeless_show(self):
+    def test_open_child_dialog_tracks_owner_and_uses_window_modal_show(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
         mountlet_window._child_dialogs = []
         mountlet_window._child_dialog_owners = {}
         mountlet_window.qt = SimpleNamespace(
             Qt=SimpleNamespace(
-                WindowModality=SimpleNamespace(NonModal="nonmodal"),
+                WindowModality=SimpleNamespace(WindowModal="window-modal"),
             )
         )
         owner = SimpleNamespace(dialog=mock.Mock())
@@ -1309,8 +1321,8 @@ class TrayTests(unittest.TestCase):
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
-        owner.dialog.setModal.assert_called_once_with(False)
-        owner.dialog.setWindowFlag.assert_not_called()
+        owner.dialog.setModal.assert_called_once_with(True)
+        owner.dialog.setWindowModality.assert_called_once_with("window-modal")
         owner.dialog.show.assert_called_once_with()
         raise_child.assert_called_once_with()
 

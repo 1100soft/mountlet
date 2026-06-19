@@ -2932,7 +2932,7 @@ class MountletWindow:
         self._bridge.action_finished.connect(self._handle_action_finished)
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self._bridge.folder_opened.connect(self._handle_folder_opened)
-        self.window = self.qt.QMainWindow()
+        self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self._make_tray_owned_window()
@@ -2951,6 +2951,24 @@ class MountletWindow:
             folder_opened = qt.Signal(bool)
 
         return Bridge()
+
+    def _make_main_window(self) -> Any:
+        qt = self.qt
+        outer = self
+
+        class MainWindow(qt.QMainWindow):
+            def closeEvent(self, event: object) -> None:
+                try:
+                    if outer._handle_window_close(event):
+                        return
+                except Exception:
+                    pass
+                try:
+                    super().closeEvent(event)
+                except Exception:
+                    pass
+
+        return MainWindow()
 
     def _make_close_filter(self) -> Any:
         qt = self.qt
@@ -3118,8 +3136,8 @@ class MountletWindow:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
         try:
-            dialog.setModal(False)
-            dialog.setWindowModality(self.qt.Qt.WindowModality.NonModal)
+            dialog.setModal(True)
+            dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
         except Exception:
             pass
         if on_accepted is not None:
