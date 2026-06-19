@@ -2961,6 +2961,8 @@ class MountletWindow:
         self._child_dialog_owners: dict[Any, Any] = {}
         self._last_child_offsets: dict[Any, tuple[int, int]] = {}
         self._window_stack_hidden = False
+        self._keep_above = False
+        self._keep_above_button: Any | None = None
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -3097,6 +3099,7 @@ class MountletWindow:
             return False
 
     def _focus_window(self) -> None:
+        self._apply_keep_above()
         _move_x11_window_to_current_desktop(self.window)
         if self.window.isMinimized():
             self.window.showNormal()
@@ -3356,18 +3359,67 @@ class MountletWindow:
         layout = self.qt.QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        title = self.qt.QLabel("Mountlet")
+        layout.addStretch(1)
+        keep_above = self._pin_button()
+        layout.addWidget(keep_above)
+        return widget
+
+    def _pin_button(self) -> Any:
+        button = self.qt.QPushButton("Pin")
+        button.setFixedSize(42, 22)
+        button.setToolTip("Keep Mountlet above other windows")
         try:
-            font = title.font()
-            font.setBold(True)
-            title.setFont(font)
+            button.setCheckable(True)
+            button.setChecked(self._keep_above)
         except Exception:
             pass
-        layout.addWidget(title, 1)
-        close_button = self._small_icon_button("×", self._hide_window_stack)
-        close_button.setToolTip("Close Mountlet window")
-        layout.addWidget(close_button)
-        return widget
+        button.clicked.connect(lambda checked=False: self._toggle_keep_above(bool(checked)))
+        self._keep_above_button = button
+        self._update_keep_above_button()
+        return button
+
+    def _toggle_keep_above(self, checked: bool | None = None) -> None:
+        self._keep_above = not self._keep_above if checked is None else checked
+        self._apply_keep_above()
+        self._update_keep_above_button()
+
+    def _apply_keep_above(self) -> None:
+        try:
+            flag = self.qt.Qt.WindowType.WindowStaysOnTopHint
+        except Exception:
+            return
+        try:
+            was_visible = self.window.isVisible()
+        except Exception:
+            was_visible = False
+        position = self._window_position(self.window)
+        try:
+            self.window.setWindowFlag(flag, self._keep_above)
+        except Exception:
+            return
+        if position is not None:
+            try:
+                self.window.move(*position)
+            except Exception:
+                pass
+        if was_visible:
+            try:
+                self.window.show()
+            except Exception:
+                pass
+
+    def _update_keep_above_button(self) -> None:
+        button = getattr(self, "_keep_above_button", None)
+        if button is None:
+            return
+        try:
+            button.setChecked(self._keep_above)
+        except Exception:
+            pass
+        try:
+            button.setText("Pinned" if self._keep_above else "Pin")
+        except Exception:
+            pass
 
     def _request_refresh(self) -> None:
         if self._tray_is_quitting():

@@ -1133,6 +1133,26 @@ class TrayTests(unittest.TestCase):
 
         window.setWindowFlags.assert_called_once_with(3)
 
+    def test_toggle_keep_above_applies_window_stays_on_top_hint(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(WindowType=SimpleNamespace(WindowStaysOnTopHint="top"))
+        )
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window._keep_above = False
+        mountlet_window._keep_above_button = mock.Mock()
+
+        with mock.patch.object(mountlet_window, "_window_position", return_value=(12, 34)):
+            mountlet_window._toggle_keep_above(True)
+
+        self.assertTrue(mountlet_window._keep_above)
+        mountlet_window.window.setWindowFlag.assert_called_once_with("top", True)
+        mountlet_window.window.move.assert_called_once_with(12, 34)
+        mountlet_window.window.show.assert_called_once_with()
+        mountlet_window._keep_above_button.setChecked.assert_called_once_with(True)
+        mountlet_window._keep_above_button.setText.assert_called_once_with("Pinned")
+
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
