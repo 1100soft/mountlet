@@ -59,6 +59,9 @@ All three options below use a separate virtual environment, so they do not
 replace a stable `pipx` or PyPI installation. Install Python 3.10 or newer and
 [`rclone`](https://rclone.org/install/) first.
 
+Use only the subsection for your operating system. Linux and macOS commands
+use Bash; Windows commands use PowerShell. Their syntax is not interchangeable.
+
 ### Linux
 
 Install FUSE 3 through your distribution. On Ubuntu or Debian:
@@ -110,8 +113,7 @@ Then install and start Mountlet:
 $Preview = "$env:LOCALAPPDATA\Mountlet\preview"
 py -3 -m venv $Preview
 & "$Preview\Scripts\python.exe" -m pip install --upgrade pip
-& "$Preview\Scripts\python.exe" -m pip install --upgrade --force-reinstall `
-  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+& "$Preview\Scripts\python.exe" -m pip install --upgrade --force-reinstall "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
 & "$Preview\Scripts\mountlet.exe" tray
 ```
 
