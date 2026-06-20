@@ -108,6 +108,15 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
         self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
 
+    def test_platform_without_driver_config_hides_config_action(self):
+        platform = mock.Mock()
+        platform.mount_driver_config_paths.return_value = ()
+
+        with mock.patch.object(tray, "get_platform", return_value=platform):
+            available = tray._has_mount_driver_config()
+
+        self.assertFalse(available)
+
     def test_remote_browser_tooltip_names_service_not_remote(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 

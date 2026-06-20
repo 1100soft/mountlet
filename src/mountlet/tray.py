@@ -828,6 +828,10 @@ def _desktop_services(qt: SimpleNamespace) -> DesktopServices:
     )
 
 
+def _has_mount_driver_config() -> bool:
+    return bool(get_platform().mount_driver_config_paths())
+
+
 def _folder_uri(path: str) -> str:
     return Path(path).expanduser().resolve().as_uri()
 
@@ -3278,11 +3282,12 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
-        self.tray_app._add_action(
-            config_menu,
-            "Open filesystem driver config",
-            self._open_fuse_config_file,
-        )
+        if _has_mount_driver_config():
+            self.tray_app._add_action(
+                config_menu,
+                "Open filesystem driver config",
+                self._open_fuse_config_file,
+            )
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -4769,7 +4774,8 @@ class MountletTray:
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
         self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
-        self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
+        if _has_mount_driver_config():
+            self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
