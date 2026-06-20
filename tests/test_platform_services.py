@@ -114,6 +114,15 @@ class PlatformServicesTests(unittest.TestCase):
         self.assertEqual(managers[0].identifier, "finder")
         self.assertEqual(managers[0].label, "Finder")
 
+    def test_macos_checks_homebrew_rclone_locations(self):
+        self.assertEqual(
+            MacOSPlatformServices().rclone_candidates(),
+            (
+                Path("/opt/homebrew/bin/rclone"),
+                Path("/usr/local/bin/rclone"),
+            ),
+        )
+
     def test_missing_saved_manager_falls_back_to_platform_default(self):
         manager = resolve_file_manager(WindowsPlatformServices(), "removed-manager")
 

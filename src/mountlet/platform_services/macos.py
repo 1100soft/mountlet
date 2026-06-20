@@ -19,6 +19,12 @@ class MacOSPlatformServices(PlatformServices):
     def default_mount_base(self) -> Path:
         return Path.home() / "Mountlet"
 
+    def rclone_candidates(self) -> tuple[Path, ...]:
+        return (
+            Path("/opt/homebrew/bin/rclone"),
+            Path("/usr/local/bin/rclone"),
+        )
+
     def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         commands: list[list[str]] = []
         umount = shutil.which("umount")

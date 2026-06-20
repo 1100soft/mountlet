@@ -52,6 +52,18 @@ python -m pytest
 python -m build
 ```
 
+Native packaging uses PyInstaller separately on each target operating system:
+
+```bash
+python -m pip install -e ".[tray,packaging]"
+python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
+python packaging/verify_bundle.py
+```
+
+The `Native package CI` workflow builds Linux x64, Windows x64, macOS arm64,
+and macOS x64 bundles. These development artifacts are not Windows-signed or
+Apple-notarized and expire from GitHub Actions after 14 days.
+
 Install the optional tray dependencies when working on the desktop preview:
 
 ```bash
@@ -103,11 +115,13 @@ Available but untested:
 
 - Keep the CLI/TUI core MIT licensed.
 - Publish CLI builds to PyPI for lightweight `pipx` installation.
-- Publish the first user-facing desktop package as a native Ubuntu `.deb` from
-  GitHub Releases.
+- Build unsigned standalone Linux, Windows, and macOS development artifacts in
+  GitHub Actions before introducing installers and code signing.
+- Publish signed native desktop packages through GitHub Releases once startup,
+  updates, and prerequisite handling are ready for nontechnical users.
 - Build the desktop tray app as the first commercial product layer.
-- Keep Snap and AppImage as later distribution options after the mount and tray
-  flows are proven in the `.deb`.
+- Evaluate `.deb`, AppImage, Windows installer, and macOS DMG distribution after
+  the standalone bundles are stable.
 
 ## Monetization Direction
 

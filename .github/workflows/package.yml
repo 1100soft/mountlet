@@ -1,0 +1,84 @@
+name: Native package CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/package.yml"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+  push:
+    branches: [main, wip]
+    tags:
+      - "v*.*.*"
+    paths:
+      - ".github/workflows/package.yml"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "src/**"
+      - "tests/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            runner: ubuntu-24.04
+            artifact: mountlet-linux-x64
+            path: dist/Mountlet
+          - label: Windows x64
+            runner: windows-2025
+            artifact: mountlet-windows-x64
+            path: dist/Mountlet
+          - label: macOS arm64
+            runner: macos-15
+            artifact: mountlet-macos-arm64
+            path: dist/Mountlet.app
+          - label: macOS x64
+            runner: macos-15-intel
+            artifact: mountlet-macos-x64
+            path: dist/Mountlet.app
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package and build tools
+        run: python -m pip install --upgrade --editable ".[tray,packaging]"
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests
+
+      - name: Build native bundle
+        run: python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
+
+      - name: Verify native bundle
+        run: python packaging/verify_bundle.py
+
+      - name: Upload native bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9

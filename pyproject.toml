@@ -39,6 +39,10 @@ dev = [
   "ruff>=0.4",
   "twine>=6",
 ]
+packaging = [
+  "Pillow>=10",
+  "PyInstaller>=6.20,<7",
+]
 
 [project.urls]
 Homepage = "https://github.com/eric-holt/mountlet"

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added PyInstaller-based native bundle definitions and GitHub Actions builds
+  for Linux x64, Windows x64, macOS arm64, and macOS x64.
+- Added automated frozen-executable smoke checks and macOS bundle validation
+  for menu-bar-only operation.
+
 ## 0.3.0 - 2026-06-20
 
 - Refactored paths, prerequisites, mount lifecycle, process handling,

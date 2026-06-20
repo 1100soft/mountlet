@@ -56,6 +56,11 @@ installers. They may be unstable and can change without notice. Linux is the
 primary supported platform. Source-installed Windows and macOS tray and mount
 flows are available as experimental support while native packaging is developed.
 
+The `Native package CI` workflow also produces short-lived, unsigned standalone
+bundles for Linux x64, Windows x64, macOS Apple Silicon, and macOS Intel. They
+are development artifacts, not release installers, and operating-system
+security warnings are expected until signing and notarization are configured.
+
 Each section starts with the system prerequisites and installs Mountlet in an
 isolated environment, so a GitHub preview does not replace a stable PyPI
 installation.
