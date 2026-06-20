@@ -269,6 +269,7 @@ class TrayTests(unittest.TestCase):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._is_macos = True
         tray_app._application_activation_ready = True
+        tray_app._last_tray_activation = 0.0
         tray_app._quitting = False
         tray_app.main_window = mock.Mock()
         tray_app.rebuild_menus = mock.Mock()
@@ -278,15 +279,19 @@ class TrayTests(unittest.TestCase):
             QTimer=mock.Mock(),
         )
 
+        tray_app.qt.QTimer.singleShot.side_effect = lambda _delay, callback: callback()
+
         tray_app._handle_application_state_changed(active)
 
         tray_app.main_window.show.assert_called_once_with()
-        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+        self.assertEqual(tray_app.qt.QTimer.singleShot.call_count, 2)
+        tray_app.qt.QTimer.singleShot.assert_any_call(25, tray_app.rebuild_menus)
 
     def test_macos_startup_activation_does_not_open_main_window(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._is_macos = True
         tray_app._application_activation_ready = False
+        tray_app._last_tray_activation = 0.0
         tray_app._quitting = False
         tray_app.main_window = mock.Mock()
         active = object()
@@ -295,6 +300,38 @@ class TrayTests(unittest.TestCase):
         )
 
         tray_app._handle_application_state_changed(active)
+
+        tray_app.main_window.show.assert_not_called()
+
+    def test_macos_tray_activation_does_not_toggle_main_window(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._is_macos = True
+        tray_app._quitting = False
+        tray_app._last_tray_activation = 0.0
+        tray_app.main_window = mock.Mock()
+
+        tray_app._handle_activation(object())
+
+        tray_app.main_window.toggle_from_tray.assert_not_called()
+        self.assertGreater(tray_app._last_tray_activation, 0)
+
+    def test_macos_tray_activation_suppresses_pending_dock_reopen(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._is_macos = True
+        tray_app._application_activation_ready = True
+        tray_app._quitting = False
+        tray_app._last_tray_activation = 0.0
+        tray_app.main_window = mock.Mock()
+        active = object()
+        callbacks: list[object] = []
+        tray_app.qt = SimpleNamespace(
+            Qt=SimpleNamespace(ApplicationState=SimpleNamespace(ApplicationActive=active)),
+            QTimer=SimpleNamespace(singleShot=lambda _delay, callback: callbacks.append(callback)),
+        )
+
+        tray_app._handle_application_state_changed(active)
+        tray_app._handle_activation(object())
+        callbacks[0]()
 
         tray_app.main_window.show.assert_not_called()
 

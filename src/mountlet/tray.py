@@ -4690,6 +4690,7 @@ class MountletTray:
         self.app.setQuitOnLastWindowClosed(False)
         self._is_macos = get_platform().system_name == "Darwin"
         self._application_activation_ready = False
+        self._last_tray_activation = 0.0
         self._quitting = False
         self._allow_forced_exit = True
         self._forced_exit_scheduled = False
@@ -4755,11 +4756,23 @@ class MountletTray:
             return
         if state != self.qt.Qt.ApplicationState.ApplicationActive:
             return
+        activation_time = time.monotonic()
+        self.qt.QTimer.singleShot(
+            100,
+            lambda started=activation_time: self._show_after_macos_activation(started),
+        )
+
+    def _show_after_macos_activation(self, activation_time: float) -> None:
+        if self._quitting or time.monotonic() - self._last_tray_activation < 0.5:
+            return
         self.main_window.show()
         self.qt.QTimer.singleShot(25, self.rebuild_menus)
 
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
+            return
+        if getattr(self, "_is_macos", False):
+            self._last_tray_activation = time.monotonic()
             return
         if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
             return

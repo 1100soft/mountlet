@@ -147,14 +147,33 @@ printf 'eval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
 eval "$("$BREW" shellenv)"
 ```
 
-Install Python, `pipx`, and macFUSE. macOS may ask you to approve the macFUSE
-system extension under **System Settings > Privacy & Security** and restart:
+Install Python, `pipx`, and macFUSE:
 
 ```bash
 brew install python@3.12 pipx
 brew install --cask macfuse
 pipx ensurepath
 ```
+
+Before macFUSE can mount anything, macOS may block its kernel extension. Follow
+the prompts shown when you first try to mount a remote:
+
+1. Choose **Open System Settings**, then open **Privacy & Security**.
+2. If an **Allow** button appears for system software from developer Benjamin
+   Fleischer, select it, authenticate, and restart the Mac.
+3. On an Apple Silicon Mac, macOS may first show **Enable System Extensions**.
+   Select it and shut down when prompted. Hold the power button to enter
+   Recovery, open **Startup Security Utility**, select the macOS volume, and
+   choose **Security Policy**.
+4. Select **Reduced Security**, enable **Allow user management of kernel
+   extensions from identified developers**, and restart.
+5. Try mounting again, return to **Privacy & Security**, select **Allow** for
+   macFUSE if requested, and restart once more.
+
+These security changes are required by macFUSE's kernel backend, not by
+Mountlet. See the official
+[macFUSE setup guide](https://github.com/macfuse/macfuse/wiki/Getting-Started)
+for screenshots and troubleshooting.
 
 Install rclone using its official script. Do not use `brew install rclone` for
 Mountlet: that macOS build does not include mount support.
