@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from .. import core
 from ..platform_services import get_platform
@@ -40,6 +42,17 @@ def _fuse_available() -> bool:
 
 def _install_guidance() -> tuple[str, ...]:
     return get_platform().prerequisite_guidance()
+
+
+def _mountlet_command() -> str:
+    invoked_as = sys.argv[0]
+    platform = get_platform()
+    launcher = PureWindowsPath(invoked_as) if platform.system_name == "Windows" else Path(invoked_as)
+    if launcher.name.lower() not in {"mountlet", "mountlet.exe"}:
+        return "mountlet"
+    if platform.system_name == "Windows":
+        return f"& '{invoked_as.replace(chr(39), chr(39) * 2)}'"
+    return shlex.quote(invoked_as)
 
 
 def _print_paths() -> None:
@@ -89,11 +102,12 @@ def ensure_ready_for_menu() -> bool:
         print(f"- {message}")
     print()
     print("Run:")
-    print("  mountlet setup")
+    command = _mountlet_command()
+    print(f"  {command} setup")
     if find_rclone():
         print()
         print("If you still need to connect cloud storage, run:")
-        print("  mountlet setup --configure-rclone")
+        print(f"  {command} setup --configure-rclone")
     return False
 
 
@@ -106,17 +120,18 @@ def _run_rclone_config(rclone_bin: str) -> int:
 
 def _next_steps(rclone_bin: str | None, fuse_ok: bool, remotes: list[str], failures: list[str]) -> list[str]:
     steps: list[str] = []
+    command = _mountlet_command()
     if not rclone_bin:
         steps.append(_install_guidance()[0])
     if not fuse_ok:
         steps.append(_install_guidance()[1])
     if not remotes:
         if rclone_bin:
-            steps.append("Add cloud storage: mountlet setup --configure-rclone")
+            steps.append(f"Add cloud storage: {command} setup --configure-rclone")
         else:
-            steps.append("After installing rclone, add cloud storage: mountlet setup --configure-rclone")
+            steps.append(f"After installing rclone, add cloud storage: {command} setup --configure-rclone")
     if failures:
-        steps.append("Reconnect credentials: mountlet reconnect --remote <name>")
+        steps.append(f"Reconnect credentials: {command} reconnect --remote <name>")
     return steps
 
 
@@ -189,7 +204,7 @@ def setup_command(args: argparse.Namespace) -> int:
     ready = bool(rclone_bin and fuse_ok and remotes and not failures)
     if ready:
         print("Ready. Open the menu with:")
-        print("  mountlet")
+        print(f"  {_mountlet_command()}")
         return 0
 
     print("A few things still need attention before mounting.")

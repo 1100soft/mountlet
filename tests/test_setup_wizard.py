@@ -15,6 +15,16 @@ from mountlet.config_tools import setup_wizard
 
 
 class SetupWizardTests(unittest.TestCase):
+    def test_windows_command_hint_uses_running_virtualenv_launcher(self):
+        launcher = r"C:\Users\Example User\AppData\Local\Mountlet\preview\Scripts\mountlet.exe"
+        platform = mock.Mock(system_name="Windows")
+
+        with mock.patch.object(setup_wizard.sys, "argv", [launcher, "tray"]):
+            with mock.patch.object(setup_wizard, "get_platform", return_value=platform):
+                command = setup_wizard._mountlet_command()
+
+        self.assertEqual(command, f"& '{launcher}'")
+
     def test_setup_succeeds_when_requirements_and_remotes_exist(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "rclone.conf"
