@@ -265,6 +265,39 @@ class TrayTests(unittest.TestCase):
         rebuild.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 1)
 
+    def test_macos_application_activation_opens_main_window(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._is_macos = True
+        tray_app._application_activation_ready = True
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        tray_app.rebuild_menus = mock.Mock()
+        active = object()
+        tray_app.qt = SimpleNamespace(
+            Qt=SimpleNamespace(ApplicationState=SimpleNamespace(ApplicationActive=active)),
+            QTimer=mock.Mock(),
+        )
+
+        tray_app._handle_application_state_changed(active)
+
+        tray_app.main_window.show.assert_called_once_with()
+        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_macos_startup_activation_does_not_open_main_window(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._is_macos = True
+        tray_app._application_activation_ready = False
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        active = object()
+        tray_app.qt = SimpleNamespace(
+            Qt=SimpleNamespace(ApplicationState=SimpleNamespace(ApplicationActive=active)),
+        )
+
+        tray_app._handle_application_state_changed(active)
+
+        tray_app.main_window.show.assert_not_called()
+
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         original = {

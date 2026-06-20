@@ -4688,11 +4688,18 @@ class MountletTray:
         self.refresh_interval = max(refresh_interval, 2)
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setQuitOnLastWindowClosed(False)
+        self._is_macos = get_platform().system_name == "Darwin"
+        self._application_activation_ready = False
         self._quitting = False
         self._allow_forced_exit = True
         self._forced_exit_scheduled = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
+        if self._is_macos:
+            try:
+                self.app_menu.setAsDockMenu()
+            except Exception:
+                pass
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
         self.main_window = MountletWindow(self)
@@ -4706,6 +4713,11 @@ class MountletTray:
             self.app.aboutToQuit.connect(self._prepare_quit)
         except Exception:
             pass
+        if self._is_macos:
+            try:
+                self.app.applicationStateChanged.connect(self._handle_application_state_changed)
+            except Exception:
+                pass
 
     def _icon(self) -> Any:
         icon_path = _packaged_icon_path()
@@ -4731,7 +4743,20 @@ class MountletTray:
         self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
         self._schedule_auto_mounts()
+        if self._is_macos:
+            self.qt.QTimer.singleShot(500, self._enable_application_activation)
         return int(self.app.exec() or 0)
+
+    def _enable_application_activation(self) -> None:
+        self._application_activation_ready = True
+
+    def _handle_application_state_changed(self, state: Any) -> None:
+        if not self._is_macos or not self._application_activation_ready or self._quitting:
+            return
+        if state != self.qt.Qt.ApplicationState.ApplicationActive:
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(25, self.rebuild_menus)
 
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):

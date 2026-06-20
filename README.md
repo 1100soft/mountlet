@@ -239,8 +239,11 @@ The tray app uses the tray icon this way:
   window, the first click brings it forward. On Plasma X11, opening it from a
   different desktop moves it to the current desktop.
 - Right-click shows app-level actions such as mount all, unmount all, update
-  status, app settings, raw app, mount, rclone, and FUSE config files, and
-  quit.
+  status, app settings, available configuration files, and quit.
+
+On macOS, the actual tray icon is in the menu bar. Clicking Mountlet's Dock
+icon opens or refocuses the main window; its Dock menu also includes Mountlet
+actions alongside the standard macOS items.
 
 The Mountlet window provides:
 
