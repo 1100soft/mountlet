@@ -55,18 +55,19 @@ installers. They may be unstable and can change without notice. Linux is the
 current supported platform; Windows and macOS builds are available for early
 testing while their mount integration is developed.
 
-All three options below use a separate virtual environment, so they do not
-replace a stable `pipx` or PyPI installation. Install Python 3.10 or newer and
-[`rclone`](https://rclone.org/install/) first.
+Each section starts with the system prerequisites and installs Mountlet in an
+isolated environment, so a GitHub preview does not replace a stable PyPI
+installation.
 
-Use only the subsection for your operating system. Linux and macOS commands
-use Bash; Windows commands use PowerShell. Their syntax is not interchangeable.
+Use only the subsection for your operating system. Linux and macOS use shell
+commands; Windows uses PowerShell. Their syntax is not interchangeable.
 
 ### Linux
 
 Install FUSE 3 through your distribution. On Ubuntu or Debian:
 
 ```bash
+sudo apt update
 sudo apt install rclone fuse3 python3-venv
 ```
 
@@ -83,13 +84,15 @@ python3 -m venv "$PREVIEW"
 
 ### Windows (Experimental)
 
-Install [`rclone`](https://rclone.org/install/) and
-[`WinFsp`](https://winfsp.dev/rel/). Installing rclone with WinGet is the
-simplest option because it makes the executable discoverable:
+Install Python 3.12 and rclone with WinGet:
 
 ```powershell
-winget install Rclone.Rclone
+winget install --id Python.Python.3.12 --exact
+winget install --id Rclone.Rclone --exact
 ```
+
+Install [`WinFsp`](https://winfsp.dev/rel/) using its Windows installer, then
+close and reopen PowerShell so Python and rclone are available.
 
 If you downloaded the portable `rclone.exe` instead, place it in a permanent
 folder and tell Mountlet where it is. Replace the example path as needed:
@@ -111,8 +114,8 @@ If you used WinGet and did not set `RCLONE_PATH`, use `rclone version` instead.
 Install `pipx` and add its application directory to your user `PATH`:
 
 ```powershell
-py -3 -m pip install --user --upgrade pipx
-py -3 -m pipx ensurepath
+py -3.12 -m pip install --user --upgrade pipx
+py -3.12 -m pipx ensurepath
 ```
 
 Close and reopen PowerShell so the updated `PATH` is loaded. Then install and
@@ -126,14 +129,44 @@ mountlet tray
 
 ### macOS (Experimental)
 
-Install [`rclone`](https://rclone.org/install/) and
-[`macFUSE`](https://macfuse.github.io/). Apple's bundled Python may be older
-than Mountlet's Python 3.10 minimum, so install a current interpreter and
-`pipx` through Homebrew:
+Install Apple's Command Line Tools first. A system dialog opens; finish that
+installation before continuing:
+
+```bash
+xcode-select --install
+```
+
+Install [Homebrew](https://brew.sh/) and activate it in the current shell. The
+path check supports both Apple Silicon and Intel Macs:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+BREW=/opt/homebrew/bin/brew
+[ -x "$BREW" ] || BREW=/usr/local/bin/brew
+printf 'eval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
+eval "$("$BREW" shellenv)"
+```
+
+Install Python, `pipx`, and macFUSE. macOS may ask you to approve the macFUSE
+system extension under **System Settings > Privacy & Security** and restart:
 
 ```bash
 brew install python@3.12 pipx
+brew install --cask macfuse
 pipx ensurepath
+```
+
+Install rclone using its official script. Do not use `brew install rclone` for
+Mountlet: that macOS build does not include mount support.
+
+```bash
+sudo -v
+curl https://rclone.org/install.sh | sudo bash
+```
+
+Finally, install Mountlet with the Homebrew Python:
+
+```bash
 PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
 "$PYTHON" --version
 pipx install --force --python "$PYTHON" \
