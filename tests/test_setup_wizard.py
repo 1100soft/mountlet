@@ -12,9 +12,20 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mountlet.config_tools import setup_wizard
+from mountlet.platform_services.linux import LinuxPlatformServices
 
 
 class SetupWizardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        platform = LinuxPlatformServices()
+        patchers = (
+            mock.patch.object(setup_wizard, "get_platform", return_value=platform),
+            mock.patch("mountlet.config_tools.shared.get_platform", return_value=platform),
+        )
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_windows_command_hint_uses_running_virtualenv_launcher(self):
         launcher = r"C:\Users\Example User\AppData\Local\Mountlet\preview\Scripts\mountlet.exe"
         platform = mock.Mock(system_name="Windows")

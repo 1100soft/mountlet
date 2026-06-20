@@ -9,9 +9,20 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mountlet import settings
+from mountlet.platform_services.linux import LinuxPlatformServices
 
 
 class SettingsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        platform = LinuxPlatformServices()
+        patchers = (
+            mock.patch.object(settings, "get_platform", return_value=platform),
+            mock.patch("mountlet.config_tools.shared.get_platform", return_value=platform),
+        )
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_load_app_settings_reads_app_and_tray_defaults(self):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "config.toml"

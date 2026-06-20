@@ -10,8 +10,16 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mountlet.platform_services.linux import LinuxPlatformServices
+
 
 class CoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.platform = LinuxPlatformServices()
+        patcher = mock.patch("mountlet.config_tools.shared.get_platform", return_value=self.platform)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def load_core(self, tempdir: str, config_text: str = "", *, set_mount_base: bool = True):
         config_path = Path(tempdir) / "rclone.conf"
         config_path.write_text(config_text, encoding="utf-8")
@@ -33,7 +41,10 @@ class CoreTests(unittest.TestCase):
 
         import mountlet.core as core
 
-        return importlib.reload(core)
+        core = importlib.reload(core)
+        core.PLATFORM = self.platform
+        core.DEFAULT_HOME_MOUNT = str(self.platform.default_mount_base())
+        return core
 
     def test_load_remotes_parses_provider_alias_and_mount_flags(self):
         with tempfile.TemporaryDirectory() as tempdir:

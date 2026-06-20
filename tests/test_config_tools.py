@@ -11,9 +11,16 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mountlet.config_tools import import_config, path_config, shared, verify_config
+from mountlet.platform_services.linux import LinuxPlatformServices
 
 
 class ConfigToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        platform = LinuxPlatformServices()
+        patcher = mock.patch.object(shared, "get_platform", return_value=platform)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_read_remotes_returns_config_sections(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "rclone.conf"
