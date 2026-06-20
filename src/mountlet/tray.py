@@ -26,6 +26,14 @@ from typing import Any
 from . import core, rclone_wizard
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
+from .platform_services import get_platform
+from .platform_services.desktop import DesktopServices
+from .platform_services.file_managers import (
+    SYSTEM_FILE_MANAGER_ID,
+    discover_file_managers,
+    open_with_file_manager,
+    resolve_file_manager,
+)
 from .settings import (
     AppSettings,
     MountSettings,
@@ -96,7 +104,6 @@ RCLONE_SELECT_FIELDS = {
 }
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
-FUSE_CONFIG_PATH = Path("/etc/fuse.conf")
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -111,11 +118,6 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
 )
-PROVIDER_STATUS_COLORS = {
-    "tested": "#ffffff",
-    "partial": "#ffffff",
-    "untested": "#facc15",
-}
 REMOTE_PROVIDER_STATUSES = {
     "drive": "tested",
     "dropbox": "tested",
@@ -522,8 +524,38 @@ def _default_s3_regions() -> set[str]:
     return {option.get("region", "") for option in S3_PROVIDER_OPTIONS}
 
 
-def _provider_status_color(status: str) -> str:
-    return PROVIDER_STATUS_COLORS.get(status, PROVIDER_STATUS_COLORS["untested"])
+def _color_luminance(color: Any) -> float:
+    return (0.2126 * color.red()) + (0.7152 * color.green()) + (0.0722 * color.blue())
+
+
+def _palette_text_color(widget: Any) -> str:
+    color = widget.palette().color(widget.foregroundRole())
+    return color.name()
+
+
+def _provider_status_color(status: str, widget: Any) -> str:
+    if status != "untested":
+        return _palette_text_color(widget)
+    background = widget.palette().color(widget.backgroundRole())
+    return "#facc15" if _color_luminance(background) < 128 else "#92400e"
+
+
+def _popup_position(
+    anchor_x: int,
+    anchor_y: int,
+    available: tuple[int, int, int, int],
+    window_size: tuple[int, int],
+) -> tuple[int, int]:
+    left, top, available_width, available_height = available
+    width, height = window_size
+    max_x = max(left, left + available_width - width)
+    max_y = max(top, top + available_height - height)
+    x = min(max(anchor_x - (width // 2), left), max_x)
+    if anchor_y > top + (available_height // 2):
+        y = anchor_y - height - 8
+    else:
+        y = anchor_y + 8
+    return x, min(max(y, top), max_y)
 
 
 def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: str) -> None:
@@ -546,6 +578,10 @@ def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
         return getattr(window_type, base_name) | window_type.FramelessWindowHint
     except Exception:
         return None
+
+
+def _main_window_type_name(is_macos: bool) -> str:
+    return "Window" if is_macos else "Tool"
 
 
 def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
@@ -758,8 +794,10 @@ def _terminate_process_id(pid: int) -> bool:
 
 
 def _desktop_session_available() -> tuple[bool, str]:
-    if platform.system() != "Linux":
-        return True, ""
+    system = platform.system()
+    if system != "Linux":
+        result = get_platform(system).graphical_session_available()
+        return result.success, result.detail
 
     wayland_display = os.environ.get("WAYLAND_DISPLAY")
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
@@ -780,6 +818,35 @@ def _desktop_session_available() -> tuple[bool, str]:
         return False, f"Cannot connect to the X11 display at {display}."
 
     return True, ""
+
+
+def _desktop_services(qt: SimpleNamespace) -> DesktopServices:
+    return DesktopServices(
+        qt,
+        folder_opener=lambda bindings, path, strategy: _open_folder_default(bindings, path, strategy),
+        text_opener=lambda path: _open_text_file_focused(path),
+        file_manager_name=lambda: _file_manager_label(),
+        window_workspace_check=lambda window: _x11_qt_window_is_on_current_desktop(window),
+        window_workspace_mover=lambda window: _move_x11_window_to_current_desktop(window),
+        keep_above_setter=lambda window, enabled: _set_x11_keep_above(window, enabled),
+    )
+
+
+def _has_mount_driver_config() -> bool:
+    return bool(get_platform().mount_driver_config_paths())
+
+
+def _set_macos_accessory_mode() -> bool:
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        return bool(
+            NSApplication.sharedApplication().setActivationPolicy_(
+                NSApplicationActivationPolicyAccessory
+            )
+        )
+    except Exception:
+        return False
 
 
 def _folder_uri(path: str) -> str:
@@ -829,14 +896,9 @@ def _file_manager_label() -> str:
     global _file_manager_label_cache
     if _file_manager_label_cache is not None:
         return _file_manager_label_cache
-    app = _default_directory_app()
-    if not app:
-        _file_manager_label_cache = "the file manager"
-        return _file_manager_label_cache
-    name = app.rsplit("/", 1)[-1].removesuffix(".desktop")
-    name = re.sub(r"^(org|com|net)\.", "", name)
-    name = name.rsplit(".", 1)[-1]
-    _file_manager_label_cache = name.replace("-", " ").replace("_", " ").title() or "the file manager"
+    settings = load_app_settings()
+    manager = resolve_file_manager(get_platform(), settings.file_manager)
+    _file_manager_label_cache = manager.label
     return _file_manager_label_cache
 
 
@@ -1382,9 +1444,15 @@ def _open_folder_in_dolphin_tab(path: str, *, current_desktop: bool = True, focu
     return False
 
 
-def _open_folder_with_known_file_manager(path: str, *, behavior: str, focus: bool) -> bool:
-    default_app = _default_directory_app().lower()
-    if "dolphin" in default_app:
+def _open_folder_with_known_file_manager(
+    path: str,
+    *,
+    behavior: str,
+    focus: bool,
+    manager_id: str | None = None,
+) -> bool:
+    selected = (manager_id or _default_directory_app()).lower()
+    if "dolphin" in selected:
         if behavior == "new_window":
             return False
         if _open_folder_in_dolphin_tab(path, current_desktop=behavior == "current_desktop", focus=focus):
@@ -1396,18 +1464,32 @@ def _open_folder_with_known_file_manager(path: str, *, behavior: str, focus: boo
 
 def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "default") -> bool:
     settings = load_app_settings()
+    manager = resolve_file_manager(get_platform(), settings.file_manager)
     behavior = settings.open_folder_behavior
     if strategy == "default":
         strategy = behavior
-    if strategy == "file-manager-service" and _show_folder_with_file_manager(path):
+    if (
+        strategy == "file-manager-service"
+        and manager.identifier == SYSTEM_FILE_MANAGER_ID
+        and _show_folder_with_file_manager(path)
+    ):
         return True
     if strategy in {"current_desktop", "existing_window"} and _open_folder_with_known_file_manager(
         path,
         behavior=strategy,
         focus=settings.focus_file_manager,
+        manager_id=(
+            _default_directory_app()
+            if manager.identifier == SYSTEM_FILE_MANAGER_ID
+            else manager.identifier
+        ),
     ):
         return True
-    if strategy == "new_window" and _open_folder_in_dolphin_new_window(path):
+    if manager.identifier != SYSTEM_FILE_MANAGER_ID and open_with_file_manager(
+        manager,
+        path,
+        new_window=strategy == "new_window",
+    ):
         return True
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
@@ -1450,7 +1532,7 @@ def _path_relative_to_base(path: str | None, base_path: str) -> str:
 
 def _muted_text_style(widget: Any) -> str:
     background = widget.palette().color(widget.backgroundRole())
-    luminance = (0.2126 * background.red()) + (0.7152 * background.green()) + (0.0722 * background.blue())
+    luminance = _color_luminance(background)
     color = "#cbd5e1" if luminance < 128 else "#4b5563"
     return f"color: {color};"
 
@@ -1554,18 +1636,26 @@ class AppConfigDialog(_ConfigDialogBase):
             "auto_mount": self._check(app_settings.auto_mount),
             "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
             "start_at_login": self._check(app_settings.start_at_login),
+            "file_manager": self._combo(
+                tuple(
+                    (manager.identifier, manager.label)
+                    for manager in discover_file_managers(get_platform(), refresh=True)
+                ),
+                app_settings.file_manager,
+            ),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
         self.fields["start_at_login"].setText("Start Mountlet when I log in")
-        self.fields["start_at_login"].setToolTip("Create a Linux desktop autostart entry for Mountlet.")
+        self.fields["start_at_login"].setToolTip("Start Mountlet automatically after signing in.")
         self.fields["focus_file_manager"].setText("Focus file manager")
         self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("Default mount folder", self.fields["mount_base"])
+        form.addRow("File manager", self.fields["file_manager"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
@@ -1585,10 +1675,13 @@ class AppConfigDialog(_ConfigDialogBase):
                 auto_mount=self.fields["auto_mount"].isChecked(),
                 auto_mount_delay=max(delay, 0.0),
                 start_at_login=self.fields["start_at_login"].isChecked(),
+                file_manager=self.fields["file_manager"].currentData() or "",
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
             )
         )
+        global _file_manager_label_cache
+        _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
 
@@ -1857,7 +1950,10 @@ class NewRemoteWizard:
                 self.qt,
                 provider,
                 index,
-                _provider_status_color(REMOTE_PROVIDER_STATUSES.get(backend_type, "untested")),
+                _provider_status_color(
+                    REMOTE_PROVIDER_STATUSES.get(backend_type, "untested"),
+                    provider,
+                ),
             )
         provider.currentIndexChanged.connect(lambda _index=0: self._apply_provider_choice())
 
@@ -1923,7 +2019,12 @@ class NewRemoteWizard:
         s3_provider = self.qt.QComboBox()
         for index, option in enumerate(S3_PROVIDER_OPTIONS):
             s3_provider.addItem(option["label"], option)
-            _set_combo_item_color(self.qt, s3_provider, index, _provider_status_color(option.get("status", "untested")))
+            _set_combo_item_color(
+                self.qt,
+                s3_provider,
+                index,
+                _provider_status_color(option.get("status", "untested"), s3_provider),
+            )
         s3_provider.currentIndexChanged.connect(lambda _index=0: self._apply_s3_provider_choice())
         s3_endpoint = self.qt.QLineEdit()
         s3_region = self.qt.QLineEdit()
@@ -1955,7 +2056,12 @@ class NewRemoteWizard:
         webdav_vendor = self.qt.QComboBox()
         for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
             webdav_vendor.addItem(option["label"], option)
-            _set_combo_item_color(self.qt, webdav_vendor, index, _provider_status_color(option.get("status", "untested")))
+            _set_combo_item_color(
+                self.qt,
+                webdav_vendor,
+                index,
+                _provider_status_color(option.get("status", "untested"), webdav_vendor),
+            )
         webdav_vendor.currentIndexChanged.connect(lambda _index=0: self._apply_webdav_vendor_choice())
         webdav_user = self.qt.QLineEdit()
         webdav_pass = self.qt.QLineEdit()
@@ -3074,6 +3180,7 @@ class MountletWindow:
     def __init__(self, tray_app: "MountletTray") -> None:
         self.tray_app = tray_app
         self.qt = tray_app.qt
+        self.desktop = _desktop_services(self.qt)
         self._usage_cache: dict[str, core.StorageUsage] = {}
         self._usage_pending: set[str] = set()
         self._action_pending: set[str] = set()
@@ -3087,6 +3194,7 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._keep_above = False
         self._keep_above_button: Any | None = None
+        self._drag_offset: Any | None = None
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -3099,6 +3207,13 @@ class MountletWindow:
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
         self._build_app_menu()
+
+    def _desktop_api(self) -> DesktopServices:
+        desktop = getattr(self, "desktop", None)
+        if desktop is None:
+            desktop = _desktop_services(getattr(self, "qt", None))
+            self.desktop = desktop
+        return desktop
 
     def _make_bridge(self) -> Any:
         qt = self.qt
@@ -3117,7 +3232,11 @@ class MountletWindow:
 
         class MainWindow(qt.QMainWindow):
             def __init__(self) -> None:
-                flags = _frameless_window_flags(qt, "Tool")
+                tray_app = getattr(outer, "tray_app", None)
+                base_name = _main_window_type_name(
+                    bool(getattr(tray_app, "_is_macos", False))
+                )
+                flags = _frameless_window_flags(qt, base_name)
                 if flags is not None:
                     try:
                         super().__init__(None, flags)
@@ -3125,7 +3244,7 @@ class MountletWindow:
                     except Exception:
                         pass
                 super().__init__()
-                _apply_frameless_window_flags(qt, self, base_name="Tool")
+                _apply_frameless_window_flags(qt, self, base_name=base_name)
 
             def closeEvent(self, event: object) -> None:
                 try:
@@ -3184,7 +3303,12 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
-        self.tray_app._add_action(config_menu, "Open FUSE config file", self._open_fuse_config_file)
+        if _has_mount_driver_config():
+            self.tray_app._add_action(
+                config_menu,
+                "Open filesystem driver config",
+                self._open_fuse_config_file,
+            )
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -3192,7 +3316,7 @@ class MountletWindow:
     def toggle_from_tray(self) -> None:
         if self._tray_is_quitting():
             return
-        visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
+        visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
             if self._window_is_active() or self._has_visible_child_dialog():
                 self._hide_window_stack()
@@ -3205,7 +3329,7 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         was_visible = self.is_visible()
-        visible_on_current_desktop = _x11_qt_window_is_on_current_desktop(self.window)
+        visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         reopened_from_other_desktop = was_visible and visible_on_current_desktop is False
         if reopened_from_other_desktop:
             self._close_child_dialogs()
@@ -3224,12 +3348,12 @@ class MountletWindow:
             return False
 
     def _focus_window(self, *, defer_activation: bool = False) -> None:
-        _move_x11_window_to_current_desktop(self.window)
+        self._desktop_api().move_window_to_current_workspace(self.window)
         if self.window.isMinimized():
             self.window.showNormal()
         else:
             self.window.show()
-        _move_x11_window_to_current_desktop(self.window)
+        self._desktop_api().move_window_to_current_workspace(self.window)
         self._restore_x11_keep_above()
         if self._has_visible_child_dialog():
             self._raise_child_windows()
@@ -3253,15 +3377,16 @@ class MountletWindow:
         timer.singleShot(300, self._activate_main_window_if_current_desktop)
 
     def _activate_main_window_if_current_desktop(self) -> None:
-        _move_x11_window_to_current_desktop(self.window)
-        if _x11_qt_window_is_on_current_desktop(self.window) is False:
+        desktop = self._desktop_api()
+        desktop.move_window_to_current_workspace(self.window)
+        if desktop.window_is_on_current_workspace(self.window) is False:
             return
         self._restore_x11_keep_above()
         self._activate_main_window()
 
     def _restore_x11_keep_above(self) -> None:
         if getattr(self, "_keep_above", False):
-            _set_x11_keep_above(self.window, True)
+            self._desktop_api().set_keep_above(self.window, True)
 
     def _activate_main_window(self) -> None:
         self.window.raise_()
@@ -3337,6 +3462,15 @@ class MountletWindow:
         if on_accepted is not None:
             dialog.accepted.connect(on_accepted)
         dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
+        if not self.is_visible():
+            self.show()
+            self.qt.QTimer.singleShot(0, lambda child=dialog: self._show_tracked_child_dialog(child))
+            return
+        self._show_tracked_child_dialog(dialog)
+
+    def _show_tracked_child_dialog(self, dialog: Any) -> None:
+        if dialog not in getattr(self, "_child_dialogs", []) or self._tray_is_quitting():
+            return
         dialog.show()
         self._raise_child_windows()
 
@@ -3442,20 +3576,33 @@ class MountletWindow:
             if screen is None:
                 return
             available = screen.availableGeometry()
-            size = self.window.sizeHint()
+            size = self.window.size()
             if not size.isValid():
-                size = self.window.size()
-            width = size.width()
-            height = size.height()
-            max_x = max(available.left(), available.right() - width)
-            max_y = max(available.top(), available.bottom() - height)
-            x = min(max(anchor.x() - (width // 2), available.left()), max_x)
-            if anchor.y() > available.center().y():
-                y = anchor.y() - height - 8
-            else:
-                y = anchor.y() + 8
-            y = min(max(y, available.top()), max_y)
+                size = self.window.sizeHint()
+            x, y = _popup_position(
+                anchor.x(),
+                anchor.y(),
+                (available.left(), available.top(), available.width(), available.height()),
+                (size.width(), size.height()),
+            )
             self.window.move(x, y)
+        except Exception:
+            return
+
+    def _clamp_to_screen(self, screen: Any | None = None) -> None:
+        try:
+            target_screen = screen or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if target_screen is None:
+                return
+            available = target_screen.availableGeometry()
+            position = self.window.frameGeometry().topLeft()
+            size = self.window.size()
+            max_x = max(available.left(), available.left() + available.width() - size.width())
+            max_y = max(available.top(), available.top() + available.height() - size.height())
+            x = min(max(position.x(), available.left()), max_x)
+            y = min(max(position.y(), available.top()), max_y)
+            if x != position.x() or y != position.y():
+                self.window.move(x, y)
         except Exception:
             return
 
@@ -3531,7 +3678,7 @@ class MountletWindow:
         self._update_keep_above_button()
 
     def _apply_keep_above(self) -> None:
-        if _set_x11_keep_above(self.window, self._keep_above):
+        if self._desktop_api().set_keep_above(self.window, self._keep_above):
             return
         try:
             flag = self.qt.Qt.WindowType.WindowStaysOnTopHint
@@ -3592,6 +3739,15 @@ class MountletWindow:
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
+        drag_handle = self.qt.QLabel("✥")
+        drag_handle.setFixedSize(22, 26)
+        drag_handle.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        drag_handle.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.SizeAllCursor))
+        drag_handle.setToolTip("Drag to move Mountlet.")
+        drag_handle.mousePressEvent = self._begin_window_drag
+        drag_handle.mouseMoveEvent = self._continue_window_drag
+        drag_handle.mouseReleaseEvent = self._end_window_drag
+
         sort_button = self.qt.QPushButton("Sort by")
         sort_menu = self.qt.QMenu(sort_button)
         for mode, label in REMOTE_SORT_OPTIONS:
@@ -3604,11 +3760,44 @@ class MountletWindow:
         reverse_button.setToolTip("Reverse the current remote order.")
         reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
 
+        layout.addWidget(drag_handle)
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         layout.addWidget(self._pin_button())
         return widget
+
+    def _event_global_point(self, event: Any) -> Any:
+        point = event.globalPosition() if hasattr(event, "globalPosition") else event.globalPos()
+        return point.toPoint() if hasattr(point, "toPoint") else point
+
+    def _begin_window_drag(self, event: Any) -> None:
+        try:
+            if event.button() != self.qt.Qt.MouseButton.LeftButton:
+                return
+            self._drag_offset = self._event_global_point(event) - self.window.frameGeometry().topLeft()
+            event.accept()
+        except Exception:
+            self._drag_offset = None
+
+    def _continue_window_drag(self, event: Any) -> None:
+        if self._drag_offset is None:
+            return
+        try:
+            if not (event.buttons() & self.qt.Qt.MouseButton.LeftButton):
+                return
+            self.window.move(self._event_global_point(event) - self._drag_offset)
+            event.accept()
+        except Exception:
+            return
+
+    def _end_window_drag(self, event: Any) -> None:
+        self._drag_offset = None
+        self._clamp_to_screen()
+        try:
+            event.accept()
+        except Exception:
+            pass
 
     def _sort_remote_order(self, sort_mode: str) -> None:
         remotes = _load_visible_remotes()
@@ -3662,7 +3851,7 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        open_tooltip = f"Open {remote.display_name} in {_file_manager_label()}"
+        open_tooltip = f"Open {remote.display_name} in {self.desktop.file_manager_label()}"
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
 
         frame = self.qt.QFrame()
@@ -3781,7 +3970,7 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        open_tooltip = f"Open {remote.display_name} in {_file_manager_label()}"
+        open_tooltip = f"Open {remote.display_name} in {self.desktop.file_manager_label()}"
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
 
         row.frame.setProperty("mounted", mounted)
@@ -4017,9 +4206,10 @@ class MountletWindow:
             used_gb = usage.used / (1024**3)
             total_gb = usage.total / (1024**3)
             color = self._usage_color(usage, checking_usage=checking_usage)
+            text_color = _palette_text_color(self.window)
             return (
                 f'<span style="color:{color};">{used_gb:.1f}</span>'
-                f'<span style="color:#ffffff;">/{total_gb:.1f} GB</span>'
+                f'<span style="color:{text_color};">/{total_gb:.1f} GB</span>'
             )
         if usage.text:
             return f'<span style="{_muted_text_style(self.window).removesuffix(";")}">{usage.text}</span>'
@@ -4164,6 +4354,7 @@ class MountletWindow:
             height = max_height
 
         self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
+        self._clamp_to_screen(screen)
 
     def _layout_item_size(self, layout: Any, index: int) -> Any:
         item = layout.itemAt(index)
@@ -4270,7 +4461,7 @@ class MountletWindow:
             return
 
         def worker() -> None:
-            self._bridge.folder_opened.emit(_open_folder_default(self.qt, remote.mount_path))
+            self._bridge.folder_opened.emit(self.desktop.open_folder(remote.mount_path))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -4461,7 +4652,16 @@ class MountletWindow:
         self._open_text_config(Path(core.CONFIG_PATH))
 
     def _open_fuse_config_file(self) -> None:
-        self._open_text_config(FUSE_CONFIG_PATH)
+        paths = get_platform().mount_driver_config_paths()
+        if not paths:
+            self.tray_app._notify(
+                "Open config",
+                "This platform does not expose a filesystem driver config file.",
+                success=False,
+            )
+            return
+        path = next((candidate for candidate in paths if candidate.exists()), paths[0])
+        self._open_text_config(path)
 
     def _open_text_config(self, path: Path, *, ensure_mountlet_config: bool = False) -> None:
         if ensure_mountlet_config:
@@ -4469,9 +4669,7 @@ class MountletWindow:
         if not path.exists():
             self.tray_app._notify("Open config", f"{path} does not exist.", success=False)
             return
-        if _open_text_file_focused(path):
-            return
-        if not self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
+        if not self.desktop.open_text_file(path):
             self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
 
     def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
@@ -4509,7 +4707,14 @@ class MountletTray:
     def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10) -> None:
         self.qt = qt
         self.refresh_interval = max(refresh_interval, 2)
+        self._is_macos = get_platform().system_name == "Darwin"
+        if self._is_macos:
+            _set_macos_accessory_mode()
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+        if self._is_macos:
+            # QApplication may restore the regular activation policy while it
+            # initializes AppKit. Reapply accessory mode before creating windows.
+            _set_macos_accessory_mode()
         self.app.setQuitOnLastWindowClosed(False)
         self._quitting = False
         self._allow_forced_exit = True
@@ -4518,10 +4723,16 @@ class MountletTray:
         self.app_menu = qt.QMenu()
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
-        self.main_window = MountletWindow(self)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("Mountlet")
-        self.tray.setContextMenu(self.app_menu)
+        if not self._is_macos:
+            self.tray.setContextMenu(self.app_menu)
+        self.tray.show()
+        try:
+            self.app.processEvents()
+        except Exception:
+            pass
+        self.main_window = MountletWindow(self)
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self.rebuild_menus)
@@ -4551,7 +4762,6 @@ class MountletTray:
             return 1
 
         self.rebuild_menus()
-        self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
         self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
@@ -4559,10 +4769,18 @@ class MountletTray:
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
             return
-        if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
+        if reason == self.qt.QSystemTrayIcon.ActivationReason.Trigger:
+            self.main_window.toggle_from_tray()
+            self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return
-        self.main_window.toggle_from_tray()
-        self.qt.QTimer.singleShot(25, self.rebuild_menus)
+        if getattr(self, "_is_macos", False) and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
+            self.app_menu.popup(self.qt.QCursor.pos())
+
+    def _show_app_settings_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_app_config_editor)
 
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
@@ -4587,11 +4805,12 @@ class MountletTray:
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
-        self._add_action(self.app_menu, "App settings", self.main_window._show_app_config_editor)
+        self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
         self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
-        self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
+        if _has_mount_driver_config():
+            self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.request_quit)
 

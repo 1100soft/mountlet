@@ -10,8 +10,8 @@ Mountlet is a friendly control panel for two standard tools:
 
 - `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
   S3-compatible storage, and WebDAV.
-- FUSE lets Linux show a cloud remote as if it were a normal folder on your
-  computer.
+- A filesystem driver lets the operating system show a cloud remote as if it
+  were a normal folder: FUSE on Linux, WinFsp on Windows, or macFUSE on macOS.
 
 This app reads your `rclone` remotes, creates local mount folders, and starts or
 stops `rclone mount` for you.
@@ -20,7 +20,8 @@ stops `rclone mount` for you.
 
 - Python 3.10 or newer.
 - `rclone`, which connects to your cloud storage.
-- FUSE, which lets Linux show mounted cloud storage as folders.
+- A compatible filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE
+  on macOS.
 
 On Ubuntu, install the system tools with:
 
@@ -47,6 +48,161 @@ For a local checkout:
 ```bash
 python -m pip install .
 ```
+
+## Install a GitHub Preview
+
+GitHub previews are source snapshots from the `wip` branch, not signed native
+installers. They may be unstable and can change without notice. Linux is the
+primary supported platform. Source-installed Windows and macOS tray and mount
+flows are available as experimental support while native packaging is developed.
+
+Each section starts with the system prerequisites and installs Mountlet in an
+isolated environment, so a GitHub preview does not replace a stable PyPI
+installation.
+
+Use only the subsection for your operating system. Linux and macOS use shell
+commands; Windows uses PowerShell. Their syntax is not interchangeable.
+
+### Linux
+
+Install FUSE 3 through your distribution. On Ubuntu or Debian:
+
+```bash
+sudo apt update
+sudo apt install rclone fuse3 python3-venv
+```
+
+Install and start the preview:
+
+```bash
+PREVIEW="$HOME/.local/share/mountlet-preview"
+python3 -m venv "$PREVIEW"
+"$PREVIEW/bin/python" -m pip install --upgrade pip
+"$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
+  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+"$PREVIEW/bin/mountlet" tray
+```
+
+### Windows (Experimental)
+
+Install Python 3.12 and rclone with WinGet:
+
+```powershell
+winget install --id Python.Python.3.12 --exact
+winget install --id Rclone.Rclone --exact
+```
+
+Install [`WinFsp`](https://winfsp.dev/rel/) using its Windows installer, then
+close and reopen PowerShell so Python and rclone are available.
+
+If you downloaded the portable `rclone.exe` instead, place it in a permanent
+folder and tell Mountlet where it is. Replace the example path as needed:
+
+```powershell
+$env:RCLONE_PATH = "C:\Tools\rclone\rclone.exe"
+[Environment]::SetEnvironmentVariable("RCLONE_PATH", $env:RCLONE_PATH, "User")
+```
+
+Mountlet also checks `PATH` and common WinGet, Chocolatey, Scoop, and manual
+installation folders. Confirm that rclone is available before continuing:
+
+```powershell
+& $env:RCLONE_PATH version
+```
+
+If you used WinGet and did not set `RCLONE_PATH`, use `rclone version` instead.
+
+Install `pipx` and add its application directory to your user `PATH`:
+
+```powershell
+py -3.12 -m pip install --user --upgrade pipx
+py -3.12 -m pipx ensurepath
+```
+
+Close and reopen PowerShell so the updated `PATH` is loaded. Then install and
+start Mountlet. `pipx` keeps the preview isolated while making the `mountlet`
+command available to your user account:
+
+```powershell
+pipx install --force "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+mountlet tray
+```
+
+### macOS (Experimental)
+
+Install Apple's Command Line Tools first. A system dialog opens; finish that
+installation before continuing:
+
+```bash
+xcode-select --install
+```
+
+Install [Homebrew](https://brew.sh/) and activate it in the current shell. The
+path check supports both Apple Silicon and Intel Macs:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+BREW=/opt/homebrew/bin/brew
+[ -x "$BREW" ] || BREW=/usr/local/bin/brew
+printf 'eval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
+eval "$("$BREW" shellenv)"
+```
+
+Install Python, `pipx`, and macFUSE:
+
+```bash
+brew install python@3.12 pipx
+brew install --cask macfuse
+pipx ensurepath
+```
+
+Before macFUSE can mount anything, macOS may block its kernel extension. Follow
+the prompts shown when you first try to mount a remote:
+
+1. Choose **Open System Settings**, then open **Privacy & Security**.
+2. If an **Allow** button appears for system software from developer Benjamin
+   Fleischer, select it, authenticate, and restart the Mac.
+3. On an Apple Silicon Mac, macOS may first show **Enable System Extensions**.
+   Select it and shut down when prompted. Hold the power button to enter
+   Recovery, open **Startup Security Utility**, select the macOS volume, and
+   choose **Security Policy**.
+4. Select **Reduced Security**, enable **Allow user management of kernel
+   extensions from identified developers**, and restart.
+5. Try mounting again, return to **Privacy & Security**, select **Allow** for
+   macFUSE if requested, and restart once more.
+
+These security changes are required by macFUSE's kernel backend, not by
+Mountlet. See the official
+[macFUSE setup guide](https://github.com/macfuse/macfuse/wiki/Getting-Started)
+for screenshots and troubleshooting.
+
+Install rclone using its official script. Do not use `brew install rclone` for
+Mountlet: that macOS build does not include mount support.
+
+```bash
+sudo -v
+curl https://rclone.org/install.sh | sudo bash
+```
+
+Finally, install Mountlet with the Homebrew Python:
+
+```bash
+PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
+"$PYTHON" --version
+pipx install --force --python "$PYTHON" \
+  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+```
+
+The version check must report Python 3.10 or newer. Close and reopen the
+terminal after `pipx ensurepath`, then start the preview:
+
+```bash
+mountlet tray
+```
+
+Run the same install command again to update an existing preview. To test a
+specific tagged pre-release instead, replace `refs/heads/wip.zip` with
+`refs/tags/vX.Y.Z.zip`.
 
 ## Use
 
@@ -103,8 +259,11 @@ The tray app uses the tray icon this way:
   window, the first click brings it forward. On Plasma X11, opening it from a
   different desktop moves it to the current desktop.
 - Right-click shows app-level actions such as mount all, unmount all, update
-  status, app settings, raw app, mount, rclone, and FUSE config files, and
-  quit.
+  status, app settings, available configuration files, and quit.
+
+On macOS, Mountlet runs as a menu-bar utility without a separate Dock icon.
+Left-click opens or closes the Mountlet window, and right-click opens the app
+menu, matching the other supported desktops.
 
 The Mountlet window provides:
 
@@ -115,6 +274,10 @@ The Mountlet window provides:
   remaining space, with manual move controls for final adjustments.
 - A pin control that keeps the window above other windows without tying it to
   one desktop.
+- A file-manager selector in App settings. Mountlet follows the Linux desktop
+  default, uses File Explorer by default on Windows, and Finder on macOS; other
+  detected managers can be selected without changing the operating-system
+  default.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.

@@ -85,6 +85,38 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
 
+    def test_popup_position_clamps_full_window_to_available_screen(self):
+        position = tray._popup_position(
+            890,
+            640,
+            (100, 50, 800, 600),
+            (400, 300),
+        )
+
+        self.assertEqual(position, (500, 332))
+
+    def test_provider_status_colors_follow_light_system_palette(self):
+        foreground = SimpleNamespace(name=lambda: "#202020")
+        background = SimpleNamespace(red=lambda: 245, green=lambda: 245, blue=lambda: 245)
+        palette = mock.Mock()
+        palette.color.side_effect = lambda role: foreground if role == "foreground" else background
+        widget = mock.Mock()
+        widget.palette.return_value = palette
+        widget.foregroundRole.return_value = "foreground"
+        widget.backgroundRole.return_value = "background"
+
+        self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
+        self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
+
+    def test_platform_without_driver_config_hides_config_action(self):
+        platform = mock.Mock()
+        platform.mount_driver_config_paths.return_value = ()
+
+        with mock.patch.object(tray, "get_platform", return_value=platform):
+            available = tray._has_mount_driver_config()
+
+        self.assertFalse(available)
+
     def test_remote_browser_tooltip_names_service_not_remote(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
@@ -232,6 +264,48 @@ class TrayTests(unittest.TestCase):
 
         rebuild.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 1)
+
+    def test_macos_tray_handles_left_and_right_click_separately(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._is_macos = True
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        tray_app.app_menu = mock.Mock()
+        tray_app.rebuild_menus = mock.Mock()
+        trigger = object()
+        context = object()
+        tray_app.qt = SimpleNamespace(
+            QSystemTrayIcon=SimpleNamespace(
+                ActivationReason=SimpleNamespace(Trigger=trigger, Context=context)
+            ),
+            QCursor=SimpleNamespace(pos=lambda: "cursor-position"),
+            QTimer=mock.Mock(),
+        )
+
+        tray_app._handle_activation(trigger)
+        tray_app._handle_activation(context)
+
+        tray_app.main_window.toggle_from_tray.assert_called_once_with()
+        tray_app.app_menu.popup.assert_called_once_with("cursor-position")
+        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_macos_accessory_mode_hides_dock_application(self):
+        application = mock.Mock()
+        application.setActivationPolicy_.return_value = True
+        appkit = SimpleNamespace(
+            NSApplication=SimpleNamespace(sharedApplication=lambda: application),
+            NSApplicationActivationPolicyAccessory="accessory",
+        )
+
+        with mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            enabled = tray._set_macos_accessory_mode()
+
+        self.assertTrue(enabled)
+        application.setActivationPolicy_.assert_called_once_with("accessory")
+
+    def test_macos_main_window_uses_normal_window_type(self):
+        self.assertEqual(tray._main_window_type_name(True), "Window")
+        self.assertEqual(tray._main_window_type_name(False), "Tool")
 
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1157,6 +1231,25 @@ class TrayTests(unittest.TestCase):
         )
         mountlet_window._keep_above_button.setStyleSheet.assert_called_once()
 
+    def test_macos_pin_applies_native_always_on_top_flag(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowType=SimpleNamespace(WindowStaysOnTopHint="top"),
+            )
+        )
+        mountlet_window.tray_app = SimpleNamespace(_is_macos=True)
+        mountlet_window.desktop = mock.Mock()
+        mountlet_window.desktop.set_keep_above.return_value = False
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window._keep_above = True
+
+        mountlet_window._apply_keep_above()
+
+        mountlet_window.window.setWindowFlag.assert_called_once_with("top", True)
+        mountlet_window.window.show.assert_called_once_with()
+
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
@@ -1459,6 +1552,38 @@ class TrayTests(unittest.TestCase):
         owner.dialog.setWindowModality.assert_called_once_with("window-modal")
         owner.dialog.show.assert_called_once_with()
         raise_child.assert_called_once_with()
+
+    def test_open_child_dialog_shows_main_window_before_hidden_parent_dialog(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = False
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowModality=SimpleNamespace(WindowModal="window-modal"),
+                WindowType=SimpleNamespace(Dialog=1, FramelessWindowHint=2),
+            ),
+            QTimer=mock.Mock(),
+        )
+        owner = SimpleNamespace(dialog=mock.Mock())
+        events: list[str] = []
+
+        with mock.patch.object(mountlet_window, "show", side_effect=lambda: events.append("main")):
+            with mock.patch.object(
+                mountlet_window,
+                "_show_tracked_child_dialog",
+                side_effect=lambda _dialog: events.append("child"),
+            ):
+                mountlet_window.qt.QTimer.singleShot.side_effect = lambda _delay, callback: (
+                    events.append("timer"),
+                    callback(),
+                )
+                mountlet_window._open_child_dialog(owner)
+
+        self.assertEqual(events, ["main", "timer", "child"])
+        owner.dialog.show.assert_not_called()
 
     def test_restore_child_offsets_moves_subwindow_with_main_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1902,6 +2027,23 @@ class TrayTests(unittest.TestCase):
         qt.QUrl.fromLocalFile.assert_not_called()
         qt.QDesktopServices.openUrl.assert_not_called()
 
+    def test_open_folder_explicit_manager_overrides_desktop_service(self):
+        qt = mock.Mock()
+        manager = SimpleNamespace(identifier="org.example.Files.desktop")
+        settings = SimpleNamespace(
+            file_manager=manager.identifier,
+            open_folder_behavior="file-manager-service",
+            focus_file_manager=True,
+        )
+        with mock.patch.object(tray, "load_app_settings", return_value=settings):
+            with mock.patch.object(tray, "resolve_file_manager", return_value=manager):
+                with mock.patch.object(tray, "_show_folder_with_file_manager") as service:
+                    with mock.patch.object(tray, "open_with_file_manager", return_value=True) as opener:
+                        self.assertTrue(tray._open_folder_default(qt, "/tmp/docs"))
+
+        service.assert_not_called()
+        opener.assert_called_once_with(manager, "/tmp/docs", new_window=False)
+
     def test_open_text_file_focused_opens_known_editor(self):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             with mock.patch.object(tray.shutil, "which", side_effect=lambda name: "/usr/bin/kate" if name == "kate" else None):
@@ -2006,6 +2148,26 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.rebuild_menus.assert_not_called()
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_tray_app_settings_shows_main_window_before_dialog(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.main_window = mock.Mock()
+        tray_app.qt = mock.Mock()
+        events: list[str] = []
+        tray_app.main_window.show.side_effect = lambda: events.append("window")
+
+        def single_shot(delay: int, callback: object) -> None:
+            self.assertEqual(delay, 0)
+            events.append("timer")
+            callback()
+
+        tray_app.qt.QTimer.singleShot.side_effect = single_shot
+        tray_app.main_window._show_app_config_editor.side_effect = lambda: events.append("dialog")
+
+        tray_app._show_app_settings_from_tray()
+
+        self.assertEqual(events, ["window", "timer", "dialog"])
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")

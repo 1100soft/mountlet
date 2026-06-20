@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import platform
+import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from .. import core
+from ..platform_services import get_platform
 from ..settings import ensure_default_config_files
 from .shared import (
     app_cache_dir,
@@ -18,6 +20,7 @@ from .shared import (
     app_state_dir,
     default_config_path,
     ensure_app_directories,
+    ensure_rclone_config,
     find_rclone,
     read_remotes,
     verify_remotes,
@@ -36,11 +39,24 @@ def _status(ok: bool, message: str) -> str:
 
 
 def _fuse_available() -> bool:
-    if platform.system() == "Windows":
-        return True
-    if shutil.which("fusermount3") or shutil.which("fusermount"):
-        return True
-    return False
+    return get_platform().mount_driver_available()
+
+
+def _install_guidance() -> tuple[str, ...]:
+    return get_platform().prerequisite_guidance()
+
+
+def _mountlet_command() -> str:
+    if shutil.which("mountlet"):
+        return "mountlet"
+    invoked_as = sys.argv[0]
+    platform = get_platform()
+    launcher = PureWindowsPath(invoked_as) if platform.system_name == "Windows" else Path(invoked_as)
+    if launcher.name.lower() not in {"mountlet", "mountlet.exe"}:
+        return "mountlet"
+    if platform.system_name == "Windows":
+        return f"& '{invoked_as.replace(chr(39), chr(39) * 2)}'"
+    return shlex.quote(invoked_as)
 
 
 def _print_paths() -> None:
@@ -62,19 +78,18 @@ def check_readiness() -> Readiness:
 
     rclone_bin = find_rclone()
     if not rclone_bin:
-        messages.append("Install rclone: sudo apt install rclone")
+        messages.append(_install_guidance()[0])
 
     if not _fuse_available():
-        messages.append("Install FUSE: sudo apt install fuse3")
+        messages.append(_install_guidance()[1])
 
     config_path = default_config_path()
-    if not config_path.exists():
-        messages.append(f"Create an rclone config: {config_path}")
-        remotes: list[str] = []
-    else:
-        remotes = read_remotes(config_path)
-        if not remotes:
-            messages.append("Add at least one cloud storage connection to rclone.")
+    if rclone_bin:
+        try:
+            ensure_rclone_config(config_path)
+        except OSError as exc:
+            messages.append(f"Cannot create the rclone config at {config_path}: {exc}")
+    remotes = read_remotes(config_path) if config_path.exists() else []
 
     return Readiness(ready=not messages, messages=messages, remotes=remotes)
 
@@ -90,11 +105,12 @@ def ensure_ready_for_menu() -> bool:
         print(f"- {message}")
     print()
     print("Run:")
-    print("  mountlet setup")
+    command = _mountlet_command()
+    print(f"  {command} setup")
     if find_rclone():
         print()
         print("If you still need to connect cloud storage, run:")
-        print("  mountlet setup --configure-rclone")
+        print(f"  {command} setup --configure-rclone")
     return False
 
 
@@ -107,17 +123,18 @@ def _run_rclone_config(rclone_bin: str) -> int:
 
 def _next_steps(rclone_bin: str | None, fuse_ok: bool, remotes: list[str], failures: list[str]) -> list[str]:
     steps: list[str] = []
+    command = _mountlet_command()
     if not rclone_bin:
-        steps.append("Install rclone: sudo apt install rclone")
+        steps.append(_install_guidance()[0])
     if not fuse_ok:
-        steps.append("Install FUSE: sudo apt install fuse3")
+        steps.append(_install_guidance()[1])
     if not remotes:
         if rclone_bin:
-            steps.append("Add cloud storage: mountlet setup --configure-rclone")
+            steps.append(f"Add cloud storage: {command} setup --configure-rclone")
         else:
-            steps.append("After installing rclone, add cloud storage: mountlet setup --configure-rclone")
+            steps.append(f"After installing rclone, add cloud storage: {command} setup --configure-rclone")
     if failures:
-        steps.append("Reconnect credentials: mountlet reconnect --remote <name>")
+        steps.append(f"Reconnect credentials: {command} reconnect --remote <name>")
     return steps
 
 
@@ -140,7 +157,7 @@ def setup_command(args: argparse.Namespace) -> int:
     print(
         _status(
             bool(rclone_bin),
-            f"Found rclone: {rclone_bin}" if rclone_bin else "Install rclone. On Ubuntu: sudo apt install rclone",
+            f"Found rclone: {rclone_bin}" if rclone_bin else _install_guidance()[0],
         )
     )
 
@@ -148,11 +165,17 @@ def setup_command(args: argparse.Namespace) -> int:
     print(
         _status(
             fuse_ok,
-            "Found FUSE mount support." if fuse_ok else "Install FUSE. On Ubuntu: sudo apt install fuse3",
+            "Found filesystem mount support." if fuse_ok else _install_guidance()[1],
         )
     )
 
     config_path = default_config_path()
+    if rclone_bin and not config_path.exists():
+        try:
+            ensure_rclone_config(config_path)
+            print(_status(True, f"Created empty rclone config: {config_path}"))
+        except OSError as exc:
+            print(_status(False, f"Could not create rclone config: {exc}"))
     config_exists = config_path.exists()
     remotes = read_remotes(config_path) if config_exists else []
 
@@ -187,10 +210,13 @@ def setup_command(args: argparse.Namespace) -> int:
     _print_paths()
     print()
 
-    ready = bool(rclone_bin and fuse_ok and remotes and not failures)
+    ready = bool(rclone_bin and fuse_ok and config_exists and not failures)
     if ready:
+        if not remotes:
+            print("Ready. Add cloud storage with the + button in the tray app, or run:")
+            print(f"  {_mountlet_command()} setup --configure-rclone")
         print("Ready. Open the menu with:")
-        print("  mountlet")
+        print(f"  {_mountlet_command()}")
         return 0
 
     print("A few things still need attention before mounting.")

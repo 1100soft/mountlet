@@ -2,55 +2,27 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from typing import Dict, List
 
 from . import core
 from .config_tools.shared import ensure_app_directories
+from .platform_services import get_platform
+from .platform_services.console import ConsoleServices
 
 USE_COLOR = True
 CACHE_USAGE: Dict[str, str] = {}
+CONSOLE = ConsoleServices(get_platform())
 
 
-if core.IS_WINDOWS:
-    try:
-        import ctypes
-
-        _kernel32 = ctypes.windll.kernel32
-        _STDOUT = _kernel32.GetStdHandle(-11)
-
-        def _set_color(code: int) -> None:
-            _kernel32.SetConsoleTextAttribute(_STDOUT, code)
-
-        def _reset_color() -> None:
-            _set_color(7)
-
-        def print_maybe_color(line_prefix: str, mounted_line: str, normal_line: str, mounted: bool) -> None:
-            if USE_COLOR and mounted and sys.stdout.isatty():
-                print(line_prefix, end="")
-                _set_color(10)
-                print(mounted_line, end="")
-                _reset_color()
-                print()
-            else:
-                print(line_prefix + (mounted_line if mounted else normal_line))
-
-    except Exception:
-
-        def print_maybe_color(line_prefix: str, mounted_line: str, normal_line: str, mounted: bool) -> None:
-            print(line_prefix + (mounted_line if mounted else normal_line))
-
-else:
-
-    def print_maybe_color(line_prefix: str, mounted_line: str, normal_line: str, mounted: bool) -> None:
-        if USE_COLOR and sys.stdout.isatty():
-            if mounted:
-                print(f"{line_prefix}\033[92m{mounted_line}\033[0m")
-            else:
-                print(line_prefix + normal_line)
-        else:
-            print(line_prefix + (mounted_line if mounted else normal_line))
+def print_maybe_color(line_prefix: str, mounted_line: str, normal_line: str, mounted: bool) -> None:
+    CONSOLE.print_status(
+        line_prefix,
+        mounted_line,
+        normal_line,
+        mounted,
+        color=USE_COLOR,
+    )
 
 
 def mount_all(remotes: List[core.RemoteInfo]) -> str:
@@ -116,13 +88,7 @@ def toggle_remote(remote: core.RemoteInfo) -> str:
 
 
 def clear_screen() -> None:
-    if core.IS_WINDOWS:
-        import os
-
-        os.system("cls")
-    else:
-        sys.stdout.write("\33[2J\33[H")
-        sys.stdout.flush()
+    CONSOLE.clear()
 
 
 def display(remotes: List[core.RemoteInfo], status_line: str = "") -> None:

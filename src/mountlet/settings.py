@@ -8,7 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories, legacy_app_config_dirs
+from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ensure_app_directories, legacy_app_config_dirs
+from .platform_services import get_platform
+from .platform_services.file_managers import default_file_manager_id
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,7 @@ class AppSettings:
     auto_mount: bool = False
     auto_mount_delay: float = 2.0
     start_at_login: bool = False
+    file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
 
@@ -44,7 +47,10 @@ auto_mount_delay = 2.0
 start_at_login = false
 
 [tray]
-# current_desktop uses an existing Dolphin window on the current X11 desktop when possible.
+# Leave empty to use this platform's default file manager.
+file_manager = ""
+
+# current_desktop reuses a supported file-manager window on the current desktop when possible.
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
@@ -228,6 +234,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         auto_mount=_bool_value(app.get("auto_mount"), False),
         auto_mount_delay=max(_float_value(app.get("auto_mount_delay"), 2.0), 0.0),
         start_at_login=_bool_value(app.get("start_at_login"), _autostart_file().exists()),
+        file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
     )
@@ -281,7 +288,10 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"start_at_login = {_toml_bool(settings.start_at_login)}",
             "",
             "[tray]",
-            "# current_desktop uses an existing Dolphin window on the current X11 desktop when possible.",
+            "# File-manager identifier discovered by Mountlet.",
+            f"file_manager = {_toml_string(settings.file_manager)}",
+            "",
+            "# current_desktop reuses a supported file-manager window on the current desktop when possible.",
             "# default uses the desktop's normal folder opener.",
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
@@ -292,34 +302,16 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
 
 
 def _autostart_file() -> Path:
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return config_home / "autostart" / "mountlet.desktop"
+    return get_platform().autostart_path(APP_NAME)
 
 
 def set_start_at_login(enabled: bool, path: Path | None = None) -> None:
-    destination = path or _autostart_file()
-    if enabled:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            "\n".join(
-                [
-                    "[Desktop Entry]",
-                    "Type=Application",
-                    "Name=Mountlet",
-                    "Comment=Mount cloud storage folders with Mountlet",
-                    "Exec=mountlet tray",
-                    "Terminal=false",
-                    "X-GNOME-Autostart-enabled=true",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return
-    try:
-        destination.unlink()
-    except FileNotFoundError:
-        pass
+    get_platform().set_start_at_login(
+        APP_NAME,
+        enabled,
+        command=("mountlet", "tray"),
+        destination=path,
+    )
 
 
 def _remote_section_name(remote_name: str) -> str:

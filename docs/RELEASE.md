@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` first:
 
 ```bash
-VERSION=0.2.2
+VERSION=0.3.0
 python -m unittest discover -s tests
 python -m compileall -q src tests
 python -m pip wheel . -w /tmp/mountlet-release --no-deps --no-build-isolation

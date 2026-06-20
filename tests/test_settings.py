@@ -24,6 +24,7 @@ auto_mount_delay = 3.5
 start_at_login = true
 
 [tray]
+file_manager = "org.example.Files.desktop"
 open_folder_behavior = "new_window"
 focus_file_manager = false
 """.strip(),
@@ -36,6 +37,7 @@ focus_file_manager = false
         self.assertTrue(config.auto_mount)
         self.assertEqual(config.auto_mount_delay, 3.5)
         self.assertTrue(config.start_at_login)
+        self.assertEqual(config.file_manager, "org.example.Files.desktop")
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
 
@@ -113,6 +115,7 @@ order = 2
                     auto_mount=True,
                     auto_mount_delay=4.25,
                     start_at_login=True,
+                    file_manager="org.example.Files.desktop",
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
                 ),
@@ -125,6 +128,7 @@ order = 2
         self.assertTrue(loaded.auto_mount)
         self.assertEqual(loaded.auto_mount_delay, 4.25)
         self.assertTrue(loaded.start_at_login)
+        self.assertEqual(loaded.file_manager, "org.example.Files.desktop")
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
 

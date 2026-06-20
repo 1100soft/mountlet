@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 - 2026-06-20
+
+- Refactored paths, prerequisites, mount lifecycle, process handling,
+  start-at-login registration, and desktop integration behind Linux, Windows,
+  macOS, and generic Qt platform services.
+- Kept Dolphin and Plasma X11 behavior as optional Linux enhancements while
+  providing default file-manager and window fallbacks for other environments.
+- Added platform adapter tests and Windows-specific directory mountpoint
+  preparation. Source-installed tray and mount flows have now been exercised
+  on Linux, Windows, and macOS; Windows and macOS remain experimental until
+  native packages are available.
+- Added cross-platform file-manager discovery and an app-specific selector,
+  with platform defaults and automatic fallback when a selected manager is no
+  longer installed.
+- Opening App settings from the tray now positions and focuses the main window
+  at the tray before showing the settings dialog.
+- Child dialogs, including Add Remote, now establish their positioned main
+  window before appearing when launched directly from the tray.
+- Added Windows prerequisite discovery for rclone and WinFsp, PowerShell-safe
+  setup guidance, and File Explorer integration.
+- Added macOS prerequisite guidance for rclone and macFUSE, Finder integration,
+  menu-bar-only operation, native tray click handling, and keep-above behavior.
+
 ## 0.2.2 - 2026-06-19
 
 - Added a guided new-remote wizard for major cloud providers, with browser and

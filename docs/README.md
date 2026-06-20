@@ -5,6 +5,27 @@ user-facing document used for package publication.
 
 ## Development
 
+### Platform architecture
+
+Operating-system behavior belongs in `src/mountlet/platform_services/`. Application
+modules use the platform contract for:
+
+- user config, state, cache, and mount paths;
+- rclone discovery and filesystem-driver readiness;
+- mount process creation, status checks, and unmounting;
+- start-at-login registration and process-tree shutdown;
+- desktop file opening, workspace movement, and keep-above capabilities.
+
+`LinuxPlatformServices`, `WindowsPlatformServices`, and
+`MacOSPlatformServices` provide the OS layer. `DesktopServices` supplies Qt
+fallbacks and accepts optional desktop adapters. KDE/Dolphin/X11 behavior is an
+enhancement on Linux; it must not be required for mounting or opening folders.
+
+The adapters establish implementation boundaries and testable conventions.
+Source-installed tray and mount flows have been exercised on Linux, Windows,
+and macOS. Windows and macOS remain experimental until native packaging and
+broader end-to-end testing are complete.
+
 Install from a local checkout:
 
 ```bash
@@ -58,7 +79,7 @@ ignored by git and must not be part of the installed-user workflow.
 
 ## Provider Test Status
 
-The 0.2.2 release documents provider status based on local remotes in
+The 0.3.0 release documents provider status based on local remotes in
 `~/.config/rclone/rclone.conf` and recent GUI setup work.
 
 Locally tested:
