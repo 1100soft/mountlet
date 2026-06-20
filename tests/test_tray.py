@@ -12,6 +12,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mountlet import core, settings, tray
+from mountlet.platform_services.linux import LinuxPlatformServices
+
+
+DOCS_URI = Path("/tmp/docs").resolve().as_uri()
 
 
 class _FakeWindow:
@@ -30,6 +34,9 @@ class TrayTests(unittest.TestCase):
     def setUp(self) -> None:
         tray._dolphin_tab_target_cache = None
         tray._wizard_pending_remote_names.clear()
+        patcher = mock.patch.object(tray, "get_platform", return_value=LinuxPlatformServices())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
         with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
@@ -1638,7 +1645,7 @@ class TrayTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("--dest=org.freedesktop.FileManager1", command)
         self.assertIn("org.freedesktop.FileManager1.ShowFolders", command)
-        self.assertIn("array:string:file:///tmp/docs", command)
+        self.assertIn(f"array:string:{DOCS_URI}", command)
         self.assertEqual(command[-1], "string:")
 
     def test_open_folder_uses_qt_default_opener_by_default(self):
@@ -1697,7 +1704,7 @@ class TrayTests(unittest.TestCase):
                 "org.kde.dolphin-1234",
                 "/dolphin/Dolphin_1",
                 "org.kde.dolphin.MainWindow.openDirectories",
-                "file:///tmp/docs",
+                DOCS_URI,
                 "false",
             ],
         )
@@ -1895,14 +1902,14 @@ class TrayTests(unittest.TestCase):
                     None,
                     "org.kde.dolphin-1234",
                     "/dolphin/Dolphin_1",
-                    "file:///tmp/docs",
+                    DOCS_URI,
                 )
             )
 
         self.assertEqual(
             interface.call.call_args_list,
             [
-                mock.call("openDirectories", ["file:///tmp/docs"], False),
+                mock.call("openDirectories", [DOCS_URI], False),
                 mock.call("activateWindow", ""),
             ],
         )
@@ -1918,7 +1925,7 @@ class TrayTests(unittest.TestCase):
                     "/usr/bin/qdbus6",
                     "org.kde.dolphin-1234",
                     "/dolphin/Dolphin_1",
-                    "file:///tmp/docs",
+                    DOCS_URI,
                 )
             )
 
@@ -1953,7 +1960,7 @@ class TrayTests(unittest.TestCase):
                     "/usr/bin/qdbus6",
                     "org.kde.dolphin-1234",
                     "/dolphin/Dolphin_1",
-                    "file:///tmp/docs",
+                    DOCS_URI,
                 )
             )
 
@@ -1967,7 +1974,7 @@ class TrayTests(unittest.TestCase):
                     "/usr/bin/qdbus6",
                     "org.kde.dolphin-1234",
                     "/dolphin/Dolphin_1",
-                    "file:///tmp/docs",
+                    DOCS_URI,
                 )
             )
 
@@ -1977,7 +1984,7 @@ class TrayTests(unittest.TestCase):
                 "org.kde.dolphin-1234",
                 "/dolphin/Dolphin_1",
                 "org.kde.dolphin.MainWindow.openDirectories",
-                "file:///tmp/docs",
+                DOCS_URI,
                 "false",
             ],
             stdout=tray.subprocess.DEVNULL,
