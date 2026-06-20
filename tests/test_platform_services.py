@@ -194,6 +194,26 @@ Categories=Utility;FileManager;
             self.assertFalse(result.success)
             self.assertIn("not empty", result.detail)
 
+    def test_windows_finds_winfsp_in_32_bit_program_files(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            program_files_x86 = Path(tempdir) / "Program Files (x86)"
+            tool = program_files_x86 / "WinFsp" / "bin" / "fsptool-x64.exe"
+            tool.parent.mkdir(parents=True)
+            tool.touch()
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "ProgramFiles": str(Path(tempdir) / "Program Files"),
+                    "ProgramFiles(x86)": str(program_files_x86),
+                    "ProgramW6432": str(Path(tempdir) / "Program Files"),
+                },
+                clear=True,
+            ):
+                with mock.patch("mountlet.platform_services.windows.shutil.which", return_value=None):
+                    available = WindowsPlatformServices().mount_driver_available()
+
+        self.assertTrue(available)
+
     def test_linux_autostart_uses_freedesktop_entry(self):
         with tempfile.TemporaryDirectory() as tempdir:
             destination = Path(tempdir) / "mountlet.desktop"

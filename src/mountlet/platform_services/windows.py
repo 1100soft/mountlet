@@ -146,8 +146,13 @@ class WindowsPlatformServices(PlatformServices):
         return ("Install rclone.", "Install WinFsp to enable filesystem mounts.")
 
     def mount_driver_available(self) -> bool:
-        program_files = Path(os.environ.get("ProgramFiles", "C:/Program Files"))
-        return bool(
-            shutil.which("fsptool-x64.exe")
-            or (program_files / "WinFsp" / "bin" / "fsptool-x64.exe").exists()
-        )
+        tool_names = ("fsptool-x64.exe", "fsptool-x86.exe", "fsptool-a64.exe")
+        if any(shutil.which(name) for name in tool_names):
+            return True
+
+        roots = {
+            Path(os.environ.get("ProgramFiles", "C:/Program Files")),
+            Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")),
+            Path(os.environ.get("ProgramW6432", "C:/Program Files")),
+        }
+        return any((root / "WinFsp" / "bin" / name).exists() for root in roots for name in tool_names)

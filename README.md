@@ -107,14 +107,21 @@ installation folders. Confirm that rclone is available before continuing:
 ```
 
 If you used WinGet and did not set `RCLONE_PATH`, use `rclone version` instead.
-Then install and start Mountlet:
+
+Install `pipx` and add its application directory to your user `PATH`:
 
 ```powershell
-$Preview = "$env:LOCALAPPDATA\Mountlet\preview"
-py -3 -m venv $Preview
-& "$Preview\Scripts\python.exe" -m pip install --upgrade pip
-& "$Preview\Scripts\python.exe" -m pip install --upgrade --force-reinstall "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
-& "$Preview\Scripts\mountlet.exe" tray
+py -3 -m pip install --user --upgrade pipx
+py -3 -m pipx ensurepath
+```
+
+Close and reopen PowerShell so the updated `PATH` is loaded. Then install and
+start Mountlet. `pipx` keeps the preview isolated while making the `mountlet`
+command available to your user account:
+
+```powershell
+pipx install --force "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+mountlet tray
 ```
 
 ### macOS (Experimental)
