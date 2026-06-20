@@ -106,7 +106,11 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertEqual(step.state, "next")
         self.assertEqual(step.option["Name"], "config_is_local")
         self.assertEqual(process.communicate_timeout, rclone_wizard.RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
-        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        process_options = rclone_wizard.PLATFORM.mount_process_options()
+        self.assertEqual(
+            {name: popen.call_args.kwargs[name] for name in process_options},
+            process_options,
+        )
 
     def test_continue_drive_remote_passes_state_and_result(self):
         with tempfile.TemporaryDirectory() as tempdir:

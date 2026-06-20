@@ -64,7 +64,7 @@ mount_flags = --read-only --dir-cache-time 10m
             self.assertEqual(remote.name, "Work__Drive")
             self.assertEqual(remote.alias, "Work")
             self.assertEqual(remote.provider, "Drive")
-            self.assertTrue(remote.mount_path.endswith("/drive/Work"))
+            self.assertEqual(Path(remote.mount_path).parts[-2:], ("drive", "Work"))
             self.assertIn("--links", remote.flags)
             self.assertIn("--read-only", remote.flags)
             self.assertIn("10m", remote.flags)
@@ -210,7 +210,7 @@ type = dropbox
             remotes = core.load_remotes()
 
         self.assertEqual([remote.name for remote in remotes], ["Docs"])
-        self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertEqual(Path(remotes[0].mount_path).name, "custom-docs")
         self.assertEqual(remotes[0].remote_path, "bucket/docs")
         self.assertTrue(Path(remotes[0].mount_path).is_absolute())
         self.assertFalse(remotes[0].auto_mount)
@@ -233,7 +233,7 @@ endpoint = https://account.r2.cloudflarestorage.com
             remote = core.load_remotes()[0]
 
         self.assertEqual(remote.provider, "Cloudflare R2")
-        self.assertTrue(remote.mount_path.endswith("/s3/Archive"))
+        self.assertEqual(Path(remote.mount_path).parts[-2:], ("s3", "Archive"))
 
     def test_load_remotes_uses_mountlet_order_when_configured(self):
         with tempfile.TemporaryDirectory() as tempdir:

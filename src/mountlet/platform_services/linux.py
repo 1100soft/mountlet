@@ -13,10 +13,14 @@ class LinuxPlatformServices(PlatformServices):
     system_name = "Linux"
 
     def user_directories(self, app_name: str) -> UserDirectories:
-        home = Path.home()
-        config = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config")).expanduser()
-        state = Path(os.environ.get("XDG_STATE_HOME", home / ".local" / "state")).expanduser()
-        cache = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache")).expanduser()
+        home = Path.home() if not all(
+            name in os.environ for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME")
+        ) else None
+        config = Path(os.environ["XDG_CONFIG_HOME"] if "XDG_CONFIG_HOME" in os.environ else home / ".config")
+        state = Path(
+            os.environ["XDG_STATE_HOME"] if "XDG_STATE_HOME" in os.environ else home / ".local" / "state"
+        )
+        cache = Path(os.environ["XDG_CACHE_HOME"] if "XDG_CACHE_HOME" in os.environ else home / ".cache")
         return UserDirectories(config / app_name, state / app_name, cache / app_name)
 
     def default_mount_base(self) -> Path:
@@ -34,7 +38,11 @@ class LinuxPlatformServices(PlatformServices):
         return ([command, "-u", path], [command, "-uz", path])
 
     def autostart_path(self, app_name: str) -> Path:
-        config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).expanduser()
+        config = (
+            Path(os.environ["XDG_CONFIG_HOME"])
+            if "XDG_CONFIG_HOME" in os.environ
+            else Path.home() / ".config"
+        )
         return config / "autostart" / f"{app_name}.desktop"
 
     def set_start_at_login(

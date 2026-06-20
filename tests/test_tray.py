@@ -2057,7 +2057,7 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.subprocess, "Popen") as popen:
                     self.assertTrue(tray._open_text_file_focused(Path("/tmp/config.toml")))
 
-        self.assertEqual(popen.call_args.args[0], ["/usr/bin/kate", "/tmp/config.toml"])
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/kate", str(Path("/tmp/config.toml"))])
 
     def test_open_text_file_focused_falls_back_without_known_editor(self):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
