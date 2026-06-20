@@ -260,9 +260,9 @@ The tray app uses the tray icon this way:
 - Right-click shows app-level actions such as mount all, unmount all, update
   status, app settings, available configuration files, and quit.
 
-On macOS, the actual tray icon is in the menu bar. Clicking Mountlet's Dock
-icon opens or refocuses the main window; its Dock menu also includes Mountlet
-actions alongside the standard macOS items.
+On macOS, Mountlet runs as a menu-bar utility without a separate Dock icon.
+Left-click opens or closes the Mountlet window, and right-click opens the app
+menu, matching the other supported desktops.
 
 The Mountlet window provides:
 

@@ -265,75 +265,43 @@ class TrayTests(unittest.TestCase):
         rebuild.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 1)
 
-    def test_macos_application_activation_opens_main_window(self):
+    def test_macos_tray_handles_left_and_right_click_separately(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._is_macos = True
-        tray_app._application_activation_ready = True
-        tray_app._last_tray_activation = 0.0
         tray_app._quitting = False
         tray_app.main_window = mock.Mock()
+        tray_app.app_menu = mock.Mock()
         tray_app.rebuild_menus = mock.Mock()
-        active = object()
+        trigger = object()
+        context = object()
         tray_app.qt = SimpleNamespace(
-            Qt=SimpleNamespace(ApplicationState=SimpleNamespace(ApplicationActive=active)),
+            QSystemTrayIcon=SimpleNamespace(
+                ActivationReason=SimpleNamespace(Trigger=trigger, Context=context)
+            ),
+            QCursor=SimpleNamespace(pos=lambda: "cursor-position"),
             QTimer=mock.Mock(),
         )
 
-        tray_app.qt.QTimer.singleShot.side_effect = lambda _delay, callback: callback()
+        tray_app._handle_activation(trigger)
+        tray_app._handle_activation(context)
 
-        tray_app._handle_application_state_changed(active)
+        tray_app.main_window.toggle_from_tray.assert_called_once_with()
+        tray_app.app_menu.popup.assert_called_once_with("cursor-position")
+        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
 
-        tray_app.main_window.show.assert_called_once_with()
-        self.assertEqual(tray_app.qt.QTimer.singleShot.call_count, 2)
-        tray_app.qt.QTimer.singleShot.assert_any_call(25, tray_app.rebuild_menus)
-
-    def test_macos_startup_activation_does_not_open_main_window(self):
-        tray_app = object.__new__(tray.MountletTray)
-        tray_app._is_macos = True
-        tray_app._application_activation_ready = False
-        tray_app._last_tray_activation = 0.0
-        tray_app._quitting = False
-        tray_app.main_window = mock.Mock()
-        active = object()
-        tray_app.qt = SimpleNamespace(
-            Qt=SimpleNamespace(ApplicationState=SimpleNamespace(ApplicationActive=active)),
+    def test_macos_accessory_mode_hides_dock_application(self):
+        application = mock.Mock()
+        application.setActivationPolicy_.return_value = True
+        appkit = SimpleNamespace(
+            NSApplication=SimpleNamespace(sharedApplication=lambda: application),
+            NSApplicationActivationPolicyAccessory="accessory",
         )
 
-        tray_app._handle_application_state_changed(active)
+        with mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            enabled = tray._set_macos_accessory_mode()
 
-        tray_app.main_window.show.assert_not_called()
-
-    def test_macos_tray_activation_does_not_toggle_main_window(self):
-        tray_app = object.__new__(tray.MountletTray)
-        tray_app._is_macos = True
-        tray_app._quitting = False
-        tray_app._last_tray_activation = 0.0
-        tray_app.main_window = mock.Mock()
-
-        tray_app._handle_activation(object())
-
-        tray_app.main_window.toggle_from_tray.assert_not_called()
-        self.assertGreater(tray_app._last_tray_activation, 0)
-
-    def test_macos_tray_activation_suppresses_pending_dock_reopen(self):
-        tray_app = object.__new__(tray.MountletTray)
-        tray_app._is_macos = True
-        tray_app._application_activation_ready = True
-        tray_app._quitting = False
-        tray_app._last_tray_activation = 0.0
-        tray_app.main_window = mock.Mock()
-        active = object()
-        callbacks: list[object] = []
-        tray_app.qt = SimpleNamespace(
-            Qt=SimpleNamespace(ApplicationState=SimpleNamespace(ApplicationActive=active)),
-            QTimer=SimpleNamespace(singleShot=lambda _delay, callback: callbacks.append(callback)),
-        )
-
-        tray_app._handle_application_state_changed(active)
-        tray_app._handle_activation(object())
-        callbacks[0]()
-
-        tray_app.main_window.show.assert_not_called()
+        self.assertTrue(enabled)
+        application.setActivationPolicy_.assert_called_once_with("accessory")
 
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1258,6 +1226,28 @@ class TrayTests(unittest.TestCase):
             "Stop keeping Mountlet above other windows"
         )
         mountlet_window._keep_above_button.setStyleSheet.assert_called_once()
+
+    def test_macos_pin_keeps_tool_window_visible_when_app_is_inactive(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        attribute = object()
+        mountlet_window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WidgetAttribute=SimpleNamespace(WA_MacAlwaysShowToolWindow=attribute),
+                WindowType=SimpleNamespace(WindowStaysOnTopHint="top"),
+            )
+        )
+        mountlet_window.tray_app = SimpleNamespace(_is_macos=True)
+        mountlet_window.desktop = mock.Mock()
+        mountlet_window.desktop.set_keep_above.return_value = False
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window._keep_above = True
+
+        mountlet_window._apply_keep_above()
+
+        mountlet_window.window.setAttribute.assert_called_once_with(attribute, True)
+        mountlet_window.window.setWindowFlag.assert_called_once_with("top", True)
+        mountlet_window.window.show.assert_called_once_with()
 
     def test_mountlet_window_toggle_shows_visible_window_from_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)

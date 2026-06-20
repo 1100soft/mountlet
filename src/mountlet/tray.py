@@ -832,6 +832,19 @@ def _has_mount_driver_config() -> bool:
     return bool(get_platform().mount_driver_config_paths())
 
 
+def _set_macos_accessory_mode() -> bool:
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        return bool(
+            NSApplication.sharedApplication().setActivationPolicy_(
+                NSApplicationActivationPolicyAccessory
+            )
+        )
+    except Exception:
+        return False
+
+
 def _folder_uri(path: str) -> str:
     return Path(path).expanduser().resolve().as_uri()
 
@@ -3657,6 +3670,12 @@ class MountletWindow:
         self._update_keep_above_button()
 
     def _apply_keep_above(self) -> None:
+        if getattr(getattr(self, "tray_app", None), "_is_macos", False):
+            try:
+                attribute = self.qt.Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow
+                self.window.setAttribute(attribute, self._keep_above)
+            except Exception:
+                pass
         if self._desktop_api().set_keep_above(self.window, self._keep_above):
             return
         try:
@@ -4689,24 +4708,20 @@ class MountletTray:
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setQuitOnLastWindowClosed(False)
         self._is_macos = get_platform().system_name == "Darwin"
-        self._application_activation_ready = False
-        self._last_tray_activation = 0.0
+        if self._is_macos:
+            _set_macos_accessory_mode()
         self._quitting = False
         self._allow_forced_exit = True
         self._forced_exit_scheduled = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
-        if self._is_macos:
-            try:
-                self.app_menu.setAsDockMenu()
-            except Exception:
-                pass
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
         self.main_window = MountletWindow(self)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("Mountlet")
-        self.tray.setContextMenu(self.app_menu)
+        if not self._is_macos:
+            self.tray.setContextMenu(self.app_menu)
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self.rebuild_menus)
@@ -4714,11 +4729,6 @@ class MountletTray:
             self.app.aboutToQuit.connect(self._prepare_quit)
         except Exception:
             pass
-        if self._is_macos:
-            try:
-                self.app.applicationStateChanged.connect(self._handle_application_state_changed)
-            except Exception:
-                pass
 
     def _icon(self) -> Any:
         icon_path = _packaged_icon_path()
@@ -4744,40 +4754,17 @@ class MountletTray:
         self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
         self._schedule_auto_mounts()
-        if self._is_macos:
-            self.qt.QTimer.singleShot(500, self._enable_application_activation)
         return int(self.app.exec() or 0)
-
-    def _enable_application_activation(self) -> None:
-        self._application_activation_ready = True
-
-    def _handle_application_state_changed(self, state: Any) -> None:
-        if not self._is_macos or not self._application_activation_ready or self._quitting:
-            return
-        if state != self.qt.Qt.ApplicationState.ApplicationActive:
-            return
-        activation_time = time.monotonic()
-        self.qt.QTimer.singleShot(
-            100,
-            lambda started=activation_time: self._show_after_macos_activation(started),
-        )
-
-    def _show_after_macos_activation(self, activation_time: float) -> None:
-        if self._quitting or time.monotonic() - self._last_tray_activation < 0.5:
-            return
-        self.main_window.show()
-        self.qt.QTimer.singleShot(25, self.rebuild_menus)
 
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
             return
-        if getattr(self, "_is_macos", False):
-            self._last_tray_activation = time.monotonic()
+        if reason == self.qt.QSystemTrayIcon.ActivationReason.Trigger:
+            self.main_window.toggle_from_tray()
+            self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return
-        if reason != self.qt.QSystemTrayIcon.ActivationReason.Trigger:
-            return
-        self.main_window.toggle_from_tray()
-        self.qt.QTimer.singleShot(25, self.rebuild_menus)
+        if getattr(self, "_is_macos", False) and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
+            self.app_menu.popup(self.qt.QCursor.pos())
 
     def _show_app_settings_from_tray(self) -> None:
         if getattr(self, "_quitting", False):
