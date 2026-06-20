@@ -28,7 +28,20 @@ class WindowsPlatformServices(PlatformServices):
         return ("rclone.exe", "rclone")
 
     def rclone_candidates(self) -> tuple[Path, ...]:
-        return (Path("C:/Program Files/rclone/rclone.exe"),)
+        home = Path(os.environ.get("USERPROFILE", Path.home()))
+        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        program_files = Path(os.environ.get("ProgramFiles", "C:/Program Files"))
+        chocolatey = Path(os.environ.get("ChocolateyInstall", "C:/ProgramData/chocolatey"))
+        scoop = Path(os.environ.get("SCOOP", home / "scoop"))
+        return (
+            local / "Microsoft" / "WinGet" / "Links" / "rclone.exe",
+            chocolatey / "bin" / "rclone.exe",
+            scoop / "shims" / "rclone.exe",
+            program_files / "rclone" / "rclone.exe",
+            local / "rclone" / "rclone.exe",
+            home / "rclone" / "rclone.exe",
+            Path("C:/rclone/rclone.exe"),
+        )
 
     def apply_private_permissions(self, path: Path) -> None:
         # Windows applies ACLs inherited from the per-user application directory.

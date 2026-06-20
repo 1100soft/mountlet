@@ -75,6 +75,36 @@ class PlatformServicesTests(unittest.TestCase):
         self.assertEqual(managers[0].identifier, "explorer")
         self.assertEqual(managers[0].label, "File Explorer")
 
+    def test_windows_finds_rclone_in_winget_links(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            local = Path(tempdir) / "Local"
+            executable = local / "Microsoft" / "WinGet" / "Links" / "rclone.exe"
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            with mock.patch.dict(
+                "os.environ",
+                {"LOCALAPPDATA": str(local)},
+                clear=True,
+            ):
+                with mock.patch("mountlet.platform_services.base.shutil.which", return_value=None):
+                    found = WindowsPlatformServices().find_rclone()
+
+        self.assertEqual(found, str(executable))
+
+    def test_windows_prefers_explicit_rclone_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            executable = Path(tempdir) / "portable" / "rclone.exe"
+            executable.parent.mkdir()
+            executable.touch()
+            with mock.patch.dict(
+                "os.environ",
+                {"RCLONE_PATH": str(executable)},
+                clear=True,
+            ):
+                found = WindowsPlatformServices().find_rclone()
+
+        self.assertEqual(found, str(executable))
+
     def test_macos_defaults_to_finder(self):
         platform = MacOSPlatformServices()
 

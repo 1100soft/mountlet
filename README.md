@@ -81,7 +81,30 @@ python3 -m venv "$PREVIEW"
 ### Windows (Experimental)
 
 Install [`rclone`](https://rclone.org/install/) and
-[`WinFsp`](https://winfsp.dev/rel/), then run these commands in PowerShell:
+[`WinFsp`](https://winfsp.dev/rel/). Installing rclone with WinGet is the
+simplest option because it makes the executable discoverable:
+
+```powershell
+winget install Rclone.Rclone
+```
+
+If you downloaded the portable `rclone.exe` instead, place it in a permanent
+folder and tell Mountlet where it is. Replace the example path as needed:
+
+```powershell
+$env:RCLONE_PATH = "C:\Tools\rclone\rclone.exe"
+[Environment]::SetEnvironmentVariable("RCLONE_PATH", $env:RCLONE_PATH, "User")
+```
+
+Mountlet also checks `PATH` and common WinGet, Chocolatey, Scoop, and manual
+installation folders. Confirm that rclone is available before continuing:
+
+```powershell
+& $env:RCLONE_PATH version
+```
+
+If you used WinGet and did not set `RCLONE_PATH`, use `rclone version` instead.
+Then install and start Mountlet:
 
 ```powershell
 $Preview = "$env:LOCALAPPDATA\Mountlet\preview"
