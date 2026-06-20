@@ -4711,6 +4711,10 @@ class MountletTray:
         if self._is_macos:
             _set_macos_accessory_mode()
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+        if self._is_macos:
+            # QApplication may restore the regular activation policy while it
+            # initializes AppKit. Reapply accessory mode before creating windows.
+            _set_macos_accessory_mode()
         self.app.setQuitOnLastWindowClosed(False)
         self._quitting = False
         self._allow_forced_exit = True
@@ -4719,11 +4723,16 @@ class MountletTray:
         self.app_menu = qt.QMenu()
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
-        self.main_window = MountletWindow(self)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("Mountlet")
         if not self._is_macos:
             self.tray.setContextMenu(self.app_menu)
+        self.tray.show()
+        try:
+            self.app.processEvents()
+        except Exception:
+            pass
+        self.main_window = MountletWindow(self)
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self.rebuild_menus)
@@ -4753,7 +4762,6 @@ class MountletTray:
             return 1
 
         self.rebuild_menus()
-        self.tray.show()
         self.timer.start(self.refresh_interval * 1000)
         self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
