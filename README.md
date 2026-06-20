@@ -127,15 +127,24 @@ mountlet tray
 ### macOS (Experimental)
 
 Install [`rclone`](https://rclone.org/install/) and
-[`macFUSE`](https://macfuse.github.io/), then run:
+[`macFUSE`](https://macfuse.github.io/). Apple's bundled Python may be older
+than Mountlet's Python 3.10 minimum, so install a current interpreter and
+`pipx` through Homebrew:
 
 ```bash
-PREVIEW="$HOME/Library/Application Support/Mountlet/preview"
-python3 -m venv "$PREVIEW"
-"$PREVIEW/bin/python" -m pip install --upgrade pip
-"$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
+brew install python@3.12 pipx
+pipx ensurepath
+PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
+"$PYTHON" --version
+pipx install --force --python "$PYTHON" \
   "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
-"$PREVIEW/bin/mountlet" tray
+```
+
+The version check must report Python 3.10 or newer. Close and reopen the
+terminal after `pipx ensurepath`, then start the preview:
+
+```bash
+mountlet tray
 ```
 
 Run the same install command again to update an existing preview. To test a
