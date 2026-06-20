@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,7 @@ from mountlet.platform_services.file_managers import (
 )
 from mountlet.platform_services.linux import LinuxPlatformServices
 from mountlet.platform_services.macos import MacOSPlatformServices
+from mountlet.platform_services.processes import terminate_process
 from mountlet.platform_services.windows import WindowsPlatformServices
 
 
@@ -104,6 +106,16 @@ class PlatformServicesTests(unittest.TestCase):
                 found = WindowsPlatformServices().find_rclone()
 
         self.assertEqual(found, str(executable))
+
+    def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("rclone", 1), 0]
+
+        terminate_process(process, WindowsPlatformServices(), timeout=1)
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
 
     def test_macos_defaults_to_finder(self):
         platform = MacOSPlatformServices()

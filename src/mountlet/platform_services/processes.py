@@ -17,10 +17,12 @@ def signal_process_tree(
     process: subprocess.Popen[str],
     sig: int,
     platform: PlatformServices,
+    *,
+    force: bool = False,
 ) -> None:
     if platform.system_name == "Windows":
         try:
-            if sig == signal.SIGKILL:
+            if force:
                 process.kill()
             else:
                 process.terminate()
@@ -48,5 +50,6 @@ def terminate_process(
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        signal_process_tree(process, signal.SIGKILL, platform)
+        force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+        signal_process_tree(process, force_signal, platform, force=True)
         process.wait(timeout=timeout)

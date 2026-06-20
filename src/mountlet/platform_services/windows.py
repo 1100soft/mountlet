@@ -12,24 +12,41 @@ from .base import OperationResult, PlatformServices, UserDirectories
 class WindowsPlatformServices(PlatformServices):
     system_name = "Windows"
 
+    @staticmethod
+    def _home() -> Path:
+        if profile := os.environ.get("USERPROFILE"):
+            return Path(profile)
+        if drive := os.environ.get("HOMEDRIVE"):
+            if home_path := os.environ.get("HOMEPATH"):
+                return Path(f"{drive}{home_path}")
+        try:
+            return Path.home()
+        except RuntimeError:
+            return Path.cwd()
+
     def user_directories(self, app_name: str) -> UserDirectories:
-        roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        home = self._home()
+        roaming = Path(os.environ["APPDATA"]) if "APPDATA" in os.environ else home / "AppData" / "Roaming"
+        local = Path(os.environ["LOCALAPPDATA"]) if "LOCALAPPDATA" in os.environ else home / "AppData" / "Local"
         return UserDirectories(roaming / app_name, local / app_name / "State", local / app_name / "Cache")
 
     def default_rclone_config(self) -> Path:
-        roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        roaming = (
+            Path(os.environ["APPDATA"])
+            if "APPDATA" in os.environ
+            else self._home() / "AppData" / "Roaming"
+        )
         return roaming / "rclone" / "rclone.conf"
 
     def default_mount_base(self) -> Path:
-        return Path.home() / "Mountlet"
+        return self._home() / "Mountlet"
 
     def rclone_executable_names(self) -> tuple[str, ...]:
         return ("rclone.exe", "rclone")
 
     def rclone_candidates(self) -> tuple[Path, ...]:
-        home = Path(os.environ.get("USERPROFILE", Path.home()))
-        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        home = self._home()
+        local = Path(os.environ["LOCALAPPDATA"]) if "LOCALAPPDATA" in os.environ else home / "AppData" / "Local"
         program_files = Path(os.environ.get("ProgramFiles", "C:/Program Files"))
         chocolatey = Path(os.environ.get("ChocolateyInstall", "C:/ProgramData/chocolatey"))
         scoop = Path(os.environ.get("SCOOP", home / "scoop"))
