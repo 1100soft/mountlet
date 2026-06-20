@@ -38,19 +38,19 @@ jobs:
           - label: Linux x64
             runner: ubuntu-24.04
             artifact: mountlet-linux-x64
-            path: dist/Mountlet
+            archive: mountlet-linux-x64.tar.gz
           - label: Windows x64
             runner: windows-2025
             artifact: mountlet-windows-x64
-            path: dist/Mountlet
+            archive: mountlet-windows-x64.zip
           - label: macOS arm64
             runner: macos-15
             artifact: mountlet-macos-arm64
-            path: dist/Mountlet.app
+            archive: mountlet-macos-arm64.zip
           - label: macOS x64
             runner: macos-15-intel
             artifact: mountlet-macos-x64
-            path: dist/Mountlet.app
+            archive: mountlet-macos-x64.zip
 
     steps:
       - name: Check out source
@@ -74,11 +74,14 @@ jobs:
       - name: Verify native bundle
         run: python packaging/verify_bundle.py
 
+      - name: Archive native bundle
+        run: python packaging/archive_bundle.py --name ${{ matrix.artifact }}
+
       - name: Upload native bundle
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.path }}
+          path: artifacts/${{ matrix.archive }}
           if-no-files-found: error
           retention-days: 14
-          compression-level: 9
+          compression-level: 0

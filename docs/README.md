@@ -58,6 +58,7 @@ Native packaging uses PyInstaller separately on each target operating system:
 python -m pip install -e ".[tray,packaging]"
 python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 python packaging/verify_bundle.py
+python packaging/archive_bundle.py --name mountlet-local
 ```
 
 The `Native package CI` workflow builds Linux x64, Windows x64, macOS arm64,

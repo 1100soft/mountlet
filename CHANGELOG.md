@@ -6,6 +6,8 @@
   for Linux x64, Windows x64, macOS arm64, and macOS x64.
 - Added automated frozen-executable smoke checks and macOS bundle validation
   for menu-bar-only operation.
+- Added platform-native artifact archives that preserve macOS bundle links and
+  avoid redundant GitHub upload compression.
 
 ## 0.3.0 - 2026-06-20
 
