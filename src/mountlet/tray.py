@@ -580,6 +580,10 @@ def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
         return None
 
 
+def _main_window_type_name(is_macos: bool) -> str:
+    return "Window" if is_macos else "Tool"
+
+
 def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
     flags = _frameless_window_flags(qt, "Dialog")
     if flags is not None:
@@ -3228,7 +3232,11 @@ class MountletWindow:
 
         class MainWindow(qt.QMainWindow):
             def __init__(self) -> None:
-                flags = _frameless_window_flags(qt, "Tool")
+                tray_app = getattr(outer, "tray_app", None)
+                base_name = _main_window_type_name(
+                    bool(getattr(tray_app, "_is_macos", False))
+                )
+                flags = _frameless_window_flags(qt, base_name)
                 if flags is not None:
                     try:
                         super().__init__(None, flags)
@@ -3236,7 +3244,7 @@ class MountletWindow:
                     except Exception:
                         pass
                 super().__init__()
-                _apply_frameless_window_flags(qt, self, base_name="Tool")
+                _apply_frameless_window_flags(qt, self, base_name=base_name)
 
             def closeEvent(self, event: object) -> None:
                 try:
@@ -3670,12 +3678,6 @@ class MountletWindow:
         self._update_keep_above_button()
 
     def _apply_keep_above(self) -> None:
-        if getattr(getattr(self, "tray_app", None), "_is_macos", False):
-            try:
-                attribute = self.qt.Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow
-                self.window.setAttribute(attribute, self._keep_above)
-            except Exception:
-                pass
         if self._desktop_api().set_keep_above(self.window, self._keep_above):
             return
         try:
@@ -4705,11 +4707,11 @@ class MountletTray:
     def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10) -> None:
         self.qt = qt
         self.refresh_interval = max(refresh_interval, 2)
-        self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
-        self.app.setQuitOnLastWindowClosed(False)
         self._is_macos = get_platform().system_name == "Darwin"
         if self._is_macos:
             _set_macos_accessory_mode()
+        self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+        self.app.setQuitOnLastWindowClosed(False)
         self._quitting = False
         self._allow_forced_exit = True
         self._forced_exit_scheduled = False

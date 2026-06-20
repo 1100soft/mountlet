@@ -303,6 +303,10 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(enabled)
         application.setActivationPolicy_.assert_called_once_with("accessory")
 
+    def test_macos_main_window_uses_normal_window_type(self):
+        self.assertEqual(tray._main_window_type_name(True), "Window")
+        self.assertEqual(tray._main_window_type_name(False), "Tool")
+
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         original = {
@@ -1227,12 +1231,10 @@ class TrayTests(unittest.TestCase):
         )
         mountlet_window._keep_above_button.setStyleSheet.assert_called_once()
 
-    def test_macos_pin_keeps_tool_window_visible_when_app_is_inactive(self):
+    def test_macos_pin_applies_native_always_on_top_flag(self):
         mountlet_window = object.__new__(tray.MountletWindow)
-        attribute = object()
         mountlet_window.qt = SimpleNamespace(
             Qt=SimpleNamespace(
-                WidgetAttribute=SimpleNamespace(WA_MacAlwaysShowToolWindow=attribute),
                 WindowType=SimpleNamespace(WindowStaysOnTopHint="top"),
             )
         )
@@ -1245,7 +1247,6 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window._apply_keep_above()
 
-        mountlet_window.window.setAttribute.assert_called_once_with(attribute, True)
         mountlet_window.window.setWindowFlag.assert_called_once_with("top", True)
         mountlet_window.window.show.assert_called_once_with()
 
