@@ -10,8 +10,8 @@ Mountlet is a friendly control panel for two standard tools:
 
 - `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
   S3-compatible storage, and WebDAV.
-- FUSE lets Linux show a cloud remote as if it were a normal folder on your
-  computer.
+- A filesystem driver lets the operating system show a cloud remote as if it
+  were a normal folder: FUSE on Linux, WinFsp on Windows, or macFUSE on macOS.
 
 This app reads your `rclone` remotes, creates local mount folders, and starts or
 stops `rclone mount` for you.
@@ -20,7 +20,8 @@ stops `rclone mount` for you.
 
 - Python 3.10 or newer.
 - `rclone`, which connects to your cloud storage.
-- FUSE, which lets Linux show mounted cloud storage as folders.
+- A compatible filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE
+  on macOS.
 
 On Ubuntu, install the system tools with:
 
@@ -52,8 +53,8 @@ python -m pip install .
 
 GitHub previews are source snapshots from the `wip` branch, not signed native
 installers. They may be unstable and can change without notice. Linux is the
-current supported platform; Windows and macOS builds are available for early
-testing while their mount integration is developed.
+primary supported platform. Source-installed Windows and macOS tray and mount
+flows are available as experimental support while native packaging is developed.
 
 Each section starts with the system prerequisites and installs Mountlet in an
 isolated environment, so a GitHub preview does not replace a stable PyPI

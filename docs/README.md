@@ -21,9 +21,10 @@ modules use the platform contract for:
 fallbacks and accepts optional desktop adapters. KDE/Dolphin/X11 behavior is an
 enhancement on Linux; it must not be required for mounting or opening folders.
 
-The adapters establish implementation boundaries and testable conventions. They
-do not yet mean Windows or macOS releases are supported. Each platform still
-requires native packaging and end-to-end mount testing.
+The adapters establish implementation boundaries and testable conventions.
+Source-installed tray and mount flows have been exercised on Linux, Windows,
+and macOS. Windows and macOS remain experimental until native packaging and
+broader end-to-end testing are complete.
 
 Install from a local checkout:
 
@@ -78,7 +79,7 @@ ignored by git and must not be part of the installed-user workflow.
 
 ## Provider Test Status
 
-The 0.2.2 release documents provider status based on local remotes in
+The 0.3.0 release documents provider status based on local remotes in
 `~/.config/rclone/rclone.conf` and recent GUI setup work.
 
 Locally tested:
