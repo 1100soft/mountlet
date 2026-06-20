@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import shlex
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from .shared import (
     app_state_dir,
     default_config_path,
     ensure_app_directories,
+    ensure_rclone_config,
     find_rclone,
     read_remotes,
     verify_remotes,
@@ -45,6 +47,8 @@ def _install_guidance() -> tuple[str, ...]:
 
 
 def _mountlet_command() -> str:
+    if shutil.which("mountlet"):
+        return "mountlet"
     invoked_as = sys.argv[0]
     platform = get_platform()
     launcher = PureWindowsPath(invoked_as) if platform.system_name == "Windows" else Path(invoked_as)
@@ -80,13 +84,12 @@ def check_readiness() -> Readiness:
         messages.append(_install_guidance()[1])
 
     config_path = default_config_path()
-    if not config_path.exists():
-        messages.append(f"Create an rclone config: {config_path}")
-        remotes: list[str] = []
-    else:
-        remotes = read_remotes(config_path)
-        if not remotes:
-            messages.append("Add at least one cloud storage connection to rclone.")
+    if rclone_bin:
+        try:
+            ensure_rclone_config(config_path)
+        except OSError as exc:
+            messages.append(f"Cannot create the rclone config at {config_path}: {exc}")
+    remotes = read_remotes(config_path) if config_path.exists() else []
 
     return Readiness(ready=not messages, messages=messages, remotes=remotes)
 
@@ -167,6 +170,12 @@ def setup_command(args: argparse.Namespace) -> int:
     )
 
     config_path = default_config_path()
+    if rclone_bin and not config_path.exists():
+        try:
+            ensure_rclone_config(config_path)
+            print(_status(True, f"Created empty rclone config: {config_path}"))
+        except OSError as exc:
+            print(_status(False, f"Could not create rclone config: {exc}"))
     config_exists = config_path.exists()
     remotes = read_remotes(config_path) if config_exists else []
 
@@ -201,8 +210,11 @@ def setup_command(args: argparse.Namespace) -> int:
     _print_paths()
     print()
 
-    ready = bool(rclone_bin and fuse_ok and remotes and not failures)
+    ready = bool(rclone_bin and fuse_ok and config_exists and not failures)
     if ready:
+        if not remotes:
+            print("Ready. Add cloud storage with the + button in the tray app, or run:")
+            print(f"  {_mountlet_command()} setup --configure-rclone")
         print("Ready. Open the menu with:")
         print(f"  {_mountlet_command()}")
         return 0

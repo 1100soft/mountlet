@@ -19,11 +19,18 @@ class SetupWizardTests(unittest.TestCase):
         launcher = r"C:\Users\Example User\AppData\Local\Mountlet\preview\Scripts\mountlet.exe"
         platform = mock.Mock(system_name="Windows")
 
-        with mock.patch.object(setup_wizard.sys, "argv", [launcher, "tray"]):
-            with mock.patch.object(setup_wizard, "get_platform", return_value=platform):
-                command = setup_wizard._mountlet_command()
+        with mock.patch.object(setup_wizard.shutil, "which", return_value=None):
+            with mock.patch.object(setup_wizard.sys, "argv", [launcher, "tray"]):
+                with mock.patch.object(setup_wizard, "get_platform", return_value=platform):
+                    command = setup_wizard._mountlet_command()
 
         self.assertEqual(command, f"& '{launcher}'")
+
+    def test_command_hint_prefers_global_command(self):
+        with mock.patch.object(setup_wizard.shutil, "which", return_value=r"C:\Users\erich\.local\bin\mountlet"):
+            command = setup_wizard._mountlet_command()
+
+        self.assertEqual(command, "mountlet")
 
     def test_setup_succeeds_when_requirements_and_remotes_exist(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -71,8 +78,22 @@ class SetupWizardTests(unittest.TestCase):
                                 with contextlib.redirect_stdout(io.StringIO()) as output:
                                     result = setup_wizard.setup_command(args)
 
-            self.assertEqual(result, 1)
-            self.assertIn("mountlet setup --configure-rclone", output.getvalue())
+            self.assertEqual(result, 0)
+            self.assertTrue(config_path.exists())
+            self.assertIn("Add cloud storage with the + button", output.getvalue())
+
+    def test_menu_readiness_allows_an_empty_rclone_config(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone" / "rclone.conf"
+
+            with mock.patch.object(setup_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(setup_wizard, "_fuse_available", return_value=True):
+                    with mock.patch.object(setup_wizard, "default_config_path", return_value=config_path):
+                        with mock.patch.object(setup_wizard.core, "BASE_MOUNT_DIR", str(Path(tempdir) / "mounts")):
+                            ready = setup_wizard.ensure_ready_for_menu()
+
+            self.assertTrue(ready)
+            self.assertTrue(config_path.exists())
 
     def test_setup_tells_user_to_install_rclone_before_configuring_storage(self):
         with tempfile.TemporaryDirectory() as tempdir:

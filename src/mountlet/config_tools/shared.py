@@ -72,6 +72,15 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def ensure_rclone_config(path: Path | None = None) -> Path:
+    config_path = path or default_config_path()
+    ensure_dir(config_path.parent)
+    if not config_path.exists():
+        config_path.touch(mode=0o600)
+    apply_permissions(config_path)
+    return config_path
+
+
 def timestamp() -> str:
     return _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -235,6 +244,7 @@ __all__ = [
     "legacy_app_config_dirs",
     "ensure_app_directories",
     "ensure_dir",
+    "ensure_rclone_config",
     "copy_file",
     "find_client_secrets",
     "print_remote_list",
