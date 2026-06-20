@@ -118,11 +118,6 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
 )
-PROVIDER_STATUS_COLORS = {
-    "tested": "#ffffff",
-    "partial": "#ffffff",
-    "untested": "#facc15",
-}
 REMOTE_PROVIDER_STATUSES = {
     "drive": "tested",
     "dropbox": "tested",
@@ -529,8 +524,38 @@ def _default_s3_regions() -> set[str]:
     return {option.get("region", "") for option in S3_PROVIDER_OPTIONS}
 
 
-def _provider_status_color(status: str) -> str:
-    return PROVIDER_STATUS_COLORS.get(status, PROVIDER_STATUS_COLORS["untested"])
+def _color_luminance(color: Any) -> float:
+    return (0.2126 * color.red()) + (0.7152 * color.green()) + (0.0722 * color.blue())
+
+
+def _palette_text_color(widget: Any) -> str:
+    color = widget.palette().color(widget.foregroundRole())
+    return color.name()
+
+
+def _provider_status_color(status: str, widget: Any) -> str:
+    if status != "untested":
+        return _palette_text_color(widget)
+    background = widget.palette().color(widget.backgroundRole())
+    return "#facc15" if _color_luminance(background) < 128 else "#92400e"
+
+
+def _popup_position(
+    anchor_x: int,
+    anchor_y: int,
+    available: tuple[int, int, int, int],
+    window_size: tuple[int, int],
+) -> tuple[int, int]:
+    left, top, available_width, available_height = available
+    width, height = window_size
+    max_x = max(left, left + available_width - width)
+    max_y = max(top, top + available_height - height)
+    x = min(max(anchor_x - (width // 2), left), max_x)
+    if anchor_y > top + (available_height // 2):
+        y = anchor_y - height - 8
+    else:
+        y = anchor_y + 8
+    return x, min(max(y, top), max_y)
 
 
 def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: str) -> None:
@@ -1486,7 +1511,7 @@ def _path_relative_to_base(path: str | None, base_path: str) -> str:
 
 def _muted_text_style(widget: Any) -> str:
     background = widget.palette().color(widget.backgroundRole())
-    luminance = (0.2126 * background.red()) + (0.7152 * background.green()) + (0.0722 * background.blue())
+    luminance = _color_luminance(background)
     color = "#cbd5e1" if luminance < 128 else "#4b5563"
     return f"color: {color};"
 
@@ -1904,7 +1929,10 @@ class NewRemoteWizard:
                 self.qt,
                 provider,
                 index,
-                _provider_status_color(REMOTE_PROVIDER_STATUSES.get(backend_type, "untested")),
+                _provider_status_color(
+                    REMOTE_PROVIDER_STATUSES.get(backend_type, "untested"),
+                    provider,
+                ),
             )
         provider.currentIndexChanged.connect(lambda _index=0: self._apply_provider_choice())
 
@@ -1970,7 +1998,12 @@ class NewRemoteWizard:
         s3_provider = self.qt.QComboBox()
         for index, option in enumerate(S3_PROVIDER_OPTIONS):
             s3_provider.addItem(option["label"], option)
-            _set_combo_item_color(self.qt, s3_provider, index, _provider_status_color(option.get("status", "untested")))
+            _set_combo_item_color(
+                self.qt,
+                s3_provider,
+                index,
+                _provider_status_color(option.get("status", "untested"), s3_provider),
+            )
         s3_provider.currentIndexChanged.connect(lambda _index=0: self._apply_s3_provider_choice())
         s3_endpoint = self.qt.QLineEdit()
         s3_region = self.qt.QLineEdit()
@@ -2002,7 +2035,12 @@ class NewRemoteWizard:
         webdav_vendor = self.qt.QComboBox()
         for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
             webdav_vendor.addItem(option["label"], option)
-            _set_combo_item_color(self.qt, webdav_vendor, index, _provider_status_color(option.get("status", "untested")))
+            _set_combo_item_color(
+                self.qt,
+                webdav_vendor,
+                index,
+                _provider_status_color(option.get("status", "untested"), webdav_vendor),
+            )
         webdav_vendor.currentIndexChanged.connect(lambda _index=0: self._apply_webdav_vendor_choice())
         webdav_user = self.qt.QLineEdit()
         webdav_pass = self.qt.QLineEdit()
@@ -3135,6 +3173,7 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._keep_above = False
         self._keep_above_button: Any | None = None
+        self._drag_offset: Any | None = None
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -3511,20 +3550,33 @@ class MountletWindow:
             if screen is None:
                 return
             available = screen.availableGeometry()
-            size = self.window.sizeHint()
+            size = self.window.size()
             if not size.isValid():
-                size = self.window.size()
-            width = size.width()
-            height = size.height()
-            max_x = max(available.left(), available.right() - width)
-            max_y = max(available.top(), available.bottom() - height)
-            x = min(max(anchor.x() - (width // 2), available.left()), max_x)
-            if anchor.y() > available.center().y():
-                y = anchor.y() - height - 8
-            else:
-                y = anchor.y() + 8
-            y = min(max(y, available.top()), max_y)
+                size = self.window.sizeHint()
+            x, y = _popup_position(
+                anchor.x(),
+                anchor.y(),
+                (available.left(), available.top(), available.width(), available.height()),
+                (size.width(), size.height()),
+            )
             self.window.move(x, y)
+        except Exception:
+            return
+
+    def _clamp_to_screen(self, screen: Any | None = None) -> None:
+        try:
+            target_screen = screen or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if target_screen is None:
+                return
+            available = target_screen.availableGeometry()
+            position = self.window.frameGeometry().topLeft()
+            size = self.window.size()
+            max_x = max(available.left(), available.left() + available.width() - size.width())
+            max_y = max(available.top(), available.top() + available.height() - size.height())
+            x = min(max(position.x(), available.left()), max_x)
+            y = min(max(position.y(), available.top()), max_y)
+            if x != position.x() or y != position.y():
+                self.window.move(x, y)
         except Exception:
             return
 
@@ -3661,6 +3713,15 @@ class MountletWindow:
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
+        drag_handle = self.qt.QLabel("✥")
+        drag_handle.setFixedSize(22, 26)
+        drag_handle.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        drag_handle.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.SizeAllCursor))
+        drag_handle.setToolTip("Drag to move Mountlet.")
+        drag_handle.mousePressEvent = self._begin_window_drag
+        drag_handle.mouseMoveEvent = self._continue_window_drag
+        drag_handle.mouseReleaseEvent = self._end_window_drag
+
         sort_button = self.qt.QPushButton("Sort by")
         sort_menu = self.qt.QMenu(sort_button)
         for mode, label in REMOTE_SORT_OPTIONS:
@@ -3673,11 +3734,44 @@ class MountletWindow:
         reverse_button.setToolTip("Reverse the current remote order.")
         reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
 
+        layout.addWidget(drag_handle)
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         layout.addWidget(self._pin_button())
         return widget
+
+    def _event_global_point(self, event: Any) -> Any:
+        point = event.globalPosition() if hasattr(event, "globalPosition") else event.globalPos()
+        return point.toPoint() if hasattr(point, "toPoint") else point
+
+    def _begin_window_drag(self, event: Any) -> None:
+        try:
+            if event.button() != self.qt.Qt.MouseButton.LeftButton:
+                return
+            self._drag_offset = self._event_global_point(event) - self.window.frameGeometry().topLeft()
+            event.accept()
+        except Exception:
+            self._drag_offset = None
+
+    def _continue_window_drag(self, event: Any) -> None:
+        if self._drag_offset is None:
+            return
+        try:
+            if not (event.buttons() & self.qt.Qt.MouseButton.LeftButton):
+                return
+            self.window.move(self._event_global_point(event) - self._drag_offset)
+            event.accept()
+        except Exception:
+            return
+
+    def _end_window_drag(self, event: Any) -> None:
+        self._drag_offset = None
+        self._clamp_to_screen()
+        try:
+            event.accept()
+        except Exception:
+            pass
 
     def _sort_remote_order(self, sort_mode: str) -> None:
         remotes = _load_visible_remotes()
@@ -4086,9 +4180,10 @@ class MountletWindow:
             used_gb = usage.used / (1024**3)
             total_gb = usage.total / (1024**3)
             color = self._usage_color(usage, checking_usage=checking_usage)
+            text_color = _palette_text_color(self.window)
             return (
                 f'<span style="color:{color};">{used_gb:.1f}</span>'
-                f'<span style="color:#ffffff;">/{total_gb:.1f} GB</span>'
+                f'<span style="color:{text_color};">/{total_gb:.1f} GB</span>'
             )
         if usage.text:
             return f'<span style="{_muted_text_style(self.window).removesuffix(";")}">{usage.text}</span>'
@@ -4233,6 +4328,7 @@ class MountletWindow:
             height = max_height
 
         self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
+        self._clamp_to_screen(screen)
 
     def _layout_item_size(self, layout: Any, index: int) -> Any:
         item = layout.itemAt(index)

@@ -85,6 +85,29 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
 
+    def test_popup_position_clamps_full_window_to_available_screen(self):
+        position = tray._popup_position(
+            890,
+            640,
+            (100, 50, 800, 600),
+            (400, 300),
+        )
+
+        self.assertEqual(position, (500, 332))
+
+    def test_provider_status_colors_follow_light_system_palette(self):
+        foreground = SimpleNamespace(name=lambda: "#202020")
+        background = SimpleNamespace(red=lambda: 245, green=lambda: 245, blue=lambda: 245)
+        palette = mock.Mock()
+        palette.color.side_effect = lambda role: foreground if role == "foreground" else background
+        widget = mock.Mock()
+        widget.palette.return_value = palette
+        widget.foregroundRole.return_value = "foreground"
+        widget.backgroundRole.return_value = "background"
+
+        self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
+        self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
+
     def test_remote_browser_tooltip_names_service_not_remote(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
