@@ -80,6 +80,11 @@ function InitializeSetup: Boolean;
 var
   Missing: String;
 begin
+  if CmdLineParamExists('/PACKAGINGTEST') then
+  begin
+    Result := True;
+    exit;
+  end;
   if RegQueryStringValue(
     HKCU,
     'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B36E40DC-6A3E-45EC-A668-25E36A9E527F}_is1',

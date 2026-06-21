@@ -16,6 +16,7 @@ def _verify_windows(installer: Path) -> None:
                 "/VERYSILENT",
                 "/SUPPRESSMSGBOXES",
                 "/NORESTART",
+                "/PACKAGINGTEST",
                 f"/DIR={destination}",
             ],
             check=True,
