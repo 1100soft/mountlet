@@ -56,10 +56,22 @@ installers. They may be unstable and can change without notice. Linux is the
 primary supported platform. Source-installed Windows and macOS tray and mount
 flows are available as experimental support while native packaging is developed.
 
-The `Native package CI` workflow also produces short-lived, unsigned standalone
-bundles for Linux x64, Windows x64, macOS Apple Silicon, and macOS Intel. They
-are development artifacts, not release installers, and operating-system
-security warnings are expected until signing and notarization are configured.
+The `Native package CI` workflow produces short-lived, unsigned portable bundles
+and test installers for Linux x64, Windows x64, macOS Apple Silicon, and macOS
+Intel. Operating-system security warnings are expected until signing and Apple
+notarization are configured.
+
+Open a successful workflow run under **Actions > Native package CI** and download
+the artifact for your platform. It contains both the portable archive and:
+
+- Linux: a `.deb` package, removable with your package manager.
+- Windows: a setup `.exe`, including an entry in **Installed apps** and an
+  uninstaller.
+- macOS: a `.dmg`; drag Mountlet to Applications and move the app to Trash to
+  uninstall it.
+
+Uninstalling Mountlet does not remove rclone, FUSE/WinFsp/macFUSE, `rclone.conf`,
+or Mountlet's per-user settings.
 
 Each section starts with the system prerequisites and installs Mountlet in an
 isolated environment, so a GitHub preview does not replace a stable PyPI

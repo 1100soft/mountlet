@@ -61,8 +61,10 @@ python packaging/verify_bundle.py
 python packaging/archive_bundle.py --name mountlet-local
 ```
 
-The `Native package CI` workflow builds Linux x64, Windows x64, macOS arm64,
-and macOS x64 bundles. These development artifacts are not Windows-signed or
+The `Native package CI` workflow builds portable bundles plus a Linux `.deb`,
+Windows setup `.exe`, and macOS `.dmg` for both Apple architectures. The Windows
+installer registers an uninstaller; Linux and macOS use their normal package or
+application removal flow. These development artifacts are not Windows-signed or
 Apple-notarized and expire from GitHub Actions after 14 days.
 
 Install the optional tray dependencies when working on the desktop preview:

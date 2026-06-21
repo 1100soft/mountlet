@@ -39,18 +39,22 @@ jobs:
             runner: ubuntu-24.04
             artifact: mountlet-linux-x64
             archive: mountlet-linux-x64.tar.gz
+            installer: mountlet-linux-x64.deb
           - label: Windows x64
             runner: windows-2025
             artifact: mountlet-windows-x64
             archive: mountlet-windows-x64.zip
+            installer: mountlet-windows-x64-setup.exe
           - label: macOS arm64
             runner: macos-15
             artifact: mountlet-macos-arm64
             archive: mountlet-macos-arm64.zip
+            installer: mountlet-macos-arm64.dmg
           - label: macOS x64
             runner: macos-15-intel
             artifact: mountlet-macos-x64
             archive: mountlet-macos-x64.zip
+            installer: mountlet-macos-x64.dmg
 
     steps:
       - name: Check out source
@@ -74,14 +78,31 @@ jobs:
       - name: Verify native bundle
         run: python packaging/verify_bundle.py
 
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress --yes
+          }
+
       - name: Archive native bundle
         run: python packaging/archive_bundle.py --name ${{ matrix.artifact }}
+
+      - name: Build native installer
+        run: python packaging/build_installer.py --name ${{ matrix.installer }}
+
+      - name: Verify native installer
+        run: python packaging/verify_installer.py artifacts/${{ matrix.installer }}
 
       - name: Upload native bundle
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: artifacts/${{ matrix.archive }}
+          path: |
+            artifacts/${{ matrix.archive }}
+            artifacts/${{ matrix.installer }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

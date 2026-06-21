@@ -8,6 +8,11 @@
   for menu-bar-only operation.
 - Added platform-native artifact archives that preserve macOS bundle links and
   avoid redundant GitHub upload compression.
+- Added test installers for Linux (`.deb`), Windows (setup `.exe` with an
+  uninstaller), and macOS (`.dmg`), with CI validation and portable bundles
+  retained alongside them.
+- Added a resumable graphical prerequisite check that opens installation
+  guidance and starts Mountlet when rclone and filesystem support are ready.
 
 ## 0.3.0 - 2026-06-20
 
