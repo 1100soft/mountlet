@@ -113,7 +113,7 @@ def _build_linux(root: Path, dist: Path, output: Path, version: str) -> None:
                     f"Installed-Size: {_installed_size_kib(app_dir)}",
                     "Section: utils",
                     "Priority: optional",
-                    "Suggests: rclone, fuse3",
+                    "Recommends: rclone, fuse3",
                     "Description: Desktop controls for mounting rclone remotes",
                     " Mountlet uses an existing rclone configuration and FUSE installation.",
                     "",

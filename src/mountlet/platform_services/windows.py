@@ -67,7 +67,9 @@ class WindowsPlatformServices(PlatformServices):
         return
 
     def mount_process_options(self) -> dict[str, int]:
-        return {"creationflags": 0x08000000 | 0x00000008 | 0x00000200}
+        # Keep rclone as a directly tracked foreground child without creating a
+        # console window. DETACHED_PROCESS prevents reliable lifetime tracking.
+        return {"creationflags": 0x08000000}
 
     def is_mounted(self, path: str) -> bool:
         if not os.path.exists(path):
@@ -89,14 +91,11 @@ class WindowsPlatformServices(PlatformServices):
     def _is_volume_mountpoint(path: str) -> bool:
         try:
             buffer = ctypes.create_unicode_buffer(32768)
-            get_volume_path = ctypes.windll.kernel32.GetVolumePathNameW
-            if not get_volume_path(str(Path(path)), buffer, len(buffer)):
-                return False
+            mountpoint = ntpath.normpath(path).rstrip("\\/") + "\\"
+            get_volume_name = ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW
+            return bool(get_volume_name(mountpoint, buffer, len(buffer)))
         except (AttributeError, OSError):
             return False
-        requested = ntpath.normcase(ntpath.normpath(path))
-        volume_path = ntpath.normcase(ntpath.normpath(buffer.value))
-        return requested == volume_path
 
     def prepare_mount_path(self, path: str) -> OperationResult:
         mountpoint = Path(path)

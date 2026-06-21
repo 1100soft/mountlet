@@ -57,6 +57,59 @@ var
   ExistingUninstaller: String;
   ClosingAfterUninstall: Boolean;
 
+function RcloneAvailable: Boolean;
+begin
+  Result :=
+    FileExists(GetEnv('RCLONE_PATH')) or
+    (FileSearch('rclone.exe', GetEnv('PATH')) <> '') or
+    FileExists(ExpandConstant('{localappdata}\Microsoft\WinGet\Links\rclone.exe')) or
+    FileExists(ExpandConstant('{userprofile}\scoop\shims\rclone.exe')) or
+    FileExists(ExpandConstant('{commonappdata}\chocolatey\bin\rclone.exe')) or
+    FileExists(ExpandConstant('{pf}\rclone\rclone.exe')) or
+    FileExists('C:\rclone\rclone.exe');
+end;
+
+function WinFspAvailable: Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{pf}\WinFsp\bin\fsptool-x64.exe')) or
+    FileExists(ExpandConstant('{pf32}\WinFsp\bin\fsptool-x86.exe'));
+end;
+
+function InitializeSetup: Boolean;
+var
+  Missing: String;
+begin
+  if RegQueryStringValue(
+    HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B36E40DC-6A3E-45EC-A668-25E36A9E527F}_is1',
+    'UninstallString',
+    ExistingUninstaller
+  ) then
+  begin
+    Result := True;
+    exit;
+  end;
+  Missing := '';
+  if not RcloneAvailable then
+    Missing := Missing + #13#10 + '- rclone: https://rclone.org/install/';
+  if not WinFspAvailable then
+    Missing := Missing + #13#10 + '- WinFsp: https://winfsp.dev/rel/';
+  if Missing <> '' then
+  begin
+    MsgBox(
+      'Mountlet needs the following software before installation:' + #13#10 +
+      Missing + #13#10#13#10 +
+      'Install it, then run the Mountlet installer again.',
+      mbInformation,
+      MB_OK
+    );
+    Result := False;
+    exit;
+  end;
+  Result := True;
+end;
+
 procedure InitializeWizard;
 begin
   if RegQueryStringValue(

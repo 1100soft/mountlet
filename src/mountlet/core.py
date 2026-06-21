@@ -510,6 +510,10 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not rclone_bin:
         return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
 
+    connected, connection_message = check_remote_connection(remote, rclone_bin)
+    if not connected:
+        return False, connection_message
+
     ok, err = _ensure_mount_dir(mount_path(remote))
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
@@ -517,18 +521,7 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     args = _rclone_command(rclone_bin, "mount", remote_source(remote), remote.mount_path)
     args.extend(remote.flags)
 
-    success, message = _launch_mount_process(remote, args)
-    if not success:
-        return success, message
-
-    connected, connection_message = check_remote_connection(remote, rclone_bin)
-    if connected:
-        return success, message
-
-    unmounted, unmount_message = unmount_remote(remote)
-    if not unmounted:
-        return False, f"{connection_message}\n{unmount_message}"
-    return False, connection_message
+    return _launch_mount_process(remote, args)
 
 
 def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -> Tuple[bool, str]:
@@ -551,8 +544,8 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
     if result.returncode == 0:
         return True, f"[*] connected {remote.display_name}."
     detail = result.stderr.strip()
-    summary = detail.splitlines()[0] if detail else f"exit code {result.returncode}"
-    return False, f"[!] {remote.display_name} is not connected to {source}: {summary}"
+    summary = detail or f"rclone exited with code {result.returncode}."
+    return False, f"[!] {remote.display_name} is not connected to {source}:\n{summary}"
 
 
 def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:

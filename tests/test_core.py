@@ -121,24 +121,23 @@ type = dropbox
                 ["/usr/bin/rclone", "--config", core.CONFIG_PATH, "mount", "R2__S3:bucket/prefix"],
             )
 
-    def test_mount_remote_unmounts_when_connection_check_fails(self):
+    def test_mount_remote_does_not_start_mount_when_connection_check_fails(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Archive__S3]\ntype = s3\n")
             remote = core.load_remotes()[0]
 
             with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
-                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")):
+                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")) as launch:
                     with mock.patch.object(
                         core,
                         "check_remote_connection",
                         return_value=(False, "[!] Archive (S3) is not connected."),
                     ):
-                        with mock.patch.object(core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
-                            success, message = core.mount_remote(remote)
+                        success, message = core.mount_remote(remote)
 
             self.assertFalse(success)
             self.assertIn("not connected", message)
-            unmount.assert_called_once_with(remote)
+            launch.assert_not_called()
 
     def test_check_remote_connection_uses_remote_source(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -178,8 +177,9 @@ type = dropbox
             (Path(remote.mount_path) / "existing.txt").write_text("keep", encoding="utf-8")
 
             with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
-                with mock.patch.object(core, "_launch_mount_process") as launch:
-                    success, message = core.mount_remote(remote)
+                with mock.patch.object(core, "check_remote_connection", return_value=(True, "connected")):
+                    with mock.patch.object(core, "_launch_mount_process") as launch:
+                        success, message = core.mount_remote(remote)
 
             self.assertFalse(success)
             self.assertIn("is not empty", message)

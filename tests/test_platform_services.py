@@ -247,12 +247,15 @@ Categories=Utility;FileManager;
 
         fallback.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
 
-    def test_windows_volume_mountpoint_api_compares_returned_root(self):
-        def get_volume_path(_path, buffer, _length):
-            buffer.value = "C:\\Users\\test\\Mountlet\\Docs\\"
+    def test_windows_volume_mountpoint_api_checks_requested_directory(self):
+        requested = []
+
+        def get_volume_name(path, buffer, _length):
+            requested.append(path)
+            buffer.value = "\\\\?\\Volume{mountlet}\\"
             return 1
 
-        kernel32 = SimpleNamespace(GetVolumePathNameW=get_volume_path)
+        kernel32 = SimpleNamespace(GetVolumeNameForVolumeMountPointW=get_volume_name)
         with mock.patch(
             "mountlet.platform_services.windows.ctypes.windll",
             SimpleNamespace(kernel32=kernel32),
@@ -261,6 +264,10 @@ Categories=Utility;FileManager;
             mounted = WindowsPlatformServices._is_volume_mountpoint(r"C:\Users\test\Mountlet\Docs")
 
         self.assertTrue(mounted)
+        self.assertEqual(requested, ["C:\\Users\\test\\Mountlet\\Docs\\"])
+
+    def test_windows_mount_process_stays_attached_without_console(self):
+        self.assertEqual(WindowsPlatformServices().mount_process_options(), {"creationflags": 0x08000000})
 
     def test_windows_finds_winfsp_in_32_bit_program_files(self):
         with tempfile.TemporaryDirectory() as tempdir:

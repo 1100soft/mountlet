@@ -70,6 +70,11 @@ the artifact for your platform. It contains both the portable archive and:
 - macOS: a `.dmg`; drag Mountlet to Applications and move the app to Trash to
   uninstall it.
 
+The Linux package recommends rclone and FUSE through package metadata. The
+Windows installer checks for rclone and WinFsp before copying Mountlet. The
+macOS DMG has no executable installation phase, so its prerequisite check runs
+when Mountlet first starts.
+
 Uninstalling Mountlet does not remove rclone, FUSE/WinFsp/macFUSE, `rclone.conf`,
 or Mountlet's per-user settings.
 
@@ -296,7 +301,14 @@ The tray app uses the tray icon this way:
 
 GNOME's AppIndicator bridge may route a tray click directly to the app menu
 instead of reporting separate left and right clicks. Use **Open Mountlet** from
-that menu; double-click is also accepted when the shell reports it.
+that menu; double-click is also accepted when the shell reports it. GNOME
+Wayland also treats Mountlet as a normal application window while it is open;
+its compositor does not let Mountlet pin or precisely anchor that window to the
+extension-provided indicator.
+
+Windows initially places new notification icons in the hidden overflow area.
+Use the taskbar notification-area settings to keep Mountlet visible; applications
+cannot promote their own icons permanently.
 
 On macOS, Mountlet runs as a menu-bar utility without a separate Dock icon.
 Left-click opens or closes the Mountlet window, and right-click opens the app
@@ -309,8 +321,8 @@ The Mountlet window provides:
 - A guided `+` flow for adding supported cloud remotes through rclone.
 - Sorting by registration time, name, provider, total size, used space, or
   remaining space, with manual move controls for final adjustments.
-- A pin control that keeps the window above other windows without tying it to
-  one desktop.
+- A pin control that keeps the window above other windows where the desktop
+  compositor supports it.
 - A file-manager selector in App settings. Mountlet follows the Linux desktop
   default, uses File Explorer by default on Windows, and Finder on macOS; other
   detected managers can be selected without changing the operating-system

@@ -3699,7 +3699,8 @@ class MountletWindow:
     def _position_near_tray(self) -> None:
         try:
             tray_geometry = self.tray_app.tray.geometry()
-            anchor = tray_geometry.center() if tray_geometry.isValid() else self.qt.QCursor.pos()
+            geometry_valid = tray_geometry.isValid()
+            anchor = tray_geometry.center() if geometry_valid else self.qt.QCursor.pos()
             screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
             if screen is None:
                 return
@@ -3707,12 +3708,16 @@ class MountletWindow:
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
-            x, y = _popup_position(
-                anchor.x(),
-                anchor.y(),
-                (available.left(), available.top(), available.width(), available.height()),
-                (size.width(), size.height()),
-            )
+            if getattr(self.tray_app, "_is_gnome_wayland", False) and not geometry_valid:
+                x = available.left() + available.width() - size.width() - 8
+                y = available.top() + 8
+            else:
+                x, y = _popup_position(
+                    anchor.x(),
+                    anchor.y(),
+                    (available.left(), available.top(), available.width(), available.height()),
+                    (size.width(), size.height()),
+                )
             self.window.move(x, y)
         except Exception:
             return
@@ -3779,6 +3784,14 @@ class MountletWindow:
 
         self.window.setCentralWidget(root)
         self._fit_to_content(root, scroll, container)
+        self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container))
+
+    def _finish_content_fit(self, root: Any, scroll: Any, container: Any) -> None:
+        if self.window.centralWidget() is not root or self._tray_is_quitting():
+            return
+        self._fit_to_content(root, scroll, container)
+        if self.is_visible() and getattr(self.tray_app, "_is_gnome_wayland", False):
+            self._position_near_tray()
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")
