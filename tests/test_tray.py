@@ -38,15 +38,30 @@ class TrayTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_tray_stops_before_qt_import_when_environment_is_not_ready(self):
-        with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=False):
-            with mock.patch.object(tray, "_load_qt_bindings") as load_qt:
-                self.assertEqual(tray.main([]), 1)
+    def test_tray_opens_setup_wizard_when_environment_is_not_ready(self):
+        readiness = SimpleNamespace(ready=False)
+        qt = SimpleNamespace()
+        with mock.patch.object(tray.setup_wizard, "check_readiness", return_value=readiness):
+            with mock.patch.object(tray, "_desktop_session_available", return_value=(True, "")):
+                with mock.patch.object(tray, "_load_qt_bindings", return_value=qt):
+                    with mock.patch.object(tray, "_run_prerequisite_wizard", return_value=False) as wizard:
+                        self.assertEqual(tray.main([]), 1)
 
-        load_qt.assert_not_called()
+        wizard.assert_called_once_with(qt)
+
+    def test_tray_rechecks_environment_after_setup_wizard(self):
+        qt = SimpleNamespace()
+        readiness = [SimpleNamespace(ready=False), SimpleNamespace(ready=False)]
+        with mock.patch.object(tray.setup_wizard, "check_readiness", side_effect=readiness) as check:
+            with mock.patch.object(tray, "_desktop_session_available", return_value=(True, "")):
+                with mock.patch.object(tray, "_load_qt_bindings", return_value=qt):
+                    with mock.patch.object(tray, "_run_prerequisite_wizard", return_value=True):
+                        self.assertEqual(tray.main([]), 1)
+
+        self.assertEqual(check.call_count, 2)
 
     def test_tray_reports_missing_pyside_dependency(self):
-        with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=True):
+        with mock.patch.object(tray.setup_wizard, "check_readiness", return_value=SimpleNamespace(ready=True)):
             with mock.patch.object(tray, "_desktop_session_available", return_value=(True, "")):
                 missing_dependency = tray.TrayDependencyError("missing PySide6")
                 with mock.patch.object(tray, "_load_qt_bindings", side_effect=missing_dependency):
@@ -56,7 +71,7 @@ class TrayTests(unittest.TestCase):
         self.assertIn("missing PySide6", output.getvalue())
 
     def test_tray_can_skip_readiness_check(self):
-        with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu") as readiness:
+        with mock.patch.object(tray.setup_wizard, "check_readiness") as readiness:
             with mock.patch.object(tray, "_desktop_session_available", return_value=(True, "")):
                 missing_dependency = tray.TrayDependencyError("missing PySide6")
                 with mock.patch.object(tray, "_load_qt_bindings", side_effect=missing_dependency):
@@ -66,7 +81,7 @@ class TrayTests(unittest.TestCase):
         readiness.assert_not_called()
 
     def test_tray_reports_missing_desktop_session_before_qt_import(self):
-        with mock.patch.object(tray.setup_wizard, "ensure_ready_for_menu", return_value=True):
+        with mock.patch.object(tray.setup_wizard, "check_readiness", return_value=SimpleNamespace(ready=True)):
             with mock.patch.object(tray, "_desktop_session_available", return_value=(False, "no display")):
                 with mock.patch.object(tray, "_load_qt_bindings") as load_qt:
                     with contextlib.redirect_stderr(io.StringIO()) as output:

@@ -217,9 +217,12 @@ Open Mountlet:
 mountlet
 ```
 
-The app checks whether your computer is ready before it opens the menu. If
-something is missing, it prints the next step instead of dropping you into an
-empty screen.
+The desktop app checks for rclone and the platform filesystem driver at startup.
+If either is missing, a setup window shows the relevant official installation
+instructions and checks again while it remains open. Mountlet starts
+automatically when both are available. If an installer requires a restart,
+reopen Mountlet and the same checks resume; existing rclone remotes are used
+without being copied.
 
 For a guided setup check:
 

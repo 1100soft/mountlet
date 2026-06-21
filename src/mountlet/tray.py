@@ -596,6 +596,100 @@ def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> 
     return dialog
 
 
+class PrerequisiteWizard:
+    """Keep the graphical startup alive while external prerequisites are installed."""
+
+    def __init__(self, qt: SimpleNamespace) -> None:
+        self.qt = qt
+        self.dialog = qt.QDialog()
+        self.dialog.setWindowTitle("Mountlet setup")
+        icon_path = _packaged_icon_path()
+        if icon_path:
+            self.dialog.setWindowIcon(qt.QIcon(icon_path))
+        self.dialog.setMinimumWidth(480)
+
+        layout = qt.QVBoxLayout(self.dialog)
+        heading = qt.QLabel("Prepare Mountlet")
+        font = heading.font()
+        font.setBold(True)
+        font.setPointSize(font.pointSize() + 2)
+        heading.setFont(font)
+        layout.addWidget(heading)
+
+        description = qt.QLabel(
+            "Mountlet uses your existing rclone configuration and your operating "
+            "system's filesystem driver. Install anything marked as missing, then "
+            "return here."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.rows = qt.QGridLayout()
+        layout.addLayout(self.rows)
+        self._row_widgets: dict[str, tuple[Any, Any, Any]] = {}
+
+        actions = qt.QHBoxLayout()
+        actions.addStretch(1)
+        self.recheck_button = qt.QPushButton("Check again")
+        self.close_button = qt.QPushButton("Close")
+        actions.addWidget(self.recheck_button)
+        actions.addWidget(self.close_button)
+        layout.addLayout(actions)
+
+        self.recheck_button.clicked.connect(self.refresh)
+        self.close_button.clicked.connect(self.dialog.reject)
+        self.timer = qt.QTimer(self.dialog)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self.refresh)
+        self._accept_pending = False
+        self.refresh()
+        self.timer.start()
+
+    def refresh(self) -> None:
+        prerequisites = setup_wizard.check_prerequisites()
+        for row, item in enumerate(prerequisites):
+            widgets = self._row_widgets.get(item.key)
+            if widgets is None:
+                name = self.qt.QLabel()
+                status = self.qt.QLabel()
+                help_button = self.qt.QPushButton("Installation instructions")
+                help_button.clicked.connect(
+                    lambda _checked=False, url=item.help_url: self.qt.QDesktopServices.openUrl(self.qt.QUrl(url))
+                )
+                self.rows.addWidget(name, row, 0)
+                self.rows.addWidget(status, row, 1)
+                self.rows.addWidget(help_button, row, 2)
+                widgets = (name, status, help_button)
+                self._row_widgets[item.key] = widgets
+            name, status, help_button = widgets
+            name.setText(item.label)
+            status.setText("Ready" if item.ready else item.detail)
+            status.setToolTip(item.detail)
+            help_button.setVisible(not item.ready)
+
+        ready = all(item.ready for item in prerequisites)
+        self.recheck_button.setEnabled(not ready)
+        if ready and not self._accept_pending:
+            self._accept_pending = True
+            self.timer.stop()
+            self.qt.QTimer.singleShot(150, self.dialog.accept)
+
+    def run(self) -> bool:
+        accepted = int(self.dialog.exec() or 0)
+        try:
+            return accepted == int(self.qt.QDialog.DialogCode.Accepted)
+        except Exception:
+            return accepted != 0
+
+
+def _run_prerequisite_wizard(qt: SimpleNamespace) -> bool:
+    if get_platform().system_name == "Darwin":
+        _set_macos_accessory_mode()
+    app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+    app.setQuitOnLastWindowClosed(False)
+    return PrerequisiteWizard(qt).run()
+
+
 def _apply_frameless_window_flags(qt: SimpleNamespace, window: Any, *, base_name: str = "Window") -> None:
     flags = _frameless_window_flags(qt, base_name)
     if flags is not None:
@@ -4965,9 +5059,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if not args.skip_readiness_check and not setup_wizard.ensure_ready_for_menu():
-        return 1
-
     desktop_ready, message = _desktop_session_available()
     if not desktop_ready:
         print(f"[!] {message}", file=sys.stderr)
@@ -4979,6 +5070,16 @@ def main(argv: list[str] | None = None) -> int:
     except TrayDependencyError as exc:
         print(f"[!] {exc}", file=sys.stderr)
         return 1
+
+    if not args.skip_readiness_check:
+        readiness = setup_wizard.check_readiness()
+        if not readiness.ready:
+            if not _run_prerequisite_wizard(qt):
+                return 1
+            # Re-run the complete check so a newly installed rclone gets its
+            # config directory before the tray starts.
+            if not setup_wizard.check_readiness().ready:
+                return 1
 
     ensure_app_directories()
     ensure_default_config_files()

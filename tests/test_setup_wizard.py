@@ -43,6 +43,22 @@ class SetupWizardTests(unittest.TestCase):
 
         self.assertEqual(command, "mountlet")
 
+    def test_prerequisites_report_existing_tools(self):
+        with mock.patch.object(setup_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+            with mock.patch.object(setup_wizard, "_fuse_available", return_value=True):
+                prerequisites = setup_wizard.check_prerequisites()
+
+        self.assertTrue(all(item.ready for item in prerequisites))
+        self.assertEqual([item.label for item in prerequisites], ["rclone", "FUSE"])
+
+    def test_prerequisites_include_install_help_when_missing(self):
+        with mock.patch.object(setup_wizard, "find_rclone", return_value=None):
+            with mock.patch.object(setup_wizard, "_fuse_available", return_value=False):
+                prerequisites = setup_wizard.check_prerequisites()
+
+        self.assertFalse(any(item.ready for item in prerequisites))
+        self.assertTrue(all(item.help_url.startswith("https://") for item in prerequisites))
+
     def test_setup_succeeds_when_requirements_and_remotes_exist(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "rclone.conf"
