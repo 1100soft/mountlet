@@ -75,6 +75,10 @@ jobs:
       - name: Build native bundle
         run: python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 
+      - name: Ad-hoc sign macOS test bundle
+        if: runner.os == 'macOS'
+        run: codesign --force --deep --sign - --timestamp=none dist/Mountlet.app
+
       - name: Verify native bundle
         run: python packaging/verify_bundle.py
 

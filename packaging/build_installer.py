@@ -89,6 +89,7 @@ def _build_linux(root: Path, dist: Path, output: Path, version: str) -> None:
                     "Exec=/opt/mountlet/Mountlet",
                     "Icon=mountlet",
                     "Terminal=false",
+                    "StartupWMClass=Mountlet",
                     "Categories=Utility;FileTools;",
                     "",
                 )

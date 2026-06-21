@@ -281,11 +281,21 @@ class TrayTests(unittest.TestCase):
         fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 1)
 
+        fake_qt.QTimer.singleShot.reset_mock()
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
-        rebuild.assert_not_called()
-        self.assertEqual(fake_window.toggle_calls, 1)
+        fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
+        self.assertEqual(fake_window.toggle_calls, 2)
+
+    def test_gnome_wayland_detection(self):
+        environment = {
+            "WAYLAND_DISPLAY": "wayland-0",
+            "XDG_CURRENT_DESKTOP": "GNOME:GNOME-Classic",
+        }
+        with mock.patch.object(tray.get_platform(), "system_name", "Linux"):
+            with mock.patch.dict(tray.os.environ, environment, clear=True):
+                self.assertTrue(tray._is_gnome_wayland())
 
     def test_macos_tray_handles_left_and_right_click_separately(self):
         tray_app = object.__new__(tray.MountletTray)

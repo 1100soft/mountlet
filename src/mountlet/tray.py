@@ -16,6 +16,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from importlib.resources import files
@@ -375,9 +376,28 @@ def _packaged_icon_path() -> str | None:
     return str(fallback) if fallback.is_file() else None
 
 
+def _is_gnome_wayland() -> bool:
+    if get_platform().system_name != "Linux" or not os.environ.get("WAYLAND_DISPLAY"):
+        return False
+    desktop = ":".join(
+        (os.environ.get("XDG_CURRENT_DESKTOP", ""), os.environ.get("DESKTOP_SESSION", ""))
+    ).casefold()
+    return "gnome" in desktop
+
+
+def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
+    lock_type = getattr(qt, "QLockFile", None)
+    if lock_type is None:
+        return SimpleNamespace()
+    user_id = str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "user")
+    lock = lock_type(str(Path(tempfile.gettempdir()) / f"mountlet-desktop-{user_id}.lock"))
+    lock.setStaleLockTime(30_000)
+    return lock if lock.tryLock(0) else None
+
+
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
+        from PySide6.QtCore import QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
         from PySide6.QtWidgets import (
             QApplication,
@@ -433,6 +453,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QIcon=QIcon,
         QLabel=QLabel,
         QLineEdit=QLineEdit,
+        QLockFile=QLockFile,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
@@ -3737,7 +3758,7 @@ class MountletWindow:
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
@@ -3775,6 +3796,10 @@ class MountletWindow:
         except Exception:
             pass
         button.clicked.connect(lambda checked=False: self._toggle_keep_above(bool(checked)))
+        pin_supported = not getattr(self.tray_app, "_is_gnome_wayland", False)
+        button.setEnabled(pin_supported)
+        if not pin_supported:
+            button.setToolTip("GNOME on Wayland does not allow apps to pin their own windows.")
         self._keep_above_button = button
         self._update_keep_above_button()
         return button
@@ -3815,6 +3840,13 @@ class MountletWindow:
         button = getattr(self, "_keep_above_button", None)
         if button is None:
             return
+        try:
+            if not button.isEnabled():
+                button.setToolTip("GNOME on Wayland does not allow apps to pin their own windows.")
+                button.setStyleSheet("")
+                return
+        except Exception:
+            pass
         try:
             button.setChecked(self._keep_above)
         except Exception:
@@ -4450,12 +4482,14 @@ class MountletWindow:
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
-            max_width = max(360, available.width() - 96)
-            max_height = max(220, available.height() - 96)
+            max_width = max(360, available.width() - 16)
+            max_height = max(220, available.height() - 16)
         else:
             max_width = 960
             max_height = 720
 
+        if width > max_width:
+            height += scroll.horizontalScrollBar().sizeHint().height()
         if height > max_height:
             width += scroll.verticalScrollBar().sizeHint().width()
             height = max_height
@@ -4811,15 +4845,23 @@ class MountletWindow:
 
 
 class MountletTray:
-    def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10) -> None:
+    def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10, instance_lock: Any | None = None) -> None:
         self.qt = qt
+        self._instance_lock = instance_lock
         self.refresh_interval = max(refresh_interval, 2)
         self._is_macos = get_platform().system_name == "Darwin"
         self._is_wayland = get_platform().system_name == "Linux" and bool(os.environ.get("WAYLAND_DISPLAY"))
-        self._manual_context_menu = self._is_macos or self._is_wayland
+        self._is_gnome_wayland = _is_gnome_wayland()
+        self._manual_context_menu = self._is_macos or (self._is_wayland and not self._is_gnome_wayland)
         if self._is_macos:
             _set_macos_accessory_mode()
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+        self.app.setApplicationName("Mountlet")
+        self.app.setApplicationDisplayName("Mountlet")
+        try:
+            self.app.setDesktopFileName("com.ericholt.mountlet")
+        except AttributeError:
+            pass
         if self._is_macos:
             # QApplication may restore the regular activation policy while it
             # initializes AppKit. Reapply accessory mode before creating windows.
@@ -4878,7 +4920,8 @@ class MountletTray:
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
             return
-        if reason == self.qt.QSystemTrayIcon.ActivationReason.Trigger:
+        activation_reason = self.qt.QSystemTrayIcon.ActivationReason
+        if reason in (activation_reason.Trigger, getattr(activation_reason, "DoubleClick", None)):
             self.main_window.toggle_from_tray()
             self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return
@@ -5089,6 +5132,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[!] {exc}", file=sys.stderr)
         return 1
 
+    instance_lock = _acquire_instance_lock(qt)
+    if instance_lock is None:
+        print("[*] Mountlet is already running.", file=sys.stderr)
+        return 0
+
     if not args.skip_readiness_check:
         readiness = setup_wizard.check_readiness()
         if not readiness.ready:
@@ -5102,7 +5150,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_app_directories()
     ensure_default_config_files()
     core.ensure_base_mount_dir()
-    return MountletTray(qt, refresh_interval=args.refresh_interval).run()
+    return MountletTray(qt, refresh_interval=args.refresh_interval, instance_lock=instance_lock).run()
 
 
 if __name__ == "__main__":

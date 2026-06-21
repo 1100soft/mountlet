@@ -95,8 +95,8 @@ type = dropbox
             self.assertTrue(success)
             self.assertEqual(message, "mounted")
             args = launch.call_args.args[1]
-            self.assertEqual(args[:3], ["/usr/bin/rclone", "mount", "Docs:"])
-            self.assertEqual(args[3], remote.mount_path)
+            self.assertEqual(args[:5], ["/usr/bin/rclone", "--config", core.CONFIG_PATH, "mount", "Docs:"])
+            self.assertEqual(args[5], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
 
     def test_mount_remote_can_mount_remote_path(self):
@@ -116,7 +116,10 @@ type = dropbox
                         success, _message = core.mount_remote(remote)
 
             self.assertTrue(success)
-            self.assertEqual(launch.call_args.args[1][:3], ["/usr/bin/rclone", "mount", "R2__S3:bucket/prefix"])
+            self.assertEqual(
+                launch.call_args.args[1][:5],
+                ["/usr/bin/rclone", "--config", core.CONFIG_PATH, "mount", "R2__S3:bucket/prefix"],
+            )
 
     def test_mount_remote_unmounts_when_connection_check_fails(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -156,7 +159,15 @@ type = dropbox
             self.assertIn("connected", message)
             self.assertEqual(
                 run.call_args.args[0],
-                ["/usr/bin/rclone", "lsf", "R2__S3:bucket/prefix", "--max-depth", "1"],
+                [
+                    "/usr/bin/rclone",
+                    "--config",
+                    core.CONFIG_PATH,
+                    "lsf",
+                    "R2__S3:bucket/prefix",
+                    "--max-depth",
+                    "1",
+                ],
             )
 
     def test_mount_remote_rejects_non_empty_mount_directory(self):
@@ -470,7 +481,10 @@ client_secret = work-secret
                     usage = core.get_storage_usage(remote)
 
             self.assertEqual(usage, "1.0 / 2.0 GB")
-            self.assertEqual(check_output.call_args.args[0][0], "/custom/rclone")
+            self.assertEqual(
+                check_output.call_args.args[0][:3],
+                ["/custom/rclone", "--config", core.CONFIG_PATH],
+            )
 
     def test_get_storage_usage_details_includes_numeric_percent(self):
         with tempfile.TemporaryDirectory() as tempdir:

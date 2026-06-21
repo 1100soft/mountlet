@@ -199,6 +199,13 @@ If macOS still blocks it, open **System Settings > Privacy & Security** and use
 **Open Anyway** for Mountlet. Public releases require Developer ID signing and
 Apple notarization; do not disable Gatekeeper globally.
 
+For a development artifact downloaded directly from this repository's GitHub
+Actions, remove quarantine from that app only if macOS offers neither option:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Mountlet.app
+```
+
 Install rclone using its official script. Do not use `brew install rclone` for
 Mountlet: that macOS build does not include mount support.
 
@@ -286,6 +293,10 @@ The tray app uses the tray icon this way:
   different desktop moves it to the current desktop.
 - Right-click shows app-level actions such as mount all, unmount all, update
   status, app settings, available configuration files, and quit.
+
+GNOME's AppIndicator bridge may route a tray click directly to the app menu
+instead of reporting separate left and right clicks. Use **Open Mountlet** from
+that menu; double-click is also accepted when the shell reports it.
 
 On macOS, Mountlet runs as a menu-bar utility without a separate Dock icon.
 Left-click opens or closes the Mountlet window, and right-click opens the app

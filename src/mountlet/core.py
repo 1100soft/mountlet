@@ -437,6 +437,10 @@ def remote_source(remote: RemoteInfo) -> str:
     return f"{remote.name}:{path}" if path else f"{remote.name}:"
 
 
+def _rclone_command(binary: str, *arguments: str) -> List[str]:
+    return [binary, "--config", CONFIG_PATH, *arguments]
+
+
 def is_mounted(remote: RemoteInfo) -> bool:
     return PLATFORM.is_mounted(mount_path(remote))
 
@@ -510,7 +514,7 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
 
-    args = [rclone_bin, "mount", remote_source(remote), remote.mount_path]
+    args = _rclone_command(rclone_bin, "mount", remote_source(remote), remote.mount_path)
     args.extend(remote.flags)
 
     success, message = _launch_mount_process(remote, args)
@@ -534,7 +538,7 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
     source = remote_source(remote)
     try:
         result = subprocess.run(
-            [binary, "lsf", source, "--max-depth", "1"],
+            _rclone_command(binary, "lsf", source, "--max-depth", "1"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
@@ -607,7 +611,7 @@ def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
         return StorageUsage("?")
     try:
         output = subprocess.check_output(
-            [rclone_bin, "about", remote_source(remote), "--json"],
+            _rclone_command(rclone_bin, "about", remote_source(remote), "--json"),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=RCLONE_STATUS_TIMEOUT_SECONDS,
@@ -634,7 +638,7 @@ def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
         return False, "[!] rclone not found."
     try:
         result = subprocess.run(
-            [rclone_bin, "about", remote_source(remote)],
+            _rclone_command(rclone_bin, "about", remote_source(remote)),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
