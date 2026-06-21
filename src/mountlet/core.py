@@ -186,7 +186,7 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
 COMMON_SAFE_RCLONE_KEYS = ("description",)
 SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
-    "drive": ("shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "drive": ("client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
@@ -451,43 +451,48 @@ def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, inter
 
 
 def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
-    try:
-        proc = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **PLATFORM.mount_process_options(),
-        )
-    except Exception as exc:
-        return False, f"[!] Failed to mount {remote.name}: {exc}"
-
-    PIDS[remote.name] = proc.pid
-
-    if wait_for(remote, True, timeout=wait_timeout):
-        return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
-
-    exit_code = proc.poll()
-    if exit_code is None:
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as error_output:
         try:
-            proc.terminate()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=error_output,
+                **PLATFORM.mount_process_options(),
+            )
+        except Exception as exc:
+            return False, f"[!] Failed to mount {remote.name}: {exc}"
+
+        PIDS[remote.name] = proc.pid
+
+        if wait_for(remote, True, timeout=wait_timeout):
+            return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
+
+        exit_code = proc.poll()
+        if exit_code is None:
             try:
-                proc.kill()
-                proc.wait(timeout=3)
+                proc.terminate()
             except Exception:
                 pass
-        exit_code = proc.poll()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+            exit_code = proc.poll()
 
-    PIDS.pop(remote.name, None)
+        PIDS.pop(remote.name, None)
+        error_output.seek(0)
+        detail = error_output.read().strip()
+        summary = detail.splitlines()[-1] if detail else ""
 
-    if exit_code is None:
-        return False, f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
-
-    return False, f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
+        if exit_code is None:
+            message = f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
+        else:
+            message = f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
+        return False, f"{message} {summary}".rstrip()
 
 
 def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:

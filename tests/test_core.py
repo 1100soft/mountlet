@@ -356,14 +356,27 @@ token = REDACTED
 
             fields = core.editable_rclone_fields(remote)
 
-            self.assertEqual(list(fields)[:4], ["shared_with_me", "root_folder_id", "team_drive", "scope"])
+            self.assertEqual(
+                list(fields)[:6],
+                ["client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"],
+            )
             self.assertEqual(fields["root_folder_id"], "abc")
             self.assertIn("team_drive", fields)
             self.assertNotIn("token", fields)
 
-            core.save_rclone_fields("Docs", {"root_folder_id": "def", "token": "REDACTED"})
+            core.save_rclone_fields(
+                "Docs",
+                {
+                    "client_id": "client.apps.googleusercontent.com",
+                    "client_secret": "new-secret",
+                    "root_folder_id": "def",
+                    "token": "REDACTED",
+                },
+            )
             remote = core.load_remotes()[0]
 
+            self.assertEqual(remote.extra_info["client_id"], "client.apps.googleusercontent.com")
+            self.assertEqual(remote.extra_info["client_secret"], "new-secret")
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
             self.assertEqual(remote.extra_info["token"], "REDACTED")
 

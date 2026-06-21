@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import ctypes
+import ntpath
 import shutil
 import subprocess
 from pathlib import Path
@@ -78,8 +80,23 @@ class WindowsPlatformServices(PlatformServices):
                 timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode == 0:
+            return True
+        return self._is_volume_mountpoint(path)
+
+    @staticmethod
+    def _is_volume_mountpoint(path: str) -> bool:
+        try:
+            buffer = ctypes.create_unicode_buffer(32768)
+            get_volume_path = ctypes.windll.kernel32.GetVolumePathNameW
+            if not get_volume_path(str(Path(path)), buffer, len(buffer)):
+                return False
+        except (AttributeError, OSError):
             return False
-        return result.returncode == 0
+        requested = ntpath.normcase(ntpath.normpath(path))
+        volume_path = ntpath.normcase(ntpath.normpath(buffer.value))
+        return requested == volume_path
 
     def prepare_mount_path(self, path: str) -> OperationResult:
         mountpoint = Path(path)

@@ -34,6 +34,7 @@ from .platform_services.file_managers import (
     open_with_file_manager,
     resolve_file_manager,
 )
+from .platform_services.processes import external_process_environment
 from .settings import (
     AppSettings,
     MountSettings,
@@ -71,6 +72,8 @@ MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
 )
 RCLONE_FIELD_TOOLTIPS = {
+    "client_id": "Google OAuth client ID used by this Drive remote. Changing it may require reconnecting the account.",
+    "client_secret": "Google OAuth client secret used by this Drive remote. Changing it may require reconnecting the account.",
     "description": "Optional note stored in rclone.conf. Mountlet does not use this value.",
     "root_folder_id": "Limit this Drive remote to one Google Drive folder ID. rclone uses it when accessing the remote.",
     "team_drive": "Google shared drive ID. rclone uses it when this remote points at a shared drive.",
@@ -580,8 +583,8 @@ def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
         return None
 
 
-def _main_window_type_name(is_macos: bool) -> str:
-    return "Window" if is_macos else "Tool"
+def _main_window_type_name(is_macos: bool, is_wayland: bool = False) -> str:
+    return "Window" if is_macos or is_wayland else "Tool"
 
 
 def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
@@ -1010,6 +1013,7 @@ def _open_folder_in_dolphin_new_window(path: str) -> bool:
     try:
         subprocess.Popen(
             [dolphin, "--new-window", path],
+            env=external_process_environment(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -1599,7 +1603,12 @@ def _open_text_file_focused(path: Path) -> bool:
             commands.append([editor_path, path_text])
     for command in commands:
         try:
-            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(
+                command,
+                env=external_process_environment(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             return True
         except OSError:
             continue
@@ -1950,7 +1959,10 @@ class MountConfigDialog(_ConfigDialogBase):
             return "bool", self._check(_config_bool(value))
         if key in RCLONE_SELECT_FIELDS:
             return "combo", self._editable_config_combo(RCLONE_SELECT_FIELDS[key], value)
-        return "text", self._line(value)
+        field = self._line(value)
+        if key == "client_secret":
+            field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        return "text", field
 
     def _rclone_config_value(self, kind: str, field: Any) -> str:
         if kind == "bool":
@@ -3328,7 +3340,8 @@ class MountletWindow:
             def __init__(self) -> None:
                 tray_app = getattr(outer, "tray_app", None)
                 base_name = _main_window_type_name(
-                    bool(getattr(tray_app, "_is_macos", False))
+                    bool(getattr(tray_app, "_is_macos", False)),
+                    bool(getattr(tray_app, "_is_wayland", False)),
                 )
                 flags = _frameless_window_flags(qt, base_name)
                 if flags is not None:
@@ -4802,6 +4815,8 @@ class MountletTray:
         self.qt = qt
         self.refresh_interval = max(refresh_interval, 2)
         self._is_macos = get_platform().system_name == "Darwin"
+        self._is_wayland = get_platform().system_name == "Linux" and bool(os.environ.get("WAYLAND_DISPLAY"))
+        self._manual_context_menu = self._is_macos or self._is_wayland
         if self._is_macos:
             _set_macos_accessory_mode()
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
@@ -4819,7 +4834,7 @@ class MountletTray:
         self.app.setWindowIcon(self.icon)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("Mountlet")
-        if not self._is_macos:
+        if not self._manual_context_menu:
             self.tray.setContextMenu(self.app_menu)
         self.tray.show()
         try:
@@ -4867,7 +4882,8 @@ class MountletTray:
             self.main_window.toggle_from_tray()
             self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return
-        if getattr(self, "_is_macos", False) and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
+        manual_context = getattr(self, "_manual_context_menu", getattr(self, "_is_macos", False))
+        if manual_context and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
             self.app_menu.popup(self.qt.QCursor.pos())
 
     def _show_app_settings_from_tray(self) -> None:
@@ -4894,6 +4910,8 @@ class MountletTray:
 
         status = self.app_menu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
         status.setEnabled(False)
+        self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))

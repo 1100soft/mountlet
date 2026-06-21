@@ -22,6 +22,7 @@ from mountlet.platform_services.file_managers import (
 from mountlet.platform_services.linux import LinuxPlatformServices
 from mountlet.platform_services.macos import MacOSPlatformServices
 from mountlet.platform_services.processes import terminate_process
+from mountlet.platform_services.processes import external_process_environment
 from mountlet.platform_services.windows import WindowsPlatformServices
 
 
@@ -116,6 +117,25 @@ class PlatformServicesTests(unittest.TestCase):
 
         process.terminate.assert_called_once_with()
         process.kill.assert_called_once_with()
+
+    def test_frozen_external_process_restores_original_library_path(self):
+        with mock.patch("mountlet.platform_services.processes.sys.frozen", True, create=True):
+            with mock.patch.dict(
+                "os.environ",
+                {"LD_LIBRARY_PATH": "/bundle", "LD_LIBRARY_PATH_ORIG": "/system"},
+                clear=True,
+            ):
+                environment = external_process_environment()
+
+        self.assertEqual(environment["LD_LIBRARY_PATH"], "/system")
+        self.assertNotIn("LD_LIBRARY_PATH_ORIG", environment)
+
+    def test_source_external_process_preserves_library_path(self):
+        with mock.patch("mountlet.platform_services.processes.sys.frozen", False, create=True):
+            with mock.patch.dict("os.environ", {"LD_LIBRARY_PATH": "/custom"}, clear=True):
+                environment = external_process_environment()
+
+        self.assertEqual(environment["LD_LIBRARY_PATH"], "/custom")
 
     def test_macos_defaults_to_finder(self):
         platform = MacOSPlatformServices()
@@ -213,7 +233,34 @@ Categories=Utility;FileManager;
             result = WindowsPlatformServices().prepare_mount_path(str(mountpoint))
 
             self.assertFalse(result.success)
-            self.assertIn("not empty", result.detail)
+        self.assertIn("not empty", result.detail)
+
+    def test_windows_mount_detection_falls_back_to_volume_mountpoint_api(self):
+        platform = WindowsPlatformServices()
+        with mock.patch("mountlet.platform_services.windows.os.path.exists", return_value=True):
+            with mock.patch(
+                "mountlet.platform_services.windows.subprocess.run",
+                side_effect=OSError("fsutil unavailable"),
+            ):
+                with mock.patch.object(platform, "_is_volume_mountpoint", return_value=True) as fallback:
+                    self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
+
+        fallback.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
+
+    def test_windows_volume_mountpoint_api_compares_returned_root(self):
+        def get_volume_path(_path, buffer, _length):
+            buffer.value = "C:\\Users\\test\\Mountlet\\Docs\\"
+            return 1
+
+        kernel32 = SimpleNamespace(GetVolumePathNameW=get_volume_path)
+        with mock.patch(
+            "mountlet.platform_services.windows.ctypes.windll",
+            SimpleNamespace(kernel32=kernel32),
+            create=True,
+        ):
+            mounted = WindowsPlatformServices._is_volume_mountpoint(r"C:\Users\test\Mountlet\Docs")
+
+        self.assertTrue(mounted)
 
     def test_windows_finds_winfsp_in_32_bit_program_files(self):
         with tempfile.TemporaryDirectory() as tempdir:

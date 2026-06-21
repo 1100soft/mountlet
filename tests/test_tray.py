@@ -329,6 +329,9 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._main_window_type_name(True), "Window")
         self.assertEqual(tray._main_window_type_name(False), "Tool")
 
+    def test_wayland_main_window_uses_normal_window_type(self):
+        self.assertEqual(tray._main_window_type_name(False, True), "Window")
+
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         original = {

@@ -13,6 +13,11 @@
   retained alongside them.
 - Added a resumable graphical prerequisite check that opens installation
   guidance and starts Mountlet when rclone and filesystem support are ready.
+- Fixed Wayland tray activation and top-level window handling, and prevented
+  frozen Linux builds from passing bundled library paths to Dolphin.
+- Added editable Google Drive client IDs and client secrets to remote settings.
+- Improved Windows mountpoint detection, rclone mount diagnostics, and installer
+  maintenance options for repair/update and uninstall.
 
 ## 0.3.0 - 2026-06-20
 

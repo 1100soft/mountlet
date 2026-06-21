@@ -13,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from . import tray
 
-    return int(tray.main(["--skip-readiness-check"]) or 0)
+    return int(tray.main([]) or 0)
 
 
 if __name__ == "__main__":

@@ -193,6 +193,12 @@ Mountlet. See the official
 [macFUSE setup guide](https://github.com/macfuse/macfuse/wiki/Getting-Started)
 for screenshots and troubleshooting.
 
+Unsigned test DMGs are also subject to Gatekeeper. After copying Mountlet to
+Applications, Control-click **Mountlet**, choose **Open**, then confirm **Open**.
+If macOS still blocks it, open **System Settings > Privacy & Security** and use
+**Open Anyway** for Mountlet. Public releases require Developer ID signing and
+Apple notarization; do not disable Gatekeeper globally.
+
 Install rclone using its official script. Do not use `brew install rclone` for
 Mountlet: that macOS build does not include mount support.
 

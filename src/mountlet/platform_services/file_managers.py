@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .base import PlatformServices
+from .processes import external_process_environment
 
 
 SYSTEM_FILE_MANAGER_ID = "system"
@@ -71,6 +72,7 @@ def open_with_file_manager(manager: FileManager, path: str, *, new_window: bool 
     try:
         subprocess.Popen(
             command,
+            env=external_process_environment(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

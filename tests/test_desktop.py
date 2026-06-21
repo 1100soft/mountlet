@@ -24,7 +24,7 @@ class DesktopTests(unittest.TestCase):
         with mock.patch("mountlet.tray.main", return_value=0) as tray_main:
             self.assertEqual(desktop.main([]), 0)
 
-        tray_main.assert_called_once_with(["--skip-readiness-check"])
+        tray_main.assert_called_once_with([])
 
 
 if __name__ == "__main__":
