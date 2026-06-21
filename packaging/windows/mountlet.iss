@@ -76,11 +76,24 @@ begin
     FileExists(ExpandConstant('{pf32}\WinFsp\bin\fsptool-x86.exe'));
 end;
 
+function HasCommandLineParam(Value: String): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+    if CompareText(ParamStr(Index), Value) = 0 then
+    begin
+      Result := True;
+      exit;
+    end;
+end;
+
 function InitializeSetup: Boolean;
 var
   Missing: String;
 begin
-  if CmdLineParamExists('/PACKAGINGTEST') then
+  if HasCommandLineParam('/PACKAGINGTEST') then
   begin
     Result := True;
     exit;
