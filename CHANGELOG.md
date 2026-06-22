@@ -8,6 +8,9 @@
   outside the UI thread.
 - Added managed offline files and complete folders, offline availability icons,
   explicit local-copy removal, and disconnected browsing of completed folders.
+- Added hover-open remote switching, keyboard focus navigation, retained Qt
+  input handlers for X11 stability, file and folder context menus, permanent
+  delete confirmation, and remote folder creation.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds
   for Linux x64, Windows x64, macOS arm64, and macOS x64.
 - Added automated frozen-executable smoke checks and macOS bundle validation

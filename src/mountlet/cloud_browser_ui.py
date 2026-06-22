@@ -38,13 +38,15 @@ class CompactCloudBrowser:
         *,
         remotes: Callable[[], list[core.RemoteInfo]],
         notify: Callable[[str, str, bool], None],
-        open_mount: Callable[[core.RemoteInfo], None],
+        open_mount: Callable[[core.RemoteInfo, str], None],
+        file_manager_label: Callable[[], str],
     ) -> None:
         self.qt = qt
         self.main_window = main_window
         self._remotes = remotes
         self._notify = notify
         self._open_mount = open_mount
+        self._file_manager_name = file_manager_label
         self.backend = CloudBrowserBackend()
         self.remote: core.RemoteInfo | None = None
         self.path = ""
@@ -68,11 +70,28 @@ class CompactCloudBrowser:
         return Bridge()
 
     def _make_window(self) -> Any:
+        outer = self
         flags = self.qt.Qt.WindowType.Tool | self.qt.Qt.WindowType.FramelessWindowHint
+
+        class BrowserWindow(self.qt.QMainWindow):
+            def keyPressEvent(self, event: Any) -> None:
+                if outer._handle_key(event):
+                    return
+                super().keyPressEvent(event)
+
+            def changeEvent(self, event: Any) -> None:
+                super().changeEvent(event)
+                if event.type() in {
+                    outer.qt.QEvent.Type.ActivationChange,
+                    outer.qt.QEvent.Type.WindowActivate,
+                    outer.qt.QEvent.Type.WindowDeactivate,
+                }:
+                    outer._update_focus_style()
+
         try:
-            window = self.qt.QMainWindow(None, flags)
+            window = BrowserWindow(None, flags)
         except Exception:
-            window = self.qt.QMainWindow()
+            window = BrowserWindow()
             window.setWindowFlags(flags)
         window.setWindowTitle("Mountlet Files")
         window.resize(520, 390)
@@ -81,6 +100,8 @@ class CompactCloudBrowser:
     def _build(self) -> None:
         qt = self.qt
         root = qt.QWidget()
+        root.setObjectName("fileBrowserSurface")
+        self.root = root
         layout = qt.QVBoxLayout(root)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(5)
@@ -100,6 +121,8 @@ class CompactCloudBrowser:
         self.path_field = qt.QLineEdit()
         self.path_field.setReadOnly(True)
         self.path_field.setPlaceholderText("Remote root")
+        self.path_field.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.path_field.customContextMenuRequested.connect(self._show_folder_menu)
         navigation.addWidget(self.up_button)
         navigation.addWidget(self.path_field, 1)
         navigation.addWidget(self._button("↻", self.refresh, "Refresh folder", square=True))
@@ -132,6 +155,11 @@ class CompactCloudBrowser:
                 drag.setMimeData(mime)
                 drag.exec(qt.Qt.DropAction.CopyAction | qt.Qt.DropAction.MoveAction, qt.Qt.DropAction.CopyAction)
 
+            def keyPressEvent(self, event: Any) -> None:
+                if outer._handle_key(event):
+                    return
+                super().keyPressEvent(event)
+
         self.tree = FileTree()
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["", "Name", "Size", "Modified"])
@@ -140,6 +168,8 @@ class CompactCloudBrowser:
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setDragEnabled(True)
         self.tree.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_tree_menu)
         self.tree.itemDoubleClicked.connect(self._open_item)
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.setColumnWidth(0, 24)
@@ -149,11 +179,8 @@ class CompactCloudBrowser:
         self.status = qt.QLabel("")
         layout.addWidget(self.status)
         self.window.setCentralWidget(root)
-
-        for sequence, callback in (("Ctrl+C", self.copy_selected), ("Ctrl+X", self.cut_selected), ("Ctrl+V", self.paste)):
-            shortcut = qt.QShortcut(qt.QKeySequence(sequence), self.window)
-            shortcut.activated.connect(callback)
         self._update_actions()
+        self._update_focus_style()
 
     def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
         button = self.qt.QPushButton(text)
@@ -169,17 +196,78 @@ class CompactCloudBrowser:
     def hide(self) -> None:
         self.window.hide()
 
-    def show_remote(self, remote: core.RemoteInfo, row: Any, *, open_browser: bool) -> None:
+    def show_remote(
+        self,
+        remote: core.RemoteInfo,
+        row: Any,
+        *,
+        show_browser: bool,
+        focus_browser: bool = False,
+    ) -> None:
         changed = self.remote is None or self.remote.name != remote.name
         self.remote = remote
         self.path = self.backend.current_path(remote.name)
         self._position(row)
-        if open_browser:
+        if show_browser:
+            try:
+                self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
+            except Exception:
+                pass
             self.window.show()
             self.window.raise_()
-            self.window.activateWindow()
-        if changed or open_browser:
+            if focus_browser:
+                self.focus()
+        if changed or show_browser:
             self.refresh()
+
+    def focus(self) -> None:
+        try:
+            self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+        except Exception:
+            pass
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+        self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+
+    def focus_main_window(self) -> None:
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+        callback = getattr(self.main_window, "focus_remote_row", None)
+        if callable(callback):
+            callback()
+
+    def _update_focus_style(self) -> None:
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        active = bool(self.window.isActiveWindow())
+        color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
+        root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
+
+    def _handle_key(self, event: Any) -> bool:
+        key = event.key()
+        modifiers = event.modifiers()
+        control = bool(modifiers & self.qt.Qt.KeyboardModifier.ControlModifier)
+        if control and key == self.qt.Qt.Key.Key_C:
+            self.copy_selected()
+        elif control and key == self.qt.Qt.Key.Key_X:
+            self.cut_selected()
+        elif control and key == self.qt.Qt.Key.Key_V:
+            self.paste()
+        elif key == self.qt.Qt.Key.Key_Delete:
+            self.delete_selected()
+        elif key in {self.qt.Qt.Key.Key_Escape, self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            self.focus_main_window()
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+            item = self.tree.currentItem()
+            if item is None:
+                return False
+            self._open_item(item)
+        else:
+            return False
+        event.accept()
+        return True
 
     def refresh(self) -> None:
         if self.remote is None:
@@ -259,6 +347,86 @@ class CompactCloudBrowser:
         if self.clipboard is not None:
             items, move = self.clipboard
             self._transfer(items, move=move)
+
+    def delete_selected(self) -> None:
+        entries = self._selected_entries()
+        if not entries or self.remote is None or self._operation_pending:
+            return
+        names = ", ".join(entry.name for entry in entries[:3])
+        if len(entries) > 3:
+            names += f", and {len(entries) - 3} more"
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Delete from cloud storage?",
+            f"Permanently delete {names}?\n\nThis cannot be undone by Mountlet.",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        remote = self.remote
+        self._run_operation("Deleting…", lambda: self.backend.delete_entries(remote, entries))
+
+    def create_folder(self) -> None:
+        if self.remote is None or self._operation_pending:
+            return
+        name, accepted = self.qt.QInputDialog.getText(self.window, "New folder", "Folder name")
+        if not accepted or not name.strip():
+            return
+        remote, parent = self.remote, self.path
+        self._run_operation("Creating folder…", lambda: self.backend.create_folder(remote, parent, name.strip()))
+
+    def _show_tree_menu(self, point: Any) -> None:
+        item = self.tree.itemAt(point)
+        if item is None:
+            self._show_folder_menu(point, source=self.tree.viewport())
+            return
+        if not item.isSelected():
+            self.tree.clearSelection()
+            item.setSelected(True)
+            self.tree.setCurrentItem(item)
+        entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(entry, BrowserEntry):
+            return
+        menu = self.qt.QMenu(self.window)
+        self._menu_action(menu, "Open", lambda selected=item: self._open_item(selected))
+        if entry.is_dir:
+            self._menu_action(
+                menu,
+                f"Open in {self._file_manager_label()}",
+                lambda path=entry.path: self._open_external_folder(path),
+                enabled=bool(self.remote and core.is_mounted(self.remote)),
+            )
+        menu.addSeparator()
+        self._menu_action(menu, "Copy", self.copy_selected)
+        self._menu_action(menu, "Cut", self.cut_selected)
+        self._menu_action(menu, "Delete", self.delete_selected)
+        menu.exec(self.tree.viewport().mapToGlobal(point))
+
+    def _show_folder_menu(self, point: Any, *, source: Any | None = None) -> None:
+        menu = self.qt.QMenu(self.window)
+        self._menu_action(
+            menu,
+            f"Open in {self._file_manager_label()}",
+            lambda: self._open_external_folder(self.path),
+            enabled=bool(self.remote and core.is_mounted(self.remote)),
+        )
+        self._menu_action(menu, "Paste", self.paste, enabled=self.clipboard is not None and not self._operation_pending)
+        self._menu_action(menu, "New folder", self.create_folder, enabled=not self._operation_pending)
+        origin = source or self.path_field
+        menu.exec(origin.mapToGlobal(point))
+
+    def _menu_action(self, menu: Any, label: str, callback: Callable[[], None], *, enabled: bool = True) -> Any:
+        action = menu.addAction(label)
+        action.setEnabled(enabled)
+        action.triggered.connect(lambda _checked=False: callback())
+        return action
+
+    def _file_manager_label(self) -> str:
+        try:
+            return self._file_manager_name()
+        except Exception:
+            return "file manager"
 
     def accept_drop(self, payload: bytes, *, move: bool = False) -> None:
         try:
@@ -373,12 +541,15 @@ class CompactCloudBrowser:
         self.refresh()
 
     def _open_current_mount(self) -> None:
+        self._open_external_folder(self.path)
+
+    def _open_external_folder(self, path: str) -> None:
         if self.remote is None:
             return
         if not core.is_mounted(self.remote):
             self._notify("Open folder", "Mount this remote before opening it in the system file manager.", False)
             return
-        self._open_mount(self.remote)
+        self._open_mount(self.remote, path)
 
     def _position(self, row: Any) -> None:
         try:

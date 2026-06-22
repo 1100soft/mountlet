@@ -338,8 +338,18 @@ remembers its last folder. The browser lists the remote through rclone, so the
 remote does not need to be mounted.
 
 - Double-click folders to navigate and files to open them.
+- Hover over a remote strip to open or switch the browser without moving
+  keyboard focus. Click the strip to focus the browser.
+- With the main window focused, use Up and Down to select remote strips and
+  Enter, Space, Left, or Right to enter the browser. Press Escape, Left, or
+  Right in the browser to return to the selected strip.
 - Use **Copy**, **Cut**, and **Paste**, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
   transfer files and folders within or between remotes.
+- Press Delete to permanently delete selected cloud items after confirmation.
+- Right-click an item for open, copy, cut, and delete commands. Folder menus
+  can also open the mounted location in the configured file manager. Right-click
+  the current path or empty list area to paste, open the current mounted folder,
+  or create a folder.
 - Drag files onto another remote strip to copy them to that remote's remembered
   folder. Hold Shift while dropping to move them.
 - Use the download icon to keep selected files or complete folders available

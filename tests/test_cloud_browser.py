@@ -81,6 +81,49 @@ class CloudBrowserTests(unittest.TestCase):
 
         run.assert_called_once_with("rclone", "copyto", "Source:/Reports/a.txt", "Target:/Inbox/a.txt")
 
+    def test_delete_uses_deletefile_and_purge(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entries = [
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+                BrowserEntry("Old", "Reports/Old", True),
+            ]
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    backend.delete_entries(_remote(), entries)
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call("rclone", "deletefile", "Docs:/Reports/a.txt"),
+                mock.call("rclone", "purge", "Docs:/Reports/Old"),
+            ],
+        )
+
+    def test_create_folder_uses_remote_current_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    backend.create_folder(_remote(), "Reports", "New")
+
+        run.assert_called_once_with("rclone", "mkdir", "Docs:/Reports/New")
+
+    def test_create_folder_rejects_nested_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with self.assertRaisesRegex(RuntimeError, "single folder name"):
+                backend.create_folder(_remote(), "", "one/two")
+
     def test_offline_file_is_indicated_by_managed_copy(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(

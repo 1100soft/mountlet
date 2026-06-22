@@ -182,6 +182,19 @@ class CloudBrowserBackend:
                 arguments = ["moveto" if move else "copyto", source, target]
             self._run_operation(binary, *arguments)
 
+    def delete_entries(self, remote: core.RemoteInfo, entries: Iterable[BrowserEntry]) -> None:
+        binary = self._rclone()
+        for entry in entries:
+            operation = "purge" if entry.is_dir else "deletefile"
+            self._run_operation(binary, operation, remote_target(remote, entry.path))
+            self.remove_offline(remote.name, entry.path)
+
+    def create_folder(self, remote: core.RemoteInfo, parent: str, name: str) -> None:
+        normalized_name = normalize_browser_path(name)
+        if not normalized_name or "/" in normalized_name or normalized_name != name.strip():
+            raise RuntimeError("Enter a single folder name without slashes")
+        self._run_operation(self._rclone(), "mkdir", remote_target(remote, join_browser_path(parent, normalized_name)))
+
     def make_offline(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path:
         binary = self._rclone()
         destination = self.offline_path(remote.name, entry.path)
