@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import core, rclone_wizard
+from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .platform_services import get_platform
@@ -397,9 +398,10 @@ def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QEvent, QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
-        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
+        from PySide6.QtCore import QEvent, QLockFile, QMimeData, QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal
+        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter, QShortcut
         from PySide6.QtWidgets import (
+            QAbstractItemView,
             QApplication,
             QButtonGroup,
             QCheckBox,
@@ -424,6 +426,8 @@ def _load_qt_bindings() -> SimpleNamespace:
             QStyle,
             QSystemTrayIcon,
             QToolTip,
+            QTreeWidget,
+            QTreeWidgetItem,
             QVBoxLayout,
             QWidget,
         )
@@ -437,6 +441,7 @@ def _load_qt_bindings() -> SimpleNamespace:
 
     return SimpleNamespace(
         QAction=QAction,
+        QAbstractItemView=QAbstractItemView,
         QApplication=QApplication,
         QButtonGroup=QButtonGroup,
         QColor=QColor,
@@ -446,6 +451,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QDialog=QDialog,
         QDialogButtonBox=QDialogButtonBox,
         QDesktopServices=QDesktopServices,
+        QDrag=QDrag,
         QFormLayout=QFormLayout,
         QFrame=QFrame,
         QGridLayout=QGridLayout,
@@ -454,16 +460,20 @@ def _load_qt_bindings() -> SimpleNamespace:
         QLabel=QLabel,
         QLineEdit=QLineEdit,
         QLockFile=QLockFile,
+        QKeySequence=QKeySequence,
+        QMimeData=QMimeData,
         QEvent=QEvent,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
         QPlainTextEdit=QPlainTextEdit,
         QObject=QObject,
+        QPoint=QPoint,
         QPainter=QPainter,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
         QRadioButton=QRadioButton,
+        QShortcut=QShortcut,
         QScrollArea=QScrollArea,
         QSize=QSize,
         QSizePolicy=QSizePolicy,
@@ -471,6 +481,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         QSystemTrayIcon=QSystemTrayIcon,
         QTimer=QTimer,
         QToolTip=QToolTip,
+        QTreeWidget=QTreeWidget,
+        QTreeWidgetItem=QTreeWidgetItem,
         Qt=Qt,
         QUrl=QUrl,
         Signal=Signal,
@@ -3352,6 +3364,14 @@ class MountletWindow:
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
+        self.file_browser = CompactCloudBrowser(
+            self.qt,
+            self.window,
+            remotes=_load_visible_remotes,
+            notify=lambda title, message, success: self.tray_app._notify(title, message, success=success),
+            open_mount=self._open_folder,
+        )
+        self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -3637,6 +3657,7 @@ class MountletWindow:
 
     def _hide_window_stack(self) -> None:
         self._close_child_dialogs()
+        self.file_browser.hide()
         self._window_stack_hidden = True
         try:
             self.window.hide()
@@ -3823,6 +3844,7 @@ class MountletWindow:
         if self.window.centralWidget() is not root or self._tray_is_quitting():
             return
         self._fit_to_content(root, scroll, container)
+        self._reposition_file_browser()
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")
@@ -4034,8 +4056,8 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        open_tooltip = f"Open {remote.display_name} in {self.desktop.file_manager_label()}"
-        title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
+        open_tooltip = f"Browse {remote.display_name}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
@@ -4043,13 +4065,18 @@ class MountletWindow:
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
         frame.setToolTip(open_tooltip)
+        frame.setAcceptDrops(True)
         frame.mouseReleaseEvent = lambda event, row=frame, selected=remote: self._handle_remote_row_click(event, row, selected)
         frame.enterEvent = lambda event, row=frame, tooltip=open_tooltip: self._highlight_remote_row(
             row,
             highlighted=True,
             tooltip=tooltip,
+            remote=remote,
         )
         frame.leaveEvent = lambda event, row=frame: self._highlight_remote_row(row, highlighted=False)
+        frame.dragEnterEvent = lambda event, row=frame, selected=remote: self._remote_drag_enter(event, row, selected)
+        frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+        frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
         frame.setStyleSheet(self._remote_row_style(frame, highlighted=False))
         layout = self.qt.QGridLayout(frame)
         layout.setContentsMargins(8, 5, 8, 5)
@@ -4153,11 +4180,12 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        open_tooltip = f"Open {remote.display_name} in {self.desktop.file_manager_label()}"
-        title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
+        open_tooltip = f"Browse {remote.display_name}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         row.frame.setProperty("mounted", mounted)
         row.frame.setToolTip(open_tooltip)
+        row.frame.setAcceptDrops(True)
         row.frame.mouseReleaseEvent = lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
             event,
             frame,
@@ -4167,7 +4195,13 @@ class MountletWindow:
             frame,
             highlighted=True,
             tooltip=tooltip,
+            remote=remote,
         )
+        row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
+            event, frame, selected
+        )
+        row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+        row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
         row.frame.setStyleSheet(self._remote_row_style(row.frame, highlighted=False))
 
         row.title.setText(self._display_remote_name(remote))
@@ -4444,32 +4478,81 @@ class MountletWindow:
             if child.property("rowControl"):
                 return
             child = child.parentWidget()
-        if not row.property("mounted"):
-            return
-        self._open_folder(remote)
+        self._browse_remote(remote, row)
 
     def _remote_row_style(self, row: Any, *, highlighted: bool) -> str:
         mounted = bool(row.property("mounted"))
+        selected = bool(row.property("browserSelected"))
         if not mounted:
             return (
                 "QFrame#remoteRow {"
-                "border: 1px solid rgba(107, 114, 128, 90);"
-                "background: rgba(107, 114, 128, 24);"
+                f"border: 1px solid {'#3b82f6' if selected else 'rgba(107, 114, 128, 90)'};"
+                f"background: {'rgba(59, 130, 246, 30)' if selected else 'rgba(107, 114, 128, 24)'};"
                 "}"
             )
-        if highlighted:
+        if highlighted or selected:
             return (
                 "QFrame#remoteRow {"
-                "border: 1px solid rgba(22, 163, 74, 190);"
-                "background: rgba(22, 163, 74, 36);"
+                f"border: 1px solid {'#3b82f6' if selected else 'rgba(22, 163, 74, 190)'};"
+                f"background: {'rgba(59, 130, 246, 30)' if selected else 'rgba(22, 163, 74, 36)'};"
                 "}"
             )
         return ""
 
-    def _highlight_remote_row(self, row: Any, *, highlighted: bool, tooltip: str | None = None) -> None:
+    def _highlight_remote_row(
+        self,
+        row: Any,
+        *,
+        highlighted: bool,
+        tooltip: str | None = None,
+        remote: core.RemoteInfo | None = None,
+    ) -> None:
         row.setStyleSheet(self._remote_row_style(row, highlighted=highlighted))
-        if highlighted and row.property("mounted") and tooltip:
+        if highlighted and tooltip:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
+        if highlighted and remote is not None and self.file_browser.is_visible():
+            self._select_browser_remote(remote, row)
+
+    def _browse_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        self._set_browser_selected(remote.name)
+        self.file_browser.show_remote(remote, row, open_browser=True)
+
+    def _select_browser_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        self._set_browser_selected(remote.name)
+        self.file_browser.show_remote(remote, row, open_browser=False)
+
+    def _set_browser_selected(self, remote_name: str | None) -> None:
+        for name, widgets in self._row_widgets.items():
+            widgets.frame.setProperty("browserSelected", name == remote_name)
+            widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+
+    def _reposition_file_browser(self) -> None:
+        if not self.file_browser.is_visible() or self.file_browser.remote is None:
+            return
+        row = self._row_widgets.get(self.file_browser.remote.name)
+        if row is not None:
+            self.file_browser.show_remote(self.file_browser.remote, row.frame, open_browser=False)
+
+    def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        if not event.mimeData().hasFormat(MIME_TYPE):
+            event.ignore()
+            return
+        self._select_browser_remote(remote, row)
+        event.acceptProposedAction()
+
+    def _remote_drag_move(self, event: Any) -> None:
+        if event.mimeData().hasFormat(MIME_TYPE):
+            event.acceptProposedAction()
+
+    def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
+        if not event.mimeData().hasFormat(MIME_TYPE):
+            event.ignore()
+            return
+        move = bool(event.keyboardModifiers() & self.qt.Qt.KeyboardModifier.ShiftModifier)
+        self.file_browser.remote = remote
+        self.file_browser.path = self.file_browser.backend.current_path(remote.name)
+        self.file_browser.accept_drop(bytes(event.mimeData().data(MIME_TYPE)), move=move)
+        event.acceptProposedAction()
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
         name = html.escape(self._truncated_remote_alias(remote, include_provider=bool(remote.provider)))
