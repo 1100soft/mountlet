@@ -3791,7 +3791,12 @@ class MountletWindow:
             return
         self._fit_to_content(root, scroll, container)
         if self.is_visible():
-            self._position_near_tray()
+            try:
+                tray_geometry = self.tray_app.tray.geometry()
+                if tray_geometry.isValid() or getattr(self.tray_app, "_is_gnome_wayland", False):
+                    self._position_near_tray()
+            except Exception:
+                self._clamp_to_screen()
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")
@@ -4507,7 +4512,29 @@ class MountletWindow:
             width += scroll.verticalScrollBar().sizeHint().width()
             height = max_height
 
-        self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
+        target_width = min(max(width, 360), max_width)
+        target_height = min(max(height, 132), max_height)
+        self._resize_anchored(target_width, target_height, screen)
+
+    def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
+        """Resize while preserving the window's nearest screen-edge offsets."""
+        if not self.is_visible() or screen is None:
+            self.window.resize(width, height)
+            self._clamp_to_screen(screen)
+            return
+        try:
+            available = screen.availableGeometry()
+            frame = self.window.frameGeometry()
+            left_gap = max(frame.left() - available.left(), 0)
+            right_gap = max(available.right() - frame.right(), 0)
+            top_gap = max(frame.top() - available.top(), 0)
+            bottom_gap = max(available.bottom() - frame.bottom(), 0)
+            self.window.resize(width, height)
+            x = available.left() + left_gap if left_gap <= right_gap else available.right() - right_gap - width + 1
+            y = available.top() + top_gap if top_gap <= bottom_gap else available.bottom() - bottom_gap - height + 1
+            self.window.move(x, y)
+        except Exception:
+            self.window.resize(width, height)
         self._clamp_to_screen(screen)
 
     def _layout_item_size(self, layout: Any, index: int) -> Any:
@@ -4610,7 +4637,7 @@ class MountletWindow:
         self._request_refresh()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
-        if not os.path.isdir(remote.mount_path):
+        if not core.is_mounted(remote):
             self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
             return
 

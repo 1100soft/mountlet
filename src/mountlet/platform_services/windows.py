@@ -79,20 +79,9 @@ class WindowsPlatformServices(PlatformServices):
     def is_mounted(self, path: str) -> bool:
         # A WinFsp directory mount is an NTFS junction. Python can report a
         # newly attached junction as nonexistent while Windows already
-        # recognizes the reparse point, so query the native mount mechanisms
-        # directly instead of using os.path.exists as a gate.
-        try:
-            result = subprocess.run(
-                ("fsutil", "reparsepoint", "query", path),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-                **self.command_process_options(),
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            result = None
-        if result is not None and result.returncode == 0:
-            return True
+        # recognizes the volume. GetVolumeNameForVolumeMountPointW is both
+        # authoritative and non-blocking; invoking fsutil here stalled the UI
+        # once per remote during every refresh.
         return self._is_volume_mountpoint(path)
 
     @staticmethod

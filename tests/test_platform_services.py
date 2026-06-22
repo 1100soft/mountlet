@@ -19,6 +19,7 @@ from mountlet.platform_services.file_managers import (
     open_with_file_manager,
     resolve_file_manager,
 )
+from mountlet.platform_services import file_managers
 from mountlet.platform_services.linux import LinuxPlatformServices
 from mountlet.platform_services.macos import MacOSPlatformServices
 from mountlet.platform_services.processes import terminate_process
@@ -204,6 +205,15 @@ Categories=Utility;FileManager;
 
         self.assertEqual(popen.call_args.args[0], ["example-files", "/tmp/docs"])
 
+    def test_windows_explorer_reuses_matching_location_before_launching(self):
+        manager = FileManager("explorer", "File Explorer", ("explorer.exe",), True, True)
+
+        with mock.patch.object(file_managers, "_focus_existing_explorer_location", return_value=True):
+            with mock.patch("mountlet.platform_services.file_managers.subprocess.Popen") as popen:
+                self.assertTrue(open_with_file_manager(manager, r"C:\Users\test\Mountlet\Docs"))
+
+        popen.assert_not_called()
+
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
         with mock.patch("pathlib.Path.home", return_value=Path("/Users/tester")):
@@ -235,24 +245,20 @@ Categories=Utility;FileManager;
             self.assertFalse(result.success)
         self.assertIn("not empty", result.detail)
 
-    def test_windows_mount_detection_falls_back_to_volume_mountpoint_api(self):
+    def test_windows_mount_detection_uses_nonblocking_volume_api(self):
         platform = WindowsPlatformServices()
-        with mock.patch(
-            "mountlet.platform_services.windows.subprocess.run",
-            side_effect=OSError("fsutil unavailable"),
-        ):
+        with mock.patch("mountlet.platform_services.windows.subprocess.run") as run:
             with mock.patch.object(platform, "_is_volume_mountpoint", return_value=True) as fallback:
                 self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
 
         fallback.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
+        run.assert_not_called()
 
     def test_windows_mount_detection_does_not_depend_on_python_path_exists(self):
         platform = WindowsPlatformServices()
-        fsutil = mock.Mock(returncode=1)
         with mock.patch("mountlet.platform_services.windows.os.path.exists", return_value=False):
-            with mock.patch("mountlet.platform_services.windows.subprocess.run", return_value=fsutil):
-                with mock.patch.object(platform, "_is_volume_mountpoint", return_value=True):
-                    self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
+            with mock.patch.object(platform, "_is_volume_mountpoint", return_value=True):
+                self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
 
     def test_windows_volume_mountpoint_api_checks_requested_directory(self):
         requested = []

@@ -66,6 +66,8 @@ def resolve_file_manager(platform: PlatformServices, identifier: str | None) -> 
 def open_with_file_manager(manager: FileManager, path: str, *, new_window: bool = False) -> bool:
     if not manager.command:
         return False
+    if manager.identifier == "explorer" and _focus_existing_explorer_location(path):
+        return True
     command = _expand_command(manager.command, path)
     if new_window and manager.supports_new_window:
         command = _new_window_command(manager.identifier, command)
@@ -80,6 +82,46 @@ def open_with_file_manager(manager: FileManager, path: str, *, new_window: bool 
     except OSError:
         return False
     return True
+
+
+def _focus_existing_explorer_location(path: str) -> bool:
+    """Focus Explorer when one of its exposed views already shows *path*.
+
+    Shell.Windows exposes Explorer windows through COM. Windows 11 does not
+    provide a supported API for creating or selecting arbitrary Explorer tabs,
+    but reusing an already exposed matching view avoids duplicate windows.
+    """
+    if os.name != "nt":
+        return False
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        return False
+    try:
+        target_uri = Path(path).absolute().as_uri().rstrip("/")
+    except (OSError, ValueError):
+        return False
+    script = (
+        "$target=$args[0].TrimEnd('/');"
+        "$shell=New-Object -ComObject Shell.Application;"
+        "$match=@($shell.Windows())|Where-Object {"
+        "try { $_.FullName -like '*\\explorer.exe' -and $_.LocationURL.TrimEnd('/') -ieq $target } "
+        "catch { $false }}|Select-Object -First 1;"
+        "if($null -eq $match){exit 1};"
+        "Add-Type -TypeDefinition '[DllImport(\"user32.dll\")] public static extern bool "
+        "SetForegroundWindow(IntPtr hWnd);' -Name NativeWindow -Namespace Mountlet;"
+        "[Mountlet.NativeWindow]::SetForegroundWindow([IntPtr]$match.HWND)|Out-Null;exit 0"
+    )
+    try:
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script, target_uri],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def _expand_command(template: tuple[str, ...], path: str) -> list[str]:

@@ -1638,7 +1638,13 @@ class TrayTests(unittest.TestCase):
         container = mock.Mock()
         mountlet_window.window = mock.Mock()
         mountlet_window.window.centralWidget.return_value = root
-        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        tray_geometry = mock.Mock()
+        tray_geometry.isValid.return_value = True
+        mountlet_window.tray_app = SimpleNamespace(
+            _quitting=False,
+            _is_gnome_wayland=False,
+            tray=SimpleNamespace(geometry=lambda: tray_geometry),
+        )
 
         with mock.patch.object(mountlet_window, "_fit_to_content") as fit:
             with mock.patch.object(mountlet_window, "is_visible", return_value=True):
@@ -2121,6 +2127,22 @@ class TrayTests(unittest.TestCase):
         tray_app._open_folder(remote)
 
         tray_app.main_window._open_folder.assert_called_once_with(remote)
+
+    def test_window_folder_open_uses_mount_status_instead_of_directory_probe(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+
+        with mock.patch.object(core, "is_mounted", return_value=False):
+            with mock.patch.object(tray.os.path, "isdir", return_value=True) as isdir:
+                window._open_folder(remote)
+
+        isdir.assert_not_called()
+        window.tray_app._notify.assert_called_once_with(
+            "Open folder",
+            "Mount the remote before opening its folder.",
+            success=False,
+        )
 
     def test_window_folder_open_failure_reports_notification(self):
         window = object.__new__(tray.MountletWindow)

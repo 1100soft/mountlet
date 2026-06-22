@@ -334,6 +334,11 @@ The Mountlet window provides:
   detected managers can be selected without changing the operating-system
   default.
 
+On Windows, Mountlet focuses an Explorer view that is already showing the
+selected mount. Otherwise it asks Explorer to open the folder. Windows 11 does
+not expose a supported API for creating or selecting arbitrary File Explorer
+tabs, so Explorer decides whether that request becomes a tab or a new window.
+
 If your desktop session does not expose a system tray, use the terminal menu
 instead.
 
