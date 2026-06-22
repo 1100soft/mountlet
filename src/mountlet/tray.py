@@ -3657,7 +3657,9 @@ class MountletWindow:
 
     def _hide_window_stack(self) -> None:
         self._close_child_dialogs()
-        self.file_browser.hide()
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser.hide()
         self._window_stack_hidden = True
         try:
             self.window.hide()
@@ -4527,11 +4529,12 @@ class MountletWindow:
             widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
 
     def _reposition_file_browser(self) -> None:
-        if not self.file_browser.is_visible() or self.file_browser.remote is None:
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is None or not file_browser.is_visible() or file_browser.remote is None:
             return
-        row = self._row_widgets.get(self.file_browser.remote.name)
+        row = self._row_widgets.get(file_browser.remote.name)
         if row is not None:
-            self.file_browser.show_remote(self.file_browser.remote, row.frame, open_browser=False)
+            file_browser.show_remote(file_browser.remote, row.frame, open_browser=False)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
         if not event.mimeData().hasFormat(MIME_TYPE):
@@ -4548,7 +4551,8 @@ class MountletWindow:
         if not event.mimeData().hasFormat(MIME_TYPE):
             event.ignore()
             return
-        move = bool(event.keyboardModifiers() & self.qt.Qt.KeyboardModifier.ShiftModifier)
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+        move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
         self.file_browser.remote = remote
         self.file_browser.path = self.file_browser.backend.current_path(remote.name)
         self.file_browser.accept_drop(bytes(event.mimeData().data(MIME_TYPE)), move=move)

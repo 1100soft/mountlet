@@ -39,6 +39,12 @@ Source-installed tray and mount flows have been exercised on Linux, Windows,
 and macOS. Windows and macOS remain experimental until native packaging and
 broader end-to-end testing are complete.
 
+`cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
+paths, and managed offline storage. `cloud_browser_ui.py` owns the compact Qt
+view and must keep every rclone operation off the UI thread. Managed offline
+copies are intentionally distinct from rclone's VFS cache. Do not treat cached
+VFS blocks as an offline guarantee.
+
 Install from a local checkout:
 
 ```bash

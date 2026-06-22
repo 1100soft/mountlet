@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a compact rclone-backed file browser connected directly to the remote
+  strips, with remembered per-remote paths and adaptive left/right placement.
+- Added cross-remote copy, cut, paste, and drag-and-drop transfers that run
+  outside the UI thread.
+- Added managed offline files and complete folders, offline availability icons,
+  explicit local-copy removal, and disconnected browsing of completed folders.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds
   for Linux x64, Windows x64, macOS arm64, and macOS x64.
 - Added automated frozen-executable smoke checks and macOS bundle validation

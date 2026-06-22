@@ -1,20 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
 from . import core
-from .cloud_browser import (
-    BrowserEntry,
-    CloudBrowserBackend,
-    TransferItem,
-    format_file_size,
-    parent_browser_path,
-)
-
+from .cloud_browser import BrowserEntry, CloudBrowserBackend, TransferItem, format_file_size, parent_browser_path
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 
@@ -32,10 +24,7 @@ def cascade_position(
     main_right = main_x + main_width
     right_space = right_edge - main_right
     left_space = main_x - left
-    if right_space >= width + 8 or right_space >= left_space:
-        x = main_right + 8
-    else:
-        x = main_x - width - 8
+    x = main_right + 8 if right_space >= width + 8 or right_space >= left_space else main_x - width - 8
     x = min(max(x, left), max(left, right_edge - width))
     y = min(max(row_y, top), max(top, top + available_height - height))
     return x, y
@@ -73,7 +62,7 @@ class CompactCloudBrowser:
         qt = self.qt
 
         class Bridge(qt.QObject):
-            listing_ready = qt.Signal(int, object, object)
+            listing_ready = qt.Signal(int, object, str)
             operation_finished = qt.Signal(bool, str)
 
         return Bridge()
@@ -98,13 +87,12 @@ class CompactCloudBrowser:
 
         header = qt.QHBoxLayout()
         self.title = qt.QLabel("Files")
-        title_font = self.title.font()
-        title_font.setBold(True)
-        self.title.setFont(title_font)
+        font = self.title.font()
+        font.setBold(True)
+        self.title.setFont(font)
         header.addWidget(self.title)
         header.addStretch(1)
-        close = self._button("×", self.hide, "Close file browser", square=True)
-        header.addWidget(close)
+        header.addWidget(self._button("×", self.hide, "Close file browser", square=True))
         layout.addLayout(header)
 
         navigation = qt.QHBoxLayout()
@@ -112,13 +100,12 @@ class CompactCloudBrowser:
         self.path_field = qt.QLineEdit()
         self.path_field.setReadOnly(True)
         self.path_field.setPlaceholderText("Remote root")
-        self.path_field.returnPressed.connect(self._path_entered)
-        refresh = self._button("↻", self.refresh, "Refresh folder", square=True)
-        external = self._button("↗", self._open_current_mount, "Open this folder in the system file manager", square=True)
         navigation.addWidget(self.up_button)
         navigation.addWidget(self.path_field, 1)
-        navigation.addWidget(refresh)
-        navigation.addWidget(external)
+        navigation.addWidget(self._button("↻", self.refresh, "Refresh folder", square=True))
+        navigation.addWidget(
+            self._button("↗", self._open_current_mount, "Open this folder in the system file manager", square=True)
+        )
         layout.addLayout(navigation)
 
         actions = qt.QHBoxLayout()
@@ -126,9 +113,8 @@ class CompactCloudBrowser:
         self.cut_button = self._button("Cut", self.cut_selected, "Move selected files on paste")
         self.paste_button = self._button("Paste", self.paste, "Paste into this folder")
         self.offline_button = self._button("↓", self.toggle_offline, "Keep selected files available offline", square=True)
-        actions.addWidget(self.copy_button)
-        actions.addWidget(self.cut_button)
-        actions.addWidget(self.paste_button)
+        for button in (self.copy_button, self.cut_button, self.paste_button):
+            actions.addWidget(button)
         actions.addStretch(1)
         actions.addWidget(self.offline_button)
         layout.addLayout(actions)
@@ -136,12 +122,12 @@ class CompactCloudBrowser:
         outer = self
 
         class FileTree(qt.QTreeWidget):
-            def startDrag(self, supported_actions: Any) -> None:
-                payload = outer.selected_transfer_items()
-                if not payload:
+            def startDrag(self, _supported_actions: Any) -> None:
+                items = outer.selected_transfer_items()
+                if not items:
                     return
                 mime = qt.QMimeData()
-                mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in payload]).encode("utf-8"))
+                mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in items]).encode())
                 drag = qt.QDrag(self)
                 drag.setMimeData(mime)
                 drag.exec(qt.Qt.DropAction.CopyAction | qt.Qt.DropAction.MoveAction, qt.Qt.DropAction.CopyAction)
@@ -160,14 +146,13 @@ class CompactCloudBrowser:
         self.tree.setColumnWidth(1, 250)
         self.tree.setColumnWidth(2, 72)
         layout.addWidget(self.tree, 1)
-
         self.status = qt.QLabel("")
         layout.addWidget(self.status)
         self.window.setCentralWidget(root)
 
-        self._shortcut("Ctrl+C", self.copy_selected)
-        self._shortcut("Ctrl+X", self.cut_selected)
-        self._shortcut("Ctrl+V", self.paste)
+        for sequence, callback in (("Ctrl+C", self.copy_selected), ("Ctrl+X", self.cut_selected), ("Ctrl+V", self.paste)):
+            shortcut = qt.QShortcut(qt.QKeySequence(sequence), self.window)
+            shortcut.activated.connect(callback)
         self._update_actions()
 
     def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
@@ -177,10 +162,6 @@ class CompactCloudBrowser:
         button.setToolTip(tooltip)
         button.clicked.connect(lambda _checked=False: callback())
         return button
-
-    def _shortcut(self, sequence: str, callback: Callable[[], None]) -> None:
-        shortcut = self.qt.QShortcut(self.qt.QKeySequence(sequence), self.window)
-        shortcut.activated.connect(callback)
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -204,9 +185,7 @@ class CompactCloudBrowser:
         if self.remote is None:
             return
         self._listing_token += 1
-        token = self._listing_token
-        remote = self.remote
-        path = self.path
+        token, remote, path = self._listing_token, self.remote, self.path
         self.title.setText(remote.display_name)
         self.path_field.setText(path)
         self.path_field.setToolTip(path or "Remote root")
@@ -223,17 +202,18 @@ class CompactCloudBrowser:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _listing_ready(self, token: int, entries: object, error: object) -> None:
+    def _listing_ready(self, token: int, entries: object, error: str) -> None:
         if token != self._listing_token:
             return
         if not isinstance(entries, list):
-            self.status.setText(str(error) or "Could not load this folder")
+            self.status.setText(error or "Could not load this folder")
             return
         self.entries = entries
         self.tree.clear()
-        offline_icon = self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
-        directory_icon = self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
-        file_icon = self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+        style = self.window.style()
+        offline_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
+        directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         for entry in entries:
             item = self.qt.QTreeWidgetItem(["", entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
@@ -276,14 +256,13 @@ class CompactCloudBrowser:
             self._update_actions()
 
     def paste(self) -> None:
-        if self.clipboard is None:
-            return
-        items, move = self.clipboard
-        self._transfer(items, move=move)
+        if self.clipboard is not None:
+            items, move = self.clipboard
+            self._transfer(items, move=move)
 
     def accept_drop(self, payload: bytes, *, move: bool = False) -> None:
         try:
-            values = json.loads(bytes(payload).decode("utf-8"))
+            values = json.loads(payload.decode("utf-8"))
             items = [TransferItem(**value) for value in values]
         except (TypeError, ValueError, json.JSONDecodeError):
             self._notify("File transfer", "The dragged files could not be read.", False)
@@ -293,8 +272,7 @@ class CompactCloudBrowser:
     def _transfer(self, items: list[TransferItem], *, move: bool) -> None:
         if not items or self.remote is None or self._operation_pending:
             return
-        destination = self.remote
-        destination_path = self.path
+        destination, destination_path = self.remote, self.path
         remotes = {remote.name: remote for remote in self._remotes()}
         verb = "Moving" if move else "Copying"
         self._run_operation(
@@ -310,10 +288,16 @@ class CompactCloudBrowser:
         remote = self.remote
         all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
         if all_offline:
-            action = lambda: [self.backend.remove_offline(remote.name, entry.path) for entry in entries]
+            def action() -> None:
+                for entry in entries:
+                    self.backend.remove_offline(remote.name, entry.path)
+
             message = "Removing local copies…"
         else:
-            action = lambda: [self.backend.make_offline(remote, entry) for entry in entries]
+            def action() -> None:
+                for entry in entries:
+                    self.backend.make_offline(remote, entry)
+
             message = "Downloading for offline use…"
         self._run_operation(message, action)
 
@@ -375,12 +359,11 @@ class CompactCloudBrowser:
         offline = self.backend.offline_path(self.remote.name, entry.path)
         if offline.is_file():
             self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(offline)))
-            return
-        if core.is_mounted(self.remote):
+        elif core.is_mounted(self.remote):
             local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
             self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local)))
-            return
-        self._notify("Open file", "Mount the remote or make this file available offline first.", False)
+        else:
+            self._notify("Open file", "Mount the remote or make this file available offline first.", False)
 
     def go_up(self) -> None:
         if self.remote is None:
@@ -388,9 +371,6 @@ class CompactCloudBrowser:
         self.path = parent_browser_path(self.path)
         self.backend.remember_path(self.remote.name, self.path)
         self.refresh()
-
-    def _path_entered(self) -> None:
-        return
 
     def _open_current_mount(self) -> None:
         if self.remote is None:

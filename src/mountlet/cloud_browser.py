@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -91,7 +90,13 @@ class CloudBrowserBackend:
         temporary.replace(self.state_path)
 
     def list_entries(self, remote: core.RemoteInfo, path: str) -> list[BrowserEntry]:
-        binary = self._rclone()
+        try:
+            binary = self._rclone()
+        except RuntimeError:
+            offline = self._list_offline_entries(remote.name, path)
+            if offline is not None:
+                return offline
+            raise
         result = subprocess.run(
             self._command(binary, "lsjson", remote_target(remote, path), "--max-depth", "1"),
             stdout=subprocess.PIPE,
@@ -101,6 +106,9 @@ class CloudBrowserBackend:
             **core.PLATFORM.command_process_options(),
         )
         if result.returncode != 0:
+            offline = self._list_offline_entries(remote.name, path)
+            if offline is not None:
+                return offline
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
         try:
             values = json.loads(result.stdout or "[]")
@@ -119,6 +127,29 @@ class CloudBrowserBackend:
                     is_dir=bool(value.get("IsDir")),
                     size=max(int(value.get("Size") or 0), 0),
                     modified=modified,
+                )
+            )
+        return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
+
+    def _list_offline_entries(self, remote_name: str, path: str) -> list[BrowserEntry] | None:
+        directory = self.offline_path(remote_name, path)
+        if not directory.is_dir():
+            return None
+        entries: list[BrowserEntry] = []
+        for child in directory.iterdir():
+            if child.name == ".mountlet-offline":
+                continue
+            try:
+                stat = child.stat()
+            except OSError:
+                continue
+            entries.append(
+                BrowserEntry(
+                    name=child.name,
+                    path=join_browser_path(path, child.name),
+                    is_dir=child.is_dir(),
+                    size=0 if child.is_dir() else stat.st_size,
+                    modified=datetime.fromtimestamp(stat.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
                 )
             )
         return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))

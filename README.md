@@ -318,7 +318,9 @@ different detected file manager in App settings may provide different behavior.
 The Mountlet window provides:
 
 - Compact remote strips with storage usage and mount-state toggles.
-- Click-to-open folders, provider website shortcuts, and per-remote settings.
+- Remote strips that open a compact file browser and switch its active remote
+  on hover while the browser is open.
+- Provider website shortcuts and per-remote settings.
 - A guided `+` flow for adding supported cloud remotes through rclone.
 - Sorting by registration time, name, provider, total size, used space, or
   remaining space, with manual move controls for final adjustments.
@@ -328,6 +330,28 @@ The Mountlet window provides:
   default, uses File Explorer by default on Windows, and Finder on macOS; other
   detected managers can be selected without changing the operating-system
   default.
+
+### File browser
+
+Click a remote strip to open Mountlet Files beside the main window. Each remote
+remembers its last folder. The browser lists the remote through rclone, so the
+remote does not need to be mounted.
+
+- Double-click folders to navigate and files to open them.
+- Use **Copy**, **Cut**, and **Paste**, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
+  transfer files and folders within or between remotes.
+- Drag files onto another remote strip to copy them to that remote's remembered
+  folder. Hold Shift while dropping to move them.
+- Use the download icon to keep selected files or complete folders available
+  offline. The same icon beside an item indicates that its managed local copy
+  is ready. Selecting an offline item and pressing the icon again removes only
+  Mountlet's local copy, not the cloud file.
+
+Offline copies are stored in Mountlet's platform-specific cache directory.
+They are separate from rclone's evictable VFS cache and remain until explicitly
+removed. Mountlet can browse a completed offline folder without a connection.
+Editing and automatic conflict resolution for offline copies are not yet
+supported; online cloud files remain authoritative.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.
