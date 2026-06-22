@@ -82,7 +82,7 @@ class WindowsPlatformServices(PlatformServices):
         # recognizes the volume. GetVolumeNameForVolumeMountPointW is both
         # authoritative and non-blocking; invoking fsutil here stalled the UI
         # once per remote during every refresh.
-        return self._is_volume_mountpoint(path)
+        return self._is_volume_mountpoint(path) or self._is_mount_reparse_point(path)
 
     @staticmethod
     def _is_volume_mountpoint(path: str) -> bool:
@@ -93,6 +93,20 @@ class WindowsPlatformServices(PlatformServices):
             return bool(get_volume_name(mountpoint, buffer, len(buffer)))
         except (AttributeError, OSError):
             return False
+
+    @staticmethod
+    def _is_mount_reparse_point(path: str) -> bool:
+        """Check the junction itself without traversing into the remote."""
+        try:
+            get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+            get_attributes.argtypes = [ctypes.c_wchar_p]
+            get_attributes.restype = ctypes.c_uint32
+            attributes = get_attributes(ntpath.normpath(path))
+        except (AttributeError, OSError):
+            return False
+        invalid_attributes = 0xFFFFFFFF
+        file_attribute_reparse_point = 0x00000400
+        return attributes != invalid_attributes and bool(attributes & file_attribute_reparse_point)
 
     def prepare_mount_path(self, path: str) -> OperationResult:
         mountpoint = Path(path)

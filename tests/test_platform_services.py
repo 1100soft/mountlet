@@ -254,6 +254,14 @@ Categories=Utility;FileManager;
         fallback.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
         run.assert_not_called()
 
+    def test_windows_mount_detection_uses_reparse_point_when_volume_api_lags(self):
+        platform = WindowsPlatformServices()
+        with mock.patch.object(platform, "_is_volume_mountpoint", return_value=False):
+            with mock.patch.object(platform, "_is_mount_reparse_point", return_value=True) as reparse:
+                self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
+
+        reparse.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
+
     def test_windows_mount_detection_does_not_depend_on_python_path_exists(self):
         platform = WindowsPlatformServices()
         with mock.patch("mountlet.platform_services.windows.os.path.exists", return_value=False):
@@ -278,6 +286,19 @@ Categories=Utility;FileManager;
 
         self.assertTrue(mounted)
         self.assertEqual(requested, ["C:\\Users\\test\\Mountlet\\Docs\\"])
+
+    def test_windows_reparse_point_check_uses_file_attributes(self):
+        get_attributes = mock.Mock(return_value=0x00000410)
+        kernel32 = SimpleNamespace(GetFileAttributesW=get_attributes)
+        with mock.patch(
+            "mountlet.platform_services.windows.ctypes.windll",
+            SimpleNamespace(kernel32=kernel32),
+            create=True,
+        ):
+            mounted = WindowsPlatformServices._is_mount_reparse_point(r"C:\Users\test\Mountlet\Docs")
+
+        self.assertTrue(mounted)
+        get_attributes.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
 
     def test_windows_mount_process_stays_attached_without_console(self):
         self.assertEqual(WindowsPlatformServices().mount_process_options(), {"creationflags": 0x08000000})
