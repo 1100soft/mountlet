@@ -96,24 +96,23 @@ def _focus_existing_explorer_location(path: str) -> bool:
     powershell = shutil.which("powershell.exe") or shutil.which("powershell")
     if not powershell:
         return False
-    try:
-        target_uri = Path(path).absolute().as_uri().rstrip("/")
-    except (OSError, ValueError):
-        return False
     script = (
-        "$target=$args[0].TrimEnd('/');"
+        "$target=[IO.Path]::GetFullPath($args[0]).TrimEnd('\\');"
         "$shell=New-Object -ComObject Shell.Application;"
         "$match=@($shell.Windows())|Where-Object {"
-        "try { $_.FullName -like '*\\explorer.exe' -and $_.LocationURL.TrimEnd('/') -ieq $target } "
+        "try { $_.FullName -like '*\\explorer.exe' -and "
+        "[IO.Path]::GetFullPath($_.Document.Folder.Self.Path).TrimEnd('\\') -ieq $target } "
         "catch { $false }}|Select-Object -First 1;"
         "if($null -eq $match){exit 1};"
         "Add-Type -TypeDefinition '[DllImport(\"user32.dll\")] public static extern bool "
+        "ShowWindowAsync(IntPtr hWnd,int nCmdShow);[DllImport(\"user32.dll\")] public static extern bool "
         "SetForegroundWindow(IntPtr hWnd);' -Name NativeWindow -Namespace Mountlet;"
+        "[Mountlet.NativeWindow]::ShowWindowAsync([IntPtr]$match.HWND,9)|Out-Null;"
         "[Mountlet.NativeWindow]::SetForegroundWindow([IntPtr]$match.HWND)|Out-Null;exit 0"
     )
     try:
         result = subprocess.run(
-            [powershell, "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script, target_uri],
+            [powershell, "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script, path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=3,

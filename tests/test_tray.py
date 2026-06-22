@@ -1182,6 +1182,37 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.hide.assert_not_called()
         show.assert_called_once_with()
 
+    def test_mountlet_window_toggle_closes_after_deactivation_to_windows_tray(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        mountlet_window.window.isActiveWindow.return_value = False
+        mountlet_window._deactivated_for_tray = True
+        mountlet_window._child_dialogs = []
+
+        with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        hide_stack.assert_called_once_with()
+        show.assert_not_called()
+        self.assertFalse(mountlet_window._deactivated_for_tray)
+
+    def test_windows_foreground_tray_detection_recognizes_overflow_window(self):
+        def class_name(_window: int, buffer: object, _length: int) -> int:
+            buffer.value = "TopLevelWindowForOverflowXamlIsland"
+            return 1
+
+        user32 = SimpleNamespace(GetForegroundWindow=lambda: 42, GetClassNameW=class_name)
+        with mock.patch.object(tray.platform, "system", return_value="Windows"):
+            with mock.patch.object(
+                tray.ctypes,
+                "windll",
+                SimpleNamespace(user32=user32),
+                create=True,
+            ):
+                self.assertTrue(tray._windows_foreground_is_tray())
+
     def test_mountlet_window_close_hides_window_stack(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         event = mock.Mock()
@@ -1631,7 +1662,7 @@ class TrayTests(unittest.TestCase):
 
         child.move.assert_called_once_with(325, 435)
 
-    def test_completed_content_resize_reanchors_visible_window(self):
+    def test_completed_content_resize_does_not_requery_moving_tray_geometry(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         root = mock.Mock()
         scroll = mock.Mock()
@@ -1652,7 +1683,7 @@ class TrayTests(unittest.TestCase):
                     mountlet_window._finish_content_fit(root, scroll, container)
 
         fit.assert_called_once_with(root, scroll, container)
-        position.assert_called_once_with()
+        position.assert_not_called()
 
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)

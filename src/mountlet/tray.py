@@ -397,7 +397,7 @@ def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
+        from PySide6.QtCore import QEvent, QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
         from PySide6.QtWidgets import (
             QApplication,
@@ -454,6 +454,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QLabel=QLabel,
         QLineEdit=QLineEdit,
         QLockFile=QLockFile,
+        QEvent=QEvent,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
@@ -606,6 +607,26 @@ def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
 
 def _main_window_type_name(is_macos: bool, is_wayland: bool = False) -> str:
     return "Window" if is_macos or is_wayland else "Tool"
+
+
+def _windows_foreground_is_tray() -> bool:
+    if platform.system() != "Windows":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        foreground = user32.GetForegroundWindow()
+        if not foreground:
+            return False
+        buffer = ctypes.create_unicode_buffer(256)
+        if not user32.GetClassNameW(foreground, buffer, len(buffer)):
+            return False
+    except (AttributeError, OSError):
+        return False
+    return buffer.value in {
+        "Shell_TrayWnd",
+        "NotifyIconOverflowWindow",
+        "TopLevelWindowForOverflowXamlIsland",
+    }
 
 
 def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
@@ -3322,6 +3343,7 @@ class MountletWindow:
         self._keep_above = False
         self._keep_above_button: Any | None = None
         self._drag_offset: Any | None = None
+        self._deactivated_for_tray = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -3394,8 +3416,14 @@ class MountletWindow:
         class CloseFilter(qt.QObject):
             def eventFilter(self, watched: object, event: object) -> bool:
                 try:
-                    if watched is outer.window and event.type() == qt.QEvent.Type.Close:
-                        return outer._handle_window_close(event)
+                    if watched is outer.window:
+                        event_type = event.type()
+                        if event_type == qt.QEvent.Type.Close:
+                            return outer._handle_window_close(event)
+                        if event_type == qt.QEvent.Type.WindowActivate:
+                            outer._deactivated_for_tray = False
+                        elif event_type == qt.QEvent.Type.WindowDeactivate:
+                            outer._deactivated_for_tray = _windows_foreground_is_tray()
                 except Exception:
                     return False
                 return False
@@ -3446,7 +3474,12 @@ class MountletWindow:
             return
         visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
-            if self._window_is_active() or self._has_visible_child_dialog():
+            if (
+                self._window_is_active()
+                or getattr(self, "_deactivated_for_tray", False)
+                or self._has_visible_child_dialog()
+            ):
+                self._deactivated_for_tray = False
                 self._hide_window_stack()
             else:
                 self.show()
@@ -3790,13 +3823,6 @@ class MountletWindow:
         if self.window.centralWidget() is not root or self._tray_is_quitting():
             return
         self._fit_to_content(root, scroll, container)
-        if self.is_visible():
-            try:
-                tray_geometry = self.tray_app.tray.geometry()
-                if tray_geometry.isValid() or getattr(self.tray_app, "_is_gnome_wayland", False):
-                    self._position_near_tray()
-            except Exception:
-                self._clamp_to_screen()
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")

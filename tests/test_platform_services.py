@@ -214,6 +214,20 @@ Categories=Utility;FileManager;
 
         popen.assert_not_called()
 
+    def test_windows_explorer_matches_filesystem_path_instead_of_location_url(self):
+        completed = SimpleNamespace(returncode=0)
+        with mock.patch.object(file_managers.os, "name", "nt"):
+            with mock.patch.object(file_managers.shutil, "which", return_value="powershell.exe"):
+                with mock.patch.object(file_managers.subprocess, "run", return_value=completed) as run:
+                    focused = file_managers._focus_existing_explorer_location(
+                        r"C:\Users\test\Mountlet\Docs"
+                    )
+
+        self.assertTrue(focused)
+        command = run.call_args.args[0]
+        self.assertIn("Document.Folder.Self.Path", command[-2])
+        self.assertEqual(command[-1], r"C:\Users\test\Mountlet\Docs")
+
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
         with mock.patch("pathlib.Path.home", return_value=Path("/Users/tester")):
