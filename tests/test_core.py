@@ -185,6 +185,31 @@ type = dropbox
             self.assertIn("is not empty", message)
             launch.assert_not_called()
 
+    def test_launch_mount_process_preserves_complete_rclone_error(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            process = mock.Mock(pid=42)
+            process.poll.return_value = 1
+
+            def failed_process(_args, *, stderr, **_kwargs):
+                stderr.write("first diagnostic line\nfinal diagnostic line\n")
+                stderr.flush()
+                return process
+
+            with mock.patch.object(core.subprocess, "Popen", side_effect=failed_process):
+                with mock.patch.object(core, "wait_for", return_value=False):
+                    success, message = core._launch_mount_process(
+                        remote,
+                        ["rclone", "mount"],
+                        wait_timeout=0,
+                    )
+
+            self.assertFalse(success)
+            self.assertIn("rclone exited with code 1", message)
+            self.assertIn("first diagnostic line", message)
+            self.assertIn("final diagnostic line", message)
+
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_dir = Path(tempdir) / "config" / "mountlet"

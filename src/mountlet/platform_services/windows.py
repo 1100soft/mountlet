@@ -72,8 +72,10 @@ class WindowsPlatformServices(PlatformServices):
         return {"creationflags": 0x08000000}
 
     def is_mounted(self, path: str) -> bool:
-        if not os.path.exists(path):
-            return False
+        # A WinFsp directory mount is an NTFS junction. Python can report a
+        # newly attached junction as nonexistent while Windows already
+        # recognizes the reparse point, so query the native mount mechanisms
+        # directly instead of using os.path.exists as a gate.
         try:
             result = subprocess.run(
                 ("fsutil", "reparsepoint", "query", path),

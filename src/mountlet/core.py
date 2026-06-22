@@ -490,13 +490,12 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
         PIDS.pop(remote.name, None)
         error_output.seek(0)
         detail = error_output.read().strip()
-        summary = detail.splitlines()[-1] if detail else ""
 
         if exit_code is None:
             message = f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
         else:
             message = f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
-        return False, f"{message} {summary}".rstrip()
+        return False, f"{message}\n{detail}".rstrip()
 
 
 def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
