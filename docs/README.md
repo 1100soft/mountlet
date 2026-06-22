@@ -25,6 +25,15 @@ documented limitations, not capabilities to emulate with compositor-specific
 workarounds. Any future GNOME Shell extension must be versioned and tested as a
 separate maintained integration.
 
+File-manager integration must use documented platform interfaces. In
+particular, Windows File Explorer does not provide a supported interface for
+creating, selecting, or reliably identifying arbitrary tabs. Mountlet therefore
+opens the requested path and lets Explorer choose the window or tab. Do not add
+keyboard simulation, UI Automation, or undocumented Explorer internals to force
+tab reuse; those approaches are locale-sensitive and unstable across Windows
+updates. Finder and Linux file managers likewise retain final control over
+window and tab reuse.
+
 The adapters establish implementation boundaries and testable conventions.
 Source-installed tray and mount flows have been exercised on Linux, Windows,
 and macOS. Windows and macOS remain experimental until native packaging and

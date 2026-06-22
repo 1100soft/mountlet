@@ -299,26 +299,21 @@ The tray app uses the tray icon this way:
 - Right-click shows app-level actions such as mount all, unmount all, update
   status, app settings, available configuration files, and quit.
 
-GNOME's AppIndicator bridge routes some tray clicks directly to the app menu
-instead of reporting separate left and right clicks to Mountlet. Use **Open
-Mountlet** from that menu; double-click is also accepted when the shell reports
-it. This behavior comes from the Shell/AppIndicator integration and cannot be
-changed reliably by an ordinary desktop application.
+### Platform behavior
 
-On Wayland, compositors deliberately prevent applications from controlling
-global window placement, workspaces, focus, and stacking as precisely as they
-can on X11. GNOME Wayland therefore treats Mountlet as a normal application
-window while it is open. Pinning is unavailable and placement near the panel
-indicator is approximate. Plasma X11 currently provides the most complete tray
-window behavior.
+Desktop integration is constrained by the APIs each operating system and
+desktop exposes:
 
-Windows initially places new notification icons in the hidden overflow area.
-Use the taskbar notification-area settings to keep Mountlet visible; applications
-cannot promote their own icons permanently.
+| Platform | Known behavior and limitations |
+| --- | --- |
+| Plasma X11 | Provides the most complete tray placement, workspace movement, pinning, and Dolphin integration. Dolphin tab reuse is best-effort. |
+| GNOME | The AppIndicator bridge may route a primary click to the app menu instead of reporting distinct left and right clicks. Use **Open Mountlet** from the menu; double-click is also accepted when GNOME reports it. |
+| Wayland | Compositors restrict global placement, workspace, focus, and stacking control. Placement near the tray is approximate, pinning may be unavailable, and Mountlet may appear as a normal taskbar window. |
+| Windows | Windows may initially place Mountlet in the notification overflow area. File Explorer has no supported interface for creating or selecting an arbitrary tab, so opening a mount may create another Explorer window, including a duplicate. |
+| macOS | Mountlet runs as a menu-bar utility without a separate Dock icon. Finder decides whether an opened mount uses an existing window, a tab, or a new window. |
 
-On macOS, Mountlet runs as a menu-bar utility without a separate Dock icon.
-Left-click opens or closes the Mountlet window, and right-click opens the app
-menu, matching the other supported desktops.
+These are integration limits rather than mounting restrictions. Selecting a
+different detected file manager in App settings may provide different behavior.
 
 The Mountlet window provides:
 
@@ -333,11 +328,6 @@ The Mountlet window provides:
   default, uses File Explorer by default on Windows, and Finder on macOS; other
   detected managers can be selected without changing the operating-system
   default.
-
-On Windows, Mountlet focuses an Explorer view that is already showing the
-selected mount. Otherwise it asks Explorer to open the folder. Windows 11 does
-not expose a supported API for creating or selecting arbitrary File Explorer
-tabs, so Explorer decides whether that request becomes a tab or a new window.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.

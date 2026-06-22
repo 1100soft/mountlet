@@ -19,7 +19,6 @@ from mountlet.platform_services.file_managers import (
     open_with_file_manager,
     resolve_file_manager,
 )
-from mountlet.platform_services import file_managers
 from mountlet.platform_services.linux import LinuxPlatformServices
 from mountlet.platform_services.macos import MacOSPlatformServices
 from mountlet.platform_services.processes import terminate_process
@@ -205,28 +204,16 @@ Categories=Utility;FileManager;
 
         self.assertEqual(popen.call_args.args[0], ["example-files", "/tmp/docs"])
 
-    def test_windows_explorer_reuses_matching_location_before_launching(self):
+    def test_windows_explorer_opens_location_directly(self):
         manager = FileManager("explorer", "File Explorer", ("explorer.exe",), True, True)
 
-        with mock.patch.object(file_managers, "_focus_existing_explorer_location", return_value=True):
-            with mock.patch("mountlet.platform_services.file_managers.subprocess.Popen") as popen:
-                self.assertTrue(open_with_file_manager(manager, r"C:\Users\test\Mountlet\Docs"))
+        with mock.patch("mountlet.platform_services.file_managers.subprocess.Popen") as popen:
+            self.assertTrue(open_with_file_manager(manager, r"C:\Users\test\Mountlet\Docs"))
 
-        popen.assert_not_called()
-
-    def test_windows_explorer_matches_filesystem_path_instead_of_location_url(self):
-        completed = SimpleNamespace(returncode=0)
-        with mock.patch.object(file_managers.os, "name", "nt"):
-            with mock.patch.object(file_managers.shutil, "which", return_value="powershell.exe"):
-                with mock.patch.object(file_managers.subprocess, "run", return_value=completed) as run:
-                    focused = file_managers._focus_existing_explorer_location(
-                        r"C:\Users\test\Mountlet\Docs"
-                    )
-
-        self.assertTrue(focused)
-        command = run.call_args.args[0]
-        self.assertIn("Document.Folder.Self.Path", command[-2])
-        self.assertEqual(command[-1], r"C:\Users\test\Mountlet\Docs")
+        self.assertEqual(
+            popen.call_args.args[0],
+            ["explorer.exe", r"C:\Users\test\Mountlet\Docs"],
+        )
 
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
