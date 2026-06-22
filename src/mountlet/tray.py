@@ -3790,7 +3790,7 @@ class MountletWindow:
         if self.window.centralWidget() is not root or self._tray_is_quitting():
             return
         self._fit_to_content(root, scroll, container)
-        if self.is_visible() and getattr(self.tray_app, "_is_gnome_wayland", False):
+        if self.is_visible():
             self._position_near_tray()
 
     def _pin_button(self) -> Any:

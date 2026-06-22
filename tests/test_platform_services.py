@@ -276,6 +276,10 @@ Categories=Utility;FileManager;
     def test_windows_mount_process_stays_attached_without_console(self):
         self.assertEqual(WindowsPlatformServices().mount_process_options(), {"creationflags": 0x08000000})
 
+    def test_windows_short_lived_commands_hide_console_windows(self):
+        with mock.patch("mountlet.platform_services.windows.os.name", "nt"):
+            self.assertEqual(WindowsPlatformServices().command_process_options(), {"creationflags": 0x08000000})
+
     def test_windows_finds_winfsp_in_32_bit_program_files(self):
         with tempfile.TemporaryDirectory() as tempdir:
             program_files_x86 = Path(tempdir) / "Program Files (x86)"

@@ -20,6 +20,10 @@ modules use the platform contract for:
 `MacOSPlatformServices` provide the OS layer. `DesktopServices` supplies Qt
 fallbacks and accepts optional desktop adapters. KDE/Dolphin/X11 behavior is an
 enhancement on Linux; it must not be required for mounting or opening folders.
+GNOME AppIndicator click routing and Wayland window-control restrictions are
+documented limitations, not capabilities to emulate with compositor-specific
+workarounds. Any future GNOME Shell extension must be versioned and tested as a
+separate maintained integration.
 
 The adapters establish implementation boundaries and testable conventions.
 Source-installed tray and mount flows have been exercised on Linux, Windows,

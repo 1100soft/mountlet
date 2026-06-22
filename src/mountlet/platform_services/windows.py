@@ -71,6 +71,11 @@ class WindowsPlatformServices(PlatformServices):
         # console window. DETACHED_PROCESS prevents reliable lifetime tracking.
         return {"creationflags": 0x08000000}
 
+    def command_process_options(self) -> dict[str, int]:
+        # Mount checks and rclone status commands run frequently. Without this
+        # flag each console executable briefly creates a visible window.
+        return {"creationflags": 0x08000000} if os.name == "nt" else {}
+
     def is_mounted(self, path: str) -> bool:
         # A WinFsp directory mount is an NTFS junction. Python can report a
         # newly attached junction as nonexistent while Windows already
@@ -82,6 +87,7 @@ class WindowsPlatformServices(PlatformServices):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=5,
+                **self.command_process_options(),
             )
         except (OSError, subprocess.TimeoutExpired):
             result = None
@@ -122,6 +128,7 @@ class WindowsPlatformServices(PlatformServices):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=10,
+                    **self.command_process_options(),
                 )
             except (OSError, subprocess.TimeoutExpired):
                 pass

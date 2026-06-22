@@ -535,6 +535,7 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
             stderr=subprocess.PIPE,
             text=True,
             timeout=RCLONE_CONNECT_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
         )
     except subprocess.TimeoutExpired:
         return False, f"[!] {remote.display_name} did not respond while checking {source}."
@@ -607,6 +608,7 @@ def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=RCLONE_STATUS_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
         )
         data = json.loads(output)
         used = int(data.get("used", 0))
@@ -634,6 +636,7 @@ def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **PLATFORM.command_process_options(),
         )
     except Exception as exc:
         return False, f"[!] Failed to verify {remote.name}: {exc}"

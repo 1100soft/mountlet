@@ -299,12 +299,18 @@ The tray app uses the tray icon this way:
 - Right-click shows app-level actions such as mount all, unmount all, update
   status, app settings, available configuration files, and quit.
 
-GNOME's AppIndicator bridge may route a tray click directly to the app menu
-instead of reporting separate left and right clicks. Use **Open Mountlet** from
-that menu; double-click is also accepted when the shell reports it. GNOME
-Wayland also treats Mountlet as a normal application window while it is open;
-its compositor does not let Mountlet pin or precisely anchor that window to the
-extension-provided indicator.
+GNOME's AppIndicator bridge routes some tray clicks directly to the app menu
+instead of reporting separate left and right clicks to Mountlet. Use **Open
+Mountlet** from that menu; double-click is also accepted when the shell reports
+it. This behavior comes from the Shell/AppIndicator integration and cannot be
+changed reliably by an ordinary desktop application.
+
+On Wayland, compositors deliberately prevent applications from controlling
+global window placement, workspaces, focus, and stacking as precisely as they
+can on X11. GNOME Wayland therefore treats Mountlet as a normal application
+window while it is open. Pinning is unavailable and placement near the panel
+indicator is approximate. Plasma X11 currently provides the most complete tray
+window behavior.
 
 Windows initially places new notification icons in the hidden overflow area.
 Use the taskbar notification-area settings to keep Mountlet visible; applications

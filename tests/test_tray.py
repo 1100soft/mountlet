@@ -1631,6 +1631,23 @@ class TrayTests(unittest.TestCase):
 
         child.move.assert_called_once_with(325, 435)
 
+    def test_completed_content_resize_reanchors_visible_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        root = mock.Mock()
+        scroll = mock.Mock()
+        container = mock.Mock()
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.centralWidget.return_value = root
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+
+        with mock.patch.object(mountlet_window, "_fit_to_content") as fit:
+            with mock.patch.object(mountlet_window, "is_visible", return_value=True):
+                with mock.patch.object(mountlet_window, "_position_near_tray") as position:
+                    mountlet_window._finish_content_fit(root, scroll, container)
+
+        fit.assert_called_once_with(root, scroll, container)
+        position.assert_called_once_with()
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
