@@ -40,10 +40,14 @@ and macOS. Windows and macOS remain experimental until native packaging and
 broader end-to-end testing are complete.
 
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
-paths, and managed offline storage. `cloud_browser_ui.py` owns the compact Qt
-view and must keep every rclone operation off the UI thread. Managed offline
-copies are intentionally distinct from rclone's VFS cache. Do not treat cached
-VFS blocks as an offline guarantee.
+paths, and the future managed-offline storage layer. `cloud_browser_ui.py` owns
+the compact Qt view and must keep every rclone operation off the UI thread.
+Folder listings are session caches and are preloaded for each remembered remote
+path. Offline pinning remains disabled: its eventual manifest must record the
+remote object identity, relative path, type, size, modification time, and hash
+when available. Pinned folders need a cached metadata tree, but unpinned files
+must remain metadata-only entries rather than fake local filesystem
+placeholders. Do not treat rclone VFS blocks as an offline guarantee.
 
 Install from a local checkout:
 

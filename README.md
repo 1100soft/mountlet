@@ -308,7 +308,7 @@ desktop exposes:
 | --- | --- |
 | Plasma X11 | Provides the most complete tray placement, workspace movement, pinning, and Dolphin integration. Dolphin tab reuse is best-effort. |
 | GNOME | The AppIndicator bridge may route a primary click to the app menu instead of reporting distinct left and right clicks. Use **Open Mountlet** from the menu; double-click is also accepted when GNOME reports it. |
-| Wayland | Compositors restrict global placement, workspace, focus, and stacking control. Placement near the tray is approximate, pinning may be unavailable, and Mountlet may appear as a normal taskbar window. |
+| Wayland | Compositors restrict global placement, workspace, focus, and stacking control. Placement near the tray is approximate, pinning may be unavailable, and Mountlet may appear as a normal taskbar window. The file browser is embedded beside the remote list so the compositor cannot overlap two Mountlet windows. |
 | Windows | Windows may initially place Mountlet in the notification overflow area. File Explorer has no supported interface for creating or selecting an arbitrary tab, so opening a mount may create another Explorer window, including a duplicate. |
 | macOS | Mountlet runs as a menu-bar utility without a separate Dock icon. Finder decides whether an opened mount uses an existing window, a tab, or a new window. |
 
@@ -343,7 +343,7 @@ remote does not need to be mounted.
 - With the main window focused, use Up and Down to select remote strips and
   Enter, Space, Left, or Right to enter the browser. Press Escape, Left, or
   Right in the browser to return to the selected strip.
-- Use **Copy**, **Cut**, and **Paste**, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
+- Use item and folder context menus, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
   transfer files and folders within or between remotes.
 - Press Delete to permanently delete selected cloud items after confirmation.
 - Right-click an item for open, copy, cut, and delete commands. Folder menus
@@ -352,16 +352,12 @@ remote does not need to be mounted.
   or create a folder.
 - Drag files onto another remote strip to copy them to that remote's remembered
   folder. Hold Shift while dropping to move them.
-- Use the download icon to keep selected files or complete folders available
-  offline. The same icon beside an item indicates that its managed local copy
-  is ready. Selecting an offline item and pressing the icon again removes only
-  Mountlet's local copy, not the cloud file.
+- **Make available offline** is visible but disabled while snapshot metadata,
+  local-edit behavior, and conflict handling are designed.
 
-Offline copies are stored in Mountlet's platform-specific cache directory.
-They are separate from rclone's evictable VFS cache and remain until explicitly
-removed. Mountlet can browse a completed offline folder without a connection.
-Editing and automatic conflict resolution for offline copies are not yet
-supported; online cloud files remain authoritative.
+Mountlet caches each remote's remembered folder listing in memory and preloads
+those folders in the background. Use the refresh button when cloud contents
+have changed outside Mountlet.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.

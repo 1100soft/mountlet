@@ -17,7 +17,7 @@ from mountlet.cloud_browser import (
     parent_browser_path,
     remote_target,
 )
-from mountlet.cloud_browser_ui import cascade_position
+from mountlet.cloud_browser_ui import CompactCloudBrowser, cascade_position
 
 
 def _remote(name: str = "Docs") -> core.RemoteInfo:
@@ -164,6 +164,37 @@ class CloudBrowserTests(unittest.TestCase):
         entry = BrowserEntry("a.txt", "Folder/a.txt", False, 42)
 
         self.assertEqual(entry.size, 42)
+
+    def test_background_listing_is_cached_even_when_remote_is_not_selected(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._folder_cache = {}
+        browser._loads_pending = {("Docs", "Reports")}
+        browser.remote = None
+        entries = [BrowserEntry("a.txt", "Reports/a.txt", False)]
+
+        browser._listing_ready("Docs", "Reports", entries, "")
+
+        self.assertEqual(browser._folder_cache[("Docs", "Reports")], entries)
+        self.assertNotIn(("Docs", "Reports"), browser._loads_pending)
+
+    def test_cached_folder_refresh_avoids_background_request(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports"
+        entries = [BrowserEntry("a.txt", "Reports/a.txt", False)]
+        browser._folder_cache = {("Docs", "Reports"): entries}
+        browser._loads_pending = set()
+        browser.title = mock.Mock()
+        browser.path_field = mock.Mock()
+        browser.up_button = mock.Mock()
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._load_folder = mock.Mock()
+
+        browser.refresh(force=False)
+
+        browser._display_entries.assert_called_once_with(entries)
+        browser._load_folder.assert_not_called()
 
 
 if __name__ == "__main__":

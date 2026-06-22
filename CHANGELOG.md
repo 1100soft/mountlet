@@ -6,11 +6,14 @@
   strips, with remembered per-remote paths and adaptive left/right placement.
 - Added cross-remote copy, cut, paste, and drag-and-drop transfers that run
   outside the UI thread.
-- Added managed offline files and complete folders, offline availability icons,
-  explicit local-copy removal, and disconnected browsing of completed folders.
+- Added the managed-offline storage foundation and availability icons, while
+  leaving offline creation disabled until edit and conflict semantics are safe.
 - Added hover-open remote switching, keyboard focus navigation, retained Qt
   input handlers for X11 stability, file and folder context menus, permanent
   delete confirmation, and remote folder creation.
+- Added background preloading and session caching for each remote's remembered
+  folder, default remote-list keyboard focus, deterministic X11 row/pin visual
+  state, and an embedded side-by-side browser on Wayland.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds
   for Linux x64, Windows x64, macOS arm64, and macOS x64.
 - Added automated frozen-executable smoke checks and macOS bundle validation

@@ -3371,9 +3371,13 @@ class MountletWindow:
             notify=lambda title, message, success: self.tray_app._notify(title, message, success=success),
             open_mount=self._open_remote_path,
             file_manager_label=self.desktop.file_manager_label,
+            embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
+            layout_changed=self._browser_layout_changed,
         )
         self.window.focus_remote_row = self._focus_current_remote_row
+        self.window.update_focus_style = self._update_main_focus_style
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
+        self.file_browser.preload(_load_visible_remotes())
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -3588,6 +3592,9 @@ class MountletWindow:
     def _activate_main_window(self) -> None:
         self.window.raise_()
         self.window.activateWindow()
+        qt = getattr(self, "qt", None)
+        if qt is not None:
+            qt.QTimer.singleShot(0, self._focus_current_remote_row)
 
     def _schedule_child_window_raises(self) -> None:
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
@@ -3828,8 +3835,6 @@ class MountletWindow:
             return
 
         root = self.qt.QWidget()
-        root.setObjectName("mountletMainSurface")
-        self._main_surface = root
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
@@ -3856,22 +3861,43 @@ class MountletWindow:
         outer.addWidget(scroll)
         outer.addWidget(self._add_remote_row())
 
-        self.window.setCentralWidget(root)
+        central = root
+        if getattr(self.tray_app, "_is_wayland", False):
+            central = self.qt.QWidget()
+            shell = self.qt.QHBoxLayout(central)
+            shell.setContentsMargins(0, 0, 0, 0)
+            shell.setSpacing(6)
+            shell.addWidget(root)
+            self.file_browser.embed_into(shell)
+        central.setObjectName("mountletMainSurface")
+        self._main_surface = central
+        self.window.setCentralWidget(central)
         self._update_main_focus_style()
+        self._content_fit_widgets = (root, scroll, container)
+        self.file_browser.preload(remotes)
         self._fit_to_content(root, scroll, container)
-        self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container))
+        self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
 
-    def _finish_content_fit(self, root: Any, scroll: Any, container: Any) -> None:
-        if self.window.centralWidget() is not root or self._tray_is_quitting():
+    def _finish_content_fit(self, root: Any, scroll: Any, container: Any, central: Any | None = None) -> None:
+        expected = central or root
+        if self.window.centralWidget() is not expected or self._tray_is_quitting():
             return
         self._fit_to_content(root, scroll, container)
         self._reposition_file_browser()
+
+    def _browser_layout_changed(self) -> None:
+        widgets = getattr(self, "_content_fit_widgets", None)
+        if widgets is None or self._tray_is_quitting():
+            return
+        self.qt.QTimer.singleShot(0, lambda: self._fit_to_content(*widgets))
 
     def _update_main_focus_style(self) -> None:
         root = getattr(self, "_main_surface", None)
         if root is None:
             return
-        active = bool(self.window.isActiveWindow())
+        file_browser = getattr(self, "file_browser", None)
+        browser_focused = bool(file_browser and file_browser.has_focus())
+        active = bool(self.window.isActiveWindow()) and not browser_focused
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
@@ -3955,7 +3981,14 @@ class MountletWindow:
                 )
             else:
                 button.setToolTip("Keep Mountlet above other windows")
-                button.setStyleSheet("")
+                button.setStyleSheet(
+                    "QPushButton, QPushButton:checked { background: transparent; "
+                    "border: 1px solid transparent; border-radius: 4px; }"
+                )
+                button.setDown(False)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
         except Exception:
             pass
 
@@ -4651,6 +4684,9 @@ class MountletWindow:
         self._focus_remote_row(names[index])
 
     def _focus_remote_row(self, remote_name: str) -> None:
+        for widgets in self._row_widgets.values():
+            widgets.frame.setProperty("keyboardFocus", False)
+            widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
         row = self._row_widgets.get(remote_name)
         if row is not None:
             row.frame.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
@@ -4741,6 +4777,15 @@ class MountletWindow:
             + (spacing * 2)
             + 2
         )
+        file_browser = getattr(self, "file_browser", None)
+        if (
+            getattr(getattr(self, "tray_app", None), "_is_wayland", False)
+            and file_browser is not None
+            and file_browser.is_visible()
+        ):
+            browser_size = file_browser.root.sizeHint()
+            width += browser_size.width() + 6
+            height = max(height, menu_height + browser_size.height() + 16)
 
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:

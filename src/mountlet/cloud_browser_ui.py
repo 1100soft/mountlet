@@ -40,6 +40,8 @@ class CompactCloudBrowser:
         notify: Callable[[str, str, bool], None],
         open_mount: Callable[[core.RemoteInfo, str], None],
         file_manager_label: Callable[[], str],
+        embedded: bool = False,
+        layout_changed: Callable[[], None] | None = None,
     ) -> None:
         self.qt = qt
         self.main_window = main_window
@@ -47,13 +49,18 @@ class CompactCloudBrowser:
         self._notify = notify
         self._open_mount = open_mount
         self._file_manager_name = file_manager_label
+        self._embedded = embedded
+        self._layout_changed = layout_changed or (lambda: None)
         self.backend = CloudBrowserBackend()
         self.remote: core.RemoteInfo | None = None
         self.path = ""
         self.entries: list[BrowserEntry] = []
         self.clipboard: tuple[list[TransferItem], bool] | None = None
-        self._listing_token = 0
         self._operation_pending = False
+        self._operation_cache_keys: set[tuple[str, str]] = set()
+        self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
+        self._loads_pending: set[tuple[str, str]] = set()
+        self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
         self._bridge.operation_finished.connect(self._operation_finished)
@@ -64,7 +71,7 @@ class CompactCloudBrowser:
         qt = self.qt
 
         class Bridge(qt.QObject):
-            listing_ready = qt.Signal(int, object, str)
+            listing_ready = qt.Signal(str, str, object, str)
             operation_finished = qt.Signal(bool, str)
 
         return Bridge()
@@ -125,22 +132,14 @@ class CompactCloudBrowser:
         self.path_field.customContextMenuRequested.connect(self._show_folder_menu)
         navigation.addWidget(self.up_button)
         navigation.addWidget(self.path_field, 1)
-        navigation.addWidget(self._button("↻", self.refresh, "Refresh folder", square=True))
+        navigation.addWidget(self._button("↻", lambda: self.refresh(force=True), "Refresh folder", square=True))
         navigation.addWidget(
             self._button("↗", self._open_current_mount, "Open this folder in the system file manager", square=True)
         )
+        self.offline_button = self._button("↓", self.toggle_offline, "Offline sync is not available yet", square=True)
+        self.offline_button.setEnabled(False)
+        navigation.addWidget(self.offline_button)
         layout.addLayout(navigation)
-
-        actions = qt.QHBoxLayout()
-        self.copy_button = self._button("Copy", self.copy_selected, "Copy selected files")
-        self.cut_button = self._button("Cut", self.cut_selected, "Move selected files on paste")
-        self.paste_button = self._button("Paste", self.paste, "Paste into this folder")
-        self.offline_button = self._button("↓", self.toggle_offline, "Keep selected files available offline", square=True)
-        for button in (self.copy_button, self.cut_button, self.paste_button):
-            actions.addWidget(button)
-        actions.addStretch(1)
-        actions.addWidget(self.offline_button)
-        layout.addLayout(actions)
 
         outer = self
 
@@ -191,10 +190,30 @@ class CompactCloudBrowser:
         return button
 
     def is_visible(self) -> bool:
-        return bool(self.window.isVisible())
+        return bool(self.root.isVisible()) if self._embedded else bool(self.window.isVisible())
 
     def hide(self) -> None:
-        self.window.hide()
+        if self._embedded:
+            self.root.hide()
+            self._layout_changed()
+        else:
+            self.window.hide()
+
+    def embed_into(self, layout: Any) -> None:
+        if not self._embedded:
+            return
+        if self.window.centralWidget() is self.root:
+            self.window.takeCentralWidget()
+        self.root.setParent(layout.parentWidget())
+        layout.addWidget(self.root)
+        self.root.hide()
+
+    def preload(self, remotes: list[core.RemoteInfo]) -> None:
+        for remote in remotes:
+            path = self.backend.current_path(remote.name)
+            key = (remote.name, path)
+            if key not in self._folder_cache and key not in self._loads_pending:
+                self._load_folder(remote, path)
 
     def show_remote(
         self,
@@ -207,20 +226,36 @@ class CompactCloudBrowser:
         changed = self.remote is None or self.remote.name != remote.name
         self.remote = remote
         self.path = self.backend.current_path(remote.name)
-        self._position(row)
+        if not self._embedded:
+            self._position(row)
         if show_browser:
-            try:
-                self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
-            except Exception:
-                pass
-            self.window.show()
-            self.window.raise_()
+            if self._embedded:
+                was_visible = self.root.isVisible()
+                self.root.show()
+                if not was_visible:
+                    self._layout_changed()
+            else:
+                try:
+                    self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
+                except Exception:
+                    pass
+                self.window.show()
+                self.window.raise_()
             if focus_browser:
                 self.focus()
         if changed or show_browser:
-            self.refresh()
+            self.refresh(force=False)
 
     def focus(self) -> None:
+        if self._embedded:
+            self.root.show()
+            self.main_window.raise_()
+            self.main_window.activateWindow()
+            self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            self._update_focus_style()
+            self._update_main_focus_style()
+            self._layout_changed()
+            return
         try:
             self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
         except Exception:
@@ -236,12 +271,23 @@ class CompactCloudBrowser:
         callback = getattr(self.main_window, "focus_remote_row", None)
         if callable(callback):
             callback()
+        self._update_focus_style()
+        self._update_main_focus_style()
+
+    def has_focus(self) -> bool:
+        focus = self.qt.QApplication.focusWidget()
+        return bool(focus is not None and (self.root.isAncestorOf(focus) or focus is self.root))
+
+    def _update_main_focus_style(self) -> None:
+        callback = getattr(self.main_window, "update_focus_style", None)
+        if callable(callback):
+            callback()
 
     def _update_focus_style(self) -> None:
         root = getattr(self, "root", None)
         if root is None:
             return
-        active = bool(self.window.isActiveWindow())
+        active = self.has_focus() if self._embedded else bool(self.window.isActiveWindow())
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
@@ -269,33 +315,56 @@ class CompactCloudBrowser:
         event.accept()
         return True
 
-    def refresh(self) -> None:
+    def refresh(self, *, force: bool = False) -> None:
         if self.remote is None:
             return
-        self._listing_token += 1
-        token, remote, path = self._listing_token, self.remote, self.path
+        remote, path = self.remote, self.path
         self.title.setText(remote.display_name)
         self.path_field.setText(path)
         self.path_field.setToolTip(path or "Remote root")
         self.up_button.setEnabled(bool(path))
+        key = (remote.name, path)
+        cached = self._folder_cache.get(key)
+        if cached is not None and not force:
+            self._display_entries(cached)
+            return
+        if key in self._loads_pending:
+            if cached is not None:
+                self._display_entries(cached)
+            return
         self.status.setText("Loading…")
+        self._load_folder(remote, path)
+
+    def _load_folder(self, remote: core.RemoteInfo, path: str) -> None:
+        key = (remote.name, path)
+        if key in self._loads_pending:
+            return
+        self._loads_pending.add(key)
 
         def worker() -> None:
-            try:
-                entries = self.backend.list_entries(remote, path)
-            except Exception as exc:
-                self._bridge.listing_ready.emit(token, None, str(exc))
-                return
-            self._bridge.listing_ready.emit(token, entries, "")
+            with self._load_slots:
+                try:
+                    entries = self.backend.list_entries(remote, path)
+                except Exception as exc:
+                    self._bridge.listing_ready.emit(remote.name, path, None, str(exc))
+                    return
+            self._bridge.listing_ready.emit(remote.name, path, entries, "")
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _listing_ready(self, token: int, entries: object, error: str) -> None:
-        if token != self._listing_token:
-            return
+    def _listing_ready(self, remote_name: str, path: str, entries: object, error: str) -> None:
+        key = (remote_name, path)
+        self._loads_pending.discard(key)
         if not isinstance(entries, list):
-            self.status.setText(error or "Could not load this folder")
+            if self.remote and (self.remote.name, self.path) == key:
+                self.status.setText(error or "Could not load this folder")
             return
+        self._folder_cache[key] = entries
+        if self.remote is None or (self.remote.name, self.path) != key:
+            return
+        self._display_entries(entries)
+
+    def _display_entries(self, entries: list[BrowserEntry]) -> None:
         self.entries = entries
         self.tree.clear()
         style = self.window.style()
@@ -400,6 +469,7 @@ class CompactCloudBrowser:
         menu.addSeparator()
         self._menu_action(menu, "Copy", self.copy_selected)
         self._menu_action(menu, "Cut", self.cut_selected)
+        self._menu_action(menu, "Make available offline", self.toggle_offline, enabled=False)
         self._menu_action(menu, "Delete", self.delete_selected)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
@@ -443,10 +513,14 @@ class CompactCloudBrowser:
         destination, destination_path = self.remote, self.path
         remotes = {remote.name: remote for remote in self._remotes()}
         verb = "Moving" if move else "Copying"
+        invalidate = {(destination.name, destination_path)}
+        if move:
+            invalidate.update((item.remote_name, parent_browser_path(item.path)) for item in items)
         self._run_operation(
             f"{verb} {len(items)} item{'s' if len(items) != 1 else ''}…",
             lambda: self.backend.transfer(items, remotes, destination, destination_path, move=move),
             clear_clipboard=move,
+            invalidate_keys=invalidate,
         )
 
     def toggle_offline(self) -> None:
@@ -475,8 +549,13 @@ class CompactCloudBrowser:
         action: Callable[[], object],
         *,
         clear_clipboard: bool = False,
+        invalidate_keys: set[tuple[str, str]] | None = None,
     ) -> None:
         self._operation_pending = True
+        current_key = (self.remote.name, self.path) if self.remote is not None else None
+        self._operation_cache_keys = set(invalidate_keys or ())
+        if current_key is not None:
+            self._operation_cache_keys.add(current_key)
         self.status.setText(message)
         self._update_actions()
 
@@ -494,26 +573,25 @@ class CompactCloudBrowser:
 
     def _operation_finished(self, success: bool, message: str) -> None:
         self._operation_pending = False
+        changed_keys = self._operation_cache_keys
+        self._operation_cache_keys = set()
+        for changed_key in changed_keys:
+            self._folder_cache.pop(changed_key, None)
         if not success:
             self._notify("File operation", message or "The operation failed.", False)
-        self.refresh()
+        current_key = (self.remote.name, self.path) if self.remote is not None else None
+        self.refresh(force=current_key in changed_keys)
 
     def _selection_changed(self) -> None:
         entries = self._selected_entries()
         if self.remote and entries:
-            all_offline = all(self.backend.is_offline(self.remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
-            self.offline_button.setToolTip(
-                "Remove local offline copies" if all_offline else "Keep selected files available offline"
-            )
+            self.offline_button.setToolTip("Offline sync is not available yet")
         self._update_actions()
 
     def _update_actions(self) -> None:
         selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
-        enabled = not self._operation_pending
-        self.copy_button.setEnabled(selected and enabled)
-        self.cut_button.setEnabled(selected and enabled)
-        self.paste_button.setEnabled(self.clipboard is not None and enabled)
-        self.offline_button.setEnabled(selected and enabled)
+        self.offline_button.setEnabled(False)
+        self.offline_button.setProperty("hasSelection", selected)
 
     def _open_item(self, item: Any, _column: int = 0) -> None:
         entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
