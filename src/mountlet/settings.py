@@ -12,16 +12,16 @@ from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ens
 from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
-DEFAULT_SHORTCUTS: dict[str, str] = {
-    "remote_previous": "Up",
-    "remote_next": "Down",
-    "remote_enter_browser": "Return",
-    "browser_open": "Return",
-    "browser_parent": "Backspace",
-    "browser_root": "Alt+Home",
-    "browser_refresh": "F5",
-    "browser_open_folder": "Ctrl+Return",
-    "browser_return_to_remotes": "Esc",
+DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
+    "remote_previous": ("Up",),
+    "remote_next": ("Down",),
+    "remote_enter_browser": ("Return", "Space", "Left", "Right"),
+    "browser_open": ("Return",),
+    "browser_parent": ("Backspace",),
+    "browser_root": ("Alt+Home",),
+    "browser_refresh": ("F5",),
+    "browser_open_folder": ("Ctrl+Return",),
+    "browser_return_to_remotes": ("Esc", "Left", "Right"),
 }
 
 
@@ -34,7 +34,7 @@ class AppSettings:
     file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
-    shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
+    shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
 
 @dataclass(frozen=True)
@@ -71,13 +71,13 @@ focus_file_manager = true
 [shortcuts]
 remote_previous = "Up"
 remote_next = "Down"
-remote_enter_browser = "Return"
+remote_enter_browser = "Return, Space, Left, Right"
 browser_open = "Return"
 browser_parent = "Backspace"
 browser_root = "Alt+Home"
 browser_refresh = "F5"
 browser_open_folder = "Ctrl+Return"
-browser_return_to_remotes = "Esc"
+browser_return_to_remotes = "Esc, Left, Right"
 """
 
 
@@ -266,13 +266,22 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     )
 
 
-def _shortcut_values(values: dict[str, Any]) -> dict[str, str]:
+def _shortcut_values(values: dict[str, Any]) -> dict[str, tuple[str, ...]]:
     shortcuts = dict(DEFAULT_SHORTCUTS)
     for key in DEFAULT_SHORTCUTS:
-        value = str(values.get(key, "")).strip()
-        if value:
-            shortcuts[key] = value
+        shortcuts[key] = _shortcut_list(values.get(key), DEFAULT_SHORTCUTS[key])
     return shortcuts
+
+
+def _shortcut_list(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)):
+        entries = [str(item).strip() for item in value]
+    else:
+        entries = [item.strip() for item in str(value).split(",")]
+    shortcuts = tuple(item for item in entries if item)
+    return shortcuts[:4] or default
 
 
 def _remote_name_from_section(section: str) -> str | None:
@@ -333,7 +342,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "",
             "[shortcuts]",
             *(
-                f"{key} = {_toml_string(settings.shortcuts.get(key, default))}"
+                f"{key} = {_toml_string(', '.join(settings.shortcuts.get(key, default)))}"
                 for key, default in DEFAULT_SHORTCUTS.items()
             ),
             "",

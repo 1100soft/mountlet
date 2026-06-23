@@ -342,11 +342,12 @@ remote does not need to be mounted.
 - Hover over a remote strip to open or switch the browser without moving
   keyboard focus. Click the strip to focus the browser.
 - With the main window focused, use Up and Down to select remote strips and
-  Enter to enter the browser. In the browser, use Enter to open an item,
-  Backspace for the parent folder, Alt+Home for the remote root, F5 to refresh,
-  Ctrl+Enter to open the current folder in the configured file manager, and
-  Escape to return to the selected strip. These shortcuts can be changed from
-  `Config` > `Keyboard shortcuts`.
+  Return, Space, Left, or Right to enter the browser. In the browser, use
+  Return to open an item, Backspace for the parent folder, Alt+Home for the
+  remote root, F5 to refresh, Ctrl+Return to open the current folder in the
+  configured file manager, and Escape, Left, or Right to return to the selected
+  strip. These shortcuts can be changed from `Config` > `Keyboard shortcuts`;
+  each action has one primary shortcut and up to three alternatives.
 - Use item and folder context menus, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
   transfer files and folders within or between remotes.
 - Press Delete to permanently delete selected cloud items after confirmation.

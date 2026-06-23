@@ -22,7 +22,7 @@ class ShortcutTests(unittest.TestCase):
             key=lambda: Qt.Key.Key_Home,
             modifiers=lambda: Qt.KeyboardModifier.AltModifier,
         )
-        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "browser_root": "Alt+Home"})
+        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "browser_root": ("Alt+Home",)})
 
         with mock.patch.object(shortcuts, "load_app_settings", return_value=settings):
             self.assertTrue(shortcuts.matches_shortcut(qt, event, "browser_root"))
@@ -33,10 +33,21 @@ class ShortcutTests(unittest.TestCase):
             key=lambda: Qt.Key.Key_Return,
             modifiers=lambda: Qt.KeyboardModifier.NoModifier,
         )
-        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "browser_open": "Enter"})
+        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "browser_open": ("Enter",)})
 
         with mock.patch.object(shortcuts, "load_app_settings", return_value=settings):
             self.assertTrue(shortcuts.matches_shortcut(qt, event, "browser_open"))
+
+    def test_matches_alternative_shortcut(self):
+        qt = SimpleNamespace(Qt=Qt, QKeySequence=QKeySequence)
+        event = SimpleNamespace(
+            key=lambda: Qt.Key.Key_Right,
+            modifiers=lambda: Qt.KeyboardModifier.NoModifier,
+        )
+        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "remote_enter_browser": ("Return", "Space", "Right")})
+
+        with mock.patch.object(shortcuts, "load_app_settings", return_value=settings):
+            self.assertTrue(shortcuts.matches_shortcut(qt, event, "remote_enter_browser"))
 
 
 if __name__ == "__main__":

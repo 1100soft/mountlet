@@ -2298,6 +2298,22 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(row.focus_reason, "mouse")
         select_remote.assert_called_once_with(remote, row)
 
+    def test_shortcut_conflicts_are_scoped_to_context(self):
+        dialog = object.__new__(tray.ShortcutConfigDialog)
+        shortcuts = {
+            **tray.DEFAULT_SHORTCUTS,
+            "remote_previous": ("Up",),
+            "remote_next": ("Up",),
+            "browser_parent": ("Up",),
+        }
+
+        conflicts = dialog._shortcut_conflicts(shortcuts)
+
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("Remote list", conflicts[0])
+        self.assertIn("Previous remote", conflicts[0])
+        self.assertIn("Next remote", conflicts[0])
+
     def test_window_folder_open_failure_reports_notification(self):
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()

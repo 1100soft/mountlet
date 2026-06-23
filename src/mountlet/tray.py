@@ -48,7 +48,7 @@ from .settings import (
     save_mount_settings,
     set_start_at_login,
 )
-from .shortcuts import matches_shortcut
+from .shortcuts import matches_shortcut, normalize_shortcut_text
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -75,16 +75,22 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
-SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("remote_previous", "Previous remote"),
     ("remote_next", "Next remote"),
     ("remote_enter_browser", "Enter file browser"),
+)
+BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("browser_open", "Open selected item"),
     ("browser_parent", "Parent folder"),
     ("browser_root", "Remote root"),
     ("browser_refresh", "Refresh folder"),
     ("browser_open_folder", "Open folder in file manager"),
     ("browser_return_to_remotes", "Return to remote list"),
+)
+SHORTCUT_CONTEXTS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Remote list", REMOTE_SHORTCUT_CONFIG_FIELDS),
+    ("File browser", BROWSER_SHORTCUT_CONFIG_FIELDS),
 )
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
@@ -1870,7 +1876,8 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("Keyboard shortcuts")
         self.dialog.resize(420, 260)
-        self.fields: dict[str, Any] = {}
+        self.fields: dict[str, list[Any]] = {}
+        self.conflict_label: Any | None = None
         self._build()
 
     def _build(self) -> None:
@@ -1880,25 +1887,67 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
+        for title, fields in SHORTCUT_CONTEXTS:
+            root.addWidget(self._shortcut_group(title, fields, app_settings.shortcuts))
+        self.conflict_label = self.qt.QLabel("")
+        self.conflict_label.setStyleSheet("color: #dc2626;")
+        root.addWidget(self.conflict_label)
+        restore = self.qt.QPushButton("Restore defaults")
+        restore.clicked.connect(lambda _checked=False: self._restore_defaults())
+        root.addWidget(restore)
+        self._button_box = self._buttons()
+        root.addWidget(self._button_box)
+        self._update_conflicts()
+        self.dialog.adjustSize()
+
+    def _shortcut_group(
+        self,
+        title: str,
+        fields: tuple[tuple[str, str], ...],
+        shortcuts: dict[str, tuple[str, ...]],
+    ) -> Any:
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
-        form = self.qt.QFormLayout(frame)
-        for key, label in SHORTCUT_CONFIG_FIELDS:
-            field = self.qt.QKeySequenceEdit(self.qt.QKeySequence(app_settings.shortcuts.get(key, "")))
-            field.setToolTip(f"Default: {DEFAULT_SHORTCUTS[key]}")
-            self.fields[key] = field
-            form.addRow(label, field)
-        root.addWidget(frame)
-        root.addWidget(self._buttons())
-        self.dialog.adjustSize()
+        layout = self.qt.QVBoxLayout(frame)
+        heading = self.qt.QLabel(title)
+        heading_font = heading.font()
+        heading_font.setBold(True)
+        heading.setFont(heading_font)
+        layout.addWidget(heading)
+        form = self.qt.QFormLayout()
+        for key, label in fields:
+            row = self.qt.QWidget()
+            row_layout = self.qt.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            values = list(shortcuts.get(key, DEFAULT_SHORTCUTS[key]))[:4]
+            values.extend([""] * (4 - len(values)))
+            self.fields[key] = []
+            for index, value in enumerate(values):
+                field = self.qt.QKeySequenceEdit(self.qt.QKeySequence(value))
+                field.setToolTip(
+                    "Primary shortcut" if index == 0 else f"Alternative shortcut {index}"
+                )
+                field.keySequenceChanged.connect(lambda _sequence=None: self._update_conflicts())
+                self.fields[key].append(field)
+                row_layout.addWidget(field)
+            form.addRow(label, row)
+        layout.addLayout(form)
+        return frame
 
     def _save(self) -> None:
+        conflicts = self._shortcut_conflicts(self._current_shortcuts())
+        if conflicts:
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Shortcut conflict",
+                "\n".join(conflicts),
+            )
+            self._update_conflicts()
+            return
         current = load_app_settings()
-        shortcuts = dict(DEFAULT_SHORTCUTS)
-        for key, field in self.fields.items():
-            value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
-            shortcuts[key] = value or DEFAULT_SHORTCUTS[key]
+        shortcuts = self._current_shortcuts()
         save_app_settings(
             AppSettings(
                 mount_base=current.mount_base,
@@ -1912,6 +1961,74 @@ class ShortcutConfigDialog(_ConfigDialogBase):
             )
         )
         self.dialog.accept()
+
+    def _restore_defaults(self) -> None:
+        for key, fields in self.fields.items():
+            values = list(DEFAULT_SHORTCUTS[key])
+            values.extend([""] * (4 - len(values)))
+            for field, value in zip(fields, values, strict=False):
+                field.setKeySequence(self.qt.QKeySequence(value))
+        self._update_conflicts()
+
+    def _current_shortcuts(self) -> dict[str, tuple[str, ...]]:
+        shortcuts: dict[str, tuple[str, ...]] = {}
+        for key, fields in self.fields.items():
+            values = []
+            for field in fields:
+                value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
+                if value:
+                    values.append(value)
+            shortcuts[key] = tuple(values[:4]) or DEFAULT_SHORTCUTS[key]
+        return shortcuts
+
+    def _update_conflicts(self) -> None:
+        conflicts = self._shortcut_conflicts(self._current_shortcuts())
+        conflict_keys = self._conflict_keys(self._current_shortcuts())
+        for key, fields in self.fields.items():
+            for field in fields:
+                value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
+                normalized = normalize_shortcut_text(value)
+                field.setStyleSheet("border: 1px solid #dc2626;" if normalized in conflict_keys else "")
+        if self.conflict_label is not None:
+            self.conflict_label.setText("\n".join(conflicts[:2]))
+        try:
+            self._button_box.button(self.qt.QDialogButtonBox.StandardButton.Save).setEnabled(not conflicts)
+        except Exception:
+            pass
+
+    def _shortcut_conflicts(self, shortcuts: dict[str, tuple[str, ...]]) -> list[str]:
+        conflicts = []
+        for title, fields in SHORTCUT_CONTEXTS:
+            names = dict(fields)
+            seen: dict[str, str] = {}
+            context_conflicts: set[str] = set()
+            for key, _label in fields:
+                for value in shortcuts.get(key, ()):
+                    normalized = normalize_shortcut_text(value)
+                    if not normalized:
+                        continue
+                    if normalized in seen:
+                        context_conflicts.add(
+                            f"{title}: {value} is assigned to {seen[normalized]} and {names[key]}."
+                        )
+                    else:
+                        seen[normalized] = names[key]
+            conflicts.extend(sorted(context_conflicts))
+        return conflicts
+
+    def _conflict_keys(self, shortcuts: dict[str, tuple[str, ...]]) -> set[str]:
+        result: set[str] = set()
+        for _title, fields in SHORTCUT_CONTEXTS:
+            seen: set[str] = set()
+            for key, _label in fields:
+                for value in shortcuts.get(key, ()):
+                    normalized = normalize_shortcut_text(value)
+                    if not normalized:
+                        continue
+                    if normalized in seen:
+                        result.add(normalized)
+                    seen.add(normalized)
+        return result
 
 
 class MountConfigDialog(_ConfigDialogBase):
