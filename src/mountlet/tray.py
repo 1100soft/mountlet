@@ -39,6 +39,7 @@ from .platform_services.file_managers import (
 from .platform_services.processes import external_process_environment
 from .settings import (
     AppSettings,
+    DEFAULT_SHORTCUTS,
     MountSettings,
     ensure_default_config_files,
     load_app_settings,
@@ -47,6 +48,7 @@ from .settings import (
     save_mount_settings,
     set_start_at_login,
 )
+from .shortcuts import matches_shortcut
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -403,7 +405,7 @@ def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
 def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import QEvent, QLockFile, QMimeData, QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal
-        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QPainter
+        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
@@ -417,6 +419,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QGridLayout,
             QHBoxLayout,
             QInputDialog,
+            QKeySequenceEdit,
             QLabel,
             QLineEdit,
             QMainWindow,
@@ -463,6 +466,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         QHBoxLayout=QHBoxLayout,
         QInputDialog=QInputDialog,
         QIcon=QIcon,
+        QKeySequence=QKeySequence,
+        QKeySequenceEdit=QKeySequenceEdit,
         QLabel=QLabel,
         QLineEdit=QLineEdit,
         QLockFile=QLockFile,

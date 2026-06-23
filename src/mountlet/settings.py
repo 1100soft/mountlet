@@ -12,6 +12,18 @@ from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ens
 from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
+DEFAULT_SHORTCUTS: dict[str, str] = {
+    "remote_previous": "Up",
+    "remote_next": "Down",
+    "remote_enter_browser": "Return",
+    "browser_open": "Return",
+    "browser_parent": "Backspace",
+    "browser_root": "Alt+Home",
+    "browser_refresh": "F5",
+    "browser_open_folder": "Ctrl+Return",
+    "browser_return_to_remotes": "Esc",
+}
+
 
 @dataclass(frozen=True)
 class AppSettings:
@@ -22,6 +34,7 @@ class AppSettings:
     file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
+    shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
 
 @dataclass(frozen=True)
@@ -54,6 +67,17 @@ file_manager = ""
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
+
+[shortcuts]
+remote_previous = "Up"
+remote_next = "Down"
+remote_enter_browser = "Return"
+browser_open = "Return"
+browser_parent = "Backspace"
+browser_root = "Alt+Home"
+browser_refresh = "F5"
+browser_open_folder = "Ctrl+Return"
+browser_return_to_remotes = "Esc"
 """
 
 
@@ -229,6 +253,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     data = _read_simple_toml(source)
     app = data.get("app", {})
     tray = data.get("tray", {})
+    shortcuts = _shortcut_values(data.get("shortcuts", {}))
     return AppSettings(
         mount_base=_string_value(app.get("mount_base")),
         auto_mount=_bool_value(app.get("auto_mount"), False),
@@ -237,7 +262,17 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        shortcuts=shortcuts,
     )
+
+
+def _shortcut_values(values: dict[str, Any]) -> dict[str, str]:
+    shortcuts = dict(DEFAULT_SHORTCUTS)
+    for key in DEFAULT_SHORTCUTS:
+        value = str(values.get(key, "")).strip()
+        if value:
+            shortcuts[key] = value
+    return shortcuts
 
 
 def _remote_name_from_section(section: str) -> str | None:
@@ -295,6 +330,12 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# default uses the desktop's normal folder opener.",
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
+            "",
+            "[shortcuts]",
+            *(
+                f"{key} = {_toml_string(settings.shortcuts.get(key, default))}"
+                for key, default in DEFAULT_SHORTCUTS.items()
+            ),
             "",
         ]
     )
