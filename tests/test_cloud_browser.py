@@ -317,6 +317,54 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertTrue(event.accepted)
         browser.focus_main_window.assert_not_called()
 
+    def test_copy_is_blocked_when_integrated_edits_are_disabled(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._edits_enabled = mock.Mock(return_value=False)
+        browser._edit_disabled = mock.Mock(return_value=True)
+        browser.selected_transfer_items = mock.Mock()
+
+        browser.copy_selected()
+
+        browser._edit_disabled.assert_called_once_with()
+        browser.selected_transfer_items.assert_not_called()
+
+    def test_drop_is_blocked_when_integrated_edits_are_disabled(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._edits_enabled = mock.Mock(return_value=False)
+        browser._edit_disabled = mock.Mock(return_value=True)
+        browser._transfer = mock.Mock()
+
+        browser.accept_drop(b"[]")
+
+        browser._edit_disabled.assert_called_once_with()
+        browser._transfer.assert_not_called()
+
+    def test_drag_is_enabled_only_when_integrated_edits_are_enabled(self):
+        class Tree:
+            def __init__(self) -> None:
+                self.drag_enabled = None
+
+            def selectedItems(self) -> list[object]:
+                return [object()]
+
+            def setDragEnabled(self, enabled: bool) -> None:
+                self.drag_enabled = enabled
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser.offline_button = mock.Mock()
+        browser._selected_entries = mock.Mock(return_value=[BrowserEntry("a.txt", "a.txt", False)])
+        browser._edits_enabled = mock.Mock(return_value=False)
+
+        browser._update_actions()
+
+        self.assertFalse(browser.tree.drag_enabled)
+
+        browser._edits_enabled.return_value = True
+        browser._update_actions()
+
+        self.assertTrue(browser.tree.drag_enabled)
+
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

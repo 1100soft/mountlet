@@ -33,6 +33,7 @@ mount_base = "~/Mounts"
 auto_mount = true
 auto_mount_delay = 3.5
 start_at_login = true
+integrated_file_edits = true
 
 [tray]
 file_manager = "org.example.Files.desktop"
@@ -52,6 +53,7 @@ browser_root = "Ctrl+Home"
         self.assertTrue(config.auto_mount)
         self.assertEqual(config.auto_mount_delay, 3.5)
         self.assertTrue(config.start_at_login)
+        self.assertTrue(config.integrated_file_edits)
         self.assertEqual(config.file_manager, "org.example.Files.desktop")
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
@@ -149,6 +151,7 @@ remote_enter_browser = "Return, Space, Left, Right"
                     auto_mount=True,
                     auto_mount_delay=4.25,
                     start_at_login=True,
+                    integrated_file_edits=True,
                     file_manager="org.example.Files.desktop",
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
@@ -163,6 +166,7 @@ remote_enter_browser = "Return, Space, Left, Right"
         self.assertTrue(loaded.auto_mount)
         self.assertEqual(loaded.auto_mount_delay, 4.25)
         self.assertTrue(loaded.start_at_login)
+        self.assertTrue(loaded.integrated_file_edits)
         self.assertEqual(loaded.file_manager, "org.example.Files.desktop")
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)

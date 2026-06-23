@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from . import core
 from .cloud_browser import BrowserEntry, CloudBrowserBackend, TransferItem, format_file_size, parent_browser_path
+from .settings import load_app_settings
 from .shortcuts import matches_shortcut
 
 MIME_TYPE = "application/x-mountlet-remote-files"
@@ -159,6 +160,8 @@ class CompactCloudBrowser:
 
         class FileTree(qt.QTreeWidget):
             def startDrag(self, _supported_actions: Any) -> None:
+                if not outer._edits_enabled():
+                    return
                 items = outer.selected_transfer_items()
                 if not items:
                     return
@@ -179,7 +182,7 @@ class CompactCloudBrowser:
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree.setDragEnabled(True)
+        self.tree.setDragEnabled(False)
         self.tree.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tree.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_tree_menu)
@@ -317,12 +320,20 @@ class CompactCloudBrowser:
         modifiers = event.modifiers()
         control = bool(modifiers & self.qt.Qt.KeyboardModifier.ControlModifier)
         if control and key == self.qt.Qt.Key.Key_C:
+            if not self._edits_enabled():
+                return self._edit_disabled()
             self.copy_selected()
         elif control and key == self.qt.Qt.Key.Key_X:
+            if not self._edits_enabled():
+                return self._edit_disabled()
             self.cut_selected()
         elif control and key == self.qt.Qt.Key.Key_V:
+            if not self._edits_enabled():
+                return self._edit_disabled()
             self.paste()
         elif key == self.qt.Qt.Key.Key_Delete:
+            if not self._edits_enabled():
+                return self._edit_disabled()
             self.delete_selected()
         elif key == self.qt.Qt.Key.Key_Escape:
             self.focus_main_window()
@@ -470,6 +481,9 @@ class CompactCloudBrowser:
         ]
 
     def copy_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         items = self.selected_transfer_items()
         if items:
             self.clipboard = (items, False)
@@ -477,6 +491,9 @@ class CompactCloudBrowser:
             self._update_actions()
 
     def cut_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         items = self.selected_transfer_items()
         if items:
             self.clipboard = (items, True)
@@ -484,11 +501,17 @@ class CompactCloudBrowser:
             self._update_actions()
 
     def paste(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         if self.clipboard is not None:
             items, move = self.clipboard
             self._transfer(items, move=move)
 
     def delete_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         entries = self._selected_entries()
         if not entries or self.remote is None or self._operation_pending:
             return
@@ -508,6 +531,9 @@ class CompactCloudBrowser:
         self._run_operation("Deleting…", lambda: self.backend.delete_entries(remote, entries))
 
     def create_folder(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         if self.remote is None or self._operation_pending:
             return
         name, accepted = self.qt.QInputDialog.getText(self.window, "New folder", "Folder name")
@@ -538,10 +564,11 @@ class CompactCloudBrowser:
                 enabled=bool(self.remote and core.is_mounted(self.remote)),
             )
         menu.addSeparator()
-        self._menu_action(menu, "Copy", self.copy_selected)
-        self._menu_action(menu, "Cut", self.cut_selected)
+        edits_enabled = self._edits_enabled()
+        self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
+        self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
         self._menu_action(menu, "Make available offline", self.toggle_offline, enabled=False)
-        self._menu_action(menu, "Delete", self.delete_selected)
+        self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
     def _show_folder_menu(self, point: Any, *, source: Any | None = None) -> None:
@@ -552,8 +579,14 @@ class CompactCloudBrowser:
             lambda: self._open_external_folder(self.path),
             enabled=bool(self.remote and core.is_mounted(self.remote)),
         )
-        self._menu_action(menu, "Paste", self.paste, enabled=self.clipboard is not None and not self._operation_pending)
-        self._menu_action(menu, "New folder", self.create_folder, enabled=not self._operation_pending)
+        edits_enabled = self._edits_enabled()
+        self._menu_action(
+            menu,
+            "Paste",
+            self.paste,
+            enabled=edits_enabled and self.clipboard is not None and not self._operation_pending,
+        )
+        self._menu_action(menu, "New folder", self.create_folder, enabled=edits_enabled and not self._operation_pending)
         origin = source or self.path_field
         menu.exec(origin.mapToGlobal(point))
 
@@ -570,6 +603,9 @@ class CompactCloudBrowser:
             return "file manager"
 
     def accept_drop(self, payload: bytes, *, move: bool = False) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         try:
             values = json.loads(payload.decode("utf-8"))
             items = [TransferItem(**value) for value in values]
@@ -579,6 +615,9 @@ class CompactCloudBrowser:
         self._transfer(items, move=move)
 
     def _transfer(self, items: list[TransferItem], *, move: bool) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
         if not items or self.remote is None or self._operation_pending:
             return
         destination, destination_path = self.remote, self.path
@@ -661,8 +700,24 @@ class CompactCloudBrowser:
 
     def _update_actions(self) -> None:
         selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
+        edits_enabled = self._edits_enabled()
+        self.tree.setDragEnabled(edits_enabled and selected)
         self.offline_button.setEnabled(False)
         self.offline_button.setProperty("hasSelection", selected)
+
+    def _edits_enabled(self) -> bool:
+        try:
+            return bool(load_app_settings().integrated_file_edits)
+        except Exception:
+            return False
+
+    def _edit_disabled(self) -> bool:
+        self._notify(
+            "Mountlet Files",
+            "Integrated file edits are disabled. Enable them in App settings, or use the system file manager.",
+            False,
+        )
+        return True
 
     def _open_item(self, item: Any, _column: int = 0) -> None:
         entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)

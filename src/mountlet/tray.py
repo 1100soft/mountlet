@@ -1824,6 +1824,7 @@ class AppConfigDialog(_ConfigDialogBase):
             ),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
+            "integrated_file_edits": self._check(app_settings.integrated_file_edits),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
@@ -1831,6 +1832,10 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["start_at_login"].setToolTip("Start Mountlet automatically after signing in.")
         self.fields["focus_file_manager"].setText("Focus file manager")
         self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
+        self.fields["integrated_file_edits"].setText("Allow edits in Mountlet Files")
+        self.fields["integrated_file_edits"].setToolTip(
+            "Allow direct copy, move, delete, drag-and-drop, and folder creation in Mountlet Files."
+        )
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("Default mount folder", self.fields["mount_base"])
@@ -1838,6 +1843,11 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
+        form.addRow(self.fields["integrated_file_edits"])
+        warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
+        warning.setWordWrap(True)
+        warning.setStyleSheet(_muted_text_style(warning))
+        form.addRow("", warning)
         root.addWidget(frame)
         root.addWidget(self._buttons())
         self.dialog.adjustSize()
@@ -1848,6 +1858,13 @@ class AppConfigDialog(_ConfigDialogBase):
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
         except ValueError:
             delay = 0.0
+        if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Direct file edits",
+                "Edits made in Mountlet Files are direct and not undoable. Deleted files are not sent to "
+                "the system trash. Use the system file manager when you want buffered file-manager behavior.",
+            )
 
         save_app_settings(
             AppSettings(
@@ -1858,6 +1875,7 @@ class AppConfigDialog(_ConfigDialogBase):
                 file_manager=self.fields["file_manager"].currentData() or "",
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
+                integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
                 shortcuts=current.shortcuts,
             )
         )
@@ -1953,6 +1971,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 file_manager=current.file_manager,
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
+                integrated_file_edits=current.integrated_file_edits,
                 shortcuts=shortcuts,
             )
         )

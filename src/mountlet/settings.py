@@ -30,6 +30,7 @@ class AppSettings:
     file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
+    integrated_file_edits: bool = False
     shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
 
@@ -54,6 +55,7 @@ mount_base = ""
 auto_mount = false
 auto_mount_delay = 2.0
 start_at_login = false
+integrated_file_edits = false
 
 [tray]
 # Leave empty to use this platform's default file manager.
@@ -251,6 +253,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         auto_mount=_bool_value(app.get("auto_mount"), False),
         auto_mount_delay=max(_float_value(app.get("auto_mount_delay"), 2.0), 0.0),
         start_at_login=_bool_value(app.get("start_at_login"), _autostart_file().exists()),
+        integrated_file_edits=_bool_value(app.get("integrated_file_edits"), False),
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
@@ -330,6 +333,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"auto_mount = {_toml_bool(settings.auto_mount)}",
             f"auto_mount_delay = {settings.auto_mount_delay:g}",
             f"start_at_login = {_toml_bool(settings.start_at_login)}",
+            f"integrated_file_edits = {_toml_bool(settings.integrated_file_edits)}",
             "",
             "[tray]",
             "# File-manager identifier discovered by Mountlet.",
