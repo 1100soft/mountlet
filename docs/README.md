@@ -44,6 +44,9 @@ broader end-to-end testing are complete.
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
 paths, and the future managed-offline storage layer. `cloud_browser_ui.py` owns
 the compact Qt view and must keep every rclone operation off the UI thread.
+Copy, move, mkdir, and delete actions are direct rclone operations. Do not
+present them as undoable or trash-backed until Mountlet has a provider-aware
+trash/restore design.
 Folder listings are session caches and are preloaded for each remembered remote
 path. When a folder is displayed, Mountlet silently prefetches one displayed
 level deeper with a bounded queue so navigation into visible folders is often

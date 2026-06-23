@@ -187,6 +187,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.title = mock.Mock()
         browser.path_field = mock.Mock()
         browser.up_button = mock.Mock()
+        browser.root_button = mock.Mock()
         browser.status = mock.Mock()
         browser._display_entries = mock.Mock()
         browser._load_folder = mock.Mock()
@@ -205,6 +206,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.title = mock.Mock()
         browser.path_field = mock.Mock()
         browser.up_button = mock.Mock()
+        browser.root_button = mock.Mock()
         browser.status = mock.Mock()
         browser._display_entries = mock.Mock()
         browser._load_folder = mock.Mock()
@@ -214,6 +216,19 @@ class CloudBrowserTests(unittest.TestCase):
         browser.status.setText.assert_called_once_with("Loading…")
         browser._display_entries.assert_not_called()
         browser._load_folder.assert_not_called()
+
+    def test_go_root_remembers_remote_root(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports/Current"
+        browser.backend = mock.Mock()
+        browser.refresh = mock.Mock()
+
+        browser.go_root()
+
+        self.assertEqual(browser.path, "")
+        browser.backend.remember_path.assert_called_once_with("Docs", "")
+        browser.refresh.assert_called_once_with()
 
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)

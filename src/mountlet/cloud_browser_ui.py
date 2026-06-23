@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from . import core
 from .cloud_browser import BrowserEntry, CloudBrowserBackend, TransferItem, format_file_size, parent_browser_path
+from .shortcuts import matches_shortcut
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
@@ -129,12 +130,14 @@ class CompactCloudBrowser:
 
         navigation = qt.QHBoxLayout()
         self.up_button = self._button("↑", self.go_up, "Parent folder", square=True)
+        self.root_button = self._button("⌂", self.go_root, "Remote root", square=True)
         self.path_field = qt.QLineEdit()
         self.path_field.setReadOnly(True)
         self.path_field.setPlaceholderText("Remote root")
         self.path_field.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
         self.path_field.customContextMenuRequested.connect(self._show_folder_menu)
         navigation.addWidget(self.up_button)
+        navigation.addWidget(self.root_button)
         navigation.addWidget(self.path_field, 1)
         navigation.addWidget(self._button("↻", lambda: self.refresh(force=True), "Refresh folder", square=True))
         navigation.addWidget(
@@ -312,9 +315,17 @@ class CompactCloudBrowser:
             self.paste()
         elif key == self.qt.Qt.Key.Key_Delete:
             self.delete_selected()
-        elif key in {self.qt.Qt.Key.Key_Escape, self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+        elif matches_shortcut(self.qt, event, "browser_return_to_remotes"):
             self.focus_main_window()
-        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+        elif matches_shortcut(self.qt, event, "browser_parent"):
+            self.go_up()
+        elif matches_shortcut(self.qt, event, "browser_root"):
+            self.go_root()
+        elif matches_shortcut(self.qt, event, "browser_refresh"):
+            self.refresh(force=True)
+        elif matches_shortcut(self.qt, event, "browser_open_folder"):
+            self._open_current_mount()
+        elif matches_shortcut(self.qt, event, "browser_open"):
             item = self.tree.currentItem()
             if item is None:
                 return False
@@ -332,6 +343,7 @@ class CompactCloudBrowser:
         self.path_field.setText(path)
         self.path_field.setToolTip(path or "Remote root")
         self.up_button.setEnabled(bool(path))
+        self.root_button.setEnabled(bool(path))
         key = (remote.name, path)
         cached = self._folder_cache.get(key)
         if cached is not None and not force:
@@ -643,6 +655,13 @@ class CompactCloudBrowser:
         if self.remote is None:
             return
         self.path = parent_browser_path(self.path)
+        self.backend.remember_path(self.remote.name, self.path)
+        self.refresh()
+
+    def go_root(self) -> None:
+        if self.remote is None:
+            return
+        self.path = ""
         self.backend.remember_path(self.remote.name, self.path)
         self.refresh()
 

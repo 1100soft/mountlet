@@ -11,6 +11,8 @@
 - Added hover-open remote switching, keyboard focus navigation, retained Qt
   input handlers for X11 stability, file and folder context menus, permanent
   delete confirmation, and remote folder creation.
+- Added a remote-root navigation button and configurable keyboard shortcuts for
+  remote-list and file-browser navigation.
 - Added background preloading, one-level child-folder prefetch, and session
   caching for each remote's remembered folder, default remote-list keyboard
   focus, deterministic X11 row/pin visual state, and an embedded side-by-side

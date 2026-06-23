@@ -75,6 +75,17 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("remote_previous", "Previous remote"),
+    ("remote_next", "Next remote"),
+    ("remote_enter_browser", "Enter file browser"),
+    ("browser_open", "Open selected item"),
+    ("browser_parent", "Parent folder"),
+    ("browser_root", "Remote root"),
+    ("browser_refresh", "Refresh folder"),
+    ("browser_open_folder", "Open folder in file manager"),
+    ("browser_return_to_remotes", "Return to remote list"),
+)
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
@@ -1830,6 +1841,7 @@ class AppConfigDialog(_ConfigDialogBase):
         self.dialog.adjustSize()
 
     def _save(self) -> None:
+        current = load_app_settings()
         try:
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
         except ValueError:
@@ -1844,11 +1856,61 @@ class AppConfigDialog(_ConfigDialogBase):
                 file_manager=self.fields["file_manager"].currentData() or "",
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
+                shortcuts=current.shortcuts,
             )
         )
         global _file_manager_label_cache
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
+        self.dialog.accept()
+
+
+class ShortcutConfigDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("Keyboard shortcuts")
+        self.dialog.resize(420, 260)
+        self.fields: dict[str, Any] = {}
+        self._build()
+
+    def _build(self) -> None:
+        ensure_default_config_files()
+        app_settings = load_app_settings()
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+
+        frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        for key, label in SHORTCUT_CONFIG_FIELDS:
+            field = self.qt.QKeySequenceEdit(self.qt.QKeySequence(app_settings.shortcuts.get(key, "")))
+            field.setToolTip(f"Default: {DEFAULT_SHORTCUTS[key]}")
+            self.fields[key] = field
+            form.addRow(label, field)
+        root.addWidget(frame)
+        root.addWidget(self._buttons())
+        self.dialog.adjustSize()
+
+    def _save(self) -> None:
+        current = load_app_settings()
+        shortcuts = dict(DEFAULT_SHORTCUTS)
+        for key, field in self.fields.items():
+            value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
+            shortcuts[key] = value or DEFAULT_SHORTCUTS[key]
+        save_app_settings(
+            AppSettings(
+                mount_base=current.mount_base,
+                auto_mount=current.auto_mount,
+                auto_mount_delay=current.auto_mount_delay,
+                start_at_login=current.start_at_login,
+                file_manager=current.file_manager,
+                open_folder_behavior=current.open_folder_behavior,
+                focus_file_manager=current.focus_file_manager,
+                shortcuts=shortcuts,
+            )
+        )
         self.dialog.accept()
 
 
@@ -3509,6 +3571,7 @@ class MountletWindow:
 
         config_menu = menu_bar.addMenu("Config")
         self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
+        self.tray_app._add_action(config_menu, "Keyboard shortcuts", self._show_shortcut_config_editor)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
         self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
@@ -4669,18 +4732,11 @@ class MountletWindow:
             pass
 
     def _handle_remote_row_key(self, event: Any, remote: core.RemoteInfo, row: Any) -> None:
-        key = event.key()
-        if key == self.qt.Qt.Key.Key_Up:
+        if matches_shortcut(self.qt, event, "remote_previous"):
             self._focus_relative_remote(remote.name, -1)
-        elif key == self.qt.Qt.Key.Key_Down:
+        elif matches_shortcut(self.qt, event, "remote_next"):
             self._focus_relative_remote(remote.name, 1)
-        elif key in {
-            self.qt.Qt.Key.Key_Return,
-            self.qt.Qt.Key.Key_Enter,
-            self.qt.Qt.Key.Key_Space,
-            self.qt.Qt.Key.Key_Left,
-            self.qt.Qt.Key.Key_Right,
-        }:
+        elif matches_shortcut(self.qt, event, "remote_enter_browser"):
             self._browse_remote(remote, row)
         else:
             event.ignore()
@@ -4688,18 +4744,11 @@ class MountletWindow:
         event.accept()
 
     def _handle_main_key(self, event: Any) -> bool:
-        key = event.key()
-        if key == self.qt.Qt.Key.Key_Up:
+        if matches_shortcut(self.qt, event, "remote_previous"):
             self._focus_relative_remote(self._focused_remote_name(), -1)
-        elif key == self.qt.Qt.Key.Key_Down:
+        elif matches_shortcut(self.qt, event, "remote_next"):
             self._focus_relative_remote(self._focused_remote_name(), 1)
-        elif key in {
-            self.qt.Qt.Key.Key_Return,
-            self.qt.Qt.Key.Key_Enter,
-            self.qt.Qt.Key.Key_Space,
-            self.qt.Qt.Key.Key_Left,
-            self.qt.Qt.Key.Key_Right,
-        }:
+        elif matches_shortcut(self.qt, event, "remote_enter_browser"):
             self._focus_current_browser()
         else:
             return False
@@ -5020,6 +5069,9 @@ class MountletWindow:
 
         self._open_child_dialog(dialog, on_accepted)
 
+    def _show_shortcut_config_editor(self) -> None:
+        self._open_child_dialog(ShortcutConfigDialog(self.qt, self.window))
+
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
@@ -5323,6 +5375,12 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_app_config_editor)
 
+    def _show_shortcuts_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_shortcut_config_editor)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
@@ -5349,6 +5407,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
+        self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
         self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)

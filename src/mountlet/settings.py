@@ -392,6 +392,7 @@ def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = 
 
 __all__ = [
     "AppSettings",
+    "DEFAULT_SHORTCUTS",
     "MountSettings",
     "ensure_default_config_files",
     "load_app_settings",

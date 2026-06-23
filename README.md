@@ -337,12 +337,16 @@ Click a remote strip to open Mountlet Files beside the main window. Each remote
 remembers its last folder. The browser lists the remote through rclone, so the
 remote does not need to be mounted.
 
-- Double-click folders to navigate and files to open them.
+- Double-click folders to navigate and files to open them. Use the parent and
+  root buttons to move out of the current folder.
 - Hover over a remote strip to open or switch the browser without moving
   keyboard focus. Click the strip to focus the browser.
 - With the main window focused, use Up and Down to select remote strips and
-  Enter, Space, Left, or Right to enter the browser. Press Escape, Left, or
-  Right in the browser to return to the selected strip.
+  Enter to enter the browser. In the browser, use Enter to open an item,
+  Backspace for the parent folder, Alt+Home for the remote root, F5 to refresh,
+  Ctrl+Enter to open the current folder in the configured file manager, and
+  Escape to return to the selected strip. These shortcuts can be changed from
+  `Config` > `Keyboard shortcuts`.
 - Use item and folder context menus, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
   transfer files and folders within or between remotes.
 - Press Delete to permanently delete selected cloud items after confirmation.
@@ -354,6 +358,9 @@ remote does not need to be mounted.
   folder. Hold Shift while dropping to move them.
 - **Make available offline** is visible but disabled while snapshot metadata,
   local-edit behavior, and conflict handling are designed.
+
+File operations are direct rclone operations. Mountlet does not currently keep
+an undo/redo history, and deleted cloud items are not moved to the system trash.
 
 Mountlet caches folder listings in memory, preloads each remote's remembered
 folder, and silently prefetches one displayed level deeper when folders are

@@ -38,6 +38,10 @@ start_at_login = true
 file_manager = "org.example.Files.desktop"
 open_folder_behavior = "new_window"
 focus_file_manager = false
+
+[shortcuts]
+browser_parent = "Alt+Up"
+browser_root = "Ctrl+Home"
 """.strip(),
                 encoding="utf-8",
             )
@@ -51,6 +55,9 @@ focus_file_manager = false
         self.assertEqual(config.file_manager, "org.example.Files.desktop")
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
+        self.assertEqual(config.shortcuts["browser_parent"], "Alt+Up")
+        self.assertEqual(config.shortcuts["browser_root"], "Ctrl+Home")
+        self.assertEqual(config.shortcuts["remote_previous"], settings.DEFAULT_SHORTCUTS["remote_previous"])
 
     def test_load_mount_settings_reads_per_remote_overrides(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -129,6 +136,7 @@ order = 2
                     file_manager="org.example.Files.desktop",
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
+                    shortcuts={**settings.DEFAULT_SHORTCUTS, "browser_parent": "Alt+Up"},
                 ),
                 path,
             )
@@ -142,6 +150,7 @@ order = 2
         self.assertEqual(loaded.file_manager, "org.example.Files.desktop")
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
+        self.assertEqual(loaded.shortcuts["browser_parent"], "Alt+Up")
 
     def test_set_start_at_login_writes_and_removes_desktop_entry(self):
         with tempfile.TemporaryDirectory() as tempdir:
