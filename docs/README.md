@@ -31,8 +31,10 @@ creating, selecting, or reliably identifying arbitrary tabs. Mountlet therefore
 opens the requested path and lets Explorer choose the window or tab. Do not add
 keyboard simulation, UI Automation, or undocumented Explorer internals to force
 tab reuse; those approaches are locale-sensitive and unstable across Windows
-updates. Finder and Linux file managers likewise retain final control over
-window and tab reuse.
+updates. Guard the requested path before launching Explorer so stale or
+temporarily unreachable mount folders do not open an unrelated default folder.
+Finder and Linux file managers likewise retain final control over window and
+tab reuse.
 
 The adapters establish implementation boundaries and testable conventions.
 Source-installed tray and mount flows have been exercised on Linux, Windows,

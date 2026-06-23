@@ -69,6 +69,10 @@ REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
     ("remaining", "Remaining space, lowest first"),
 )
 STORAGE_SORT_MODES = {"size", "used", "remaining"}
+REMOTE_ROW_HEIGHT = 40
+REMOTE_LIST_MIN_HEIGHT = 180
+EMBEDDED_BROWSER_MIN_WIDTH = 540
+EMBEDDED_BROWSER_MIN_HEIGHT = 340
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
@@ -3481,18 +3485,23 @@ class MountletWindow:
         return True
 
     def _build_app_menu(self) -> None:
-        app_menu = self.window.menuBar().addMenu("App")
+        menu_bar = self.window.menuBar()
+        try:
+            menu_bar.setNativeMenuBar(False)
+        except Exception:
+            pass
+        app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
 
-        mount_menu = self.window.menuBar().addMenu("Mount")
+        mount_menu = menu_bar.addMenu("Mount")
         self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
         self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
         mount_menu.addSeparator()
         self.tray_app._add_action(mount_menu, "Add remote", self._show_new_remote_wizard)
 
-        config_menu = self.window.menuBar().addMenu("Config")
+        config_menu = menu_bar.addMenu("Config")
         self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
@@ -3842,7 +3851,8 @@ class MountletWindow:
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(REMOTE_LIST_MIN_HEIGHT)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
@@ -4127,6 +4137,7 @@ class MountletWindow:
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
         frame.setFocusPolicy(self.qt.Qt.FocusPolicy.StrongFocus)
+        frame.setFixedHeight(REMOTE_ROW_HEIGHT)
         frame.setToolTip(open_tooltip)
         frame.setAcceptDrops(True)
         frame.mouseReleaseEvent = lambda event, row=frame, selected=remote: self._handle_remote_row_click(event, row, selected)
@@ -4225,6 +4236,7 @@ class MountletWindow:
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        frame.setFixedHeight(REMOTE_ROW_HEIGHT)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
         tooltip = "Add a new remote"
         frame.setToolTip(tooltip)
@@ -4565,21 +4577,32 @@ class MountletWindow:
         mounted = bool(row.property("mounted"))
         selected = bool(row.property("browserSelected"))
         keyboard_focus = bool(row.property("keyboardFocus"))
+        hovered = highlighted or bool(row.property("hovered"))
+        border = "rgba(107, 114, 128, 90)"
+        background = "rgba(107, 114, 128, 24)" if not mounted else "transparent"
         if not mounted:
-            return (
-                "QFrame#remoteRow {"
-                f"border: 2px solid {'#2563eb' if keyboard_focus else '#3b82f6' if selected else 'rgba(107, 114, 128, 90)'};"
-                f"background: {'rgba(37, 99, 235, 45)' if keyboard_focus else 'rgba(59, 130, 246, 30)' if selected else 'rgba(107, 114, 128, 24)'};"
-                "}"
+            if selected:
+                border = "#3b82f6"
+                background = "rgba(59, 130, 246, 30)"
+            if keyboard_focus:
+                border = "#2563eb"
+                background = "rgba(37, 99, 235, 45)"
+        elif hovered or selected or keyboard_focus:
+            border = "#2563eb" if keyboard_focus else "#3b82f6" if selected else "rgba(22, 163, 74, 190)"
+            background = (
+                "rgba(37, 99, 235, 45)"
+                if keyboard_focus
+                else "rgba(59, 130, 246, 30)"
+                if selected
+                else "rgba(22, 163, 74, 36)"
             )
-        if highlighted or selected or keyboard_focus:
-            return (
-                "QFrame#remoteRow {"
-                f"border: 2px solid {'#2563eb' if keyboard_focus else '#3b82f6' if selected else 'rgba(22, 163, 74, 190)'};"
-                f"background: {'rgba(37, 99, 235, 45)' if keyboard_focus else 'rgba(59, 130, 246, 30)' if selected else 'rgba(22, 163, 74, 36)'};"
-                "}"
-            )
-        return ""
+        return (
+            "QFrame#remoteRow {"
+            f"border: 2px solid {border};"
+            "border-radius: 4px;"
+            f"background: {background};"
+            "}"
+        )
 
     def _highlight_remote_row(
         self,
@@ -4589,7 +4612,8 @@ class MountletWindow:
         tooltip: str | None = None,
         remote: core.RemoteInfo | None = None,
     ) -> None:
-        row.setStyleSheet(self._remote_row_style(row, highlighted=highlighted))
+        row.setProperty("hovered", highlighted)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
         if highlighted and tooltip:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
         if highlighted and remote is not None:
@@ -4617,6 +4641,11 @@ class MountletWindow:
             file_browser.show_remote(file_browser.remote, row.frame, show_browser=False)
 
     def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
+        if focused:
+            for widgets in self._row_widgets.values():
+                if widgets.frame is not row:
+                    widgets.frame.setProperty("keyboardFocus", False)
+                    widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
         row.setProperty("keyboardFocus", focused)
         row.setStyleSheet(self._remote_row_style(row, highlighted=False))
         if focused:
@@ -4686,6 +4715,7 @@ class MountletWindow:
     def _focus_remote_row(self, remote_name: str) -> None:
         for widgets in self._row_widgets.values():
             widgets.frame.setProperty("keyboardFocus", False)
+            widgets.frame.setProperty("hovered", False)
             widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
         row = self._row_widgets.get(remote_name)
         if row is not None:
@@ -4766,13 +4796,13 @@ class MountletWindow:
         horizontal_padding = margins.left() + margins.right()
         vertical_padding = margins.top() + margins.bottom()
         content_width = max(toolbar_size.width(), add_row_size.width(), container_size.width())
-        width = horizontal_padding + content_width + scroll_frame + 2
+        width = horizontal_padding + content_width + scroll_frame + scroll.verticalScrollBar().sizeHint().width() + 2
         height = (
             menu_height
             + vertical_padding
             + toolbar_size.height()
             + add_row_size.height()
-            + container_size.height()
+            + max(container_size.height(), REMOTE_LIST_MIN_HEIGHT)
             + scroll_frame
             + (spacing * 2)
             + 2
@@ -4784,8 +4814,10 @@ class MountletWindow:
             and file_browser.is_visible()
         ):
             browser_size = file_browser.root.sizeHint()
-            width += browser_size.width() + 6
-            height = max(height, menu_height + browser_size.height() + 16)
+            browser_width = max(browser_size.width(), EMBEDDED_BROWSER_MIN_WIDTH)
+            browser_height = max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT)
+            width += browser_width + 6
+            height = max(height, menu_height + browser_height + 16)
 
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
@@ -4796,14 +4828,12 @@ class MountletWindow:
             max_width = 960
             max_height = 720
 
-        if width > max_width:
-            height += scroll.horizontalScrollBar().sizeHint().height()
         if height > max_height:
             width += scroll.verticalScrollBar().sizeHint().width()
             height = max_height
 
         target_width = min(max(width, 360), max_width)
-        target_height = min(max(height, 132), max_height)
+        target_height = min(max(height, 220), max_height)
         self._resize_anchored(target_width, target_height, screen)
 
     def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
@@ -4934,6 +4964,13 @@ class MountletWindow:
             self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
             return
         path = Path(remote.mount_path).joinpath(*[part for part in relative_path.split("/") if part])
+        if not path.is_dir():
+            self.tray_app._notify(
+                "Open folder",
+                "The mount folder is not reachable. Remount this remote and try again.",
+                success=False,
+            )
+            return
 
         def worker() -> None:
             self._bridge.folder_opened.emit(self.desktop.open_folder(str(path)))

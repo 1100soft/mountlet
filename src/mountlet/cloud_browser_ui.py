@@ -9,6 +9,8 @@ from . import core
 from .cloud_browser import BrowserEntry, CloudBrowserBackend, TransferItem, format_file_size, parent_browser_path
 
 MIME_TYPE = "application/x-mountlet-remote-files"
+EMBEDDED_BROWSER_MIN_WIDTH = 540
+EMBEDDED_BROWSER_MIN_HEIGHT = 340
 
 
 def cascade_position(
@@ -108,6 +110,7 @@ class CompactCloudBrowser:
         qt = self.qt
         root = qt.QWidget()
         root.setObjectName("fileBrowserSurface")
+        root.setMinimumSize(EMBEDDED_BROWSER_MIN_WIDTH, EMBEDDED_BROWSER_MIN_HEIGHT)
         self.root = root
         layout = qt.QVBoxLayout(root)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -275,6 +278,11 @@ class CompactCloudBrowser:
         self._update_main_focus_style()
 
     def has_focus(self) -> bool:
+        if not self._embedded:
+            try:
+                return bool(self.window.isActiveWindow())
+            except Exception:
+                return False
         focus = self.qt.QApplication.focusWidget()
         return bool(focus is not None and (self.root.isAncestorOf(focus) or focus is self.root))
 

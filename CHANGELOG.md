@@ -14,6 +14,11 @@
 - Added background preloading and session caching for each remote's remembered
   folder, default remote-list keyboard focus, deterministic X11 row/pin visual
   state, and an embedded side-by-side browser on Wayland.
+- Fixed remote row highlight geometry so focus and hover changes do not resize
+  the row list, reserved a minimum embedded-browser size on Wayland, and kept
+  the App/Mount/Config menus in the Mountlet window on macOS.
+- Guarded mounted-folder opening so Windows does not fall back to an unrelated
+  Explorer location when a stale mount path is no longer reachable.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds
   for Linux x64, Windows x64, macOS arm64, and macOS x64.
 - Added automated frozen-executable smoke checks and macOS bundle validation

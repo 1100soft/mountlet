@@ -2175,6 +2175,47 @@ class TrayTests(unittest.TestCase):
             success=False,
         )
 
+    def test_window_folder_open_refuses_unreachable_mount_path(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window.desktop = mock.Mock()
+
+        with mock.patch.object(core, "is_mounted", return_value=True):
+            with mock.patch.object(tray.Path, "is_dir", return_value=False):
+                window._open_folder(remote)
+
+        window.desktop.open_folder.assert_not_called()
+        window.tray_app._notify.assert_called_once_with(
+            "Open folder",
+            "The mount folder is not reachable. Remount this remote and try again.",
+            success=False,
+        )
+
+    def test_remote_row_style_keeps_border_geometry_constant(self):
+        class Row:
+            def __init__(self, values: dict[str, object]) -> None:
+                self.values = values
+
+            def property(self, name: str) -> object:
+                return self.values.get(name)
+
+        window = object.__new__(tray.MountletWindow)
+        normal = window._remote_row_style(Row({"mounted": True}), highlighted=False)
+        selected = window._remote_row_style(
+            Row({"mounted": True, "browserSelected": True}),
+            highlighted=False,
+        )
+        focused = window._remote_row_style(
+            Row({"mounted": True, "keyboardFocus": True}),
+            highlighted=False,
+        )
+
+        self.assertIn("border: 2px solid", normal)
+        self.assertIn("border: 2px solid", selected)
+        self.assertIn("border: 2px solid", focused)
+        self.assertIn("border-radius: 4px", normal)
+
     def test_window_folder_open_failure_reports_notification(self):
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
