@@ -76,17 +76,13 @@ REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
-    ("remote_previous", "Previous remote"),
-    ("remote_next", "Next remote"),
-    ("remote_enter_browser", "Enter file browser"),
+    ("remote_enter_browser", "Enter file browser alternatives"),
 )
 BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
-    ("browser_open", "Open selected item"),
     ("browser_parent", "Parent folder"),
     ("browser_root", "Remote root"),
     ("browser_refresh", "Refresh folder"),
     ("browser_open_folder", "Open folder in file manager"),
-    ("browser_return_to_remotes", "Return to remote list"),
 )
 SHORTCUT_CONTEXTS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("Remote list", REMOTE_SHORTCUT_CONFIG_FIELDS),
@@ -1921,13 +1917,13 @@ class ShortcutConfigDialog(_ConfigDialogBase):
             row_layout = self.qt.QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(4)
-            values = list(shortcuts.get(key, DEFAULT_SHORTCUTS[key]))[:4]
-            values.extend([""] * (4 - len(values)))
+            values = list(shortcuts.get(key, DEFAULT_SHORTCUTS[key]))[:3]
+            values.extend([""] * (3 - len(values)))
             self.fields[key] = []
             for index, value in enumerate(values):
                 field = self.qt.QKeySequenceEdit(self.qt.QKeySequence(value))
                 field.setToolTip(
-                    "Primary shortcut" if index == 0 else f"Alternative shortcut {index}"
+                    f"Alternative shortcut {index + 1}"
                 )
                 field.keySequenceChanged.connect(lambda _sequence=None: self._update_conflicts())
                 self.fields[key].append(field)
@@ -1965,7 +1961,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
     def _restore_defaults(self) -> None:
         for key, fields in self.fields.items():
             values = list(DEFAULT_SHORTCUTS[key])
-            values.extend([""] * (4 - len(values)))
+            values.extend([""] * (3 - len(values)))
             for field, value in zip(fields, values, strict=False):
                 field.setKeySequence(self.qt.QKeySequence(value))
         self._update_conflicts()
@@ -1978,7 +1974,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
                 if value:
                     values.append(value)
-            shortcuts[key] = tuple(values[:4]) or DEFAULT_SHORTCUTS[key]
+            shortcuts[key] = tuple(values[:3]) or DEFAULT_SHORTCUTS[key]
         return shortcuts
 
     def _update_conflicts(self) -> None:
@@ -4849,10 +4845,19 @@ class MountletWindow:
             pass
 
     def _handle_remote_row_key(self, event: Any, remote: core.RemoteInfo, row: Any) -> None:
-        if matches_shortcut(self.qt, event, "remote_previous"):
+        key = event.key()
+        if key == self.qt.Qt.Key.Key_Up:
             self._focus_relative_remote(remote.name, -1)
-        elif matches_shortcut(self.qt, event, "remote_next"):
+        elif key == self.qt.Qt.Key.Key_Down:
             self._focus_relative_remote(remote.name, 1)
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+            self._browse_remote(remote, row)
+        elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            if self._direction_points_to_browser(key):
+                self._browse_remote(remote, row)
+            else:
+                event.accept()
+                return
         elif matches_shortcut(self.qt, event, "remote_enter_browser"):
             self._browse_remote(remote, row)
         else:
@@ -4861,16 +4866,31 @@ class MountletWindow:
         event.accept()
 
     def _handle_main_key(self, event: Any) -> bool:
-        if matches_shortcut(self.qt, event, "remote_previous"):
+        key = event.key()
+        if key == self.qt.Qt.Key.Key_Up:
             self._focus_relative_remote(self._focused_remote_name(), -1)
-        elif matches_shortcut(self.qt, event, "remote_next"):
+        elif key == self.qt.Qt.Key.Key_Down:
             self._focus_relative_remote(self._focused_remote_name(), 1)
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+            self._focus_current_browser()
+        elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            if self._direction_points_to_browser(key):
+                self._focus_current_browser()
+            else:
+                event.accept()
+                return True
         elif matches_shortcut(self.qt, event, "remote_enter_browser"):
             self._focus_current_browser()
         else:
             return False
         event.accept()
         return True
+
+    def _direction_points_to_browser(self, key: Any) -> bool:
+        side = getattr(self.file_browser, "side", lambda: "right")()
+        if side == "left":
+            return key == self.qt.Qt.Key.Key_Left
+        return key == self.qt.Qt.Key.Key_Right
 
     def _focused_remote_name(self) -> str:
         selected = getattr(self, "_selected_remote_name", "")

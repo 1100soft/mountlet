@@ -13,15 +13,11 @@ from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
-    "remote_previous": ("Up",),
-    "remote_next": ("Down",),
-    "remote_enter_browser": ("Return", "Space", "Left", "Right"),
-    "browser_open": ("Return",),
+    "remote_enter_browser": ("Space",),
     "browser_parent": ("Backspace",),
     "browser_root": ("Alt+Home",),
     "browser_refresh": ("F5",),
     "browser_open_folder": ("Ctrl+Return",),
-    "browser_return_to_remotes": ("Esc", "Left", "Right"),
 }
 
 
@@ -69,15 +65,11 @@ open_folder_behavior = "current_desktop"
 focus_file_manager = true
 
 [shortcuts]
-remote_previous = "Up"
-remote_next = "Down"
-remote_enter_browser = "Return, Space, Left, Right"
-browser_open = "Return"
+remote_enter_browser = "Space"
 browser_parent = "Backspace"
 browser_root = "Alt+Home"
 browser_refresh = "F5"
 browser_open_folder = "Ctrl+Return"
-browser_return_to_remotes = "Esc, Left, Right"
 """
 
 
@@ -269,7 +261,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
 def _shortcut_values(values: dict[str, Any]) -> dict[str, tuple[str, ...]]:
     shortcuts = dict(DEFAULT_SHORTCUTS)
     for key in DEFAULT_SHORTCUTS:
-        shortcuts[key] = _shortcut_list(values.get(key), DEFAULT_SHORTCUTS[key])
+        shortcuts[key] = _filter_locked_shortcuts(key, _shortcut_list(values.get(key), DEFAULT_SHORTCUTS[key]))
     return shortcuts
 
 
@@ -281,7 +273,15 @@ def _shortcut_list(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
     else:
         entries = [item.strip() for item in str(value).split(",")]
     shortcuts = tuple(item for item in entries if item)
-    return shortcuts[:4] or default
+    return shortcuts[:3] or default
+
+
+def _filter_locked_shortcuts(key: str, values: tuple[str, ...]) -> tuple[str, ...]:
+    if key != "remote_enter_browser":
+        return values
+    locked = {"return", "enter", "left", "right"}
+    filtered = tuple(value for value in values if value.replace(" ", "").casefold() not in locked)
+    return filtered or DEFAULT_SHORTCUTS[key]
 
 
 def _remote_name_from_section(section: str) -> str | None:

@@ -47,7 +47,9 @@ the compact Qt view and must keep every rclone operation off the UI thread.
 Copy, move, mkdir, and delete actions are direct rclone operations. Do not
 present them as undoable or trash-backed until Mountlet has a provider-aware
 trash/restore design.
-Keyboard shortcuts are scoped by context. A key can be reused between the
+Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
+Down, Return, Escape, and side-aware Left/Right handoff should not be exposed
+as editable shortcuts. A configurable optional key can be reused between the
 remote list and file browser, but conflicts inside one context should remain
 blocked in the shortcut editor.
 Folder listings are session caches and are preloaded for each remembered remote

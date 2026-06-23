@@ -12,8 +12,9 @@
   input handlers for X11 stability, file and folder context menus, permanent
   delete confirmation, and remote folder creation.
 - Added a remote-root navigation button and configurable keyboard shortcuts for
-  remote-list and file-browser navigation, with primary plus three alternative
-  shortcuts per action, grouped contexts, conflict checks, and restore defaults.
+  optional remote-list and file-browser navigation keys, with up to three
+  alternatives per action, grouped contexts, conflict checks, and restore
+  defaults.
 - Added background preloading, one-level child-folder prefetch, and session
   caching for each remote's remembered folder, default remote-list keyboard
   focus, deterministic X11 row/pin visual state, and an embedded side-by-side
@@ -24,6 +25,8 @@
 - Synchronized hover-selected and keyboard-selected remote rows by focusing the
   hovered Qt row, so Up and Down navigation starts from the row currently
   highlighted by the pointer.
+- Made Left and Right navigation side-aware between the main window and file
+  browser, while keeping Up, Down, Return, and Escape as fixed navigation keys.
 - Guarded mounted-folder opening so Windows does not fall back to an unrelated
   Explorer location when a stale mount path is no longer reachable.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds

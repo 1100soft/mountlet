@@ -2265,6 +2265,75 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(window._selected_remote_name, "Gamma")
         self.assertTrue(rows["Gamma"].focused)
 
+    def test_remote_list_direction_key_enters_browser_only_toward_browser_side(self):
+        class Event:
+            def __init__(self, key: object) -> None:
+                self._key = key
+                self.accepted = False
+
+            def key(self) -> object:
+                return self._key
+
+            def accept(self) -> None:
+                self.accepted = True
+
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=SimpleNamespace(
+                    Key_Up="up",
+                    Key_Down="down",
+                    Key_Return="return",
+                    Key_Enter="enter",
+                    Key_Left="left",
+                    Key_Right="right",
+                )
+            )
+        )
+        window = object.__new__(tray.MountletWindow)
+        window.qt = qt
+        window.file_browser = SimpleNamespace(side=lambda: "right")
+
+        with mock.patch.object(window, "_focus_current_browser") as focus_browser:
+            self.assertTrue(window._handle_main_key(Event("right")))
+            focus_browser.assert_called_once_with()
+
+        with mock.patch.object(window, "_focus_current_browser") as focus_browser:
+            event = Event("left")
+            self.assertTrue(window._handle_main_key(event))
+            self.assertTrue(event.accepted)
+            focus_browser.assert_not_called()
+
+    def test_remote_list_left_key_enters_left_side_browser(self):
+        class Event:
+            def __init__(self, key: object) -> None:
+                self._key = key
+
+            def key(self) -> object:
+                return self._key
+
+            def accept(self) -> None:
+                return
+
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=SimpleNamespace(
+                    Key_Up="up",
+                    Key_Down="down",
+                    Key_Return="return",
+                    Key_Enter="enter",
+                    Key_Left="left",
+                    Key_Right="right",
+                )
+            )
+        )
+        window = object.__new__(tray.MountletWindow)
+        window.qt = qt
+        window.file_browser = SimpleNamespace(side=lambda: "left")
+
+        with mock.patch.object(window, "_focus_current_browser") as focus_browser:
+            self.assertTrue(window._handle_main_key(Event("left")))
+            focus_browser.assert_called_once_with()
+
     def test_hover_focuses_remote_row_for_keyboard_navigation(self):
         class Row:
             def __init__(self) -> None:
@@ -2302,17 +2371,16 @@ class TrayTests(unittest.TestCase):
         dialog = object.__new__(tray.ShortcutConfigDialog)
         shortcuts = {
             **tray.DEFAULT_SHORTCUTS,
-            "remote_previous": ("Up",),
-            "remote_next": ("Up",),
-            "browser_parent": ("Up",),
+            "browser_parent": ("Backspace",),
+            "browser_root": ("Backspace",),
         }
 
         conflicts = dialog._shortcut_conflicts(shortcuts)
 
         self.assertEqual(len(conflicts), 1)
-        self.assertIn("Remote list", conflicts[0])
-        self.assertIn("Previous remote", conflicts[0])
-        self.assertIn("Next remote", conflicts[0])
+        self.assertIn("File browser", conflicts[0])
+        self.assertIn("Parent folder", conflicts[0])
+        self.assertIn("Remote root", conflicts[0])
 
     def test_window_folder_open_failure_reports_notification(self):
         window = object.__new__(tray.MountletWindow)

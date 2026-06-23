@@ -58,6 +58,7 @@ class CompactCloudBrowser:
         self.backend = CloudBrowserBackend()
         self.remote: core.RemoteInfo | None = None
         self.path = ""
+        self._side = "right"
         self.entries: list[BrowserEntry] = []
         self.clipboard: tuple[list[TransferItem], bool] | None = None
         self._operation_pending = False
@@ -89,6 +90,12 @@ class CompactCloudBrowser:
                 if outer._handle_key(event):
                     return
                 super().keyPressEvent(event)
+
+            def focusInEvent(self, event: Any) -> None:
+                super().focusInEvent(event)
+                outer._ensure_tree_selection()
+                outer._update_focus_style()
+                outer._update_main_focus_style()
 
             def changeEvent(self, event: Any) -> None:
                 super().changeEvent(event)
@@ -259,6 +266,7 @@ class CompactCloudBrowser:
             self.main_window.raise_()
             self.main_window.activateWindow()
             self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            self._ensure_tree_selection()
             self._update_focus_style()
             self._update_main_focus_style()
             self._layout_changed()
@@ -271,6 +279,7 @@ class CompactCloudBrowser:
         self.window.raise_()
         self.window.activateWindow()
         self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+        self._ensure_tree_selection()
 
     def focus_main_window(self) -> None:
         self.main_window.raise_()
@@ -315,8 +324,13 @@ class CompactCloudBrowser:
             self.paste()
         elif key == self.qt.Qt.Key.Key_Delete:
             self.delete_selected()
-        elif matches_shortcut(self.qt, event, "browser_return_to_remotes"):
+        elif key == self.qt.Qt.Key.Key_Escape:
             self.focus_main_window()
+        elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            if self._direction_points_to_main(key):
+                self.focus_main_window()
+            else:
+                pass
         elif matches_shortcut(self.qt, event, "browser_parent"):
             self.go_up()
         elif matches_shortcut(self.qt, event, "browser_root"):
@@ -325,7 +339,7 @@ class CompactCloudBrowser:
             self.refresh(force=True)
         elif matches_shortcut(self.qt, event, "browser_open_folder"):
             self._open_current_mount()
-        elif matches_shortcut(self.qt, event, "browser_open"):
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
             item = self.tree.currentItem()
             if item is None:
                 return False
@@ -334,6 +348,11 @@ class CompactCloudBrowser:
             return False
         event.accept()
         return True
+
+    def _direction_points_to_main(self, key: Any) -> bool:
+        if self._side == "left":
+            return key == self.qt.Qt.Key.Key_Right
+        return key == self.qt.Qt.Key.Key_Left
 
     def refresh(self, *, force: bool = False) -> None:
         if self.remote is None:
@@ -403,8 +422,20 @@ class CompactCloudBrowser:
                 item.setToolTip(0, "Available offline")
             self.tree.addTopLevelItem(item)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
+        if self.has_focus():
+            self._ensure_tree_selection()
         self._update_actions()
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
+
+    def _ensure_tree_selection(self) -> None:
+        if self.tree.topLevelItemCount() <= 0:
+            return
+        current = self.tree.currentItem() or self.tree.topLevelItem(0)
+        if current is None:
+            return
+        self.tree.setCurrentItem(current)
+        if not self.tree.selectedItems():
+            current.setSelected(True)
 
     def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
         remote = self.remote
@@ -688,9 +719,13 @@ class CompactCloudBrowser:
                 (available.x(), available.y(), available.width(), available.height()),
                 (self.window.width(), self.window.height()),
             )
+            self._side = "left" if position[0] < main.x() else "right"
             self.window.move(*position)
         except Exception:
             return
+
+    def side(self) -> str:
+        return self._side
 
 
 __all__ = ["CompactCloudBrowser", "MIME_TYPE", "cascade_position"]

@@ -230,6 +230,93 @@ class CloudBrowserTests(unittest.TestCase):
         browser.backend.remember_path.assert_called_once_with("Docs", "")
         browser.refresh.assert_called_once_with()
 
+    def test_focus_selects_first_browser_item_when_none_is_selected(self):
+        class Item:
+            def __init__(self) -> None:
+                self.selected = False
+
+            def setSelected(self, selected: bool) -> None:
+                self.selected = selected
+
+        class Tree:
+            def __init__(self) -> None:
+                self.item = Item()
+                self.current = None
+
+            def topLevelItemCount(self) -> int:
+                return 1
+
+            def currentItem(self) -> object | None:
+                return self.current
+
+            def topLevelItem(self, index: int) -> object:
+                self.assert_index = index
+                return self.item
+
+            def setCurrentItem(self, item: object) -> None:
+                self.current = item
+
+            def selectedItems(self) -> list[object]:
+                return []
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+
+        browser._ensure_tree_selection()
+
+        self.assertIs(browser.tree.current, browser.tree.item)
+        self.assertTrue(browser.tree.item.selected)
+
+    def test_browser_direction_key_returns_only_toward_main_window(self):
+        class Event:
+            def __init__(self, key: object) -> None:
+                self._key = key
+                self.accepted = False
+
+            def key(self) -> object:
+                return self._key
+
+            def modifiers(self) -> object:
+                return 0
+
+            def accept(self) -> None:
+                self.accepted = True
+
+        key = SimpleNamespace(
+            Key_C="c",
+            Key_X="x",
+            Key_V="v",
+            Key_Delete="delete",
+            Key_Escape="esc",
+            Key_Left="left",
+            Key_Right="right",
+            Key_Return="return",
+            Key_Enter="enter",
+        )
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=key,
+                KeyboardModifier=SimpleNamespace(ControlModifier=1),
+            )
+        )
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = qt
+        browser._side = "left"
+        browser.copy_selected = mock.Mock()
+        browser.cut_selected = mock.Mock()
+        browser.paste = mock.Mock()
+        browser.delete_selected = mock.Mock()
+        browser.focus_main_window = mock.Mock()
+
+        self.assertTrue(browser._handle_key(Event("right")))
+        browser.focus_main_window.assert_called_once_with()
+
+        browser.focus_main_window.reset_mock()
+        event = Event("left")
+        self.assertTrue(browser._handle_key(event))
+        self.assertTrue(event.accepted)
+        browser.focus_main_window.assert_not_called()
+
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

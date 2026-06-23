@@ -57,7 +57,8 @@ browser_root = "Ctrl+Home"
         self.assertFalse(config.focus_file_manager)
         self.assertEqual(config.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
         self.assertEqual(config.shortcuts["browser_root"], ("Ctrl+Home",))
-        self.assertEqual(config.shortcuts["remote_previous"], settings.DEFAULT_SHORTCUTS["remote_previous"])
+        self.assertEqual(config.shortcuts["remote_enter_browser"], settings.DEFAULT_SHORTCUTS["remote_enter_browser"])
+        self.assertNotIn("remote_previous", config.shortcuts)
 
     def test_load_mount_settings_reads_per_remote_overrides(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -84,6 +85,21 @@ order = 2
         self.assertTrue(remote.auto_mount)
         self.assertFalse(remote.enabled)
         self.assertEqual(remote.order, 2)
+
+    def test_load_app_settings_filters_now_immutable_shortcuts(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "config.toml"
+            path.write_text(
+                """
+[shortcuts]
+remote_enter_browser = "Return, Space, Left, Right"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = settings.load_app_settings(path)
+
+        self.assertEqual(config.shortcuts["remote_enter_browser"], ("Space",))
 
     def test_ensure_default_config_files_creates_app_and_mount_files(self):
         with tempfile.TemporaryDirectory() as tempdir:
