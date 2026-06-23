@@ -3350,6 +3350,7 @@ class MountletWindow:
         self._action_pending: set[str] = set()
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
+        self._selected_remote_name = ""
         self._name_column_width = 160
         self._refresh_pending = False
         self._child_dialogs: list[Any] = []
@@ -3859,6 +3860,8 @@ class MountletWindow:
         rows.setSpacing(6)
         self._row_widgets = {}
         self._current_remote_names = remote_names
+        if self._selected_remote_name not in remote_names:
+            self._selected_remote_name = remote_names[0] if remote_names else ""
         self._name_column_width = name_width
         if remotes:
             for remote in remotes:
@@ -4628,6 +4631,7 @@ class MountletWindow:
         self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=False)
 
     def _set_browser_selected(self, remote_name: str | None) -> None:
+        self._selected_remote_name = remote_name or ""
         for name, widgets in self._row_widgets.items():
             widgets.frame.setProperty("browserSelected", name == remote_name)
             widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
@@ -4694,6 +4698,9 @@ class MountletWindow:
         return True
 
     def _focused_remote_name(self) -> str:
+        selected = getattr(self, "_selected_remote_name", "")
+        if selected in getattr(self, "_current_remote_names", []):
+            return selected
         for name, widgets in self._row_widgets.items():
             if widgets.frame.hasFocus():
                 return name
@@ -4713,6 +4720,7 @@ class MountletWindow:
         self._focus_remote_row(names[index])
 
     def _focus_remote_row(self, remote_name: str) -> None:
+        self._selected_remote_name = remote_name if remote_name in self._row_widgets else ""
         for widgets in self._row_widgets.values():
             widgets.frame.setProperty("keyboardFocus", False)
             widgets.frame.setProperty("hovered", False)

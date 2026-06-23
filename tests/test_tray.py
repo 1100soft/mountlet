@@ -2216,6 +2216,55 @@ class TrayTests(unittest.TestCase):
         self.assertIn("border: 2px solid", focused)
         self.assertIn("border-radius: 4px", normal)
 
+    def test_focused_remote_name_prefers_hover_selected_remote(self):
+        class Row:
+            def __init__(self, focused: bool = False) -> None:
+                self.focused = focused
+
+            def hasFocus(self) -> bool:
+                return self.focused
+
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta", "Gamma"]
+        window._selected_remote_name = "Beta"
+        window._row_widgets = {
+            "Alpha": SimpleNamespace(frame=Row(focused=True)),
+            "Beta": SimpleNamespace(frame=Row()),
+            "Gamma": SimpleNamespace(frame=Row()),
+        }
+
+        self.assertEqual(window._focused_remote_name(), "Beta")
+
+    def test_keyboard_navigation_starts_from_hover_selected_remote(self):
+        class Row:
+            def __init__(self) -> None:
+                self.properties: dict[str, object] = {}
+                self.focused = False
+
+            def property(self, name: str) -> object:
+                return self.properties.get(name)
+
+            def setProperty(self, name: str, value: object) -> None:
+                self.properties[name] = value
+
+            def setStyleSheet(self, _style: str) -> None:
+                return
+
+            def setFocus(self, _reason: object) -> None:
+                self.focused = True
+
+        rows = {name: Row() for name in ("Alpha", "Beta", "Gamma")}
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(FocusReason=SimpleNamespace(ShortcutFocusReason="shortcut")))
+        window._current_remote_names = ["Alpha", "Beta", "Gamma"]
+        window._selected_remote_name = "Beta"
+        window._row_widgets = {name: SimpleNamespace(frame=row) for name, row in rows.items()}
+
+        window._focus_relative_remote(window._focused_remote_name(), 1)
+
+        self.assertEqual(window._selected_remote_name, "Gamma")
+        self.assertTrue(rows["Gamma"].focused)
+
     def test_window_folder_open_failure_reports_notification(self):
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()

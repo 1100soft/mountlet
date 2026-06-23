@@ -17,6 +17,8 @@
 - Fixed remote row highlight geometry so focus and hover changes do not resize
   the row list, reserved a minimum embedded-browser size on Wayland, and kept
   the App/Mount/Config menus in the Mountlet window on macOS.
+- Synchronized hover-selected and keyboard-selected remote rows so Up and Down
+  navigation starts from the row currently highlighted by the pointer.
 - Guarded mounted-folder opening so Windows does not fall back to an unrelated
   Explorer location when a stale mount path is no longer reachable.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds
