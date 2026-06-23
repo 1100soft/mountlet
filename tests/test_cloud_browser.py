@@ -267,6 +267,56 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertIs(browser.tree.current, browser.tree.item)
         self.assertTrue(browser.tree.item.selected)
 
+    def test_focus_selects_current_browser_row_with_selection_model(self):
+        class Index:
+            pass
+
+        class Selection:
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, object]] = []
+
+            def select(self, index: object, flags: object) -> None:
+                self.calls.append((index, flags))
+
+        class Tree:
+            def __init__(self) -> None:
+                self.item = object()
+                self.index = Index()
+                self.selection = Selection()
+                self.current = None
+
+            def topLevelItemCount(self) -> int:
+                return 1
+
+            def currentItem(self) -> object | None:
+                return self.current
+
+            def topLevelItem(self, index: int) -> object:
+                self.assert_index = index
+                return self.item
+
+            def setCurrentItem(self, item: object) -> None:
+                self.current = item
+
+            def currentIndex(self) -> object:
+                return self.index
+
+            def selectionModel(self) -> Selection:
+                return self.selection
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser.qt = SimpleNamespace(
+            QItemSelectionModel=SimpleNamespace(
+                SelectionFlag=SimpleNamespace(ClearAndSelect=1, Rows=2),
+            ),
+        )
+
+        browser._ensure_tree_selection()
+
+        self.assertIs(browser.tree.current, browser.tree.item)
+        self.assertEqual(browser.tree.selection.calls, [(browser.tree.index, 3)])
+
     def test_browser_direction_key_returns_only_toward_main_window(self):
         class Event:
             def __init__(self, key: object) -> None:

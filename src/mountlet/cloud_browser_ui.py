@@ -182,6 +182,7 @@ class CompactCloudBrowser:
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setDragEnabled(False)
         self.tree.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tree.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
@@ -445,7 +446,15 @@ class CompactCloudBrowser:
         if current is None:
             return
         self.tree.setCurrentItem(current)
-        if not self.tree.selectedItems():
+        selection_model = getattr(self.tree, "selectionModel", None)
+        selection = selection_model() if callable(selection_model) else None
+        if selection is not None:
+            flags = (
+                self.qt.QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | self.qt.QItemSelectionModel.SelectionFlag.Rows
+            )
+            selection.select(self.tree.currentIndex(), flags)
+        elif not self.tree.selectedItems():
             current.setSelected(True)
 
     def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
