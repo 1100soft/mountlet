@@ -17,7 +17,7 @@ from mountlet.cloud_browser import (
     parent_browser_path,
     remote_target,
 )
-from mountlet.cloud_browser_ui import CompactCloudBrowser, cascade_position
+from mountlet.cloud_browser_ui import CHILD_FOLDER_PREFETCH_LIMIT, CompactCloudBrowser, cascade_position
 
 
 def _remote(name: str = "Docs") -> core.RemoteInfo:
@@ -195,6 +195,54 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._display_entries.assert_called_once_with(entries)
         browser._load_folder.assert_not_called()
+
+    def test_pending_folder_refresh_shows_loading_message(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports"
+        browser._folder_cache = {}
+        browser._loads_pending = {("Docs", "Reports")}
+        browser.title = mock.Mock()
+        browser.path_field = mock.Mock()
+        browser.up_button = mock.Mock()
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._load_folder = mock.Mock()
+
+        browser.refresh(force=False)
+
+        browser.status.setText.assert_called_once_with("Loading…")
+        browser._display_entries.assert_not_called()
+        browser._load_folder.assert_not_called()
+
+    def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._folder_cache = {("Docs", "Projects/Cached"): []}
+        browser._loads_pending = {("Docs", "Projects/Pending")}
+        browser._load_folder = mock.Mock()
+        entries = [
+            BrowserEntry("Cached", "Projects/Cached", True),
+            BrowserEntry("Pending", "Projects/Pending", True),
+            BrowserEntry("Ready", "Projects/Ready", True),
+            BrowserEntry("a.txt", "Projects/a.txt", False),
+        ]
+
+        browser._prefetch_child_folders(entries)
+
+        browser._load_folder.assert_called_once_with(browser.remote, "Projects/Ready")
+
+    def test_prefetch_child_folders_is_bounded(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._folder_cache = {}
+        browser._loads_pending = set()
+        browser._load_folder = mock.Mock()
+        entries = [BrowserEntry(f"Folder{i}", f"Folder{i}", True) for i in range(CHILD_FOLDER_PREFETCH_LIMIT + 5)]
+
+        browser._prefetch_child_folders(entries)
+
+        self.assertEqual(browser._load_folder.call_count, CHILD_FOLDER_PREFETCH_LIMIT)
 
 
 if __name__ == "__main__":

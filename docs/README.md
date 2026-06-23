@@ -45,14 +45,17 @@ broader end-to-end testing are complete.
 paths, and the future managed-offline storage layer. `cloud_browser_ui.py` owns
 the compact Qt view and must keep every rclone operation off the UI thread.
 Folder listings are session caches and are preloaded for each remembered remote
-path. Deeper recursive indexing must stay opt-in per remote: it can improve
-navigation after the first scan, but it consumes provider API quota, stores more
-metadata locally, and needs invalidation rules for changes made outside
-Mountlet. Offline pinning remains disabled: its eventual manifest must record
-the remote object identity, relative path, type, size, modification time, and
-hash when available. Pinned folders need a cached metadata tree, but unpinned
-files must remain metadata-only entries rather than fake local filesystem
-placeholders. Do not treat rclone VFS blocks as an offline guarantee.
+path. When a folder is displayed, Mountlet silently prefetches one displayed
+level deeper with a bounded queue so navigation into visible folders is often
+instant without scanning an entire remote. Deeper recursive indexing must stay
+opt-in per remote: it can improve navigation after the first scan, but it
+consumes provider API quota, stores more metadata locally, and needs
+invalidation rules for changes made outside Mountlet. Offline pinning remains
+disabled: its eventual manifest must record the remote object identity,
+relative path, type, size, modification time, and hash when available. Pinned
+folders need a cached metadata tree, but unpinned files must remain
+metadata-only entries rather than fake local filesystem placeholders. Do not
+treat rclone VFS blocks as an offline guarantee.
 
 Install from a local checkout:
 

@@ -11,14 +11,16 @@
 - Added hover-open remote switching, keyboard focus navigation, retained Qt
   input handlers for X11 stability, file and folder context menus, permanent
   delete confirmation, and remote folder creation.
-- Added background preloading and session caching for each remote's remembered
-  folder, default remote-list keyboard focus, deterministic X11 row/pin visual
-  state, and an embedded side-by-side browser on Wayland.
+- Added background preloading, one-level child-folder prefetch, and session
+  caching for each remote's remembered folder, default remote-list keyboard
+  focus, deterministic X11 row/pin visual state, and an embedded side-by-side
+  browser on Wayland.
 - Fixed remote row highlight geometry so focus and hover changes do not resize
   the row list, reserved a minimum embedded-browser size on Wayland, and kept
   the App/Mount/Config menus in the Mountlet window on macOS.
-- Synchronized hover-selected and keyboard-selected remote rows so Up and Down
-  navigation starts from the row currently highlighted by the pointer.
+- Synchronized hover-selected and keyboard-selected remote rows by focusing the
+  hovered Qt row, so Up and Down navigation starts from the row currently
+  highlighted by the pointer.
 - Guarded mounted-folder opening so Windows does not fall back to an unrelated
   Explorer location when a stale mount path is no longer reachable.
 - Added PyInstaller-based native bundle definitions and GitHub Actions builds

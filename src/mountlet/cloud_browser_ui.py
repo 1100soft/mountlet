@@ -11,6 +11,7 @@ from .cloud_browser import BrowserEntry, CloudBrowserBackend, TransferItem, form
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+CHILD_FOLDER_PREFETCH_LIMIT = 24
 
 
 def cascade_position(
@@ -339,6 +340,8 @@ class CompactCloudBrowser:
         if key in self._loads_pending:
             if cached is not None:
                 self._display_entries(cached)
+            else:
+                self.status.setText("Loading…")
             return
         self.status.setText("Loading…")
         self._load_folder(remote, path)
@@ -389,6 +392,23 @@ class CompactCloudBrowser:
             self.tree.addTopLevelItem(item)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         self._update_actions()
+        self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
+
+    def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
+        remote = self.remote
+        if remote is None:
+            return
+        scheduled = 0
+        for entry in entries:
+            if not entry.is_dir:
+                continue
+            key = (remote.name, entry.path)
+            if key in self._folder_cache or key in self._loads_pending:
+                continue
+            self._load_folder(remote, entry.path)
+            scheduled += 1
+            if scheduled >= CHILD_FOLDER_PREFETCH_LIMIT:
+                return
 
     def _selected_entries(self) -> list[BrowserEntry]:
         result: list[BrowserEntry] = []

@@ -4620,6 +4620,10 @@ class MountletWindow:
         if highlighted and tooltip:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
         if highlighted and remote is not None:
+            try:
+                row.setFocus(self.qt.Qt.FocusReason.MouseFocusReason)
+            except Exception:
+                pass
             self._select_browser_remote(remote, row)
 
     def _browse_remote(self, remote: core.RemoteInfo, row: Any) -> None:

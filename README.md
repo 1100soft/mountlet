@@ -355,9 +355,10 @@ remote does not need to be mounted.
 - **Make available offline** is visible but disabled while snapshot metadata,
   local-edit behavior, and conflict handling are designed.
 
-Mountlet caches each remote's remembered folder listing in memory and preloads
-those folders in the background. Use the refresh button when cloud contents
-have changed outside Mountlet.
+Mountlet caches folder listings in memory, preloads each remote's remembered
+folder, and silently prefetches one displayed level deeper when folders are
+shown. Use the refresh button when cloud contents have changed outside
+Mountlet.
 
 If your desktop session does not expose a system tray, use the terminal menu
 instead.

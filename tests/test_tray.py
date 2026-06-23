@@ -2265,6 +2265,39 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(window._selected_remote_name, "Gamma")
         self.assertTrue(rows["Gamma"].focused)
 
+    def test_hover_focuses_remote_row_for_keyboard_navigation(self):
+        class Row:
+            def __init__(self) -> None:
+                self.properties: dict[str, object] = {"mounted": True}
+                self.focus_reason = None
+
+            def property(self, name: str) -> object:
+                return self.properties.get(name)
+
+            def setProperty(self, name: str, value: object) -> None:
+                self.properties[name] = value
+
+            def setStyleSheet(self, _style: str) -> None:
+                return
+
+            def setFocus(self, reason: object) -> None:
+                self.focus_reason = reason
+
+        row = Row()
+        remote = core.RemoteInfo("Beta", "Beta", "Drive", "drive", "/tmp/beta")
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(FocusReason=SimpleNamespace(MouseFocusReason="mouse")),
+            QToolTip=mock.Mock(),
+            QCursor=mock.Mock(),
+        )
+
+        with mock.patch.object(window, "_select_browser_remote") as select_remote:
+            window._highlight_remote_row(row, highlighted=True, remote=remote)
+
+        self.assertEqual(row.focus_reason, "mouse")
+        select_remote.assert_called_once_with(remote, row)
+
     def test_window_folder_open_failure_reports_notification(self):
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
