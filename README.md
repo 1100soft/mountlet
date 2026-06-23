@@ -348,8 +348,12 @@ remote does not need to be mounted.
   selected strip, and the arrow pointing back toward the main window also
   returns. Space, Backspace, Alt+Home, F5, Ctrl+Return, and other optional
   shortcut alternatives can be changed from `Config` > `Keyboard shortcuts`.
-- Use item and folder context menus, or `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to
-  transfer files and folders within or between remotes.
+- Editing inside Mountlet Files is disabled by default. Enable it from `App`
+  > `Settings` > `Allow edits in Mountlet Files` only if you want direct cloud
+  edits from the integrated browser.
+- When integrated edits are enabled, use item and folder context menus, or
+  `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to transfer files and folders within or
+  between remotes.
 - Press Delete to permanently delete selected cloud items after confirmation.
 - Right-click an item for open, copy, cut, and delete commands. Folder menus
   can also open the mounted location in the configured file manager. Right-click
@@ -360,8 +364,10 @@ remote does not need to be mounted.
 - **Make available offline** is visible but disabled while snapshot metadata,
   local-edit behavior, and conflict handling are designed.
 
-File operations are direct rclone operations. Mountlet does not currently keep
-an undo/redo history, and deleted cloud items are not moved to the system trash.
+Integrated edits are direct rclone operations. Mountlet does not keep an
+undo/redo history, and deleted cloud items are not moved to the system trash.
+Use the system file manager when you want file-manager buffering, undo, or
+trash behavior.
 
 Mountlet caches folder listings in memory, preloads each remote's remembered
 folder, and silently prefetches one displayed level deeper when folders are

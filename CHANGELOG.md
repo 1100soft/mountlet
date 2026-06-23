@@ -11,6 +11,8 @@
 - Added hover-open remote switching, keyboard focus navigation, retained Qt
   input handlers for X11 stability, file and folder context menus, permanent
   delete confirmation, and remote folder creation.
+- Disabled integrated file edits by default and added an app setting with an
+  explicit warning before enabling direct, non-undoable cloud file operations.
 - Added a remote-root navigation button and configurable keyboard shortcuts for
   optional remote-list and file-browser navigation keys, with up to three
   alternatives per action, grouped contexts, conflict checks, and restore
