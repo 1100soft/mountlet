@@ -2201,8 +2201,9 @@ class TrayTests(unittest.TestCase):
         window.desktop = mock.Mock()
 
         with mock.patch.object(core, "is_mounted", return_value=True):
-            with mock.patch.object(tray.Path, "is_dir", return_value=False):
-                window._open_folder(remote)
+            with mock.patch.object(tray.platform, "system", return_value="Linux"):
+                with mock.patch.object(tray.Path, "is_dir", return_value=False):
+                    window._open_folder(remote)
 
         window.desktop.open_folder.assert_not_called()
         window.tray_app._notify.assert_called_once_with(
