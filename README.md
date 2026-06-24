@@ -423,15 +423,17 @@ mountlet import --config ~/mountlet-backup/rclone.conf
 
 In the tray app, use `Config` > `Export config bundle` to create one
 `.mountlet` file containing `rclone.conf`, nearby client-secret files,
-`config.toml`, and `mounts.toml`. Use `Config` > `Import config bundle` on
-another device to restore that bundle. Mountlet saves the current local config
-as one restorable backup bundle before importing; use `Config` > `Open config
-backup folder` to restore or delete old backups.
+`config.toml`, and `mounts.toml`. Mountlet can encrypt the bundle with a
+password; leave the password blank only when you are comfortable storing the
+bundle as plain text. Use `Config` > `Import config bundle` on another device to
+restore that bundle. Mountlet saves the current local config as one restorable
+backup bundle before importing; use `Config` > `Open config backup folder` to
+restore or delete old backups.
 
-Export config bundles to a local folder first, then copy them to cloud storage
-if needed. Reading or writing sensitive config archives directly through mounted
-cloud folders can fail because the OS and filesystem driver may treat those
-mounts differently from normal local folders.
+You can save or open a bundle through a mounted remote. When the selected path
+is inside a mounted remote, Mountlet stages the transfer through `rclone` so the
+remote sees the file directly instead of relying on filesystem-driver behavior.
+Encrypted bundles are recommended for cloud storage.
 
 Most personal rclone remotes can use the same `rclone.conf` on your own
 devices. Some providers may still require reconnecting on the new device, and
@@ -488,8 +490,10 @@ local app and mount behavior.
 
 ## Credentials
 
-`rclone.conf` can contain OAuth tokens and provider credentials. Treat `.mountlet`
-bundles as sensitive files. Copy them only between devices you control.
+`rclone.conf` can contain OAuth tokens and provider credentials. Treat
+unencrypted `.mountlet` bundles as sensitive files. Copy them only between
+devices you control. Password-protected bundles are encrypted with AES-256-GCM
+using a key derived from the password.
 
 - Do not share real `rclone.conf` files.
 - Do not share `client_secret*.json` files.

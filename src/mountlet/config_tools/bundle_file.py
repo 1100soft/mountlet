@@ -4,9 +4,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import zipfile
 from pathlib import Path
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .shared import (
     app_config_file,
@@ -21,11 +28,24 @@ from .shared import (
 BUNDLE_EXTENSION = ".mountlet"
 BUNDLE_VERSION = 1
 MANIFEST_NAME = "manifest.json"
+PAYLOAD_NAME = "payload.bin"
 RCLONE_CONFIG_NAME = "rclone.conf"
 APP_CONFIG_NAME = "config.toml"
 MOUNTS_CONFIG_NAME = "mounts.toml"
 SECRET_PREFIX = "secrets/"
 BACKUP_DIR_NAME = "backups"
+KDF_ITERATIONS = 390_000
+SALT_BYTES = 16
+NONCE_BYTES = 12
+AAD = b"mountlet-config-bundle-v1"
+
+
+class BundlePasswordRequired(ValueError):
+    """Raised when an encrypted bundle is imported without a password."""
+
+
+class BundlePasswordInvalid(ValueError):
+    """Raised when an encrypted bundle password cannot decrypt the payload."""
 
 
 def default_export_path() -> Path:
@@ -36,7 +56,7 @@ def backup_dir() -> Path:
     return app_config_file().parent / BACKUP_DIR_NAME
 
 
-def export_bundle_file(destination: Path, *, overwrite: bool = False) -> Path:
+def export_bundle_file(destination: Path, *, overwrite: bool = False, password: str | None = None) -> Path:
     destination = _bundle_path(destination)
     if destination.exists() and not overwrite:
         raise FileExistsError(destination)
@@ -47,25 +67,37 @@ def export_bundle_file(destination: Path, *, overwrite: bool = False) -> Path:
         raise FileNotFoundError(source_conf)
 
     files = _bundle_sources(source_conf)
-    manifest = {
-        "format": "mountlet-config-bundle",
-        "version": BUNDLE_VERSION,
-        "files": sorted(files),
-    }
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2, sort_keys=True))
-        for archive_name, source in files.items():
-            archive.write(source, archive_name)
+    payload_manifest = _manifest(files)
+    if password:
+        payload = _archive_bytes(files, payload_manifest)
+        salt = os.urandom(SALT_BYTES)
+        nonce = os.urandom(NONCE_BYTES)
+        encrypted = AESGCM(_derive_key(password, salt)).encrypt(nonce, payload, AAD)
+        wrapper_manifest = {
+            "format": "mountlet-config-bundle",
+            "version": BUNDLE_VERSION,
+            "encrypted": True,
+            "cipher": "AES-256-GCM",
+            "kdf": "PBKDF2-HMAC-SHA256",
+            "iterations": KDF_ITERATIONS,
+            "salt": salt.hex(),
+            "nonce": nonce.hex(),
+        }
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(MANIFEST_NAME, json.dumps(wrapper_manifest, indent=2, sort_keys=True))
+            archive.writestr(PAYLOAD_NAME, encrypted)
+    else:
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            _write_archive(archive, files, payload_manifest)
     apply_permissions(destination)
     return destination
 
 
-def import_bundle_file(source: Path, *, backup: bool = True) -> Path | None:
+def import_bundle_file(source: Path, *, backup: bool = True, password: str | None = None) -> Path | None:
     source = Path(source).expanduser().resolve()
     if not source.exists():
         raise FileNotFoundError(source)
-    with zipfile.ZipFile(source) as archive:
-        _validate_archive(archive)
+    with _open_bundle_archive(source, password=password) as archive:
         backup_path = backup_current_config() if backup else None
         _extract_config_file(archive, RCLONE_CONFIG_NAME, default_config_path())
         _extract_config_file(archive, APP_CONFIG_NAME, app_config_file(), required=False)
@@ -78,22 +110,22 @@ def import_bundle_file(source: Path, *, backup: bool = True) -> Path | None:
     return backup_path
 
 
+def is_encrypted_bundle(source: Path) -> bool:
+    source = Path(source).expanduser()
+    with zipfile.ZipFile(source) as archive:
+        manifest = _read_manifest(archive)
+    return bool(manifest.get("encrypted"))
+
+
 def backup_current_config() -> Path | None:
     sources = _bundle_sources(default_config_path())
     if not sources:
         return None
     destination = backup_dir() / f"mountlet-config-backup-{timestamp()}{BUNDLE_EXTENSION}"
     ensure_dir(destination.parent)
-    manifest = {
-        "format": "mountlet-config-bundle",
-        "version": BUNDLE_VERSION,
-        "backup": True,
-        "files": sorted(sources),
-    }
+    manifest = _manifest(sources, backup=True)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2, sort_keys=True))
-        for archive_name, source in sources.items():
-            archive.write(source, archive_name)
+        _write_archive(archive, sources, manifest)
     apply_permissions(destination)
     return destination
 
@@ -111,6 +143,30 @@ def _bundle_sources(source_conf: Path) -> dict[str, Path]:
     return files
 
 
+def _manifest(files: dict[str, Path], *, backup: bool = False) -> dict[str, object]:
+    manifest: dict[str, object] = {
+        "format": "mountlet-config-bundle",
+        "version": BUNDLE_VERSION,
+        "files": sorted(files),
+    }
+    if backup:
+        manifest["backup"] = True
+    return manifest
+
+
+def _archive_bytes(files: dict[str, Path], manifest: dict[str, object]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        _write_archive(archive, files, manifest)
+    return output.getvalue()
+
+
+def _write_archive(archive: zipfile.ZipFile, files: dict[str, Path], manifest: dict[str, object]) -> None:
+    archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2, sort_keys=True))
+    for archive_name, source in files.items():
+        archive.write(source, archive_name)
+
+
 def _bundle_path(path: Path) -> Path:
     expanded = Path(path).expanduser()
     if expanded.suffix.casefold() != BUNDLE_EXTENSION:
@@ -118,20 +174,75 @@ def _bundle_path(path: Path) -> Path:
     return expanded.resolve()
 
 
-def _validate_archive(archive: zipfile.ZipFile) -> None:
-    names = set(archive.namelist())
-    if RCLONE_CONFIG_NAME not in names:
-        raise ValueError("This bundle does not contain rclone.conf.")
-    if MANIFEST_NAME not in names:
-        return
+def _open_bundle_archive(source: Path, *, password: str | None) -> zipfile.ZipFile:
+    archive = zipfile.ZipFile(source)
+    try:
+        manifest = _validate_archive(archive)
+        if not manifest.get("encrypted"):
+            return archive
+        if not password:
+            raise BundlePasswordRequired("This bundle is encrypted. Enter its password to import it.")
+        payload = _decrypt_payload(archive, manifest, password)
+    except Exception:
+        archive.close()
+        raise
+    archive.close()
+    decrypted = zipfile.ZipFile(io.BytesIO(payload))
+    _validate_archive(decrypted)
+    return decrypted
+
+
+def _read_manifest(archive: zipfile.ZipFile) -> dict[str, object]:
+    if MANIFEST_NAME not in archive.namelist():
+        return {}
     try:
         manifest = json.loads(archive.read(MANIFEST_NAME).decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("This bundle has an invalid manifest.") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("This bundle has an invalid manifest.")
+    return manifest
+
+
+def _validate_archive(archive: zipfile.ZipFile) -> dict[str, object]:
+    names = set(archive.namelist())
+    manifest = _read_manifest(archive)
+    if not manifest:
+        if RCLONE_CONFIG_NAME not in names:
+            raise ValueError("This bundle does not contain rclone.conf.")
+        return manifest
     if manifest.get("format") != "mountlet-config-bundle":
         raise ValueError("This is not a Mountlet config bundle.")
     if int(manifest.get("version", 0)) > BUNDLE_VERSION:
         raise ValueError("This bundle was created by a newer Mountlet version.")
+    if manifest.get("encrypted"):
+        if PAYLOAD_NAME not in names:
+            raise ValueError("This encrypted bundle does not contain a payload.")
+        return manifest
+    if RCLONE_CONFIG_NAME not in names:
+        raise ValueError("This bundle does not contain rclone.conf.")
+    return manifest
+
+
+def _derive_key(password: str, salt: bytes) -> bytes:
+    return PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=KDF_ITERATIONS,
+    ).derive(password.encode("utf-8"))
+
+
+def _decrypt_payload(archive: zipfile.ZipFile, manifest: dict[str, object], password: str) -> bytes:
+    try:
+        salt = bytes.fromhex(str(manifest["salt"]))
+        nonce = bytes.fromhex(str(manifest["nonce"]))
+    except (KeyError, ValueError) as exc:
+        raise ValueError("This encrypted bundle has invalid encryption metadata.") from exc
+    try:
+        return AESGCM(_derive_key(password, salt)).decrypt(nonce, archive.read(PAYLOAD_NAME), AAD)
+    except InvalidTag as exc:
+        raise BundlePasswordInvalid("The bundle password is incorrect.") from exc
 
 
 def _extract_config_file(
@@ -153,9 +264,12 @@ def _extract_config_file(
 
 __all__ = [
     "BUNDLE_EXTENSION",
+    "BundlePasswordInvalid",
+    "BundlePasswordRequired",
     "backup_current_config",
     "backup_dir",
     "default_export_path",
     "export_bundle_file",
     "import_bundle_file",
+    "is_encrypted_bundle",
 ]

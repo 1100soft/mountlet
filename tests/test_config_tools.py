@@ -156,6 +156,36 @@ class ConfigToolTests(unittest.TestCase):
                 self.assertIn("mounts.toml", archive.namelist())
                 self.assertIn("secrets/client_secret_demo.json", archive.namelist())
 
+    def test_encrypted_single_file_bundle_hides_config_and_imports_with_password(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            rclone_config = root / "rclone" / "rclone.conf"
+            destination = root / "secure.mountlet"
+            env = {
+                "RCLONE_CONFIG": str(rclone_config),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                rclone_config.parent.mkdir()
+                rclone_config.write_text("[Docs]\ntype = drive\n", encoding="utf-8")
+                bundle_file.export_bundle_file(destination, password="secret")
+
+                with zipfile.ZipFile(destination) as archive:
+                    self.assertIn("manifest.json", archive.namelist())
+                    self.assertIn("payload.bin", archive.namelist())
+                    self.assertNotIn("rclone.conf", archive.namelist())
+                self.assertTrue(bundle_file.is_encrypted_bundle(destination))
+
+                rclone_config.write_text("[Old]\ntype = s3\n", encoding="utf-8")
+                with self.assertRaises(bundle_file.BundlePasswordRequired):
+                    bundle_file.import_bundle_file(destination, backup=False)
+                with self.assertRaises(bundle_file.BundlePasswordInvalid):
+                    bundle_file.import_bundle_file(destination, backup=False, password="wrong")
+
+                bundle_file.import_bundle_file(destination, backup=False, password="secret")
+
+            self.assertEqual(rclone_config.read_text(encoding="utf-8"), "[Docs]\ntype = drive\n")
+
     def test_single_file_bundle_import_creates_restorable_backup_archive(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

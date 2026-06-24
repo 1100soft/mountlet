@@ -5463,8 +5463,26 @@ class MountletWindow:
             destination_path = destination_path.with_suffix(bundle_file.BUNDLE_EXTENSION)
         if destination_path.exists() and not self._confirm_replace_file(destination_path):
             return
+        password = self._ask_bundle_password(
+            "Export bundle password",
+            "Password for this bundle.\n\nLeave blank to export without encryption.",
+            confirm=True,
+        )
+        if password is None:
+            return
+        remote_destination = self._mounted_remote_file(destination_path)
+        if remote_destination is not None and not password and not self._confirm_unencrypted_remote_export():
+            return
         try:
-            exported = bundle_file.export_bundle_file(destination_path, overwrite=True)
+            if remote_destination is None:
+                exported = bundle_file.export_bundle_file(destination_path, overwrite=True, password=password)
+            else:
+                remote, relative_path = remote_destination
+                with tempfile.TemporaryDirectory(prefix="mountlet-export-") as tempdir:
+                    temporary = Path(tempdir) / destination_path.name
+                    bundle_file.export_bundle_file(temporary, overwrite=True, password=password)
+                    self._copy_local_file_to_remote(temporary, remote, relative_path)
+                exported = destination_path
         except Exception as exc:
             self.tray_app._notify("Export config", str(exc), success=False)
             return
@@ -5503,17 +5521,23 @@ class MountletWindow:
         )
         if reply != self.qt.QMessageBox.StandardButton.Yes:
             return
+        password = self._ask_bundle_password(
+            "Import bundle password",
+            "Bundle password.\n\nLeave blank if this bundle is not encrypted.",
+        )
+        if password is None:
+            return
         try:
             selected_path = Path(selected).expanduser()
             remote_source = self._mounted_remote_file(selected_path)
             if remote_source is None:
-                backup_path = bundle_file.import_bundle_file(selected_path, backup=True)
+                backup_path = bundle_file.import_bundle_file(selected_path, backup=True, password=password)
             else:
                 remote, relative_path = remote_source
                 with tempfile.TemporaryDirectory(prefix="mountlet-import-") as tempdir:
                     temporary = Path(tempdir) / selected_path.name
                     self._copy_remote_file_to_local(remote, relative_path, temporary)
-                    backup_path = bundle_file.import_bundle_file(temporary, backup=True)
+                    backup_path = bundle_file.import_bundle_file(temporary, backup=True, password=password)
         except Exception as exc:
             self.tray_app._notify("Import config", str(exc), success=False)
             return
@@ -5532,6 +5556,45 @@ class MountletWindow:
             self.qt.QMessageBox.StandardButton.No,
         )
         return reply == self.qt.QMessageBox.StandardButton.Yes
+
+    def _confirm_unencrypted_remote_export(self) -> bool:
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Export without password?",
+            "This bundle contains cloud credentials and will be written to a mounted remote without encryption.\n\n"
+            "Continue?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
+
+    def _ask_bundle_password(self, title: str, prompt: str, *, confirm: bool = False) -> str | None:
+        password = self._read_password(title, prompt)
+        if password is None:
+            return None
+        if not confirm or not password:
+            return password
+        repeated = self._read_password("Confirm bundle password", "Enter the same password again.")
+        if repeated is None:
+            return None
+        if password != repeated:
+            self.tray_app._notify("Config bundle", "The passwords did not match.", success=False)
+            return None
+        return password
+
+    def _read_password(self, title: str, prompt: str) -> str | None:
+        try:
+            value, accepted = self.qt.QInputDialog.getText(
+                self.window,
+                title,
+                prompt,
+                self.qt.QLineEdit.EchoMode.Password,
+            )
+        except TypeError:
+            value, accepted = self.qt.QInputDialog.getText(self.window, title, prompt)
+        if not accepted:
+            return None
+        return str(value)
 
     def _open_config_backup_folder(self) -> None:
         backup_path = bundle_file.backup_dir()
@@ -5556,6 +5619,21 @@ class MountletWindow:
             raise RuntimeError("rclone was not found.")
         result = subprocess.run(
             [binary, "--config", core.CONFIG_PATH, "copyto", remote_target(remote, relative_path), str(destination)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            **core.PLATFORM.command_process_options(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}.")
+
+    def _copy_local_file_to_remote(self, source: Path, remote: core.RemoteInfo, relative_path: str) -> None:
+        binary = core.find_rclone()
+        if not binary:
+            raise RuntimeError("rclone was not found.")
+        result = subprocess.run(
+            [binary, "--config", core.CONFIG_PATH, "copyto", str(source), remote_target(remote, relative_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,

@@ -8,6 +8,9 @@ version = "0.3.0"
 description = "CLI and tray tools for mounting rclone remotes"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "cryptography>=42",
+]
 license = "MIT"
 authors = [
   {name = "Eric Holt"},
