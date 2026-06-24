@@ -235,6 +235,20 @@ class CompactCloudBrowser:
             if key not in self._folder_cache and key not in self._loads_pending:
                 self._load_folder(remote, path)
 
+    def invalidate(self, remote_name: str | None = None) -> None:
+        if remote_name is None:
+            self._folder_cache.clear()
+            self._loads_pending.clear()
+            if self.remote is not None:
+                self.refresh(force=True)
+            return
+        self._folder_cache = {
+            key: entries for key, entries in self._folder_cache.items() if key[0] != remote_name
+        }
+        self._loads_pending = {key for key in self._loads_pending if key[0] != remote_name}
+        if self.remote is not None and self.remote.name == remote_name:
+            self.refresh(force=True)
+
     def show_remote(
         self,
         remote: core.RemoteInfo,
@@ -413,7 +427,10 @@ class CompactCloudBrowser:
         self._loads_pending.discard(key)
         if not isinstance(entries, list):
             if self.remote and (self.remote.name, self.path) == key:
+                self.entries = []
+                self.tree.clear()
                 self.status.setText(error or "Could not load this folder")
+                self._update_actions()
             return
         self._folder_cache[key] = entries
         if self.remote is None or (self.remote.name, self.path) != key:
