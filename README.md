@@ -416,6 +416,17 @@ mountlet export ~/mountlet-backup
 mountlet import --config ~/mountlet-backup/rclone.conf
 ```
 
+In the tray app, use `Config` > `Export rclone config bundle` to copy your
+current `rclone.conf` and nearby client-secret files into a backup folder. Use
+`Config` > `Import rclone config file` on another device to replace that
+device's `rclone.conf`, back up the previous file, clear Mountlet's cached
+remote listings, and refresh the remote list.
+
+Most personal rclone remotes can use the same `rclone.conf` on your own
+devices. Some providers may still require reconnecting on the new device, and
+provider-specific local prerequisites such as rclone and the filesystem driver
+must still be installed there.
+
 ## File Locations
 
 Mountlet keeps application data in user-specific locations and leaves
@@ -467,7 +478,7 @@ local app and mount behavior.
 ## Credentials
 
 `rclone.conf` can contain OAuth tokens and provider credentials. Treat exported
-bundles as sensitive files.
+bundles as sensitive files. Copy them only between devices you control.
 
 - Do not share real `rclone.conf` files.
 - Do not share `client_secret*.json` files.

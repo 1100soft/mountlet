@@ -197,6 +197,39 @@ class CloudBrowserTests(unittest.TestCase):
         browser._display_entries.assert_called_once_with(entries)
         browser._load_folder.assert_not_called()
 
+    def test_listing_error_clears_stale_visible_entries(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports"
+        browser.entries = [BrowserEntry("old.txt", "Reports/old.txt", False)]
+        browser._loads_pending = {("Docs", "Reports")}
+        browser.tree = mock.Mock()
+        browser.status = mock.Mock()
+        browser._update_actions = mock.Mock()
+
+        browser._listing_ready("Docs", "Reports", None, "token expired")
+
+        self.assertEqual(browser.entries, [])
+        browser.tree.clear.assert_called_once_with()
+        browser.status.setText.assert_called_once_with("token expired")
+        browser._update_actions.assert_called_once_with()
+
+    def test_invalidate_clears_selected_remote_cache_and_refreshes(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._folder_cache = {
+            ("Docs", ""): [BrowserEntry("old.txt", "old.txt", False)],
+            ("Photos", ""): [BrowserEntry("photo.jpg", "photo.jpg", False)],
+        }
+        browser._loads_pending = {("Docs", ""), ("Photos", "")}
+        browser.refresh = mock.Mock()
+
+        browser.invalidate("Docs")
+
+        self.assertEqual(browser._folder_cache, {("Photos", ""): [BrowserEntry("photo.jpg", "photo.jpg", False)]})
+        self.assertEqual(browser._loads_pending, {("Photos", "")})
+        browser.refresh.assert_called_once_with(force=True)
+
     def test_pending_folder_refresh_shows_loading_message(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

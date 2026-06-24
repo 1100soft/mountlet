@@ -427,6 +427,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QComboBox,
             QDialog,
             QDialogButtonBox,
+            QFileDialog,
             QFrame,
             QFormLayout,
             QGridLayout,
@@ -472,6 +473,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QDialog=QDialog,
         QDialogButtonBox=QDialogButtonBox,
         QDesktopServices=QDesktopServices,
+        QFileDialog=QFileDialog,
         QDrag=QDrag,
         QFormLayout=QFormLayout,
         QFrame=QFrame,
@@ -3721,6 +3723,9 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
         self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
         config_menu.addSeparator()
+        self.tray_app._add_action(config_menu, "Export rclone config bundle", self._export_rclone_config_bundle)
+        self.tray_app._add_action(config_menu, "Import rclone config file", self._import_rclone_config_file)
+        config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
         if _has_mount_driver_config():
             self.tray_app._add_action(
@@ -4055,6 +4060,7 @@ class MountletWindow:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
+            self._browser_layout_changed()
             return
 
         root = self.qt.QWidget()
@@ -4093,7 +4099,14 @@ class MountletWindow:
             shell = self.qt.QHBoxLayout(central)
             shell.setContentsMargins(0, 0, 0, 0)
             shell.setSpacing(6)
-            shell.addWidget(root)
+            try:
+                root.setSizePolicy(
+                    self.qt.QSizePolicy.Policy.Fixed,
+                    self.qt.QSizePolicy.Policy.Preferred,
+                )
+            except Exception:
+                pass
+            shell.addWidget(root, 0)
             self.file_browser.embed_into(shell)
         central.setObjectName("mountletMainSurface")
         self._main_surface = central
@@ -5036,7 +5049,10 @@ class MountletWindow:
         horizontal_padding = margins.left() + margins.right()
         vertical_padding = margins.top() + margins.bottom()
         content_width = max(toolbar_size.width(), add_row_size.width(), container_size.width())
-        width = horizontal_padding + content_width + scroll_frame + scroll.verticalScrollBar().sizeHint().width() + 2
+        remote_panel_width = (
+            horizontal_padding + content_width + scroll_frame + scroll.verticalScrollBar().sizeHint().width() + 2
+        )
+        width = remote_panel_width
         height = (
             menu_height
             + vertical_padding
@@ -5048,6 +5064,12 @@ class MountletWindow:
             + 2
         )
         file_browser = getattr(self, "file_browser", None)
+        if getattr(getattr(self, "tray_app", None), "_is_wayland", False):
+            try:
+                root.setMinimumWidth(remote_panel_width)
+                root.setMaximumWidth(remote_panel_width)
+            except Exception:
+                pass
         if (
             getattr(getattr(self, "tray_app", None), "_is_wayland", False)
             and file_browser is not None
@@ -5153,6 +5175,7 @@ class MountletWindow:
             return
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
+        self.file_browser.invalidate(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         self.tray_app.rebuild_menus()
         self._request_refresh()
@@ -5183,8 +5206,11 @@ class MountletWindow:
     def _handle_bulk_action_finished(self, title: str, completed: object, failures: object) -> None:
         if self._tray_is_quitting():
             return
+        pending_names = set(self._action_pending)
         self._action_pending.clear()
         self._usage_cache.clear()
+        for remote_name in pending_names:
+            self.file_browser.invalidate(remote_name)
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
@@ -5405,6 +5431,78 @@ class MountletWindow:
 
     def _open_rclone_config_file(self) -> None:
         self._open_text_config(Path(core.CONFIG_PATH))
+
+    def _export_rclone_config_bundle(self) -> None:
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        if file_dialog is None:
+            self.tray_app._notify("Export rclone config", "File dialogs are not available.", success=False)
+            return
+        destination = file_dialog.getExistingDirectory(
+            self.window,
+            "Export rclone config bundle",
+            str(Path.home()),
+        )
+        if not destination:
+            return
+        try:
+            from .config_tools import export_config
+
+            args = export_config.build_parser().parse_args([destination])
+            result = export_config.export_bundle(args)
+        except Exception as exc:
+            self.tray_app._notify("Export rclone config", str(exc), success=False)
+            return
+        if result == 0:
+            self.tray_app._notify("Export rclone config", f"Exported to {destination}.", success=True)
+        else:
+            self.tray_app._notify("Export rclone config", "The export did not complete.", success=False)
+
+    def _import_rclone_config_file(self) -> None:
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        if file_dialog is None:
+            self.tray_app._notify("Import rclone config", "File dialogs are not available.", success=False)
+            return
+        selected, _filter = file_dialog.getOpenFileName(
+            self.window,
+            "Import rclone config file",
+            str(Path.home()),
+            "rclone.conf (*.conf);;All files (*)",
+        )
+        if not selected:
+            return
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Import rclone config?",
+            "Replace the current rclone.conf with this file?\n\n"
+            "Mountlet will back up the current file and refresh its remote list.",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            from .config_tools import import_config
+
+            args = import_config.build_parser().parse_args(["--config", selected, "--no-verify"])
+            result = import_config.import_bundle(args)
+        except Exception as exc:
+            self.tray_app._notify("Import rclone config", str(exc), success=False)
+            return
+        if result == 0:
+            self._rclone_config_replaced()
+            self.tray_app._notify("Import rclone config", "Imported rclone.conf and refreshed remotes.", success=True)
+        else:
+            self.tray_app._notify("Import rclone config", "The import did not complete.", success=False)
+
+    def _rclone_config_replaced(self) -> None:
+        self._usage_cache.clear()
+        self._usage_pending.clear()
+        self._action_pending.clear()
+        self._current_remote_names = []
+        self._selected_remote_name = ""
+        self.file_browser.invalidate()
+        self.tray_app.rebuild_menus()
+        self.refresh()
 
     def _open_fuse_config_file(self) -> None:
         paths = get_platform().mount_driver_config_paths()

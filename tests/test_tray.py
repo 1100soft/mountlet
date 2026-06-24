@@ -2606,6 +2606,42 @@ class TrayTests(unittest.TestCase):
             tray.core.mount_all,
         )
 
+    def test_remote_action_finish_invalidates_file_browser_cache(self):
+        tray_app = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = tray_app
+        window._action_pending = {"Docs"}
+        window._usage_cache = {"Docs": core.StorageUsage("?")}
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+
+        window._handle_action_finished("Docs", True, "[*] mounted Docs")
+
+        self.assertNotIn("Docs", window._action_pending)
+        self.assertNotIn("Docs", window._usage_cache)
+        window.file_browser.invalidate.assert_called_once_with("Docs")
+        tray_app.rebuild_menus.assert_called_once_with()
+        window._request_refresh.assert_called_once_with()
+
+    def test_bulk_action_finish_invalidates_pending_file_browser_caches(self):
+        tray_app = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = tray_app
+        window._action_pending = {"Docs", "Photos"}
+        window._usage_cache = {"Docs": core.StorageUsage("?")}
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+
+        window._handle_bulk_action_finished("Mount all", ["Docs"], [])
+
+        self.assertEqual(window._action_pending, set())
+        self.assertEqual(window._usage_cache, {})
+        window.file_browser.invalidate.assert_has_calls([mock.call("Docs"), mock.call("Photos")], any_order=True)
+        tray_app.rebuild_menus.assert_called_once_with()
+        window._request_refresh.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
