@@ -2557,10 +2557,11 @@ class TrayTests(unittest.TestCase):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
         result = SimpleNamespace(returncode=0, stderr="")
+        destination = Path("/tmp/config.mountlet")
 
         with mock.patch.object(tray.core, "find_rclone", return_value="rclone"):
             with mock.patch.object(tray.subprocess, "run", return_value=result) as run:
-                window._copy_remote_file_to_local(remote, "Backups/config.mountlet", Path("/tmp/config.mountlet"))
+                window._copy_remote_file_to_local(remote, "Backups/config.mountlet", destination)
 
         self.assertEqual(
             run.call_args.args[0],
@@ -2570,7 +2571,7 @@ class TrayTests(unittest.TestCase):
                 tray.core.CONFIG_PATH,
                 "copyto",
                 "Docs:/Backups/config.mountlet",
-                "/tmp/config.mountlet",
+                str(destination),
             ],
         )
 
@@ -2578,10 +2579,11 @@ class TrayTests(unittest.TestCase):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
         result = SimpleNamespace(returncode=0, stderr="")
+        source = Path("/tmp/config.mountlet")
 
         with mock.patch.object(tray.core, "find_rclone", return_value="rclone"):
             with mock.patch.object(tray.subprocess, "run", return_value=result) as run:
-                window._copy_local_file_to_remote(Path("/tmp/config.mountlet"), remote, "Backups/config.mountlet")
+                window._copy_local_file_to_remote(source, remote, "Backups/config.mountlet")
 
         self.assertEqual(
             run.call_args.args[0],
@@ -2590,7 +2592,7 @@ class TrayTests(unittest.TestCase):
                 "--config",
                 tray.core.CONFIG_PATH,
                 "copyto",
-                "/tmp/config.mountlet",
+                str(source),
                 "Docs:/Backups/config.mountlet",
             ],
         )
