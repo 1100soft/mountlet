@@ -5486,6 +5486,7 @@ class MountletWindow:
         except Exception as exc:
             self.tray_app._notify("Export config", str(exc), success=False)
             return
+        self._bundle_export_completed(destination_path, remote_destination is not None)
         self.tray_app._notify("Export config", f"Exported to {exported}.", success=True)
 
     def _import_config_bundle(self) -> None:
@@ -5642,6 +5643,19 @@ class MountletWindow:
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}.")
+
+    def _bundle_export_completed(self, destination: Path, exported_to_mounted_remote: bool) -> None:
+        self.file_browser.invalidate()
+        if not exported_to_mounted_remote:
+            return
+        parent = str(destination.parent)
+        if platform.system() == "Linux" and _open_folder_in_dolphin_tab(parent, focus=False):
+            return
+        try:
+            with os.scandir(parent):
+                pass
+        except OSError:
+            pass
 
     def _rclone_config_replaced(self) -> None:
         self._usage_cache.clear()

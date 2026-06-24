@@ -2597,6 +2597,17 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_bundle_export_completed_refreshes_dolphin_for_mounted_remote(self):
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = mock.Mock()
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            with mock.patch.object(tray, "_open_folder_in_dolphin_tab", return_value=True) as refresh:
+                window._bundle_export_completed(Path("/mnt/docs/Backups/config.mountlet"), True)
+
+        window.file_browser.invalidate.assert_called_once_with()
+        refresh.assert_called_once_with("/mnt/docs/Backups", focus=False)
+
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")
