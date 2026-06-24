@@ -216,8 +216,10 @@ class ConfigToolTests(unittest.TestCase):
             self.assertIsNotNone(backup)
             assert backup is not None
             with zipfile.ZipFile(backup) as archive:
-                self.assertEqual(archive.read("rclone.conf").decode("utf-8"), "[Old]\ntype = drive\n")
-                self.assertEqual(archive.read("config.toml").decode("utf-8"), "[app]\nauto_mount = false\n")
+                old_rclone = archive.read("rclone.conf").decode("utf-8").replace("\r\n", "\n")
+                old_app_config = archive.read("config.toml").decode("utf-8").replace("\r\n", "\n")
+                self.assertEqual(old_rclone, "[Old]\ntype = drive\n")
+                self.assertEqual(old_app_config, "[app]\nauto_mount = false\n")
 
     def test_path_config_can_ensure_app_directories(self):
         with tempfile.TemporaryDirectory() as tempdir:

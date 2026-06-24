@@ -2606,7 +2606,7 @@ class TrayTests(unittest.TestCase):
                 window._bundle_export_completed(Path("/mnt/docs/Backups/config.mountlet"), True)
 
         window.file_browser.invalidate.assert_called_once_with()
-        refresh.assert_called_once_with("/mnt/docs/Backups", focus=False)
+        refresh.assert_called_once_with(str(Path("/mnt/docs/Backups")), focus=False)
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")

@@ -5604,12 +5604,14 @@ class MountletWindow:
             self.tray_app._notify("Open backups", f"Could not open {backup_path}.", success=False)
 
     def _mounted_remote_file(self, path: Path) -> tuple[core.RemoteInfo, str] | None:
-        absolute = os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+        absolute_original = os.path.abspath(os.path.expanduser(str(path)))
+        absolute = os.path.normcase(absolute_original)
         for remote in _load_visible_remotes():
-            root = os.path.normcase(os.path.abspath(os.path.expanduser(remote.mount_path)))
+            root_original = os.path.abspath(os.path.expanduser(remote.mount_path))
+            root = os.path.normcase(root_original)
             if absolute == root or not absolute.startswith(root + os.sep):
                 continue
-            relative = os.path.relpath(absolute, root).replace(os.sep, "/")
+            relative = os.path.relpath(absolute_original, root_original).replace(os.sep, "/")
             if relative:
                 return remote, relative
         return None
