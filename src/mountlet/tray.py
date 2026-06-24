@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import core, rclone_wizard
-from .cloud_browser import remote_target
+from .cloud_browser import normalize_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
@@ -1803,7 +1803,7 @@ class AppConfigDialog(_ConfigDialogBase):
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("App settings")
-        self.dialog.resize(460, 210)
+        self.dialog.resize(460, 280)
         self.fields: dict[str, Any] = {}
         self._build()
 
@@ -1833,6 +1833,11 @@ class AppConfigDialog(_ConfigDialogBase):
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
+            "config_sync_remote": self._combo(
+                (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
+                app_settings.config_sync_remote,
+            ),
+            "config_sync_path": self._line(app_settings.config_sync_path),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
@@ -1852,6 +1857,8 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow(self.fields["integrated_file_edits"])
+        form.addRow("Config sync remote", self.fields["config_sync_remote"])
+        form.addRow("Config sync path", self.fields["config_sync_path"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
         warning.setWordWrap(True)
         warning.setStyleSheet(_muted_text_style(warning))
@@ -1884,6 +1891,8 @@ class AppConfigDialog(_ConfigDialogBase):
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
+                config_sync_remote=self.fields["config_sync_remote"].currentData() or "",
+                config_sync_path=self.fields["config_sync_path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
             )
         )
@@ -1980,6 +1989,8 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
                 integrated_file_edits=current.integrated_file_edits,
+                config_sync_remote=current.config_sync_remote,
+                config_sync_path=current.config_sync_path,
                 shortcuts=shortcuts,
             )
         )
@@ -2052,6 +2063,63 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                         result.add(normalized)
                     seen.add(normalized)
         return result
+
+
+class ConfigSyncDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("Config sync")
+        self.dialog.resize(420, 160)
+        self.fields: dict[str, Any] = {}
+        self._build()
+
+    def _build(self) -> None:
+        app_settings = load_app_settings()
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+
+        frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        self.fields = {
+            "remote": self._combo(
+                (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
+                app_settings.config_sync_remote,
+            ),
+            "path": self._line(app_settings.config_sync_path),
+        }
+        self.fields["path"].setPlaceholderText("Mountlet/config.mountlet")
+        self.fields["path"].setToolTip("Remote path for the encrypted config bundle.")
+        form.addRow("Remote", self.fields["remote"])
+        form.addRow("Bundle path", self.fields["path"])
+        note = self.qt.QLabel("The sync password is not stored. Mountlet will ask before each push or pull.")
+        note.setWordWrap(True)
+        note.setStyleSheet(_muted_text_style(note))
+        form.addRow("", note)
+        root.addWidget(frame)
+        root.addWidget(self._buttons())
+        self.dialog.adjustSize()
+
+    def _save(self) -> None:
+        current = load_app_settings()
+        save_app_settings(
+            AppSettings(
+                mount_base=current.mount_base,
+                auto_mount=current.auto_mount,
+                auto_mount_delay=current.auto_mount_delay,
+                start_at_login=current.start_at_login,
+                file_manager=current.file_manager,
+                open_folder_behavior=current.open_folder_behavior,
+                focus_file_manager=current.focus_file_manager,
+                integrated_file_edits=current.integrated_file_edits,
+                config_sync_remote=self.fields["remote"].currentData() or "",
+                config_sync_path=self.fields["path"].text().strip() or "Mountlet/config.mountlet",
+                shortcuts=current.shortcuts,
+            )
+        )
+        self.dialog.accept()
 
 
 class MountConfigDialog(_ConfigDialogBase):
@@ -3729,6 +3797,10 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Import config bundle", self._import_config_bundle)
         self.tray_app._add_action(config_menu, "Open config backup folder", self._open_config_backup_folder)
         config_menu.addSeparator()
+        self.tray_app._add_action(config_menu, "Set config sync location", self._show_config_sync_editor)
+        self.tray_app._add_action(config_menu, "Push config to sync location", self._push_config_sync_bundle)
+        self.tray_app._add_action(config_menu, "Pull config from sync location", self._pull_config_sync_bundle)
+        config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
         if _has_mount_driver_config():
             self.tray_app._add_action(
@@ -5275,6 +5347,9 @@ class MountletWindow:
     def _show_shortcut_config_editor(self) -> None:
         self._open_child_dialog(ShortcutConfigDialog(self.qt, self.window))
 
+    def _show_config_sync_editor(self) -> None:
+        self._open_child_dialog(ConfigSyncDialog(self.qt, self.window), self.tray_app.rebuild_menus)
+
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
@@ -5603,6 +5678,83 @@ class MountletWindow:
         if not self.desktop.open_folder(str(backup_path)):
             self.tray_app._notify("Open backups", f"Could not open {backup_path}.", success=False)
 
+    def _push_config_sync_bundle(self) -> None:
+        target = self._config_sync_target()
+        if target is None:
+            return
+        remote, relative_path = target
+        password = self._ask_bundle_password(
+            "Sync bundle password",
+            "Password for the sync bundle.\n\nLeave blank to sync without encryption.",
+            confirm=True,
+        )
+        if password is None:
+            return
+        if not password and not self._confirm_unencrypted_remote_export():
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="mountlet-sync-push-") as tempdir:
+                temporary = Path(tempdir) / Path(relative_path).name
+                bundle_file.export_bundle_file(temporary, overwrite=True, password=password)
+                self._copy_local_file_to_remote(temporary, remote, relative_path)
+        except Exception as exc:
+            self.tray_app._notify("Push config", str(exc), success=False)
+            return
+        self.tray_app._notify("Push config", f"Pushed config to {remote.display_name}/{relative_path}.", success=True)
+
+    def _pull_config_sync_bundle(self) -> None:
+        target = self._config_sync_target()
+        if target is None:
+            return
+        remote, relative_path = target
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Pull synced config?",
+            "Replace this device's Mountlet and rclone settings with the synced bundle?\n\n"
+            "Mountlet will first save a restorable backup bundle.",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        password = self._ask_bundle_password(
+            "Sync bundle password",
+            "Password for the sync bundle.\n\nLeave blank if this bundle is not encrypted.",
+        )
+        if password is None:
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="mountlet-sync-pull-") as tempdir:
+                temporary = Path(tempdir) / Path(relative_path).name
+                self._copy_remote_file_to_local(remote, relative_path, temporary)
+                backup_path = bundle_file.import_bundle_file(temporary, backup=True, password=password)
+        except Exception as exc:
+            self.tray_app._notify("Pull config", str(exc), success=False)
+            return
+        self._rclone_config_replaced()
+        message = f"Pulled config from {remote.display_name}/{relative_path}."
+        if backup_path is not None:
+            message += f"\nBackup: {backup_path}"
+        self.tray_app._notify("Pull config", message, success=True)
+
+    def _config_sync_target(self) -> tuple[core.RemoteInfo, str] | None:
+        settings = load_app_settings()
+        if not settings.config_sync_remote:
+            self.tray_app._notify("Config sync", "Set a config sync location first.", success=False)
+            self._show_config_sync_editor()
+            return None
+        remotes = {remote.name: remote for remote in _load_visible_remotes()}
+        remote = remotes.get(settings.config_sync_remote)
+        if remote is None:
+            self.tray_app._notify("Config sync", "The configured sync remote is not available.", success=False)
+            return None
+        relative_path = normalize_browser_path(settings.config_sync_path)
+        if not relative_path:
+            relative_path = "Mountlet/config.mountlet"
+        if Path(relative_path).suffix.casefold() != bundle_file.BUNDLE_EXTENSION:
+            relative_path = f"{relative_path}{bundle_file.BUNDLE_EXTENSION}"
+        return remote, relative_path
+
     def _mounted_remote_file(self, path: Path) -> tuple[core.RemoteInfo, str] | None:
         absolute_original = os.path.abspath(os.path.expanduser(str(path)))
         absolute = os.path.normcase(absolute_original)
@@ -5826,6 +5978,24 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_shortcut_config_editor)
 
+    def _show_config_sync_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_config_sync_editor)
+
+    def _push_config_sync_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._push_config_sync_bundle)
+
+    def _pull_config_sync_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._pull_config_sync_bundle)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
@@ -5856,6 +6026,9 @@ class MountletTray:
         self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
         self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
         self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
+        self._add_action(self.app_menu, "Set config sync location", self._show_config_sync_from_tray)
+        self._add_action(self.app_menu, "Push config to sync location", self._push_config_sync_from_tray)
+        self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
         self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)

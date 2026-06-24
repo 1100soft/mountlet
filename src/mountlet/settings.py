@@ -31,6 +31,8 @@ class AppSettings:
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
     integrated_file_edits: bool = False
+    config_sync_remote: str = ""
+    config_sync_path: str = "Mountlet/config.mountlet"
     shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
 
@@ -65,6 +67,11 @@ file_manager = ""
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
+
+[sync]
+# Optional encrypted config-bundle location, stored as an rclone remote and path.
+config_remote = ""
+config_path = "Mountlet/config.mountlet"
 
 [shortcuts]
 remote_enter_browser = "Space"
@@ -247,6 +254,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     data = _read_simple_toml(source)
     app = data.get("app", {})
     tray = data.get("tray", {})
+    sync = data.get("sync", {})
     shortcuts = _shortcut_values(data.get("shortcuts", {}))
     return AppSettings(
         mount_base=_string_value(app.get("mount_base")),
@@ -257,6 +265,8 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        config_sync_remote=str(sync.get("config_remote", "")).strip(),
+        config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
         shortcuts=shortcuts,
     )
 
@@ -343,6 +353,11 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# default uses the desktop's normal folder opener.",
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
+            "",
+            "[sync]",
+            "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
+            f"config_remote = {_toml_string(settings.config_sync_remote)}",
+            f"config_path = {_toml_string(settings.config_sync_path)}",
             "",
             "[shortcuts]",
             *(

@@ -2608,6 +2608,34 @@ class TrayTests(unittest.TestCase):
         window.file_browser.invalidate.assert_called_once_with()
         refresh.assert_called_once_with(str(Path("/mnt/docs/Backups")), focus=False)
 
+    def test_config_sync_target_resolves_remote_and_adds_bundle_suffix(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = SimpleNamespace(_notify=mock.Mock())
+
+        with mock.patch.object(
+            tray,
+            "load_app_settings",
+            return_value=settings.AppSettings(config_sync_remote="Docs", config_sync_path="Backups/config"),
+        ):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+                self.assertEqual(window._config_sync_target(), (remote, "Backups/config.mountlet"))
+
+    def test_push_config_sync_bundle_uploads_encrypted_bundle_to_remote_target(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = SimpleNamespace(_notify=mock.Mock())
+
+        with mock.patch.object(window, "_config_sync_target", return_value=(remote, "Backups/config.mountlet")):
+            with mock.patch.object(window, "_ask_bundle_password", return_value="secret"):
+                with mock.patch.object(tray.bundle_file, "export_bundle_file", return_value=Path("config.mountlet")) as export:
+                    with mock.patch.object(window, "_copy_local_file_to_remote") as copy:
+                        window._push_config_sync_bundle()
+
+        self.assertEqual(export.call_args.kwargs["password"], "secret")
+        self.assertEqual(copy.call_args.args[1:], (remote, "Backups/config.mountlet"))
+        window.tray_app._notify.assert_called()
+
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")

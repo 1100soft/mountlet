@@ -435,6 +435,15 @@ is inside a mounted remote, Mountlet stages the transfer through `rclone` so the
 remote sees the file directly instead of relying on filesystem-driver behavior.
 Encrypted bundles are recommended for cloud storage.
 
+For regular multi-device use, set `Config` > `Set config sync location` to a
+remote and bundle path, then use `Push config to sync location` after changing
+settings and `Pull config from sync location` on another device. This avoids
+the Windows file dialog limitation where mounted remote folders can appear empty
+even though Explorer and Mountlet Files can browse them. Mountlet does not store
+the bundle password; it asks each time you push or pull. Automatic sync is not
+enabled yet because hidden conflict resolution could overwrite a newer local
+change on another device.
+
 Most personal rclone remotes can use the same `rclone.conf` on your own
 devices. Some providers may still require reconnecting on the new device, and
 provider-specific local prerequisites such as rclone and the filesystem driver

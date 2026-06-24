@@ -155,6 +155,8 @@ remote_enter_browser = "Return, Space, Left, Right"
                     file_manager="org.example.Files.desktop",
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
+                    config_sync_remote="Docs__Drive",
+                    config_sync_path="Mountlet/shared.mountlet",
                     shortcuts={**settings.DEFAULT_SHORTCUTS, "browser_parent": ("Alt+Up", "Backspace")},
                 ),
                 path,
@@ -170,6 +172,8 @@ remote_enter_browser = "Return, Space, Left, Right"
         self.assertEqual(loaded.file_manager, "org.example.Files.desktop")
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
+        self.assertEqual(loaded.config_sync_remote, "Docs__Drive")
+        self.assertEqual(loaded.config_sync_path, "Mountlet/shared.mountlet")
         self.assertEqual(loaded.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
 
     def test_set_start_at_login_writes_and_removes_desktop_entry(self):
