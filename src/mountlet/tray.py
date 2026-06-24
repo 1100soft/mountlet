@@ -26,6 +26,7 @@ from typing import Any
 
 from . import core, rclone_wizard
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
+from .config_tools import bundle_file
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
 from .platform_services import get_platform
@@ -3723,8 +3724,9 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
         self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
         config_menu.addSeparator()
-        self.tray_app._add_action(config_menu, "Export rclone config bundle", self._export_rclone_config_bundle)
-        self.tray_app._add_action(config_menu, "Import rclone config file", self._import_rclone_config_file)
+        self.tray_app._add_action(config_menu, "Export config bundle", self._export_config_bundle)
+        self.tray_app._add_action(config_menu, "Import config bundle", self._import_config_bundle)
+        self.tray_app._add_action(config_menu, "Open config backup folder", self._open_config_backup_folder)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
         if _has_mount_driver_config():
@@ -5432,86 +5434,100 @@ class MountletWindow:
     def _open_rclone_config_file(self) -> None:
         self._open_text_config(Path(core.CONFIG_PATH))
 
-    def _export_rclone_config_bundle(self) -> None:
+    def _export_config_bundle(self) -> None:
         file_dialog = getattr(self.qt, "QFileDialog", None)
         if file_dialog is None:
-            self.tray_app._notify("Export rclone config", "File dialogs are not available.", success=False)
+            self.tray_app._notify("Export config", "File dialogs are not available.", success=False)
             return
         kwargs = self._file_dialog_kwargs()
         try:
-            destination = file_dialog.getExistingDirectory(
+            destination, _filter = file_dialog.getSaveFileName(
                 self.window,
-                "Export rclone config bundle",
-                str(Path.home()),
+                "Export Mountlet config bundle",
+                str(bundle_file.default_export_path()),
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
                 **kwargs,
             )
         except TypeError:
-            destination = file_dialog.getExistingDirectory(
+            destination, _filter = file_dialog.getSaveFileName(
                 self.window,
-                "Export rclone config bundle",
-                str(Path.home()),
+                "Export Mountlet config bundle",
+                str(bundle_file.default_export_path()),
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
             )
         if not destination:
             return
-        try:
-            from .config_tools import export_config
-
-            args = export_config.build_parser().parse_args([destination])
-            result = export_config.export_bundle(args)
-        except Exception as exc:
-            self.tray_app._notify("Export rclone config", str(exc), success=False)
+        destination_path = Path(destination).expanduser()
+        if destination_path.suffix.casefold() != bundle_file.BUNDLE_EXTENSION:
+            destination_path = destination_path.with_suffix(bundle_file.BUNDLE_EXTENSION)
+        if destination_path.exists() and not self._confirm_replace_file(destination_path):
             return
-        if result == 0:
-            self.tray_app._notify("Export rclone config", f"Exported to {destination}.", success=True)
-        else:
-            self.tray_app._notify("Export rclone config", "The export did not complete.", success=False)
+        try:
+            exported = bundle_file.export_bundle_file(destination_path, overwrite=True)
+        except Exception as exc:
+            self.tray_app._notify("Export config", str(exc), success=False)
+            return
+        self.tray_app._notify("Export config", f"Exported to {exported}.", success=True)
 
-    def _import_rclone_config_file(self) -> None:
+    def _import_config_bundle(self) -> None:
         file_dialog = getattr(self.qt, "QFileDialog", None)
         if file_dialog is None:
-            self.tray_app._notify("Import rclone config", "File dialogs are not available.", success=False)
+            self.tray_app._notify("Import config", "File dialogs are not available.", success=False)
             return
         kwargs = self._file_dialog_kwargs()
         try:
             selected, _filter = file_dialog.getOpenFileName(
                 self.window,
-                "Import rclone config file",
+                "Import Mountlet config bundle",
                 str(Path.home()),
-                "rclone.conf (*.conf);;All files (*)",
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
                 **kwargs,
             )
         except TypeError:
             selected, _filter = file_dialog.getOpenFileName(
                 self.window,
-                "Import rclone config file",
+                "Import Mountlet config bundle",
                 str(Path.home()),
-                "rclone.conf (*.conf);;All files (*)",
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
             )
         if not selected:
             return
         reply = self.qt.QMessageBox.question(
             self.window,
-            "Import rclone config?",
-            "Replace the current rclone.conf with this file?\n\n"
-            "Mountlet will back up the current file and refresh its remote list.",
+            "Import Mountlet config?",
+            "Replace this device's Mountlet and rclone settings with this bundle?\n\n"
+            "Mountlet will first save a restorable backup bundle.",
             self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
             self.qt.QMessageBox.StandardButton.No,
         )
         if reply != self.qt.QMessageBox.StandardButton.Yes:
             return
         try:
-            from .config_tools import import_config
-
-            args = import_config.build_parser().parse_args(["--config", selected, "--no-verify"])
-            result = import_config.import_bundle(args)
+            backup_path = bundle_file.import_bundle_file(Path(selected), backup=True)
         except Exception as exc:
-            self.tray_app._notify("Import rclone config", str(exc), success=False)
+            self.tray_app._notify("Import config", str(exc), success=False)
             return
-        if result == 0:
-            self._rclone_config_replaced()
-            self.tray_app._notify("Import rclone config", "Imported rclone.conf and refreshed remotes.", success=True)
-        else:
-            self.tray_app._notify("Import rclone config", "The import did not complete.", success=False)
+        self._rclone_config_replaced()
+        message = "Imported bundle and refreshed remotes."
+        if backup_path is not None:
+            message += f"\nBackup: {backup_path}"
+        self.tray_app._notify("Import config", message, success=True)
+
+    def _confirm_replace_file(self, path: Path) -> bool:
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Replace existing bundle?",
+            f"{path} already exists.\n\nReplace it?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
+
+    def _open_config_backup_folder(self) -> None:
+        backup_path = bundle_file.backup_dir()
+        backup_path.mkdir(parents=True, exist_ok=True)
+        if not self.desktop.open_folder(str(backup_path)):
+            self.tray_app._notify("Open backups", f"Could not open {backup_path}.", success=False)
 
     def _rclone_config_replaced(self) -> None:
         self._usage_cache.clear()
@@ -5707,6 +5723,9 @@ class MountletTray:
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
+        self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
+        self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
+        self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
         self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
         self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
         self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
