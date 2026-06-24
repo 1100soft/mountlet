@@ -643,6 +643,10 @@ def _main_window_type_name(is_macos: bool, is_wayland: bool = False) -> str:
     return "Window" if is_macos or is_wayland else "Tool"
 
 
+def _main_window_uses_native_frame(is_wayland: bool) -> bool:
+    return bool(is_wayland)
+
+
 def _windows_foreground_is_tray() -> bool:
     if platform.system() != "Windows":
         return False
@@ -1659,7 +1663,7 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
         ),
     ):
         return True
-    if manager.identifier != SYSTEM_FILE_MANAGER_ID and open_with_file_manager(
+    if (platform.system() == "Windows" or manager.identifier != SYSTEM_FILE_MANAGER_ID) and open_with_file_manager(
         manager,
         path,
         new_window=strategy == "new_window",
@@ -3574,6 +3578,7 @@ class MountletWindow:
             remotes=_load_visible_remotes,
             notify=lambda title, message, success: self.tray_app._notify(title, message, success=success),
             open_mount=self._open_remote_path,
+            open_file=self.desktop.open_file,
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
@@ -3616,6 +3621,14 @@ class MountletWindow:
                     bool(getattr(tray_app, "_is_macos", False)),
                     bool(getattr(tray_app, "_is_wayland", False)),
                 )
+                if _main_window_uses_native_frame(bool(getattr(tray_app, "_is_wayland", False))):
+                    try:
+                        super().__init__(None, getattr(qt.Qt.WindowType, base_name))
+                        return
+                    except Exception:
+                        pass
+                    super().__init__()
+                    return
                 flags = _frameless_window_flags(qt, base_name)
                 if flags is not None:
                     try:
@@ -4254,6 +4267,11 @@ class MountletWindow:
     def _begin_window_drag(self, event: Any) -> None:
         try:
             if event.button() != self.qt.Qt.MouseButton.LeftButton:
+                return
+            handle = self.window.windowHandle() if hasattr(self.window, "windowHandle") else None
+            if handle is not None and hasattr(handle, "startSystemMove") and handle.startSystemMove():
+                self._drag_offset = None
+                event.accept()
                 return
             self._drag_offset = self._event_global_point(event) - self.window.frameGeometry().topLeft()
             event.accept()
@@ -5186,7 +5204,7 @@ class MountletWindow:
             self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
             return
         path = Path(remote.mount_path).joinpath(*[part for part in relative_path.split("/") if part])
-        if not path.is_dir():
+        if platform.system() != "Windows" and not path.is_dir():
             self.tray_app._notify(
                 "Open folder",
                 "The mount folder is not reachable. Remount this remote and try again.",

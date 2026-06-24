@@ -341,6 +341,8 @@ class TrayTests(unittest.TestCase):
 
     def test_wayland_main_window_uses_normal_window_type(self):
         self.assertEqual(tray._main_window_type_name(False, True), "Window")
+        self.assertTrue(tray._main_window_uses_native_frame(True))
+        self.assertFalse(tray._main_window_uses_native_frame(False))
 
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -2133,6 +2135,23 @@ class TrayTests(unittest.TestCase):
         service.assert_not_called()
         opener.assert_called_once_with(manager, "/tmp/docs", new_window=False)
 
+    def test_open_folder_uses_explorer_command_on_windows(self):
+        qt = mock.Mock()
+        manager = SimpleNamespace(identifier="explorer")
+        settings = SimpleNamespace(
+            file_manager=manager.identifier,
+            open_folder_behavior="current_desktop",
+            focus_file_manager=True,
+        )
+        with mock.patch.object(tray, "load_app_settings", return_value=settings):
+            with mock.patch.object(tray, "resolve_file_manager", return_value=manager):
+                with mock.patch.object(tray.platform, "system", return_value="Windows"):
+                    with mock.patch.object(tray, "open_with_file_manager", return_value=True) as opener:
+                        self.assertTrue(tray._open_folder_default(qt, r"C:\Mountlet\Docs"))
+
+        opener.assert_called_once_with(manager, r"C:\Mountlet\Docs", new_window=False)
+        qt.QDesktopServices.openUrl.assert_not_called()
+
     def test_open_text_file_focused_opens_known_editor(self):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             with mock.patch.object(tray.shutil, "which", side_effect=lambda name: "/usr/bin/kate" if name == "kate" else None):
@@ -2191,6 +2210,31 @@ class TrayTests(unittest.TestCase):
             "The mount folder is not reachable. Remount this remote and try again.",
             success=False,
         )
+
+    def test_windows_folder_open_skips_python_directory_probe_after_mount_check(self):
+        class ImmediateThread:
+            def __init__(self, target, **_kwargs):
+                self.target = target
+
+            def start(self) -> None:
+                self.target()
+
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window.desktop = mock.Mock()
+        window._bridge = SimpleNamespace(folder_opened=SimpleNamespace(emit=mock.Mock()))
+
+        with mock.patch.object(core, "is_mounted", return_value=True):
+            with mock.patch.object(tray.platform, "system", return_value="Windows"):
+                with mock.patch.object(tray.Path, "is_dir", return_value=False) as is_dir:
+                    with mock.patch.object(tray.threading, "Thread", ImmediateThread):
+                        window.desktop.open_folder.return_value = True
+                        window._open_folder(remote)
+
+        is_dir.assert_not_called()
+        window.desktop.open_folder.assert_called_once_with(r"C:\Mountlet\Docs")
+        window._bridge.folder_opened.emit.assert_called_once_with(True)
 
     def test_remote_row_style_keeps_border_geometry_constant(self):
         class Row:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import platform
 from pathlib import Path
 from typing import Any, Callable
 
@@ -43,6 +45,15 @@ class DesktopServices:
 
     def open_text_file(self, path: Path) -> bool:
         if self._text_opener and self._text_opener(path):
+            return True
+        return bool(self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))))
+
+    def open_file(self, path: Path) -> bool:
+        if platform.system() == "Windows" and hasattr(os, "startfile"):
+            try:
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            except OSError:
+                return False
             return True
         return bool(self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))))
 

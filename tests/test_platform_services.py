@@ -215,6 +215,20 @@ Categories=Utility;FileManager;
             ["explorer.exe", r"C:\Users\test\Mountlet\Docs"],
         )
 
+    def test_windows_desktop_service_opens_files_with_shell(self):
+        qt = SimpleNamespace(
+            QDesktopServices=SimpleNamespace(openUrl=mock.Mock(return_value=False)),
+            QUrl=SimpleNamespace(fromLocalFile=lambda path: f"file:{path}"),
+        )
+        desktop = DesktopServices(qt)
+
+        with mock.patch("mountlet.platform_services.desktop.platform.system", return_value="Windows"):
+            with mock.patch("mountlet.platform_services.desktop.os.startfile", create=True) as startfile:
+                self.assertTrue(desktop.open_file(Path(r"C:\Users\test\Mountlet\Docs\a.txt")))
+
+        startfile.assert_called_once_with(r"C:\Users\test\Mountlet\Docs\a.txt")
+        qt.QDesktopServices.openUrl.assert_not_called()
+
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
         with mock.patch("pathlib.Path.home", return_value=Path("/Users/tester")):

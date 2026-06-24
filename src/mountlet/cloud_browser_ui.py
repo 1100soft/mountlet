@@ -45,6 +45,7 @@ class CompactCloudBrowser:
         notify: Callable[[str, str, bool], None],
         open_mount: Callable[[core.RemoteInfo, str], None],
         file_manager_label: Callable[[], str],
+        open_file: Callable[[Path], bool] | None = None,
         embedded: bool = False,
         layout_changed: Callable[[], None] | None = None,
     ) -> None:
@@ -53,6 +54,7 @@ class CompactCloudBrowser:
         self._remotes = remotes
         self._notify = notify
         self._open_mount = open_mount
+        self._open_file = open_file
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -739,12 +741,19 @@ class CompactCloudBrowser:
             return
         offline = self.backend.offline_path(self.remote.name, entry.path)
         if offline.is_file():
-            self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(offline)))
+            self._open_local_file(offline)
         elif core.is_mounted(self.remote):
             local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
-            self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local)))
+            self._open_local_file(local)
         else:
             self._notify("Open file", "Mount the remote or make this file available offline first.", False)
+
+    def _open_local_file(self, path: Path) -> None:
+        if self._open_file and self._open_file(path):
+            return
+        if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
+            return
+        self._notify("Open file", "Could not open this file.", False)
 
     def go_up(self) -> None:
         if self.remote is None:
