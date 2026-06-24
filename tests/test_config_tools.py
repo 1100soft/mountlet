@@ -5,12 +5,13 @@ import io
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mountlet.config_tools import export_config, import_config, path_config, shared, verify_config
+from mountlet.config_tools import bundle_file, export_config, import_config, path_config, shared, verify_config
 from mountlet.platform_services.linux import LinuxPlatformServices
 
 
@@ -130,6 +131,63 @@ class ConfigToolTests(unittest.TestCase):
 
             self.assertEqual(target_config.read_text(encoding="utf-8"), "[Docs]\ntype = drive\n")
             self.assertEqual(imported_mounts, '[remotes."Docs"]\nremote_path = "bucket"\n')
+
+    def test_single_file_bundle_contains_rclone_mountlet_settings_and_secrets(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            rclone_config = root / "rclone" / "rclone.conf"
+            rclone_config.parent.mkdir()
+            rclone_config.write_text("[Docs]\ntype = drive\n", encoding="utf-8")
+            (rclone_config.parent / "client_secret_demo.json").write_text("{}", encoding="utf-8")
+            env = {
+                "RCLONE_CONFIG": str(rclone_config),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                shared.app_config_file().parent.mkdir(parents=True)
+                shared.app_config_file().write_text("[app]\nauto_mount = false\n", encoding="utf-8")
+                shared.app_mounts_file().write_text('[remotes."Docs"]\nremote_path = "bucket"\n', encoding="utf-8")
+                destination = bundle_file.export_bundle_file(root / "backup")
+
+            self.assertEqual(destination.suffix, ".mountlet")
+            with zipfile.ZipFile(destination) as archive:
+                self.assertIn("rclone.conf", archive.namelist())
+                self.assertIn("config.toml", archive.namelist())
+                self.assertIn("mounts.toml", archive.namelist())
+                self.assertIn("secrets/client_secret_demo.json", archive.namelist())
+
+    def test_single_file_bundle_import_creates_restorable_backup_archive(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            rclone_config = root / "rclone" / "rclone.conf"
+            source_bundle = root / "source.mountlet"
+            env = {
+                "RCLONE_CONFIG": str(rclone_config),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                rclone_config.parent.mkdir()
+                rclone_config.write_text("[Old]\ntype = drive\n", encoding="utf-8")
+                shared.app_config_file().parent.mkdir(parents=True)
+                shared.app_config_file().write_text("[app]\nauto_mount = false\n", encoding="utf-8")
+                shared.app_mounts_file().write_text('[remotes."Old"]\nremote_path = ""\n', encoding="utf-8")
+                with zipfile.ZipFile(source_bundle, "w") as archive:
+                    archive.writestr("manifest.json", '{"format":"mountlet-config-bundle","version":1}')
+                    archive.writestr("rclone.conf", "[New]\ntype = s3\n")
+                    archive.writestr("config.toml", "[app]\nauto_mount = true\n")
+                    archive.writestr("mounts.toml", '[remotes."New"]\nremote_path = "bucket"\n')
+
+                backup = bundle_file.import_bundle_file(source_bundle)
+
+                self.assertEqual(rclone_config.read_text(encoding="utf-8"), "[New]\ntype = s3\n")
+                self.assertEqual(shared.app_config_file().read_text(encoding="utf-8"), "[app]\nauto_mount = true\n")
+                self.assertEqual(shared.app_mounts_file().read_text(encoding="utf-8"), '[remotes."New"]\nremote_path = "bucket"\n')
+
+            self.assertIsNotNone(backup)
+            assert backup is not None
+            with zipfile.ZipFile(backup) as archive:
+                self.assertEqual(archive.read("rclone.conf").decode("utf-8"), "[Old]\ntype = drive\n")
+                self.assertEqual(archive.read("config.toml").decode("utf-8"), "[app]\nauto_mount = false\n")
 
     def test_path_config_can_ensure_app_directories(self):
         with tempfile.TemporaryDirectory() as tempdir:

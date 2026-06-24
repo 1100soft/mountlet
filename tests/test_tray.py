@@ -2543,6 +2543,37 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             self.assertEqual(window._file_dialog_kwargs(), {})
 
+    def test_mounted_remote_file_maps_local_mount_path_to_remote_path(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[remote]):
+            self.assertEqual(
+                window._mounted_remote_file(Path("/mnt/docs/Backups/config.mountlet")),
+                (remote, "Backups/config.mountlet"),
+            )
+
+    def test_copy_remote_file_to_local_uses_rclone_copyto(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        result = SimpleNamespace(returncode=0, stderr="")
+
+        with mock.patch.object(tray.core, "find_rclone", return_value="rclone"):
+            with mock.patch.object(tray.subprocess, "run", return_value=result) as run:
+                window._copy_remote_file_to_local(remote, "Backups/config.mountlet", Path("/tmp/config.mountlet"))
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "rclone",
+                "--config",
+                tray.core.CONFIG_PATH,
+                "copyto",
+                "Docs:/Backups/config.mountlet",
+                "/tmp/config.mountlet",
+            ],
+        )
+
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")

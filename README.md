@@ -107,6 +107,11 @@ python3 -m venv "$PREVIEW"
 
 ### Windows (Experimental)
 
+Windows Defender or SmartScreen may warn about preview builds downloaded from
+GitHub because the executable is unsigned and has little reputation. Use only
+artifacts from this repository's GitHub Actions runs, and expect to allow the
+download or app explicitly until release signing is configured.
+
 Install Python 3.12 and rclone with WinGet:
 
 ```powershell
@@ -416,12 +421,17 @@ mountlet export ~/mountlet-backup
 mountlet import --config ~/mountlet-backup/rclone.conf
 ```
 
-In the tray app, use `Config` > `Export rclone config bundle` to copy your
-current `rclone.conf`, nearby client-secret files, and Mountlet's per-remote
-`mounts.toml` settings into a backup folder. Use `Config` > `Import rclone
-config file` on another device to replace that device's `rclone.conf`, restore
-`mounts.toml` when it is present next to the imported file, back up previous
-files, clear Mountlet's cached remote listings, and refresh the remote list.
+In the tray app, use `Config` > `Export config bundle` to create one
+`.mountlet` file containing `rclone.conf`, nearby client-secret files,
+`config.toml`, and `mounts.toml`. Use `Config` > `Import config bundle` on
+another device to restore that bundle. Mountlet saves the current local config
+as one restorable backup bundle before importing; use `Config` > `Open config
+backup folder` to restore or delete old backups.
+
+Export config bundles to a local folder first, then copy them to cloud storage
+if needed. Reading or writing sensitive config archives directly through mounted
+cloud folders can fail because the OS and filesystem driver may treat those
+mounts differently from normal local folders.
 
 Most personal rclone remotes can use the same `rclone.conf` on your own
 devices. Some providers may still require reconnecting on the new device, and
@@ -478,7 +488,7 @@ local app and mount behavior.
 
 ## Credentials
 
-`rclone.conf` can contain OAuth tokens and provider credentials. Treat exported
+`rclone.conf` can contain OAuth tokens and provider credentials. Treat `.mountlet`
 bundles as sensitive files. Copy them only between devices you control.
 
 - Do not share real `rclone.conf` files.

@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import core, rclone_wizard
+from .cloud_browser import remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
@@ -5503,7 +5504,16 @@ class MountletWindow:
         if reply != self.qt.QMessageBox.StandardButton.Yes:
             return
         try:
-            backup_path = bundle_file.import_bundle_file(Path(selected), backup=True)
+            selected_path = Path(selected).expanduser()
+            remote_source = self._mounted_remote_file(selected_path)
+            if remote_source is None:
+                backup_path = bundle_file.import_bundle_file(selected_path, backup=True)
+            else:
+                remote, relative_path = remote_source
+                with tempfile.TemporaryDirectory(prefix="mountlet-import-") as tempdir:
+                    temporary = Path(tempdir) / selected_path.name
+                    self._copy_remote_file_to_local(remote, relative_path, temporary)
+                    backup_path = bundle_file.import_bundle_file(temporary, backup=True)
         except Exception as exc:
             self.tray_app._notify("Import config", str(exc), success=False)
             return
@@ -5528,6 +5538,32 @@ class MountletWindow:
         backup_path.mkdir(parents=True, exist_ok=True)
         if not self.desktop.open_folder(str(backup_path)):
             self.tray_app._notify("Open backups", f"Could not open {backup_path}.", success=False)
+
+    def _mounted_remote_file(self, path: Path) -> tuple[core.RemoteInfo, str] | None:
+        absolute = os.path.normcase(os.path.abspath(os.path.expanduser(str(path))))
+        for remote in _load_visible_remotes():
+            root = os.path.normcase(os.path.abspath(os.path.expanduser(remote.mount_path)))
+            if absolute == root or not absolute.startswith(root + os.sep):
+                continue
+            relative = os.path.relpath(absolute, root).replace(os.sep, "/")
+            if relative:
+                return remote, relative
+        return None
+
+    def _copy_remote_file_to_local(self, remote: core.RemoteInfo, relative_path: str, destination: Path) -> None:
+        binary = core.find_rclone()
+        if not binary:
+            raise RuntimeError("rclone was not found.")
+        result = subprocess.run(
+            [binary, "--config", core.CONFIG_PATH, "copyto", remote_target(remote, relative_path), str(destination)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            **core.PLATFORM.command_process_options(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}.")
 
     def _rclone_config_replaced(self) -> None:
         self._usage_cache.clear()
