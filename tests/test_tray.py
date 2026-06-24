@@ -2526,6 +2526,23 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(events, ["window", "timer", "dialog"])
 
+    def test_windows_file_dialogs_avoid_native_untrusted_mount_prompt(self):
+        option = object()
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            QFileDialog=SimpleNamespace(Option=SimpleNamespace(DontUseNativeDialog=option)),
+        )
+
+        with mock.patch.object(tray.platform, "system", return_value="Windows"):
+            self.assertEqual(window._file_dialog_kwargs(), {"options": option})
+
+    def test_non_windows_file_dialogs_use_platform_default(self):
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(QFileDialog=SimpleNamespace())
+
+        with mock.patch.object(tray.platform, "system", return_value="Linux"):
+            self.assertEqual(window._file_dialog_kwargs(), {})
+
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")

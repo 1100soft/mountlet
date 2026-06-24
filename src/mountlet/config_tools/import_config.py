@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 from .shared import (
+    app_mounts_file,
     copy_file,
     default_config_path,
     ensure_dir,
@@ -59,6 +60,18 @@ def import_bundle(args: argparse.Namespace) -> int:
         if copied_secret:
             action = "would copy" if args.dry_run else "copied"
             print(f"[*] {action} {secret} -> {copied_secret}")
+
+    if args.mountlet_settings:
+        src_mounts = (
+            Path(args.mountlet_mounts).expanduser().resolve()
+            if args.mountlet_mounts
+            else src_config.parent / "mounts.toml"
+        )
+        ensure_dir(app_mounts_file().parent)
+        copied_mounts = copy_file(src_mounts, app_mounts_file(), backup=args.backup, dry_run=args.dry_run)
+        if copied_mounts:
+            action = "would copy" if args.dry_run else "copied"
+            print(f"[*] {action} {src_mounts} -> {copied_mounts}")
 
     reference_config = src_config if args.dry_run else target_conf
     remotes = read_remotes(reference_config)
@@ -125,6 +138,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Do not backup existing files.",
     )
+    parser.add_argument(
+        "--mountlet-mounts",
+        help="Path to Mountlet's mounts.toml to import (default: mounts.toml next to rclone.conf).",
+    )
+    parser.add_argument(
+        "--no-mountlet-settings",
+        dest="mountlet_settings",
+        action="store_false",
+        help="Do not import Mountlet's per-remote settings file.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Preview without copying.")
     parser.add_argument(
         "--no-verify",
@@ -147,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(
         auto_discover_secrets=True,
         backup=True,
+        mountlet_settings=True,
         skip_verify=False,
         verify_auto_reconnect=False,
         reconnect_auto_confirm=True,

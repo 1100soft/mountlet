@@ -5437,11 +5437,20 @@ class MountletWindow:
         if file_dialog is None:
             self.tray_app._notify("Export rclone config", "File dialogs are not available.", success=False)
             return
-        destination = file_dialog.getExistingDirectory(
-            self.window,
-            "Export rclone config bundle",
-            str(Path.home()),
-        )
+        kwargs = self._file_dialog_kwargs()
+        try:
+            destination = file_dialog.getExistingDirectory(
+                self.window,
+                "Export rclone config bundle",
+                str(Path.home()),
+                **kwargs,
+            )
+        except TypeError:
+            destination = file_dialog.getExistingDirectory(
+                self.window,
+                "Export rclone config bundle",
+                str(Path.home()),
+            )
         if not destination:
             return
         try:
@@ -5462,12 +5471,22 @@ class MountletWindow:
         if file_dialog is None:
             self.tray_app._notify("Import rclone config", "File dialogs are not available.", success=False)
             return
-        selected, _filter = file_dialog.getOpenFileName(
-            self.window,
-            "Import rclone config file",
-            str(Path.home()),
-            "rclone.conf (*.conf);;All files (*)",
-        )
+        kwargs = self._file_dialog_kwargs()
+        try:
+            selected, _filter = file_dialog.getOpenFileName(
+                self.window,
+                "Import rclone config file",
+                str(Path.home()),
+                "rclone.conf (*.conf);;All files (*)",
+                **kwargs,
+            )
+        except TypeError:
+            selected, _filter = file_dialog.getOpenFileName(
+                self.window,
+                "Import rclone config file",
+                str(Path.home()),
+                "rclone.conf (*.conf);;All files (*)",
+            )
         if not selected:
             return
         reply = self.qt.QMessageBox.question(
@@ -5503,6 +5522,14 @@ class MountletWindow:
         self.file_browser.invalidate()
         self.tray_app.rebuild_menus()
         self.refresh()
+
+    def _file_dialog_kwargs(self) -> dict[str, Any]:
+        if platform.system() != "Windows":
+            return {}
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        option_type = getattr(file_dialog, "Option", None)
+        dont_use_native = getattr(option_type, "DontUseNativeDialog", None)
+        return {"options": dont_use_native} if dont_use_native is not None else {}
 
     def _open_fuse_config_file(self) -> None:
         paths = get_platform().mount_driver_config_paths()

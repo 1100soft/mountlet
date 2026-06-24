@@ -417,10 +417,11 @@ mountlet import --config ~/mountlet-backup/rclone.conf
 ```
 
 In the tray app, use `Config` > `Export rclone config bundle` to copy your
-current `rclone.conf` and nearby client-secret files into a backup folder. Use
-`Config` > `Import rclone config file` on another device to replace that
-device's `rclone.conf`, back up the previous file, clear Mountlet's cached
-remote listings, and refresh the remote list.
+current `rclone.conf`, nearby client-secret files, and Mountlet's per-remote
+`mounts.toml` settings into a backup folder. Use `Config` > `Import rclone
+config file` on another device to replace that device's `rclone.conf`, restore
+`mounts.toml` when it is present next to the imported file, back up previous
+files, clear Mountlet's cached remote listings, and refresh the remote list.
 
 Most personal rclone remotes can use the same `rclone.conf` on your own
 devices. Some providers may still require reconnecting on the new device, and
