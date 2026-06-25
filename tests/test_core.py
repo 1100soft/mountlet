@@ -169,6 +169,33 @@ type = dropbox
                 ],
             )
 
+    def test_reconnect_remote_uses_active_rclone_config(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\ntoken = REDACTED\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.subprocess, "run") as run:
+                    run.return_value.returncode = 0
+                    run.return_value.stdout = ""
+                    run.return_value.stderr = ""
+                    success, message = core.reconnect_remote(remote)
+
+            self.assertTrue(success)
+            self.assertIn("reauthenticated", message)
+            self.assertEqual(
+                run.call_args.args[0],
+                [
+                    "/usr/bin/rclone",
+                    "--config",
+                    core.CONFIG_PATH,
+                    "config",
+                    "reconnect",
+                    "Docs:",
+                    "--auto-confirm",
+                ],
+            )
+
     def test_mount_remote_rejects_non_empty_mount_directory(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")

@@ -602,6 +602,26 @@ def _sync_metadata_summary(metadata: dict[str, object]) -> str:
     return f"Updated on {device} at {created_at}."
 
 
+def _message_might_be_auth_failure(message: str) -> bool:
+    text = message.casefold()
+    indicators = (
+        "token expired",
+        "expired token",
+        "refresh token",
+        "invalid_grant",
+        "unauthorized",
+        "401",
+        "403",
+        "access_denied",
+        "authentication",
+        "authorization",
+        "oauth",
+        "login required",
+        "reauth",
+    )
+    return any(indicator in text for indicator in indicators)
+
+
 def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, unique_count: int) -> str:
     if unique_count <= 1:
         return "Existing credentials (recommended)"
@@ -2775,6 +2795,15 @@ class NewRemoteWizard:
         if self._remote_type == "protondrive" and not self._proton_fields_are_valid():
             self._warning("Add remote", "Enter the Proton user and password before creating the remote.")
             return
+        if self._remote_type == "protondrive" and rclone_wizard.backend_is_available("protondrive") is False:
+            self._warning(
+                "Add remote",
+                "This rclone installation does not include Proton Drive support.\n\n"
+                "Update rclone to v1.64.0 or newer, then try again.",
+            )
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
             self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
             return
@@ -3754,6 +3783,7 @@ class MountletWindow:
         self._pull_sync_button: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
+        self._position_after_fit = False
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
         self._bridge = self._make_bridge()
@@ -3962,6 +3992,7 @@ class MountletWindow:
             was_visible = False
         self.refresh()
         if not was_visible:
+            self._position_after_fit = True
             self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
@@ -4208,6 +4239,11 @@ class MountletWindow:
             if screen is None:
                 return
             available = screen.availableGeometry()
+            if geometry_valid and self._tray_geometry_is_suspicious(tray_geometry, available):
+                geometry_valid = False
+                anchor = self.qt.QCursor.pos()
+                screen = self.qt.QApplication.screenAt(anchor) or screen
+                available = screen.availableGeometry()
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
@@ -4224,6 +4260,20 @@ class MountletWindow:
             self.window.move(x, y)
         except Exception:
             return
+
+    def _tray_geometry_is_suspicious(self, tray_geometry: Any, available: Any) -> bool:
+        try:
+            center = tray_geometry.center()
+            return (
+                tray_geometry.width() <= 1
+                or tray_geometry.height() <= 1
+                or (
+                    abs(center.x() - available.left()) <= 1
+                    and abs(center.y() - available.top()) <= 1
+                )
+            )
+        except Exception:
+            return True
 
     def _clamp_to_screen(self, screen: Any | None = None) -> None:
         try:
@@ -4320,6 +4370,9 @@ class MountletWindow:
         if self.window.centralWidget() is not expected or self._tray_is_quitting():
             return
         self._fit_to_content(root, scroll, container)
+        if getattr(self, "_position_after_fit", False):
+            self._position_after_fit = False
+            self._position_near_tray()
         self._reposition_file_browser()
 
     def _browser_layout_changed(self) -> None:
@@ -4378,10 +4431,11 @@ class MountletWindow:
             local_hash = bundle_file.current_config_fingerprint()
         except Exception:
             local_hash = ""
-        local_changed = bool(sync_configured and local_hash and local_hash != state.get("last_pushed_hash"))
+        last_synced_hash = str(state.get("last_synced_hash") or "")
+        local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
         remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
         remote_hash = str(remote_metadata.get("config_hash", ""))
-        remote_changed = bool(sync_configured and remote_hash and remote_hash != local_hash)
+        remote_changed = bool(sync_configured and remote_hash and remote_hash != last_synced_hash)
         if push_button is not None:
             push_button.setText("↑•" if local_changed else "↑")
             push_button.setEnabled(sync_configured)
@@ -5475,8 +5529,45 @@ class MountletWindow:
         self._usage_cache.pop(remote_name, None)
         self.file_browser.invalidate(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
+        if not success:
+            self._offer_reauthentication_if_relevant(remote_name, message)
         self.tray_app.rebuild_menus()
         self._request_refresh()
+
+    def _offer_reauthentication_if_relevant(self, remote_name: str, message: str) -> None:
+        if not _message_might_be_auth_failure(message):
+            return
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
+        if remote is None:
+            return
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Reauthenticate remote?",
+            f"{remote.display_name} may need to sign in again.\n\n"
+            "Reauthenticate it now and retry mounting?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        self._run_remote_reauthentication(remote, remount=True)
+
+    def _run_remote_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
+        if remote.name in self._action_pending:
+            return
+        self._action_pending.add(remote.name)
+        self._request_refresh()
+
+        def worker() -> None:
+            success, reconnect_message = core.reconnect_remote(remote)
+            if success and remount:
+                mount_success, mount_message = core.mount_remote(remote)
+                message = f"{reconnect_message}\n{mount_message}"
+                self._bridge.action_finished.emit(remote.name, mount_success, message)
+                return
+            self._bridge.action_finished.emit(remote.name, success, reconnect_message)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _mount_all(self) -> None:
         self._run_bulk_action("Mount all", core.mount_all)
@@ -5925,7 +6016,7 @@ class MountletWindow:
             self.tray_app._notify("Push config", str(exc), success=False)
             return
         if metadata:
-            self._record_config_sync_state(metadata, pushed=True)
+            self._record_config_sync_state(metadata)
             self._remote_sync_metadata = metadata
         self._update_config_sync_buttons()
         self.tray_app._notify("Push config", f"Pushed config to {remote.display_name}/{relative_path}.", success=True)
@@ -5970,7 +6061,7 @@ class MountletWindow:
             self.tray_app._notify("Pull config", str(exc), success=False)
             return
         if isinstance(metadata, dict):
-            self._record_config_sync_state(metadata, pushed=False)
+            self._record_config_sync_state(metadata)
             self._remote_sync_metadata = metadata
         self._rclone_config_replaced()
         message = f"Pulled config from {remote.display_name}/{relative_path}."
@@ -5978,14 +6069,16 @@ class MountletWindow:
             message += f"\nBackup: {backup_path}"
         self.tray_app._notify("Pull config", message, success=True)
 
-    def _record_config_sync_state(self, metadata: dict[str, object], *, pushed: bool) -> None:
+    def _record_config_sync_state(self, metadata: dict[str, object]) -> None:
         state = _load_config_sync_state()
         try:
             local_hash = bundle_file.current_config_fingerprint()
         except Exception:
             local_hash = str(metadata.get("config_hash", ""))
         if local_hash:
-            state["last_pushed_hash" if pushed else "last_pulled_hash"] = local_hash
+            state["last_synced_hash"] = local_hash
+            state["last_pushed_hash"] = local_hash
+            state["last_pulled_hash"] = local_hash
         for key in ("config_hash", "created_at", "device"):
             value = metadata.get(key)
             if value:

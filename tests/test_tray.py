@@ -2651,6 +2651,8 @@ class TrayTests(unittest.TestCase):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
         window.tray_app = SimpleNamespace(_notify=mock.Mock())
+        window._remote_sync_metadata = None
+        window._update_config_sync_buttons = mock.Mock()
 
         with mock.patch.object(window, "_config_sync_target", return_value=(remote, "Backups/config.mountlet")):
             with mock.patch.object(window, "_ask_bundle_password", return_value="secret"):
@@ -2661,6 +2663,38 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(export.call_args.kwargs["password"], "secret")
         self.assertEqual(copy.call_args.args[1:], (remote, "Backups/config.mountlet"))
         window.tray_app._notify.assert_called()
+
+    def test_record_config_sync_state_clears_push_and_pull_drift(self):
+        window = object.__new__(tray.MountletWindow)
+        saved = {}
+
+        with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="local-hash"):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value={}):
+                with mock.patch.object(tray, "_save_config_sync_state", side_effect=lambda state: saved.update(state)):
+                    window._record_config_sync_state(
+                        {"config_hash": "local-hash", "created_at": "2026-06-25T10:00:00Z", "device": "laptop"}
+                    )
+
+        self.assertEqual(saved["last_synced_hash"], "local-hash")
+        self.assertEqual(saved["last_pushed_hash"], "local-hash")
+        self.assertEqual(saved["last_pulled_hash"], "local-hash")
+        self.assertEqual(saved["remote_config_hash"], "local-hash")
+
+    def test_sync_button_dots_compare_against_last_synced_hash(self):
+        window = object.__new__(tray.MountletWindow)
+        push = mock.Mock()
+        pull = mock.Mock()
+        window._push_sync_button = push
+        window._pull_sync_button = pull
+        window._remote_sync_metadata = {"config_hash": "remote-hash", "created_at": "time", "device": "desktop"}
+
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value={"last_synced_hash": "synced-hash"}):
+                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="local-hash"):
+                    window._update_config_sync_buttons()
+
+        push.setText.assert_called_once_with("↑•")
+        pull.setText.assert_called_once_with("↓•")
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
@@ -2759,6 +2793,47 @@ class TrayTests(unittest.TestCase):
         window.file_browser.invalidate.assert_called_once_with("Docs")
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
+
+    def test_remote_action_failure_can_prompt_reauthentication(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        tray_app = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = tray_app
+        window.window = mock.Mock()
+        window._action_pending = {"Docs"}
+        window._usage_cache = {}
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+        window._run_remote_reauthentication = mock.Mock()
+        yes = 1
+        window.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=yes, No=2),
+                question=mock.Mock(return_value=yes),
+            )
+        )
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            window._handle_action_finished("Docs", False, "token expired")
+
+        window._run_remote_reauthentication.assert_called_once_with(remote, remount=True)
+
+    def test_remote_reauthentication_retries_mount_after_reconnect(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._action_pending = set()
+        window._request_refresh = mock.Mock()
+        window._bridge = SimpleNamespace(action_finished=SimpleNamespace(emit=mock.Mock()))
+
+        with mock.patch.object(tray.threading, "Thread") as thread:
+            worker_holder = {}
+            thread.side_effect = lambda target, daemon: worker_holder.setdefault("thread", mock.Mock(start=lambda: target()))
+            with mock.patch.object(tray.core, "reconnect_remote", return_value=(True, "reauthenticated")):
+                with mock.patch.object(tray.core, "mount_remote", return_value=(True, "mounted")):
+                    window._run_remote_reauthentication(remote, remount=True)
+
+        window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "reauthenticated\nmounted")
 
     def test_bulk_action_finish_invalidates_pending_file_browser_caches(self):
         tray_app = mock.Mock()

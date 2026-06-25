@@ -134,6 +134,7 @@ PIDS: Dict[str, int] = {}
 OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 RCLONE_STATUS_TIMEOUT_SECONDS = 20
 RCLONE_CONNECT_TIMEOUT_SECONDS = 20
+RCLONE_RECONNECT_TIMEOUT_SECONDS = 300
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -536,6 +537,32 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     return _launch_mount_process(remote, args)
 
 
+def reconnect_remote(remote: RemoteInfo, *, auto_confirm: bool = True) -> Tuple[bool, str]:
+    binary = find_rclone()
+    if not binary:
+        return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+    command = _rclone_command(binary, "config", "reconnect", f"{remote.name}:")
+    if auto_confirm:
+        command.append("--auto-confirm")
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=RCLONE_RECONNECT_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"[!] Reauthentication timed out for {remote.display_name}."
+    except Exception as exc:
+        return False, f"[!] Failed to reauthenticate {remote.display_name}: {exc}"
+    if result.returncode == 0:
+        return True, f"[*] reauthenticated {remote.display_name}."
+    detail = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    return False, f"[!] Reauthentication failed for {remote.display_name}.\n{detail}".rstrip()
+
+
 def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -> Tuple[bool, str]:
     binary = rclone_bin or find_rclone()
     if not binary:
@@ -683,6 +710,7 @@ __all__ = [
     "editable_rclone_fields",
     "save_rclone_fields",
     "mount_remote",
+    "reconnect_remote",
     "check_remote_connection",
     "unmount_remote",
     "refresh_remote",

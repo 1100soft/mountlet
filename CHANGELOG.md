@@ -52,6 +52,10 @@
 - Added an untested Proton Drive setup path using rclone's `protondrive`
   backend, with Proton username, password, optional 2FA, and mailbox-password
   fields.
+- Improved first-show tray positioning, config sync dot clearing after
+  successful push or pull, Proton Drive backend preflight errors for older
+  rclone builds, and one-click reauthentication prompts for mount failures that
+  look like expired or invalid cloud credentials.
 
 ## 0.3.0 - 2026-06-20
 
