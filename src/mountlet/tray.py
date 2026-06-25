@@ -25,7 +25,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import core, rclone_wizard
+from . import __version__, core, rclone_wizard
 from .cloud_browser import normalize_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
@@ -157,7 +157,7 @@ REMOTE_PROVIDER_STATUSES = {
     "box": "tested",
     "pcloud": "tested",
     "koofr": "tested",
-    "protondrive": "untested",
+    "protondrive": "tested",
     "s3": "partial",
     "webdav": "untested",
 }
@@ -429,7 +429,7 @@ def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QEvent, QLockFile, QMimeData, QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal
+        from PySide6.QtCore import QEvent, QLockFile, QMimeData, QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal, qVersion
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
         from PySide6.QtWidgets import (
             QAbstractItemView,
@@ -520,6 +520,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QTreeWidget=QTreeWidget,
         QTreeWidgetItem=QTreeWidgetItem,
         Qt=Qt,
+        qVersion=qVersion,
         QUrl=QUrl,
         Signal=Signal,
         QVBoxLayout=QVBoxLayout,
