@@ -48,9 +48,10 @@ Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
 Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
-Down, Return, Escape, and side-aware Left/Right handoff should not be exposed
-as editable shortcuts. A configurable optional key can be reused between the
-remote list and file browser, but conflicts inside one context should remain
+Down, Return, Escape, and side-aware Left/Right handoff should be shown as
+fixed guidance rather than exposed as editable shortcuts. Optional alternatives
+for remote selection, remote reordering, browser entry, and file-browser actions
+can be reused between contexts, but conflicts inside one context should remain
 blocked in the shortcut editor.
 Folder listings are session caches and are preloaded for each remembered remote
 path. When a folder is displayed, Mountlet silently prefetches one displayed
@@ -133,7 +134,7 @@ ignored by git and must not be part of the installed-user workflow.
 
 ## Provider Test Status
 
-The 0.3.0 release documents provider status based on local remotes in
+The 0.4.0 release documents provider status based on local remotes in
 `~/.config/rclone/rclone.conf` and recent GUI setup work.
 
 Locally tested:

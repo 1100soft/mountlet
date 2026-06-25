@@ -2364,15 +2364,16 @@ class TrayTests(unittest.TestCase):
         window.qt = qt
         window.file_browser = SimpleNamespace(side=lambda: "right")
 
-        with mock.patch.object(window, "_focus_current_browser") as focus_browser:
-            self.assertTrue(window._handle_main_key(Event("right")))
-            focus_browser.assert_called_once_with()
+        with mock.patch.object(tray, "matches_shortcut", return_value=False):
+            with mock.patch.object(window, "_focus_current_browser") as focus_browser:
+                self.assertTrue(window._handle_main_key(Event("right")))
+                focus_browser.assert_called_once_with()
 
-        with mock.patch.object(window, "_focus_current_browser") as focus_browser:
-            event = Event("left")
-            self.assertTrue(window._handle_main_key(event))
-            self.assertTrue(event.accepted)
-            focus_browser.assert_not_called()
+            with mock.patch.object(window, "_focus_current_browser") as focus_browser:
+                event = Event("left")
+                self.assertTrue(window._handle_main_key(event))
+                self.assertTrue(event.accepted)
+                focus_browser.assert_not_called()
 
     def test_remote_list_left_key_enters_left_side_browser(self):
         class Event:
@@ -2401,9 +2402,63 @@ class TrayTests(unittest.TestCase):
         window.qt = qt
         window.file_browser = SimpleNamespace(side=lambda: "left")
 
-        with mock.patch.object(window, "_focus_current_browser") as focus_browser:
-            self.assertTrue(window._handle_main_key(Event("left")))
-            focus_browser.assert_called_once_with()
+        with mock.patch.object(tray, "matches_shortcut", return_value=False):
+            with mock.patch.object(window, "_focus_current_browser") as focus_browser:
+                self.assertTrue(window._handle_main_key(Event("left")))
+                focus_browser.assert_called_once_with()
+
+    def test_remote_list_alternative_navigation_shortcut_moves_selection(self):
+        class Event:
+            def key(self) -> object:
+                return "custom"
+
+            def accept(self) -> None:
+                return
+
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=SimpleNamespace(
+                    Key_Up="up",
+                    Key_Down="down",
+                    Key_Return="return",
+                    Key_Enter="enter",
+                    Key_Left="left",
+                    Key_Right="right",
+                )
+            )
+        )
+
+        def matches(_qt: object, _event: object, action: str) -> bool:
+            return action == "remote_next"
+
+        with mock.patch.object(tray, "matches_shortcut", side_effect=matches):
+            with mock.patch.object(window, "_focused_remote_name", return_value="Beta"):
+                with mock.patch.object(window, "_focus_relative_remote") as focus:
+                    self.assertTrue(window._handle_main_key(Event()))
+
+        focus.assert_called_once_with("Beta", 1)
+
+    def test_remote_list_reorder_shortcut_moves_and_refocuses_remote(self):
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(window, "_can_move_remote", return_value=True):
+            with mock.patch.object(window, "_move_remote") as move:
+                with mock.patch.object(window, "_focus_remote_row") as focus:
+                    window._move_focused_remote("Beta", -1)
+
+        move.assert_called_once_with("Beta", -1)
+        focus.assert_called_once_with("Beta")
+
+    def test_sync_metadata_summary_is_human_readable(self):
+        with mock.patch.object(tray.platform, "node", return_value="laptop"):
+            summary = tray._sync_metadata_summary(
+                {"created_at": "2026-06-25T10:00:00Z", "device": "desktop-7f3a"}
+            )
+
+        self.assertIn("Updated on Jun 25, 2026 at", summary)
+        self.assertIn('on another device named "desktop-7f3a"', summary)
+        self.assertNotIn("2026-06-25T10:00:00Z", summary)
 
     def test_hover_focuses_remote_row_for_keyboard_navigation(self):
         class Row:

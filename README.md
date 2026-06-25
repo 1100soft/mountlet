@@ -349,10 +349,11 @@ remote does not need to be mounted.
 - With the main window focused, use Up and Down to select remote strips and
   Return to enter the browser. Left or Right also enters the browser when that
   key points toward the side where the browser is displayed; the opposite arrow
-  does nothing. In the browser, Return opens an item, Escape returns to the
-  selected strip, and the arrow pointing back toward the main window also
-  returns. Space, Backspace, Alt+Home, F5, Ctrl+Return, and other optional
-  shortcut alternatives can be changed from `Config` > `Keyboard shortcuts`.
+  does nothing. Shift+Up and Shift+Down move the selected remote. In the
+  browser, Return opens an item, Escape returns to the selected strip, and the
+  arrow pointing back toward the main window also returns. Space, Shift+Up,
+  Shift+Down, Backspace, Alt+Home, F5, Ctrl+Return, and other optional shortcut
+  alternatives can be changed from `Config` > `Keyboard shortcuts`.
 - Editing inside Mountlet Files is disabled by default. Enable it from `App`
   > `Settings` > `Allow edits in Mountlet Files` only if you want direct cloud
   edits from the integrated browser.

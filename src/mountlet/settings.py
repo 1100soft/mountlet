@@ -13,7 +13,11 @@ from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
+    "remote_previous": (),
+    "remote_next": (),
     "remote_enter_browser": ("Space",),
+    "remote_move_up": ("Shift+Up",),
+    "remote_move_down": ("Shift+Down",),
     "browser_parent": ("Backspace",),
     "browser_root": ("Alt+Home",),
     "browser_refresh": ("F5",),
@@ -74,7 +78,11 @@ config_remote = ""
 config_path = "Mountlet/config.mountlet"
 
 [shortcuts]
+remote_previous = ""
+remote_next = ""
 remote_enter_browser = "Space"
+remote_move_up = "Shift+Up"
+remote_move_down = "Shift+Down"
 browser_parent = "Backspace"
 browser_root = "Alt+Home"
 browser_refresh = "F5"
@@ -290,9 +298,14 @@ def _shortcut_list(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _filter_locked_shortcuts(key: str, values: tuple[str, ...]) -> tuple[str, ...]:
-    if key != "remote_enter_browser":
+    locked_by_key = {
+        "remote_previous": {"up"},
+        "remote_next": {"down"},
+        "remote_enter_browser": {"return", "enter", "left", "right"},
+    }
+    locked = locked_by_key.get(key)
+    if locked is None:
         return values
-    locked = {"return", "enter", "left", "right"}
     filtered = tuple(value for value in values if value.replace(" ", "").casefold() not in locked)
     return filtered or DEFAULT_SHORTCUTS[key]
 

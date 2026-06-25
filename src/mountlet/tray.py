@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
@@ -79,7 +80,11 @@ REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("remote_previous", "Previous remote alternatives"),
+    ("remote_next", "Next remote alternatives"),
     ("remote_enter_browser", "Enter file browser alternatives"),
+    ("remote_move_up", "Move remote up"),
+    ("remote_move_down", "Move remote down"),
 )
 BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("browser_parent", "Parent folder"),
@@ -598,9 +603,33 @@ def _save_config_sync_state(state: dict[str, Any]) -> None:
 
 
 def _sync_metadata_summary(metadata: dict[str, object]) -> str:
-    device = str(metadata.get("device") or "unknown device")
-    created_at = str(metadata.get("created_at") or "unknown time")
-    return f"Updated on {device} at {created_at}."
+    return f"Updated {_human_sync_time(metadata.get('created_at'))} {_human_sync_device(metadata.get('device'))}."
+
+
+def _human_sync_device(value: object) -> str:
+    device = str(value or "").strip()
+    if not device:
+        return "on an unknown device"
+    local_device = platform.node()
+    if local_device and device.casefold() == local_device.casefold():
+        return "on this device"
+    return f'on another device named "{device}"'
+
+
+def _human_sync_time(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "at an unknown time"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return f"at {raw}"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone()
+    month = local.strftime("%b")
+    hour = local.strftime("%I").lstrip("0") or "0"
+    return f"on {month} {local.day}, {local.year} at {hour}:{local:%M} {local:%p}"
 
 
 def _message_might_be_auth_failure(message: str) -> bool:
@@ -2097,6 +2126,13 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
+        fixed = self.qt.QLabel(
+            "Fixed remote-list keys: Up/Down select remotes, Left/Right enter the file browser when pointing toward it, "
+            "Enter selects."
+        )
+        fixed.setWordWrap(True)
+        fixed.setStyleSheet(_muted_text_style(fixed))
+        root.addWidget(fixed)
         for title, fields in SHORTCUT_CONTEXTS:
             root.addWidget(self._shortcut_group(title, fields, app_settings.shortcuts))
         self.conflict_label = self.qt.QLabel("")
@@ -5467,7 +5503,15 @@ class MountletWindow:
 
     def _handle_remote_row_key(self, event: Any, remote: core.RemoteInfo, row: Any) -> None:
         key = event.key()
-        if key == self.qt.Qt.Key.Key_Up:
+        if matches_shortcut(self.qt, event, "remote_move_up"):
+            self._move_focused_remote(remote.name, -1)
+        elif matches_shortcut(self.qt, event, "remote_move_down"):
+            self._move_focused_remote(remote.name, 1)
+        elif matches_shortcut(self.qt, event, "remote_previous"):
+            self._focus_relative_remote(remote.name, -1)
+        elif matches_shortcut(self.qt, event, "remote_next"):
+            self._focus_relative_remote(remote.name, 1)
+        elif key == self.qt.Qt.Key.Key_Up:
             self._focus_relative_remote(remote.name, -1)
         elif key == self.qt.Qt.Key.Key_Down:
             self._focus_relative_remote(remote.name, 1)
@@ -5488,10 +5532,19 @@ class MountletWindow:
 
     def _handle_main_key(self, event: Any) -> bool:
         key = event.key()
-        if key == self.qt.Qt.Key.Key_Up:
-            self._focus_relative_remote(self._focused_remote_name(), -1)
+        focused_remote = self._focused_remote_name()
+        if matches_shortcut(self.qt, event, "remote_move_up"):
+            self._move_focused_remote(focused_remote, -1)
+        elif matches_shortcut(self.qt, event, "remote_move_down"):
+            self._move_focused_remote(focused_remote, 1)
+        elif matches_shortcut(self.qt, event, "remote_previous"):
+            self._focus_relative_remote(focused_remote, -1)
+        elif matches_shortcut(self.qt, event, "remote_next"):
+            self._focus_relative_remote(focused_remote, 1)
+        elif key == self.qt.Qt.Key.Key_Up:
+            self._focus_relative_remote(focused_remote, -1)
         elif key == self.qt.Qt.Key.Key_Down:
-            self._focus_relative_remote(self._focused_remote_name(), 1)
+            self._focus_relative_remote(focused_remote, 1)
         elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
             self._focus_current_browser()
         elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
@@ -5507,6 +5560,12 @@ class MountletWindow:
         event.accept()
         return True
 
+    def _move_focused_remote(self, remote_name: str, delta: int) -> None:
+        if not remote_name or not self._can_move_remote(remote_name, delta):
+            return
+        self._move_remote(remote_name, delta)
+        self._focus_remote_row(remote_name)
+
     def _direction_points_to_browser(self, key: Any) -> bool:
         side = getattr(self.file_browser, "side", lambda: "right")()
         if side == "left":
@@ -5517,7 +5576,7 @@ class MountletWindow:
         selected = getattr(self, "_selected_remote_name", "")
         if selected in getattr(self, "_current_remote_names", []):
             return selected
-        for name, widgets in self._row_widgets.items():
+        for name, widgets in getattr(self, "_row_widgets", {}).items():
             if widgets.frame.hasFocus():
                 return name
         remote = getattr(self.file_browser, "remote", None)

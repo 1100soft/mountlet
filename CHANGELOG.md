@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-06-25
+
 - Added a compact rclone-backed file browser connected directly to the remote
   strips, with remembered per-remote paths and adaptive left/right placement.
 - Added cross-remote copy, cut, paste, and drag-and-drop transfers that run
@@ -14,9 +16,9 @@
 - Disabled integrated file edits by default and added an app setting with an
   explicit warning before enabling direct, non-undoable cloud file operations.
 - Added a remote-root navigation button and configurable keyboard shortcuts for
-  optional remote-list and file-browser navigation keys, with up to three
-  alternatives per action, grouped contexts, conflict checks, and restore
-  defaults.
+  optional remote-list navigation, remote reordering, and file-browser actions,
+  with up to three alternatives per action, grouped contexts, conflict checks,
+  fixed-key guidance, and restore defaults.
 - Added background preloading, one-level child-folder prefetch, and session
   caching for each remote's remembered folder, default remote-list keyboard
   focus, deterministic X11 row/pin visual state, and an embedded side-by-side
@@ -49,9 +51,8 @@
   maintenance options for repair/update and uninstall.
 - Added encrypted config-bundle metadata with device, time, and content hash,
   compact top-row config sync buttons, and a nested raw-config-file menu.
-- Added an untested Proton Drive setup path using rclone's `protondrive`
-  backend, with Proton username, password, optional 2FA, and mailbox-password
-  fields.
+- Added a Proton Drive setup path using current rclone's `protondrive` backend,
+  with Proton username, password, optional 2FA, and mailbox-password fields.
 - Improved first-show tray positioning, config sync dot clearing after
   successful push or pull, Proton Drive backend preflight errors for older
   rclone builds, and one-click reauthentication prompts for mount failures that
@@ -59,6 +60,12 @@
 - Tightened tray anchoring against transient `(0, 0)` tray geometry, re-anchored
   after config replacement, and changed sync-dot detection to use a semantic
   remote-operation config hash instead of raw app config bytes.
+- Added an About dialog with app, Python, Qt, rclone, filesystem-driver,
+  platform, config-path, and mount-folder details.
+- Made config sync pull metadata easier to read by translating bundle device
+  and timestamp values into user-facing device and local-time wording.
+- Fixed config sync push-dot updates after shortcut, app, mount, remote-order,
+  import, and new-remote changes.
 
 ## 0.3.0 - 2026-06-20
 

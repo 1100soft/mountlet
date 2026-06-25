@@ -60,7 +60,10 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
         self.assertEqual(config.shortcuts["browser_root"], ("Ctrl+Home",))
         self.assertEqual(config.shortcuts["remote_enter_browser"], settings.DEFAULT_SHORTCUTS["remote_enter_browser"])
-        self.assertNotIn("remote_previous", config.shortcuts)
+        self.assertEqual(config.shortcuts["remote_previous"], ())
+        self.assertEqual(config.shortcuts["remote_next"], ())
+        self.assertEqual(config.shortcuts["remote_move_up"], ("Shift+Up",))
+        self.assertEqual(config.shortcuts["remote_move_down"], ("Shift+Down",))
 
     def test_load_mount_settings_reads_per_remote_overrides(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -94,14 +97,22 @@ order = 2
             path.write_text(
                 """
 [shortcuts]
+remote_previous = "Up, PageUp"
+remote_next = "Down, PageDown"
 remote_enter_browser = "Return, Space, Left, Right"
+remote_move_up = "Shift+Up"
+remote_move_down = "Shift+Down"
 """.strip(),
                 encoding="utf-8",
             )
 
             config = settings.load_app_settings(path)
 
+        self.assertEqual(config.shortcuts["remote_previous"], ("PageUp",))
+        self.assertEqual(config.shortcuts["remote_next"], ("PageDown",))
         self.assertEqual(config.shortcuts["remote_enter_browser"], ("Space",))
+        self.assertEqual(config.shortcuts["remote_move_up"], ("Shift+Up",))
+        self.assertEqual(config.shortcuts["remote_move_down"], ("Shift+Down",))
 
     def test_ensure_default_config_files_creates_app_and_mount_files(self):
         with tempfile.TemporaryDirectory() as tempdir:
