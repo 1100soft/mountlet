@@ -11,6 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mountlet import settings
 from mountlet.config_tools import bundle_file, export_config, import_config, path_config, shared, verify_config
 from mountlet.platform_services.linux import LinuxPlatformServices
 
@@ -196,7 +197,7 @@ class ConfigToolTests(unittest.TestCase):
 
             self.assertEqual(rclone_config.read_text(encoding="utf-8"), "[Docs]\ntype = drive\n")
 
-    def test_config_fingerprint_ignores_non_mounting_app_preferences(self):
+    def test_config_fingerprint_tracks_shared_app_preferences_only(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             rclone_config = root / "rclone" / "rclone.conf"
@@ -209,22 +210,76 @@ class ConfigToolTests(unittest.TestCase):
                 rclone_config.write_text("[Docs]\ntype = drive\n", encoding="utf-8")
                 shared.app_config_file().parent.mkdir(parents=True)
                 shared.app_config_file().write_text(
-                    '[app]\nauto_mount = false\n\n[tray]\nfile_manager = "dolphin"\n\n'
+                    '[app]\nmount_base = "/local/mounts"\nauto_mount = false\n\n[tray]\nfile_manager = "dolphin"\n\n'
                     '[sync]\nconfig_remote = "Docs"\nconfig_path = "Mountlet/config.mountlet"\n',
                     encoding="utf-8",
                 )
                 before = bundle_file.current_config_fingerprint()
                 shared.app_config_file().write_text(
-                    '[app]\nauto_mount = false\n\n[tray]\nfile_manager = "nautilus"\n\n'
-                    '[sync]\nconfig_remote = "Other"\nconfig_path = "Other/config.mountlet"\n',
+                    '[app]\nmount_base = "/other/mounts"\nauto_mount = false\n\n[tray]\nfile_manager = "nautilus"\n\n'
+                    '[sync]\nconfig_remote = "Docs"\nconfig_path = "Mountlet/config.mountlet"\n',
                     encoding="utf-8",
                 )
-                after_non_mounting_change = bundle_file.current_config_fingerprint()
-                shared.app_config_file().write_text("[app]\nauto_mount = true\n", encoding="utf-8")
-                after_mounting_change = bundle_file.current_config_fingerprint()
+                after_local_change = bundle_file.current_config_fingerprint()
+                shared.app_config_file().write_text(
+                    '[app]\nauto_mount = false\n\n[sync]\nconfig_remote = "Other"\n'
+                    'config_path = "Other/config.mountlet"\n',
+                    encoding="utf-8",
+                )
+                after_shared_change = bundle_file.current_config_fingerprint()
 
-            self.assertEqual(before, after_non_mounting_change)
-            self.assertNotEqual(before, after_mounting_change)
+            self.assertEqual(before, after_local_change)
+            self.assertNotEqual(before, after_shared_change)
+
+    def test_single_file_bundle_import_preserves_platform_specific_app_settings(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            rclone_config = root / "rclone" / "rclone.conf"
+            source_bundle = root / "source.mountlet"
+            env = {
+                "RCLONE_CONFIG": str(rclone_config),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                rclone_config.parent.mkdir()
+                rclone_config.write_text("[Old]\ntype = drive\n", encoding="utf-8")
+                shared.app_config_file().parent.mkdir(parents=True)
+                shared.app_config_file().write_text(
+                    '[app]\nmount_base = "/local/mounts"\nauto_mount = false\n'
+                    'auto_mount_delay = 2\nstart_at_login = true\nintegrated_file_edits = false\n\n'
+                    '[tray]\nfile_manager = "dolphin"\nopen_folder_behavior = "current_desktop"\n'
+                    'focus_file_manager = false\n\n'
+                    '[sync]\nconfig_remote = "Old"\nconfig_path = "Old/config.mountlet"\n\n'
+                    '[shortcuts]\nbrowser_refresh = "F5"\n',
+                    encoding="utf-8",
+                )
+                with zipfile.ZipFile(source_bundle, "w") as archive:
+                    archive.writestr("manifest.json", '{"format":"mountlet-config-bundle","version":1}')
+                    archive.writestr("rclone.conf", "[New]\ntype = s3\n")
+                    archive.writestr(
+                        "config.toml",
+                        '[app]\nmount_base = "/remote/mounts"\nauto_mount = true\n'
+                        'auto_mount_delay = 5\nstart_at_login = false\nintegrated_file_edits = true\n\n'
+                        '[tray]\nfile_manager = "explorer"\nopen_folder_behavior = "new_window"\n'
+                        'focus_file_manager = true\n\n'
+                        '[sync]\nconfig_remote = "Docs"\nconfig_path = "Mountlet/config.mountlet"\n\n'
+                        '[shortcuts]\nbrowser_refresh = "Ctrl+R"\n',
+                    )
+
+                bundle_file.import_bundle_file(source_bundle, backup=False)
+                imported = settings.load_app_settings(shared.app_config_file())
+
+            self.assertEqual(imported.mount_base, "/local/mounts")
+            self.assertTrue(imported.start_at_login)
+            self.assertEqual(imported.file_manager, "dolphin")
+            self.assertEqual(imported.open_folder_behavior, "current_desktop")
+            self.assertFalse(imported.focus_file_manager)
+            self.assertTrue(imported.auto_mount)
+            self.assertEqual(imported.auto_mount_delay, 5)
+            self.assertTrue(imported.integrated_file_edits)
+            self.assertEqual(imported.config_sync_remote, "Docs")
+            self.assertEqual(imported.config_sync_path, "Mountlet/config.mountlet")
+            self.assertEqual(imported.shortcuts["browser_refresh"], ("Ctrl+R",))
 
     def test_single_file_bundle_import_creates_restorable_backup_archive(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -250,7 +305,7 @@ class ConfigToolTests(unittest.TestCase):
                 backup = bundle_file.import_bundle_file(source_bundle)
 
                 self.assertEqual(rclone_config.read_text(encoding="utf-8"), "[New]\ntype = s3\n")
-                self.assertEqual(shared.app_config_file().read_text(encoding="utf-8"), "[app]\nauto_mount = true\n")
+                self.assertTrue(settings.load_app_settings(shared.app_config_file()).auto_mount)
                 self.assertEqual(shared.app_mounts_file().read_text(encoding="utf-8"), '[remotes."New"]\nremote_path = "bucket"\n')
 
             self.assertIsNotNone(backup)

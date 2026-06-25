@@ -9,6 +9,7 @@ import json
 import os
 import hashlib
 import platform
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +28,7 @@ from .shared import (
     find_client_secrets,
     timestamp,
 )
-from ..settings import load_app_settings, load_mount_settings
+from ..settings import AppSettings, load_app_settings, load_mount_settings, save_app_settings
 
 BUNDLE_EXTENSION = ".mountlet"
 BUNDLE_VERSION = 1
@@ -122,7 +123,7 @@ def import_bundle_file(source: Path, *, backup: bool = True, password: str | Non
     with _open_bundle_archive(source, password=password) as archive:
         backup_path = backup_current_config() if backup else None
         _extract_config_file(archive, RCLONE_CONFIG_NAME, default_config_path())
-        _extract_config_file(archive, APP_CONFIG_NAME, app_config_file(), required=False)
+        _merge_app_config_from_archive(archive, app_config_file())
         _extract_config_file(archive, MOUNTS_CONFIG_NAME, app_mounts_file(), required=False)
         for name in archive.namelist():
             if not name.startswith(SECRET_PREFIX) or name.endswith("/"):
@@ -197,15 +198,7 @@ def _operation_config_hash(source_conf: Path | None = None) -> str:
     digest = hashlib.sha256()
     _hash_file(digest, RCLONE_CONFIG_NAME, source_conf)
     app_settings = load_app_settings()
-    _hash_json(
-        digest,
-        APP_CONFIG_NAME,
-        {
-            "mount_base": app_settings.mount_base,
-            "auto_mount": app_settings.auto_mount,
-            "auto_mount_delay": app_settings.auto_mount_delay,
-        },
-    )
+    _hash_json(digest, APP_CONFIG_NAME, _shared_app_settings_payload(app_settings))
     mount_settings = load_mount_settings()
     _hash_json(
         digest,
@@ -224,6 +217,50 @@ def _operation_config_hash(source_conf: Path | None = None) -> str:
     for secret in find_client_secrets(source_conf.parent):
         _hash_file(digest, f"{SECRET_PREFIX}{secret.name}", secret)
     return digest.hexdigest()
+
+
+def _merge_app_config_from_archive(archive: zipfile.ZipFile, destination: Path) -> None:
+    if APP_CONFIG_NAME not in archive.namelist():
+        return
+    ensure_dir(destination.parent)
+    with tempfile.NamedTemporaryFile("wb", delete=False) as handle:
+        handle.write(archive.read(APP_CONFIG_NAME))
+        temporary = Path(handle.name)
+    try:
+        incoming = load_app_settings(temporary)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    local = load_app_settings(destination)
+    merged = AppSettings(
+        mount_base=local.mount_base,
+        auto_mount=incoming.auto_mount,
+        auto_mount_delay=incoming.auto_mount_delay,
+        start_at_login=local.start_at_login,
+        file_manager=local.file_manager,
+        open_folder_behavior=local.open_folder_behavior,
+        focus_file_manager=local.focus_file_manager,
+        integrated_file_edits=incoming.integrated_file_edits,
+        config_sync_remote=incoming.config_sync_remote,
+        config_sync_path=incoming.config_sync_path,
+        shortcuts=dict(incoming.shortcuts),
+    )
+    save_app_settings(merged, destination)
+    apply_permissions(destination)
+
+
+def _shared_app_settings_payload(settings: AppSettings) -> dict[str, object]:
+    return {
+        "auto_mount": settings.auto_mount,
+        "auto_mount_delay": settings.auto_mount_delay,
+        "integrated_file_edits": settings.integrated_file_edits,
+        "config_sync_remote": settings.config_sync_remote,
+        "config_sync_path": settings.config_sync_path,
+        "shortcuts": {
+            key: list(settings.shortcuts.get(key, ()))
+            for key in sorted(settings.shortcuts)
+        },
+    }
 
 
 def _hash_file(digest: "hashlib._Hash", archive_name: str, source: Path) -> None:

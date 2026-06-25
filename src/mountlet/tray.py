@@ -3785,6 +3785,7 @@ class MountletWindow:
         self._remote_sync_check_pending = False
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
+        self._last_popup_position: tuple[int, int] | None = None
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
         self._bridge = self._make_bridge()
@@ -3997,6 +3998,8 @@ class MountletWindow:
             self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
+        if not was_visible:
+            self._schedule_position_near_tray()
 
     def _window_is_active(self) -> bool:
         try:
@@ -4032,6 +4035,14 @@ class MountletWindow:
         timer.singleShot(50, self._activate_main_window_if_current_desktop)
         timer.singleShot(150, self._activate_main_window_if_current_desktop)
         timer.singleShot(300, self._activate_main_window_if_current_desktop)
+
+    def _schedule_position_near_tray(self) -> None:
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            return
+        timer.singleShot(0, self._position_near_tray)
+        timer.singleShot(50, self._position_near_tray)
+        timer.singleShot(150, self._position_near_tray)
 
     def _activate_main_window_if_current_desktop(self) -> None:
         desktop = self._desktop_api()
@@ -4251,7 +4262,9 @@ class MountletWindow:
                     (available.left(), available.top(), available.width(), available.height()),
                     (size.width(), size.height()),
                 )
+            x, y = self._safe_popup_position(x, y, available, size)
             self.window.move(x, y)
+            self._last_popup_position = (x, y)
         except Exception:
             return
 
@@ -4296,6 +4309,35 @@ class MountletWindow:
             )
         except Exception:
             return True
+
+    def _safe_popup_position(self, x: int, y: int, available: Any, size: Any) -> tuple[int, int]:
+        if not self._position_is_suspicious(x, y, available):
+            return x, y
+        remembered = getattr(self, "_last_popup_position", None)
+        if remembered is not None:
+            remembered_x, remembered_y = remembered
+            if not self._position_is_suspicious(remembered_x, remembered_y, available):
+                return self._clamped_popup_position(remembered_x, remembered_y, available, size)
+        fallback_x = available.left() + available.width() - size.width() - 8
+        fallback_y = available.top() + 8
+        return self._clamped_popup_position(fallback_x, fallback_y, available, size)
+
+    def _position_is_suspicious(self, x: int, y: int, available: Any) -> bool:
+        try:
+            return (
+                abs(x) <= 1
+                and abs(y) <= 1
+            ) or (
+                abs(x - available.left()) <= 1
+                and abs(y - available.top()) <= 1
+            )
+        except Exception:
+            return True
+
+    def _clamped_popup_position(self, x: int, y: int, available: Any, size: Any) -> tuple[int, int]:
+        max_x = max(available.left(), available.left() + available.width() - size.width())
+        max_y = max(available.top(), available.top() + available.height() - size.height())
+        return min(max(x, available.left()), max_x), min(max(y, available.top()), max_y)
 
     def _clamp_to_screen(self, screen: Any | None = None) -> None:
         try:

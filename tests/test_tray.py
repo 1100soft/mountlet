@@ -1415,7 +1415,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.show.assert_called_once_with()
         mountlet_window.window.raise_.assert_not_called()
         mountlet_window.window.activateWindow.assert_not_called()
-        self.assertEqual(single_shot.call_count, 6)
+        self.assertEqual(single_shot.call_count, 9)
 
     def test_activate_main_window_skips_when_window_still_on_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
