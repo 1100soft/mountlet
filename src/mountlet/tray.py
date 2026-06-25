@@ -3784,6 +3784,7 @@ class MountletWindow:
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
         self._position_after_fit = False
+        self._last_tray_anchor: Any | None = None
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
         self._bridge = self._make_bridge()
@@ -4232,18 +4233,11 @@ class MountletWindow:
 
     def _position_near_tray(self) -> None:
         try:
-            tray_geometry = self.tray_app.tray.geometry()
-            geometry_valid = tray_geometry.isValid()
-            anchor = tray_geometry.center() if geometry_valid else self.qt.QCursor.pos()
+            anchor, geometry_valid = self._tray_anchor()
             screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
             if screen is None:
                 return
             available = screen.availableGeometry()
-            if geometry_valid and self._tray_geometry_is_suspicious(tray_geometry, available):
-                geometry_valid = False
-                anchor = self.qt.QCursor.pos()
-                screen = self.qt.QApplication.screenAt(anchor) or screen
-                available = screen.availableGeometry()
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
@@ -4261,16 +4255,44 @@ class MountletWindow:
         except Exception:
             return
 
+    def _tray_anchor(self) -> tuple[Any, bool]:
+        tray_geometry = self.tray_app.tray.geometry()
+        primary_screen = self.qt.QApplication.primaryScreen()
+        available = primary_screen.availableGeometry() if primary_screen is not None else None
+        if tray_geometry.isValid() and available is not None and not self._tray_geometry_is_suspicious(tray_geometry, available):
+            anchor = tray_geometry.center()
+            self._last_tray_anchor = anchor
+            return anchor, True
+        cursor = self.qt.QCursor.pos()
+        screen = self.qt.QApplication.screenAt(cursor) or primary_screen
+        available = screen.availableGeometry() if screen is not None else available
+        if available is not None and not self._point_is_suspicious_anchor(cursor, available):
+            self._last_tray_anchor = cursor
+            return cursor, False
+        remembered = getattr(self, "_last_tray_anchor", None)
+        if remembered is not None:
+            return remembered, False
+        if available is not None:
+            point = self.qt.QPoint(available.right() - 8, available.top() + 8)
+            return point, False
+        return cursor, False
+
     def _tray_geometry_is_suspicious(self, tray_geometry: Any, available: Any) -> bool:
         try:
             center = tray_geometry.center()
             return (
                 tray_geometry.width() <= 1
                 or tray_geometry.height() <= 1
-                or (
-                    abs(center.x() - available.left()) <= 1
-                    and abs(center.y() - available.top()) <= 1
-                )
+                or self._point_is_suspicious_anchor(center, available)
+            )
+        except Exception:
+            return True
+
+    def _point_is_suspicious_anchor(self, point: Any, available: Any) -> bool:
+        try:
+            return (
+                abs(point.x() - available.left()) <= 1
+                and abs(point.y() - available.top()) <= 1
             )
         except Exception:
             return True
@@ -4432,10 +4454,23 @@ class MountletWindow:
         except Exception:
             local_hash = ""
         last_synced_hash = str(state.get("last_synced_hash") or "")
-        local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
+        original_last_synced_hash = last_synced_hash
         remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
         remote_hash = str(remote_metadata.get("config_hash", ""))
-        remote_changed = bool(sync_configured and remote_hash and remote_hash != last_synced_hash)
+        known_remote_hashes = {
+            value
+            for value in (
+                original_last_synced_hash,
+                str(state.get("remote_config_hash") or ""),
+                str(state.get("last_pushed_hash") or ""),
+                str(state.get("last_pulled_hash") or ""),
+            )
+            if value
+        }
+        if local_hash and remote_hash and remote_hash in known_remote_hashes and local_hash != original_last_synced_hash:
+            last_synced_hash = local_hash
+        local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
+        remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
             push_button.setText("↑•" if local_changed else "↑")
             push_button.setEnabled(sync_configured)
@@ -6165,6 +6200,7 @@ class MountletWindow:
         self._action_pending.clear()
         self._current_remote_names = []
         self._selected_remote_name = ""
+        self._position_after_fit = self.is_visible()
         self.file_browser.invalidate()
         self.tray_app.rebuild_menus()
         self.refresh()

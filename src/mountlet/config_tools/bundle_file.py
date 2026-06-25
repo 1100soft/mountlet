@@ -7,8 +7,8 @@ from __future__ import annotations
 import io
 import json
 import os
-import platform
 import hashlib
+import platform
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +27,7 @@ from .shared import (
     find_client_secrets,
     timestamp,
 )
+from ..settings import load_app_settings, load_mount_settings
 
 BUNDLE_EXTENSION = ".mountlet"
 BUNDLE_VERSION = 1
@@ -60,8 +61,7 @@ def backup_dir() -> Path:
 
 
 def current_config_fingerprint(source_conf: Path | None = None) -> str:
-    files = _bundle_sources(source_conf or default_config_path())
-    return _config_hash(files)
+    return _operation_config_hash(source_conf or default_config_path())
 
 
 def bundle_metadata(source: Path, *, password: str | None = None) -> dict[str, object]:
@@ -172,7 +172,7 @@ def _manifest(files: dict[str, Path], *, backup: bool = False) -> dict[str, obje
         "files": sorted(files),
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "device": platform.node() or "unknown device",
-        "config_hash": _config_hash(files),
+        "config_hash": _operation_config_hash(),
     }
     if backup:
         manifest["backup"] = True
@@ -190,6 +190,56 @@ def _config_hash(files: dict[str, Path]) -> str:
         digest.update(source.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _operation_config_hash(source_conf: Path | None = None) -> str:
+    source_conf = source_conf or default_config_path()
+    digest = hashlib.sha256()
+    _hash_file(digest, RCLONE_CONFIG_NAME, source_conf)
+    app_settings = load_app_settings()
+    _hash_json(
+        digest,
+        APP_CONFIG_NAME,
+        {
+            "mount_base": app_settings.mount_base,
+            "auto_mount": app_settings.auto_mount,
+            "auto_mount_delay": app_settings.auto_mount_delay,
+        },
+    )
+    mount_settings = load_mount_settings()
+    _hash_json(
+        digest,
+        MOUNTS_CONFIG_NAME,
+        {
+            name: {
+                "mount_path": value.mount_path,
+                "remote_path": value.remote_path,
+                "mount_flags": value.mount_flags,
+                "auto_mount": value.auto_mount,
+                "enabled": value.enabled,
+            }
+            for name, value in sorted(mount_settings.items())
+        },
+    )
+    for secret in find_client_secrets(source_conf.parent):
+        _hash_file(digest, f"{SECRET_PREFIX}{secret.name}", secret)
+    return digest.hexdigest()
+
+
+def _hash_file(digest: "hashlib._Hash", archive_name: str, source: Path) -> None:
+    if not source.exists():
+        return
+    digest.update(archive_name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(source.read_bytes())
+    digest.update(b"\0")
+
+
+def _hash_json(digest: "hashlib._Hash", archive_name: str, value: object) -> None:
+    digest.update(archive_name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    digest.update(b"\0")
 
 
 def _archive_bytes(files: dict[str, Path], manifest: dict[str, object]) -> bytes:

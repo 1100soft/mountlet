@@ -56,6 +56,9 @@
   successful push or pull, Proton Drive backend preflight errors for older
   rclone builds, and one-click reauthentication prompts for mount failures that
   look like expired or invalid cloud credentials.
+- Tightened tray anchoring against transient `(0, 0)` tray geometry, re-anchored
+  after config replacement, and changed sync-dot detection to use a semantic
+  remote-operation config hash instead of raw app config bytes.
 
 ## 0.3.0 - 2026-06-20
 

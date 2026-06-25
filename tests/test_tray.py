@@ -2696,6 +2696,22 @@ class TrayTests(unittest.TestCase):
         push.setText.assert_called_once_with("↑•")
         pull.setText.assert_called_once_with("↓•")
 
+    def test_sync_button_dots_ignore_known_pre_update_remote_hash(self):
+        window = object.__new__(tray.MountletWindow)
+        push = mock.Mock()
+        pull = mock.Mock()
+        window._push_sync_button = push
+        window._pull_sync_button = pull
+        window._remote_sync_metadata = {"config_hash": "old-raw-hash", "created_at": "time", "device": "desktop"}
+
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value={"last_synced_hash": "old-raw-hash"}):
+                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="semantic-hash"):
+                    window._update_config_sync_buttons()
+
+        push.setText.assert_called_once_with("↑")
+        pull.setText.assert_called_once_with("↓")
+
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")
         unchanged_remote = core.RemoteInfo("Photos", "Photos", "drive", "drive", "/same/photos")

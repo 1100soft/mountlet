@@ -196,6 +196,36 @@ class ConfigToolTests(unittest.TestCase):
 
             self.assertEqual(rclone_config.read_text(encoding="utf-8"), "[Docs]\ntype = drive\n")
 
+    def test_config_fingerprint_ignores_non_mounting_app_preferences(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            rclone_config = root / "rclone" / "rclone.conf"
+            env = {
+                "RCLONE_CONFIG": str(rclone_config),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                rclone_config.parent.mkdir()
+                rclone_config.write_text("[Docs]\ntype = drive\n", encoding="utf-8")
+                shared.app_config_file().parent.mkdir(parents=True)
+                shared.app_config_file().write_text(
+                    '[app]\nauto_mount = false\n\n[tray]\nfile_manager = "dolphin"\n\n'
+                    '[sync]\nconfig_remote = "Docs"\nconfig_path = "Mountlet/config.mountlet"\n',
+                    encoding="utf-8",
+                )
+                before = bundle_file.current_config_fingerprint()
+                shared.app_config_file().write_text(
+                    '[app]\nauto_mount = false\n\n[tray]\nfile_manager = "nautilus"\n\n'
+                    '[sync]\nconfig_remote = "Other"\nconfig_path = "Other/config.mountlet"\n',
+                    encoding="utf-8",
+                )
+                after_non_mounting_change = bundle_file.current_config_fingerprint()
+                shared.app_config_file().write_text("[app]\nauto_mount = true\n", encoding="utf-8")
+                after_mounting_change = bundle_file.current_config_fingerprint()
+
+            self.assertEqual(before, after_non_mounting_change)
+            self.assertNotEqual(before, after_mounting_change)
+
     def test_single_file_bundle_import_creates_restorable_backup_archive(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
