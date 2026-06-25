@@ -141,6 +141,7 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Box", "box"),
     ("pCloud", "pcloud"),
     ("Koofr", "koofr"),
+    ("Proton Drive", "protondrive"),
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
 )
@@ -151,6 +152,7 @@ REMOTE_PROVIDER_STATUSES = {
     "box": "tested",
     "pcloud": "tested",
     "koofr": "tested",
+    "protondrive": "untested",
     "s3": "partial",
     "webdav": "untested",
 }
@@ -162,6 +164,7 @@ REMOTE_CONFIG_SUFFIXES = {
     "box": "Box",
     "pcloud": "pCloud",
     "koofr": "Koofr",
+    "protondrive": "Proton Drive",
     "s3": "S3",
     "webdav": "WebDAV",
 }
@@ -369,6 +372,7 @@ PROVIDER_COLORS = {
     "box": "#0057c2",
     "pcloud": "#17a2d4",
     "koofr": "#f59e0b",
+    "protondrive": "#6d4aff",
     "s3": "#ff9900",
     "webdav": "#64748b",
 }
@@ -379,6 +383,7 @@ REMOTE_BROWSER_URLS = {
     "box": "https://app.box.com/files",
     "pcloud": "https://my.pcloud.com/",
     "koofr": "https://app.koofr.net/",
+    "protondrive": "https://drive.proton.me/",
 }
 _wizard_pending_remote_names: set[str] = set()
 

@@ -7,7 +7,10 @@ from __future__ import annotations
 import io
 import json
 import os
+import platform
+import hashlib
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
@@ -56,6 +59,22 @@ def backup_dir() -> Path:
     return app_config_file().parent / BACKUP_DIR_NAME
 
 
+def current_config_fingerprint(source_conf: Path | None = None) -> str:
+    files = _bundle_sources(source_conf or default_config_path())
+    return _config_hash(files)
+
+
+def bundle_metadata(source: Path, *, password: str | None = None) -> dict[str, object]:
+    source = Path(source).expanduser()
+    with zipfile.ZipFile(source) as archive:
+        manifest = _validate_archive(archive)
+        if not manifest.get("encrypted") or password is None:
+            return dict(manifest)
+        payload = _decrypt_payload(archive, manifest, password)
+    with zipfile.ZipFile(io.BytesIO(payload)) as decrypted:
+        return dict(_validate_archive(decrypted))
+
+
 def export_bundle_file(destination: Path, *, overwrite: bool = False, password: str | None = None) -> Path:
     destination = _bundle_path(destination)
     if destination.exists() and not overwrite:
@@ -77,6 +96,9 @@ def export_bundle_file(destination: Path, *, overwrite: bool = False, password: 
             "format": "mountlet-config-bundle",
             "version": BUNDLE_VERSION,
             "encrypted": True,
+            "created_at": payload_manifest["created_at"],
+            "device": payload_manifest["device"],
+            "config_hash": payload_manifest["config_hash"],
             "cipher": "AES-256-GCM",
             "kdf": "PBKDF2-HMAC-SHA256",
             "iterations": KDF_ITERATIONS,
@@ -148,10 +170,26 @@ def _manifest(files: dict[str, Path], *, backup: bool = False) -> dict[str, obje
         "format": "mountlet-config-bundle",
         "version": BUNDLE_VERSION,
         "files": sorted(files),
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "device": platform.node() or "unknown device",
+        "config_hash": _config_hash(files),
     }
     if backup:
         manifest["backup"] = True
     return manifest
+
+
+def _config_hash(files: dict[str, Path]) -> str:
+    digest = hashlib.sha256()
+    for archive_name in sorted(files):
+        source = files[archive_name]
+        if not source.exists():
+            continue
+        digest.update(archive_name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(source.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _archive_bytes(files: dict[str, Path], manifest: dict[str, object]) -> bytes:
@@ -268,6 +306,8 @@ __all__ = [
     "BundlePasswordRequired",
     "backup_current_config",
     "backup_dir",
+    "bundle_metadata",
+    "current_config_fingerprint",
     "default_export_path",
     "export_bundle_file",
     "import_bundle_file",
