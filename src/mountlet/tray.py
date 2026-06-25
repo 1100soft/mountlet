@@ -52,7 +52,7 @@ from .settings import (
     save_mount_settings,
     set_start_at_login,
 )
-from .shortcuts import matches_shortcut, normalize_shortcut_text
+from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -104,9 +104,7 @@ COMMON_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("common_next", "Next item"),
 )
 REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
-    ("remote_previous", "Previous remote alternatives"),
-    ("remote_next", "Next remote alternatives"),
-    ("remote_enter_browser", "Enter file browser alternatives"),
+    ("remote_enter_browser", "Enter file browser"),
     ("remote_move_up", "Move remote up"),
     ("remote_move_down", "Move remote down"),
     ("remote_toggle_mount", "Mount or unmount remote"),
@@ -605,6 +603,13 @@ def _remote_service_label(remote: core.RemoteInfo) -> str:
 
 def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
     return f"Open {_remote_service_label(remote)} in browser"
+
+
+def _shortcut_hint(action: str) -> str:
+    for value in shortcut_values(action):
+        if value:
+            return f"\nShortcut: {value}"
+    return ""
 
 
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
@@ -2154,7 +2159,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("Keyboard shortcuts")
-        self.dialog.resize(420, 260)
+        self.dialog.resize(680, 620)
         self.fields: dict[str, list[Any]] = {}
         self.conflict_label: Any | None = None
         self._build()
@@ -2166,15 +2171,13 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
-        fixed = self.qt.QLabel(
-            "Fixed remote-list keys: Up/Down select remotes, Left/Right enter the file browser when pointing toward it, "
-            "Enter selects."
-        )
-        fixed.setWordWrap(True)
-        fixed.setStyleSheet(_muted_text_style(fixed))
-        root.addWidget(fixed)
-        for title, fields in SHORTCUT_CONTEXTS:
-            root.addWidget(self._shortcut_group(title, fields, app_settings.shortcuts))
+        root.addWidget(self._fixed_shortcut_box())
+        alternatives = self.qt.QGroupBox("Alternative inputs")
+        alternatives_layout = self.qt.QVBoxLayout(alternatives)
+        alternatives_layout.setSpacing(6)
+        for title, fields in SHORTCUT_GROUPS:
+            alternatives_layout.addWidget(self._shortcut_group(title, fields, app_settings.shortcuts))
+        root.addWidget(alternatives, 1)
         self.conflict_label = self.qt.QLabel("")
         self.conflict_label.setStyleSheet("color: #dc2626;")
         root.addWidget(self.conflict_label)
@@ -2186,22 +2189,32 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         self._update_conflicts()
         self.dialog.adjustSize()
 
+    def _fixed_shortcut_box(self) -> Any:
+        group = self.qt.QGroupBox("Fixed inputs")
+        layout = self.qt.QVBoxLayout(group)
+        layout.setSpacing(6)
+        for title, rows in FIXED_SHORTCUT_GROUPS:
+            layout.addWidget(self._fixed_shortcut_group(title, rows))
+        return group
+
+    def _fixed_shortcut_group(self, title: str, rows: tuple[tuple[str, str], ...]) -> Any:
+        group = self.qt.QGroupBox(title)
+        form = self.qt.QFormLayout(group)
+        for keys, description in rows:
+            label = self.qt.QLabel(description)
+            label.setWordWrap(True)
+            label.setStyleSheet(_muted_text_style(label))
+            form.addRow(keys, label)
+        return group
+
     def _shortcut_group(
         self,
         title: str,
         fields: tuple[tuple[str, str], ...],
         shortcuts: dict[str, tuple[str, ...]],
     ) -> Any:
-        frame = self.qt.QFrame()
-        frame.setObjectName("remoteRow")
-        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
-        layout = self.qt.QVBoxLayout(frame)
-        heading = self.qt.QLabel(title)
-        heading_font = heading.font()
-        heading_font.setBold(True)
-        heading.setFont(heading_font)
-        layout.addWidget(heading)
-        form = self.qt.QFormLayout()
+        group = self.qt.QGroupBox(title)
+        form = self.qt.QFormLayout(group)
         for key, label in fields:
             row = self.qt.QWidget()
             row_layout = self.qt.QHBoxLayout(row)
@@ -2219,8 +2232,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 self.fields[key].append(field)
                 row_layout.addWidget(field)
             form.addRow(label, row)
-        layout.addLayout(form)
-        return frame
+        return group
 
     def _save(self) -> None:
         conflicts = self._shortcut_conflicts(self._current_shortcuts())
@@ -5070,7 +5082,9 @@ class MountletWindow:
         toggle.setProperty("rowControl", True)
         toggle.setChecked(mounted)
         toggle.setEnabled(not action_pending)
-        toggle_tooltip = f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        toggle_tooltip = (
+            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        ) + _shortcut_hint("remote_toggle_mount")
         toggle.setToolTip(toggle_tooltip)
         toggle.enterEvent = lambda event, widget=toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(widget, tooltip)
         toggle.stateChanged.connect(
@@ -5081,7 +5095,7 @@ class MountletWindow:
         self._set_status_text(status, usage, action_pending=action_pending)
         config_button = self._icon_button("⚙", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
         config_button.setProperty("rowControl", True)
-        config_tooltip = f"Configure {remote.display_name}"
+        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
         config_button.setToolTip(config_tooltip)
         config_button.enterEvent = lambda event, widget=config_button, tooltip=config_tooltip: self._show_immediate_tooltip(
             widget,
@@ -5193,7 +5207,9 @@ class MountletWindow:
         row.toggle.setChecked(mounted)
         row.toggle.blockSignals(False)
         row.toggle.setEnabled(not action_pending)
-        toggle_tooltip = f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        toggle_tooltip = (
+            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        ) + _shortcut_hint("remote_toggle_mount")
         row.toggle.setToolTip(toggle_tooltip)
         row.toggle.enterEvent = lambda event, widget=row.toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(
             widget,
@@ -5202,7 +5218,7 @@ class MountletWindow:
 
         self._set_status_text(row.status, usage, action_pending=action_pending)
         row.config_button.setEnabled(not action_pending)
-        config_tooltip = f"Configure {remote.display_name}"
+        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
         row.config_button.setToolTip(config_tooltip)
         row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
             self._show_immediate_tooltip(widget, tooltip)
@@ -5214,11 +5230,11 @@ class MountletWindow:
     def _update_browser_button(self, button: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
         if url:
-            tooltip = _remote_browser_tooltip(remote)
+            tooltip = _remote_browser_tooltip(remote) + _shortcut_hint("remote_open_browser")
             button.setEnabled(True)
             button.setStyleSheet(f"color: {_provider_color(remote)};")
         else:
-            tooltip = f"No browser view is configured for {remote.display_name}"
+            tooltip = f"No browser view is configured for {remote.display_name}" + _shortcut_hint("remote_open_browser")
             button.setEnabled(False)
             button.setStyleSheet("")
         button.setToolTip(tooltip)
