@@ -2676,6 +2676,7 @@ class TrayTests(unittest.TestCase):
                     )
 
         self.assertEqual(saved["last_synced_hash"], "local-hash")
+        self.assertEqual(saved["last_synced_hash_kind"], "operation")
         self.assertEqual(saved["last_pushed_hash"], "local-hash")
         self.assertEqual(saved["last_pulled_hash"], "local-hash")
         self.assertEqual(saved["remote_config_hash"], "local-hash")
@@ -2696,6 +2697,27 @@ class TrayTests(unittest.TestCase):
         push.setText.assert_called_once_with("↑•")
         pull.setText.assert_called_once_with("↓•")
 
+    def test_sync_button_push_dot_appears_after_semantic_local_change(self):
+        window = object.__new__(tray.MountletWindow)
+        push = mock.Mock()
+        pull = mock.Mock()
+        window._push_sync_button = push
+        window._pull_sync_button = pull
+        window._remote_sync_metadata = {"config_hash": "synced-hash", "created_at": "time", "device": "desktop"}
+
+        state = {
+            "last_synced_hash": "synced-hash",
+            "last_synced_hash_kind": "operation",
+            "remote_config_hash": "synced-hash",
+        }
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value=state):
+                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="changed-hash"):
+                    window._update_config_sync_buttons()
+
+        push.setText.assert_called_once_with("↑•")
+        pull.setText.assert_called_once_with("↓")
+
     def test_sync_button_dots_ignore_known_pre_update_remote_hash(self):
         window = object.__new__(tray.MountletWindow)
         push = mock.Mock()
@@ -2706,11 +2728,14 @@ class TrayTests(unittest.TestCase):
 
         with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
             with mock.patch.object(tray, "_load_config_sync_state", return_value={"last_synced_hash": "old-raw-hash"}):
-                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="semantic-hash"):
-                    window._update_config_sync_buttons()
+                with mock.patch.object(tray, "_save_config_sync_state") as save:
+                    with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="semantic-hash"):
+                        window._update_config_sync_buttons()
 
         push.setText.assert_called_once_with("↑")
         pull.setText.assert_called_once_with("↓")
+        self.assertEqual(save.call_args.args[0]["last_synced_hash"], "semantic-hash")
+        self.assertEqual(save.call_args.args[0]["last_synced_hash_kind"], "operation")
 
     def test_remount_changes_match_mounted_remotes_by_name(self):
         old_remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/old/docs")

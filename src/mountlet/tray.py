@@ -695,13 +695,66 @@ def _mount_driver_about_line() -> str:
         return f"FUSE: {_command_version_line([tool, '--version'])} ({tool})"
     if platform_services.system_name == "Darwin":
         for package_id in ("io.macfuse.filesystems.macfuse", "com.github.osxfuse.pkg.Core"):
-            line = _command_version_line(["pkgutil", "--pkg-info", package_id])
-            if not line.startswith("version check failed"):
-                return f"macFUSE: {line}"
+            version = _macos_package_version(package_id)
+            if version:
+                return f"macFUSE: {version}"
         return "macFUSE: detected" if platform_services.mount_driver_available() else "macFUSE: not found"
     if platform_services.system_name == "Windows":
+        version = _windows_winfsp_version()
+        if version:
+            return f"WinFsp: {version}"
         return "WinFsp: detected" if platform_services.mount_driver_available() else "WinFsp: not found"
     return "Filesystem driver: detected" if platform_services.mount_driver_available() else "Filesystem driver: not found"
+
+
+def _macos_package_version(package_id: str) -> str:
+    try:
+        result = subprocess.run(
+            ["pkgutil", "--pkg-info", package_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            **core.PLATFORM.command_process_options(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    for line in (result.stdout or "").splitlines():
+        key, _separator, value = line.partition(":")
+        if key.strip() == "version":
+            return value.strip()
+    return ""
+
+
+def _windows_winfsp_version() -> str:
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    roots = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    )
+    for root, key_path in roots:
+        try:
+            with winreg.OpenKey(root, key_path) as parent:
+                for index in range(winreg.QueryInfoKey(parent)[0]):
+                    try:
+                        subkey_name = winreg.EnumKey(parent, index)
+                        with winreg.OpenKey(parent, subkey_name) as subkey:
+                            name = str(winreg.QueryValueEx(subkey, "DisplayName")[0])
+                            if "WinFsp" not in name:
+                                continue
+                            return str(winreg.QueryValueEx(subkey, "DisplayVersion")[0])
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return ""
 
 
 def _qt_about_line(qt: SimpleNamespace) -> str:
@@ -4000,6 +4053,7 @@ class MountletWindow:
             pass
         app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
 
@@ -4030,6 +4084,9 @@ class MountletWindow:
         if _has_mount_driver_config():
             self.tray_app._add_action(files_menu, "Filesystem driver", self._open_fuse_config_file)
         return files_menu
+
+    def _show_about(self) -> None:
+        self.qt.QMessageBox.information(self.window, "About Mountlet", _about_text(self.qt))
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -4566,6 +4623,7 @@ class MountletWindow:
             local_hash = ""
         last_synced_hash = str(state.get("last_synced_hash") or "")
         original_last_synced_hash = last_synced_hash
+        hash_kind = str(state.get("last_synced_hash_kind") or "")
         remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
         remote_hash = str(remote_metadata.get("config_hash", ""))
         known_remote_hashes = {
@@ -4578,8 +4636,18 @@ class MountletWindow:
             )
             if value
         }
-        if local_hash and remote_hash and remote_hash in known_remote_hashes and local_hash != original_last_synced_hash:
+        if (
+            sync_configured
+            and hash_kind != "operation"
+            and local_hash
+            and remote_hash
+            and remote_hash == original_last_synced_hash
+            and local_hash != original_last_synced_hash
+        ):
             last_synced_hash = local_hash
+            state["last_synced_hash"] = local_hash
+            state["last_synced_hash_kind"] = "operation"
+            _save_config_sync_state(state)
         local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
         remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
@@ -4596,6 +4664,9 @@ class MountletWindow:
                 pull_button.setToolTip(f"Synced config differs from this device.\n{detail}".strip())
             else:
                 pull_button.setToolTip("Pull config from sync location")
+
+    def _configuration_changed(self) -> None:
+        self._update_config_sync_buttons()
 
     def _request_config_sync_metadata_check(self, remotes: list[core.RemoteInfo]) -> None:
         if self._remote_sync_check_pending or self._tray_is_quitting():
@@ -4847,6 +4918,7 @@ class MountletWindow:
             )
         save_mount_settings(settings)
         self._current_remote_names = []
+        self._configuration_changed()
         self.tray_app.rebuild_menus()
 
     def _reverse_remote_order(self) -> None:
@@ -5137,6 +5209,7 @@ class MountletWindow:
                 order=order,
             )
         save_mount_settings(settings)
+        self._configuration_changed()
 
     def _sort_uses_storage(self, sort_mode: str) -> bool:
         return sort_mode in STORAGE_SORT_MODES
@@ -5800,15 +5873,22 @@ class MountletWindow:
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
         self._open_child_dialog(dialog, on_accepted)
 
     def _show_shortcut_config_editor(self) -> None:
-        self._open_child_dialog(ShortcutConfigDialog(self.qt, self.window))
+        self._open_child_dialog(ShortcutConfigDialog(self.qt, self.window), self._configuration_changed)
 
     def _show_config_sync_editor(self) -> None:
-        self._open_child_dialog(ConfigSyncDialog(self.qt, self.window), self.tray_app.rebuild_menus)
+        def on_accepted() -> None:
+            self._remote_sync_metadata = None
+            self.tray_app.rebuild_menus()
+            self._configuration_changed()
+            self._request_config_sync_metadata_check(_load_visible_remotes())
+
+        self._open_child_dialog(ConfigSyncDialog(self.qt, self.window), on_accepted)
 
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
         old_remotes = _load_visible_remotes()
@@ -5821,12 +5901,14 @@ class MountletWindow:
                 self._current_remote_names = []
                 self.tray_app.rebuild_menus()
                 self.refresh()
+                self._configuration_changed()
                 return
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._configuration_changed()
             self._ask_remount_for_config_changes(changes)
 
         self._open_child_dialog(dialog, on_accepted)
@@ -5839,6 +5921,7 @@ class MountletWindow:
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._configuration_changed()
 
         self._open_child_dialog(dialog, on_accepted)
 
@@ -6223,6 +6306,7 @@ class MountletWindow:
             local_hash = str(metadata.get("config_hash", ""))
         if local_hash:
             state["last_synced_hash"] = local_hash
+            state["last_synced_hash_kind"] = "operation"
             state["last_pushed_hash"] = local_hash
             state["last_pulled_hash"] = local_hash
         for key in ("config_hash", "created_at", "device"):
@@ -6315,6 +6399,7 @@ class MountletWindow:
         self.file_browser.invalidate()
         self.tray_app.rebuild_menus()
         self.refresh()
+        self._configuration_changed()
 
     def _file_dialog_kwargs(self) -> dict[str, Any]:
         if platform.system() != "Windows":
@@ -6491,6 +6576,12 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._pull_config_sync_bundle)
 
+    def _show_about_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_about)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
@@ -6526,6 +6617,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
         self.main_window._add_open_config_files_menu(self.app_menu)
         self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
         if self.main_window.is_visible():

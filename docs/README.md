@@ -145,14 +145,17 @@ Locally tested:
 - pCloud
 - Cloudflare R2
 - Koofr
+- Proton Drive
 
 Available but untested:
 
 - Amazon S3
 - MinIO and other S3-compatible storage
 - Wasabi
-- Proton Drive
 - WebDAV providers including Nextcloud, ownCloud, SharePoint, and Fastmail Files
+
+Box has been observed to require platform-specific reauthentication even after
+syncing the complete Mountlet config bundle.
 
 ## Release Strategy
 

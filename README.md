@@ -396,18 +396,22 @@ Locally tested with the current GUI flow and/or active local remotes:
 - pCloud
 - Cloudflare R2 through the S3-compatible wizard
 - Koofr through rclone's dedicated Koofr backend
+- Proton Drive with current rclone releases
 
 Available but not yet locally tested:
 
 - Amazon S3
 - MinIO and other S3-compatible providers
 - Wasabi
-- Proton Drive
 - WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files
 
 In the setup window, tested options are shown in white and untested options in
 yellow. Untested providers may work through rclone, but expect rough edges until
 the wizard path is tested with a real account.
+
+Some providers can still require per-device reauthentication after config sync.
+Box has shown this behavior in local testing even when the synced config bundle
+contains all Mountlet and rclone config files.
 
 ## Extra Commands
 
