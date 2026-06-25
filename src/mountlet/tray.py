@@ -661,6 +661,74 @@ def _provider_status_color(status: str, widget: Any) -> str:
     return "#facc15" if _color_luminance(background) < 128 else "#92400e"
 
 
+def _command_version_line(command: list[str], *, timeout: int = 5) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            **core.PLATFORM.command_process_options(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"version check failed: {exc}"
+    output = (result.stdout or "").strip()
+    if not output:
+        return f"version check exited with code {result.returncode}"
+    return output.splitlines()[0].strip()
+
+
+def _rclone_about_line() -> str:
+    binary = core.find_rclone()
+    if not binary:
+        return "rclone: not found"
+    return f"rclone: {_command_version_line([binary, 'version'])} ({binary})"
+
+
+def _mount_driver_about_line() -> str:
+    platform_services = get_platform()
+    if platform_services.system_name == "Linux":
+        tool = shutil.which("fusermount3") or shutil.which("fusermount")
+        if not tool:
+            return "FUSE: not found"
+        return f"FUSE: {_command_version_line([tool, '--version'])} ({tool})"
+    if platform_services.system_name == "Darwin":
+        for package_id in ("io.macfuse.filesystems.macfuse", "com.github.osxfuse.pkg.Core"):
+            line = _command_version_line(["pkgutil", "--pkg-info", package_id])
+            if not line.startswith("version check failed"):
+                return f"macFUSE: {line}"
+        return "macFUSE: detected" if platform_services.mount_driver_available() else "macFUSE: not found"
+    if platform_services.system_name == "Windows":
+        return "WinFsp: detected" if platform_services.mount_driver_available() else "WinFsp: not found"
+    return "Filesystem driver: detected" if platform_services.mount_driver_available() else "Filesystem driver: not found"
+
+
+def _qt_about_line(qt: SimpleNamespace) -> str:
+    qversion = getattr(qt, "qVersion", None)
+    if callable(qversion):
+        try:
+            return f"Qt: {qversion()}"
+        except Exception:
+            pass
+    return "Qt: unknown"
+
+
+def _about_text(qt: SimpleNamespace) -> str:
+    return "\n".join(
+        [
+            f"Mountlet: {__version__}",
+            f"Python: {platform.python_version()}",
+            _qt_about_line(qt),
+            _rclone_about_line(),
+            _mount_driver_about_line(),
+            f"Platform: {platform.platform()}",
+            f"rclone config: {core.CONFIG_PATH}",
+            f"Mount folder: {core.BASE_MOUNT_DIR}",
+        ]
+    )
+
+
 def _popup_position(
     anchor_x: int,
     anchor_y: int,
