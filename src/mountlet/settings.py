@@ -13,15 +13,24 @@ from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
-    "remote_previous": (),
-    "remote_next": (),
+    "common_previous": (),
+    "common_next": (),
     "remote_enter_browser": ("Space",),
     "remote_move_up": ("Shift+Up",),
     "remote_move_down": ("Shift+Down",),
+    "remote_toggle_mount": (),
+    "remote_config": (),
+    "remote_open_browser": (),
+    "browser_open": (),
     "browser_parent": ("Backspace",),
     "browser_root": ("Alt+Home",),
     "browser_refresh": ("F5",),
     "browser_open_folder": ("Ctrl+Return",),
+    "browser_copy": (),
+    "browser_cut": (),
+    "browser_paste": (),
+    "browser_delete": (),
+    "browser_new_folder": (),
 }
 
 
@@ -78,15 +87,24 @@ config_remote = ""
 config_path = "Mountlet/config.mountlet"
 
 [shortcuts]
-remote_previous = ""
-remote_next = ""
+common_previous = ""
+common_next = ""
 remote_enter_browser = "Space"
 remote_move_up = "Shift+Up"
 remote_move_down = "Shift+Down"
+remote_toggle_mount = ""
+remote_config = ""
+remote_open_browser = ""
+browser_open = ""
 browser_parent = "Backspace"
 browser_root = "Alt+Home"
 browser_refresh = "F5"
 browser_open_folder = "Ctrl+Return"
+browser_copy = ""
+browser_cut = ""
+browser_paste = ""
+browser_delete = ""
+browser_new_folder = ""
 """
 
 
@@ -299,9 +317,14 @@ def _shortcut_list(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
 
 def _filter_locked_shortcuts(key: str, values: tuple[str, ...]) -> tuple[str, ...]:
     locked_by_key = {
-        "remote_previous": {"up"},
-        "remote_next": {"down"},
+        "common_previous": {"up"},
+        "common_next": {"down"},
         "remote_enter_browser": {"return", "enter", "left", "right"},
+        "browser_open": {"return", "enter"},
+        "browser_copy": {"control+c"},
+        "browser_cut": {"control+x"},
+        "browser_paste": {"control+v"},
+        "browser_delete": {"delete"},
     }
     locked = locked_by_key.get(key)
     if locked is None:

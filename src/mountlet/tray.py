@@ -79,22 +79,60 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "Common",
+        (
+            ("Up / Down", "Move selection in the focused list"),
+            ("Left / Right", "Move between the remote list and file browser when the key points toward the other pane"),
+            ("Enter", "Select the focused remote or open the focused file item"),
+            ("Esc", "Return from the file browser to the remote list"),
+        ),
+    ),
+    (
+        "File operations",
+        (
+            ("Ctrl+C", "Copy selected file-browser items"),
+            ("Ctrl+X", "Cut selected file-browser items"),
+            ("Ctrl+V", "Paste into the current file-browser folder"),
+            ("Delete", "Delete selected file-browser items"),
+        ),
+    ),
+)
+COMMON_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("common_previous", "Previous item"),
+    ("common_next", "Next item"),
+)
 REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("remote_previous", "Previous remote alternatives"),
     ("remote_next", "Next remote alternatives"),
     ("remote_enter_browser", "Enter file browser alternatives"),
     ("remote_move_up", "Move remote up"),
     ("remote_move_down", "Move remote down"),
+    ("remote_toggle_mount", "Mount or unmount remote"),
+    ("remote_config", "Open remote settings"),
+    ("remote_open_browser", "Open provider website"),
 )
 BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("browser_open", "Open selected item"),
     ("browser_parent", "Parent folder"),
     ("browser_root", "Remote root"),
     ("browser_refresh", "Refresh folder"),
     ("browser_open_folder", "Open folder in file manager"),
+    ("browser_copy", "Copy selected items"),
+    ("browser_cut", "Cut selected items"),
+    ("browser_paste", "Paste into current folder"),
+    ("browser_delete", "Delete selected items"),
+    ("browser_new_folder", "Create new folder"),
 )
-SHORTCUT_CONTEXTS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Common alternatives", COMMON_SHORTCUT_CONFIG_FIELDS),
     ("Remote list", REMOTE_SHORTCUT_CONFIG_FIELDS),
     ("File browser", BROWSER_SHORTCUT_CONFIG_FIELDS),
+)
+SHORTCUT_CONTEXTS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Remote list", COMMON_SHORTCUT_CONFIG_FIELDS + REMOTE_SHORTCUT_CONFIG_FIELDS),
+    ("File browser", COMMON_SHORTCUT_CONFIG_FIELDS + BROWSER_SHORTCUT_CONFIG_FIELDS),
 )
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
@@ -448,6 +486,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QFrame,
             QFormLayout,
             QGridLayout,
+            QGroupBox,
             QHBoxLayout,
             QInputDialog,
             QKeySequenceEdit,
@@ -495,6 +534,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QFormLayout=QFormLayout,
         QFrame=QFrame,
         QGridLayout=QGridLayout,
+        QGroupBox=QGroupBox,
         QHBoxLayout=QHBoxLayout,
         QInputDialog=QInputDialog,
         QIcon=QIcon,
