@@ -47,6 +47,11 @@
 - Added editable Google Drive client IDs and client secrets to remote settings.
 - Improved Windows mountpoint detection, rclone mount diagnostics, and installer
   maintenance options for repair/update and uninstall.
+- Added encrypted config-bundle metadata with device, time, and content hash,
+  compact top-row config sync buttons, and a nested raw-config-file menu.
+- Added an untested Proton Drive setup path using rclone's `protondrive`
+  backend, with Proton username, password, optional 2FA, and mailbox-password
+  fields.
 
 ## 0.3.0 - 2026-06-20
 

@@ -402,6 +402,7 @@ Available but not yet locally tested:
 - Amazon S3
 - MinIO and other S3-compatible providers
 - Wasabi
+- Proton Drive
 - WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files
 
 In the setup window, tested options are shown in white and untested options in
@@ -436,13 +437,17 @@ remote sees the file directly instead of relying on filesystem-driver behavior.
 Encrypted bundles are recommended for cloud storage.
 
 For regular multi-device use, set `Config` > `Set config sync location` to a
-remote and bundle path, then use `Push config to sync location` after changing
-settings and `Pull config from sync location` on another device. This avoids
-the Windows file dialog limitation where mounted remote folders can appear empty
-even though Explorer and Mountlet Files can browse them. Mountlet does not store
-the bundle password; it asks each time you push or pull. Automatic sync is not
-enabled yet because hidden conflict resolution could overwrite a newer local
-change on another device.
+remote and bundle path, then use the top-row up/down arrow buttons to push or
+pull the encrypted config bundle. The arrows show a small dot when the local
+config has changed since the last push, or when Mountlet sees a different
+bundle at the sync location. This avoids the Windows file dialog limitation
+where mounted remote folders can appear empty even though Explorer and Mountlet
+Files can browse them. Mountlet does not store the bundle password; it asks each
+time you push or pull. Automatic sync is not enabled yet because hidden conflict
+resolution could overwrite a newer local change on another device.
+
+Technical users can open the raw config files from `Config` > `Open config
+file`.
 
 Most personal rclone remotes can use the same `rclone.conf` on your own
 devices. Some providers may still require reconnecting on the new device, and

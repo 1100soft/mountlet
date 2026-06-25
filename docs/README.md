@@ -151,6 +151,7 @@ Available but untested:
 - Amazon S3
 - MinIO and other S3-compatible storage
 - Wasabi
+- Proton Drive
 - WebDAV providers including Nextcloud, ownCloud, SharePoint, and Fastmail Files
 
 ## Release Strategy

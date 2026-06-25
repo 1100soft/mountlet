@@ -882,6 +882,32 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_uses_protondrive_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "protondrive"
+        wizard.fields = {
+            "proton_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "proton_pass": mock.Mock(text=mock.Mock(return_value="account-password")),
+            "proton_2fa": mock.Mock(text=mock.Mock(return_value="123456")),
+            "proton_mailbox_pass": mock.Mock(text=mock.Mock(return_value="mailbox-password")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "username",
+                "eric@example.com",
+                "password",
+                "account-password",
+                "enable_caching",
+                "false",
+                "2fa",
+                "123456",
+                "mailbox_password",
+                "mailbox-password",
+            ],
+        )
+
     def test_new_remote_wizard_saves_initial_s3_remote_path(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_name = "Archive__S3"

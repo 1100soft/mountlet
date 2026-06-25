@@ -167,6 +167,14 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
         "--buffer-size",
         "16M",
     ],
+    "protondrive": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+        "--dir-cache-time",
+        "30s",
+    ],
     "s3": [
         "--vfs-cache-mode",
         "full",
@@ -191,6 +199,7 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
     "koofr": ("provider", "user", "mountid"),
+    "protondrive": ("username", "2fa", "mailbox_password", "enable_caching"),
 }
 S3_PROVIDER_DISPLAY_NAMES = {
     "cloudflare": "Cloudflare R2",
@@ -418,6 +427,10 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
             return values.get("url", "").strip().startswith(("http://", "https://"))
         if backend_type == "koofr":
             return bool(values.get("provider", "").strip() and values.get("user", "").strip() and values.get("password", "").strip())
+        if backend_type == "protondrive":
+            user = values.get("username", "").strip() or values.get("user", "").strip()
+            password = values.get("password", "").strip() or values.get("pass", "").strip()
+            return bool(user and password)
         return bool(backend_type)
     if backend_type == "onedrive":
         return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))

@@ -7,6 +7,7 @@ import ctypes
 import ctypes.util
 import errno
 import html
+import json
 import os
 import platform
 import re
@@ -29,7 +30,7 @@ from .cloud_browser import normalize_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
-from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
+from .config_tools.shared import app_config_file, app_mounts_file, app_state_dir, ensure_app_directories
 from .platform_services import get_platform
 from .platform_services.desktop import DesktopServices
 from .platform_services.file_managers import (
@@ -112,8 +113,12 @@ RCLONE_FIELD_TOOLTIPS = {
     "endpoint": "Provider endpoint URL. rclone uses it for S3-compatible services.",
     "acl": "Default access-control setting used by the remote provider.",
     "storage_class": "Default storage class used by the remote provider.",
+    "username": "Proton account username used by this remote.",
+    "2fa": "Current Proton 2FA code. Usually only needed while configuring the remote.",
+    "mailbox_password": "Mailbox password for two-password Proton accounts.",
+    "enable_caching": "Proton Drive metadata cache. Mountlet disables it by default to avoid stale mounted folders.",
 }
-RCLONE_BOOLEAN_FIELDS = {"shared_with_me", "env_auth"}
+RCLONE_BOOLEAN_FIELDS = {"shared_with_me", "env_auth", "enable_caching"}
 RCLONE_SELECT_FIELDS = {
     "scope": (
         ("drive", "Full Drive access"),
@@ -568,6 +573,33 @@ def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) ->
     if len(mounted_names) > 3:
         names += f", +{len(mounted_names) - 3} more"
     return f"Mountlet - mounted: {names}"
+
+
+def _config_sync_state_path() -> Path:
+    return app_state_dir() / "config-sync.json"
+
+
+def _load_config_sync_state() -> dict[str, Any]:
+    path = _config_sync_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_config_sync_state(state: dict[str, Any]) -> None:
+    path = _config_sync_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _sync_metadata_summary(metadata: dict[str, object]) -> str:
+    device = str(metadata.get("device") or "unknown device")
+    created_at = str(metadata.get("created_at") or "unknown time")
+    return f"Updated on {device} at {created_at}."
 
 
 def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, unique_count: int) -> str:
@@ -2496,6 +2528,29 @@ class NewRemoteWizard:
         koofr_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         koofr_help.setStyleSheet(_muted_text_style(koofr_help))
 
+        proton_user = self.qt.QLineEdit()
+        proton_user.setPlaceholderText("Proton email address")
+        proton_user.setToolTip("Your Proton account username or email address.")
+        proton_pass = self.qt.QLineEdit()
+        proton_pass.setPlaceholderText("Proton password")
+        proton_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        proton_pass.setToolTip("Your Proton account password. rclone stores this obscured in rclone.conf.")
+        proton_2fa = self.qt.QLineEdit()
+        proton_2fa.setPlaceholderText("Optional")
+        proton_2fa.setToolTip("Current 2FA code, if Proton asks for one during setup.")
+        proton_mailbox_pass = self.qt.QLineEdit()
+        proton_mailbox_pass.setPlaceholderText("Optional")
+        proton_mailbox_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        proton_mailbox_pass.setToolTip("Only needed for two-password Proton accounts.")
+        proton_help = self.qt.QLabel(
+            "Proton Drive support is beta in rclone. Log in to Proton Drive in a browser first so Proton has generated "
+            'your Drive encryption keys. <a href="https://rclone.org/protondrive/">rclone Proton Drive guide</a>'
+        )
+        proton_help.setWordWrap(True)
+        proton_help.setOpenExternalLinks(True)
+        proton_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        proton_help.setStyleSheet(_muted_text_style(proton_help))
+
         webdav_url = self.qt.QLineEdit()
         webdav_vendor = self.qt.QComboBox()
         for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
@@ -2523,6 +2578,10 @@ class NewRemoteWizard:
             s3_remote_path,
             koofr_user,
             koofr_pass,
+            proton_user,
+            proton_pass,
+            proton_2fa,
+            proton_mailbox_pass,
             webdav_url,
             webdav_user,
             webdav_pass,
@@ -2554,6 +2613,11 @@ class NewRemoteWizard:
             "koofr_user": koofr_user,
             "koofr_pass": koofr_pass,
             "koofr_help": koofr_help,
+            "proton_user": proton_user,
+            "proton_pass": proton_pass,
+            "proton_2fa": proton_2fa,
+            "proton_mailbox_pass": proton_mailbox_pass,
+            "proton_help": proton_help,
             "webdav_url": webdav_url,
             "webdav_vendor": webdav_vendor,
             "webdav_user": webdav_user,
@@ -2579,6 +2643,11 @@ class NewRemoteWizard:
         form.addRow("Koofr user", koofr_user)
         form.addRow("Koofr app password", koofr_pass)
         form.addRow(koofr_help)
+        form.addRow("Proton user", proton_user)
+        form.addRow("Proton password", proton_pass)
+        form.addRow("Proton 2FA code", proton_2fa)
+        form.addRow("Proton mailbox password", proton_mailbox_pass)
+        form.addRow(proton_help)
         form.addRow("WebDAV URL", webdav_url)
         form.addRow("WebDAV vendor", webdav_vendor)
         form.addRow(webdav_help)
@@ -2634,6 +2703,8 @@ class NewRemoteWizard:
             return self._s3_fields_are_valid()
         if remote_type == "koofr":
             return self._koofr_fields_are_valid()
+        if remote_type == "protondrive":
+            return self._proton_fields_are_valid()
         if remote_type == "webdav":
             return self._webdav_fields_are_valid()
         return True
@@ -2653,6 +2724,9 @@ class NewRemoteWizard:
 
     def _koofr_fields_are_valid(self) -> bool:
         return bool(self.fields["koofr_user"].text().strip() and self.fields["koofr_pass"].text().strip())
+
+    def _proton_fields_are_valid(self) -> bool:
+        return bool(self.fields["proton_user"].text().strip() and self.fields["proton_pass"].text().strip())
 
     def _webdav_fields_are_valid(self) -> bool:
         url = self.fields["webdav_url"].text().strip()
@@ -2697,6 +2771,9 @@ class NewRemoteWizard:
             return
         if self._remote_type == "koofr" and not self._koofr_fields_are_valid():
             self._warning("Add remote", "Enter the Koofr user and app password before creating the remote.")
+            return
+        if self._remote_type == "protondrive" and not self._proton_fields_are_valid():
+            self._warning("Add remote", "Enter the Proton user and password before creating the remote.")
             return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
             self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
@@ -2913,6 +2990,8 @@ class NewRemoteWizard:
             return self._s3_config_args()
         if self._remote_type == "koofr":
             return self._koofr_config_args()
+        if self._remote_type == "protondrive":
+            return self._proton_config_args()
         if self._remote_type == "webdav":
             return self._webdav_config_args()
         return []
@@ -2946,6 +3025,23 @@ class NewRemoteWizard:
             "password",
             self.fields["koofr_pass"].text().strip(),
         ]
+
+    def _proton_config_args(self) -> list[str]:
+        args = [
+            "username",
+            self.fields["proton_user"].text().strip(),
+            "password",
+            self.fields["proton_pass"].text(),
+            "enable_caching",
+            "false",
+        ]
+        code = self.fields["proton_2fa"].text().strip()
+        mailbox_password = self.fields["proton_mailbox_pass"].text()
+        if code:
+            args.extend(["2fa", code])
+        if mailbox_password:
+            args.extend(["mailbox_password", mailbox_password])
+        return args
 
     def _webdav_config_args(self) -> list[str]:
         args = [
@@ -3147,6 +3243,10 @@ class NewRemoteWizard:
             "s3_remote_path",
             "koofr_user",
             "koofr_pass",
+            "proton_user",
+            "proton_pass",
+            "proton_2fa",
+            "proton_mailbox_pass",
             "webdav_url",
             "webdav_vendor",
             "webdav_user",
@@ -3183,6 +3283,7 @@ class NewRemoteWizard:
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
         is_s3 = remote_type == "s3"
         is_koofr = remote_type == "koofr"
+        is_proton = remote_type == "protondrive"
         is_webdav = remote_type == "webdav"
         for field_name in (
             "credential_source",
@@ -3208,6 +3309,14 @@ class NewRemoteWizard:
             "koofr_help",
         ):
             self._set_form_row_visible(self.fields[field_name], is_koofr)
+        for field_name in (
+            "proton_user",
+            "proton_pass",
+            "proton_2fa",
+            "proton_mailbox_pass",
+            "proton_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_proton)
         for field_name in (
             "webdav_url",
             "webdav_vendor",
@@ -3295,6 +3404,7 @@ class NewRemoteWizard:
             "box": "Work Box",
             "pcloud": "Personal pCloud",
             "koofr": "Personal Koofr",
+            "protondrive": "Personal Proton Drive",
             "s3": "Archive S3",
             "webdav": "Nextcloud",
         }
@@ -3639,6 +3749,11 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._keep_above = False
         self._keep_above_button: Any | None = None
+        self._settings_button: Any | None = None
+        self._push_sync_button: Any | None = None
+        self._pull_sync_button: Any | None = None
+        self._remote_sync_metadata: dict[str, object] | None = None
+        self._remote_sync_check_pending = False
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
         self._bridge = self._make_bridge()
@@ -3646,6 +3761,7 @@ class MountletWindow:
         self._bridge.action_finished.connect(self._handle_action_finished)
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self._bridge.folder_opened.connect(self._handle_folder_opened)
+        self._bridge.sync_metadata_ready.connect(self._handle_sync_metadata_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -3684,6 +3800,7 @@ class MountletWindow:
             action_finished = qt.Signal(str, bool, str)
             bulk_action_finished = qt.Signal(str, object, object)
             folder_opened = qt.Signal(bool)
+            sync_metadata_ready = qt.Signal(object, object)
 
         return Bridge()
 
@@ -3792,11 +3909,7 @@ class MountletWindow:
         self.tray_app._add_action(mount_menu, "Add remote", self._show_new_remote_wizard)
 
         config_menu = menu_bar.addMenu("Config")
-        self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
         self.tray_app._add_action(config_menu, "Keyboard shortcuts", self._show_shortcut_config_editor)
-        config_menu.addSeparator()
-        self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
-        self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Export config bundle", self._export_config_bundle)
         self.tray_app._add_action(config_menu, "Import config bundle", self._import_config_bundle)
@@ -3806,13 +3919,16 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Push config to sync location", self._push_config_sync_bundle)
         self.tray_app._add_action(config_menu, "Pull config from sync location", self._pull_config_sync_bundle)
         config_menu.addSeparator()
-        self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
+        self._add_open_config_files_menu(config_menu)
+
+    def _add_open_config_files_menu(self, parent_menu: Any) -> Any:
+        files_menu = parent_menu.addMenu("Open config file")
+        self.tray_app._add_action(files_menu, "rclone", self._open_rclone_config_file)
+        self.tray_app._add_action(files_menu, "App", self._open_app_config_file)
+        self.tray_app._add_action(files_menu, "Mounts", self._open_mount_config_file)
         if _has_mount_driver_config():
-            self.tray_app._add_action(
-                config_menu,
-                "Open filesystem driver config",
-                self._open_fuse_config_file,
-            )
+            self.tray_app._add_action(files_menu, "Filesystem driver", self._open_fuse_config_file)
+        return files_menu
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -4131,11 +4247,13 @@ class MountletWindow:
             return
         self._refresh_pending = False
         remotes = _load_visible_remotes()
+        self._request_config_sync_metadata_check(remotes)
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
             self._name_column_width = name_width
+            self._update_config_sync_buttons()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if mounted_by_name[remote.name]:
@@ -4219,6 +4337,102 @@ class MountletWindow:
         active = bool(self.window.isActiveWindow()) and not browser_focused
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
+
+    def _toolbar_button(self, text: str, tooltip: str, callback: Any) -> Any:
+        button = self.qt.QPushButton(text)
+        button.setFixedSize(30, 26)
+        button.setToolTip(tooltip)
+        button.clicked.connect(lambda checked=False: callback())
+        return button
+
+    def _settings_toolbar_button(self) -> Any:
+        button = self._toolbar_button("⚙", "App settings", self._show_app_config_editor)
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 2, 12))
+            button.setFont(font)
+        except Exception:
+            pass
+        self._settings_button = button
+        return button
+
+    def _push_sync_toolbar_button(self) -> Any:
+        button = self._toolbar_button("↑", "Push config to sync location", self._push_config_sync_bundle)
+        self._push_sync_button = button
+        return button
+
+    def _pull_sync_toolbar_button(self) -> Any:
+        button = self._toolbar_button("↓", "Pull config from sync location", self._pull_config_sync_bundle)
+        self._pull_sync_button = button
+        return button
+
+    def _update_config_sync_buttons(self) -> None:
+        push_button = getattr(self, "_push_sync_button", None)
+        pull_button = getattr(self, "_pull_sync_button", None)
+        if push_button is None and pull_button is None:
+            return
+        settings = load_app_settings()
+        sync_configured = bool(settings.config_sync_remote)
+        state = _load_config_sync_state()
+        try:
+            local_hash = bundle_file.current_config_fingerprint()
+        except Exception:
+            local_hash = ""
+        local_changed = bool(sync_configured and local_hash and local_hash != state.get("last_pushed_hash"))
+        remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
+        remote_hash = str(remote_metadata.get("config_hash", ""))
+        remote_changed = bool(sync_configured and remote_hash and remote_hash != local_hash)
+        if push_button is not None:
+            push_button.setText("↑•" if local_changed else "↑")
+            push_button.setEnabled(sync_configured)
+            push_button.setToolTip(
+                "Local config changed since the last push." if local_changed else "Push config to sync location"
+            )
+        if pull_button is not None:
+            pull_button.setText("↓•" if remote_changed else "↓")
+            pull_button.setEnabled(sync_configured)
+            if remote_changed:
+                detail = _sync_metadata_summary(remote_metadata)
+                pull_button.setToolTip(f"Synced config differs from this device.\n{detail}".strip())
+            else:
+                pull_button.setToolTip("Pull config from sync location")
+
+    def _request_config_sync_metadata_check(self, remotes: list[core.RemoteInfo]) -> None:
+        if self._remote_sync_check_pending or self._tray_is_quitting():
+            return
+        settings = load_app_settings()
+        if not settings.config_sync_remote:
+            self._remote_sync_metadata = None
+            self._update_config_sync_buttons()
+            return
+        remote = next((item for item in remotes if item.name == settings.config_sync_remote), None)
+        if remote is None:
+            self._remote_sync_metadata = None
+            self._update_config_sync_buttons()
+            return
+        relative_path = normalize_browser_path(settings.config_sync_path) or "Mountlet/config.mountlet"
+        if Path(relative_path).suffix.casefold() != bundle_file.BUNDLE_EXTENSION:
+            relative_path = f"{relative_path}{bundle_file.BUNDLE_EXTENSION}"
+        self._remote_sync_check_pending = True
+
+        def worker() -> None:
+            try:
+                with tempfile.TemporaryDirectory(prefix="mountlet-sync-status-") as tempdir:
+                    temporary = Path(tempdir) / Path(relative_path).name
+                    self._copy_remote_file_to_local(remote, relative_path, temporary)
+                    metadata = bundle_file.bundle_metadata(temporary)
+                self._bridge.sync_metadata_ready.emit(metadata, None)
+            except Exception as exc:
+                self._bridge.sync_metadata_ready.emit(None, exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_sync_metadata_ready(self, metadata: object, error: object) -> None:
+        self._remote_sync_check_pending = False
+        if self._tray_is_quitting():
+            return
+        self._remote_sync_metadata = metadata if isinstance(metadata, dict) else None
+        self._update_config_sync_buttons()
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")
@@ -4347,10 +4561,14 @@ class MountletWindow:
         reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
 
         layout.addWidget(drag_handle)
+        layout.addWidget(self._settings_toolbar_button())
+        layout.addWidget(self._push_sync_toolbar_button())
+        layout.addWidget(self._pull_sync_toolbar_button())
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         layout.addWidget(self._pin_button())
+        self._update_config_sync_buttons()
         return widget
 
     def _event_global_point(self, event: Any) -> Any:
@@ -5701,10 +5919,15 @@ class MountletWindow:
             with tempfile.TemporaryDirectory(prefix="mountlet-sync-push-") as tempdir:
                 temporary = Path(tempdir) / Path(relative_path).name
                 bundle_file.export_bundle_file(temporary, overwrite=True, password=password)
+                metadata = bundle_file.bundle_metadata(temporary) if temporary.exists() else {}
                 self._copy_local_file_to_remote(temporary, remote, relative_path)
         except Exception as exc:
             self.tray_app._notify("Push config", str(exc), success=False)
             return
+        if metadata:
+            self._record_config_sync_state(metadata, pushed=True)
+            self._remote_sync_metadata = metadata
+        self._update_config_sync_buttons()
         self.tray_app._notify("Push config", f"Pushed config to {remote.display_name}/{relative_path}.", success=True)
 
     def _pull_config_sync_bundle(self) -> None:
@@ -5712,11 +5935,20 @@ class MountletWindow:
         if target is None:
             return
         remote, relative_path = target
+        metadata = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="mountlet-sync-info-") as tempdir:
+                temporary = Path(tempdir) / Path(relative_path).name
+                self._copy_remote_file_to_local(remote, relative_path, temporary)
+                metadata = bundle_file.bundle_metadata(temporary)
+        except Exception:
+            metadata = None
+        detail = f"\n\n{_sync_metadata_summary(metadata)}" if isinstance(metadata, dict) else ""
         reply = self.qt.QMessageBox.question(
             self.window,
             "Pull synced config?",
             "Replace this device's Mountlet and rclone settings with the synced bundle?\n\n"
-            "Mountlet will first save a restorable backup bundle.",
+            f"Mountlet will first save a restorable backup bundle.{detail}",
             self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
             self.qt.QMessageBox.StandardButton.No,
         )
@@ -5732,15 +5964,33 @@ class MountletWindow:
             with tempfile.TemporaryDirectory(prefix="mountlet-sync-pull-") as tempdir:
                 temporary = Path(tempdir) / Path(relative_path).name
                 self._copy_remote_file_to_local(remote, relative_path, temporary)
+                metadata = bundle_file.bundle_metadata(temporary)
                 backup_path = bundle_file.import_bundle_file(temporary, backup=True, password=password)
         except Exception as exc:
             self.tray_app._notify("Pull config", str(exc), success=False)
             return
+        if isinstance(metadata, dict):
+            self._record_config_sync_state(metadata, pushed=False)
+            self._remote_sync_metadata = metadata
         self._rclone_config_replaced()
         message = f"Pulled config from {remote.display_name}/{relative_path}."
         if backup_path is not None:
             message += f"\nBackup: {backup_path}"
         self.tray_app._notify("Pull config", message, success=True)
+
+    def _record_config_sync_state(self, metadata: dict[str, object], *, pushed: bool) -> None:
+        state = _load_config_sync_state()
+        try:
+            local_hash = bundle_file.current_config_fingerprint()
+        except Exception:
+            local_hash = str(metadata.get("config_hash", ""))
+        if local_hash:
+            state["last_pushed_hash" if pushed else "last_pulled_hash"] = local_hash
+        for key in ("config_hash", "created_at", "device"):
+            value = metadata.get(key)
+            if value:
+                state[f"remote_{key}"] = value
+        _save_config_sync_state(state)
 
     def _config_sync_target(self) -> tuple[core.RemoteInfo, str] | None:
         settings = load_app_settings()
@@ -6034,11 +6284,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Set config sync location", self._show_config_sync_from_tray)
         self._add_action(self.app_menu, "Push config to sync location", self._push_config_sync_from_tray)
         self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
-        self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
-        self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
-        self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
-        if _has_mount_driver_config():
-            self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
+        self.main_window._add_open_config_files_menu(self.app_menu)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.request_quit)
 

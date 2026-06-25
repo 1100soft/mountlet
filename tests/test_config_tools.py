@@ -155,6 +155,11 @@ class ConfigToolTests(unittest.TestCase):
                 self.assertIn("config.toml", archive.namelist())
                 self.assertIn("mounts.toml", archive.namelist())
                 self.assertIn("secrets/client_secret_demo.json", archive.namelist())
+                manifest = bundle_file.bundle_metadata(destination)
+                self.assertEqual(manifest["format"], "mountlet-config-bundle")
+                self.assertIn("created_at", manifest)
+                self.assertIn("device", manifest)
+                self.assertIn("config_hash", manifest)
 
     def test_encrypted_single_file_bundle_hides_config_and_imports_with_password(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -175,6 +180,11 @@ class ConfigToolTests(unittest.TestCase):
                     self.assertIn("payload.bin", archive.namelist())
                     self.assertNotIn("rclone.conf", archive.namelist())
                 self.assertTrue(bundle_file.is_encrypted_bundle(destination))
+                public_metadata = bundle_file.bundle_metadata(destination)
+                self.assertTrue(public_metadata["encrypted"])
+                self.assertIn("created_at", public_metadata)
+                self.assertIn("device", public_metadata)
+                self.assertIn("config_hash", public_metadata)
 
                 rclone_config.write_text("[Old]\ntype = s3\n", encoding="utf-8")
                 with self.assertRaises(bundle_file.BundlePasswordRequired):
