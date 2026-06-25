@@ -359,6 +359,26 @@ class CompactCloudBrowser:
                 self.focus_main_window()
             else:
                 pass
+        elif matches_shortcut(self.qt, event, "browser_copy"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.copy_selected()
+        elif matches_shortcut(self.qt, event, "browser_cut"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.cut_selected()
+        elif matches_shortcut(self.qt, event, "browser_paste"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.paste()
+        elif matches_shortcut(self.qt, event, "browser_delete"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.delete_selected()
+        elif matches_shortcut(self.qt, event, "common_previous"):
+            self._focus_relative_item(-1)
+        elif matches_shortcut(self.qt, event, "common_next"):
+            self._focus_relative_item(1)
         elif matches_shortcut(self.qt, event, "browser_parent"):
             self.go_up()
         elif matches_shortcut(self.qt, event, "browser_root"):
@@ -367,7 +387,13 @@ class CompactCloudBrowser:
             self.refresh(force=True)
         elif matches_shortcut(self.qt, event, "browser_open_folder"):
             self._open_current_mount()
-        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+        elif matches_shortcut(self.qt, event, "browser_new_folder"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.create_folder()
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter} or matches_shortcut(
+            self.qt, event, "browser_open"
+        ):
             item = self.tree.currentItem()
             if item is None:
                 return False
@@ -475,6 +501,18 @@ class CompactCloudBrowser:
             selection.select(self.tree.currentIndex(), flags)
         elif not self.tree.selectedItems():
             current.setSelected(True)
+
+    def _focus_relative_item(self, delta: int) -> None:
+        count = self.tree.topLevelItemCount()
+        if count <= 0:
+            return
+        current = self.tree.currentItem() or self.tree.topLevelItem(0)
+        index = self.tree.indexOfTopLevelItem(current) if current is not None else 0
+        if index < 0:
+            index = 0
+        index = min(max(index + delta, 0), count - 1)
+        self.tree.setCurrentItem(self.tree.topLevelItem(index))
+        self._ensure_tree_selection()
 
     def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
         remote = self.remote

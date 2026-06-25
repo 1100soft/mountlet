@@ -300,7 +300,12 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
 def _shortcut_values(values: dict[str, Any]) -> dict[str, tuple[str, ...]]:
     shortcuts = dict(DEFAULT_SHORTCUTS)
     for key in DEFAULT_SHORTCUTS:
-        shortcuts[key] = _filter_locked_shortcuts(key, _shortcut_list(values.get(key), DEFAULT_SHORTCUTS[key]))
+        source_value = values.get(key)
+        if source_value is None and key == "common_previous":
+            source_value = values.get("remote_previous")
+        elif source_value is None and key == "common_next":
+            source_value = values.get("remote_next")
+        shortcuts[key] = _filter_locked_shortcuts(key, _shortcut_list(source_value, DEFAULT_SHORTCUTS[key]))
     return shortcuts
 
 
@@ -329,8 +334,20 @@ def _filter_locked_shortcuts(key: str, values: tuple[str, ...]) -> tuple[str, ..
     locked = locked_by_key.get(key)
     if locked is None:
         return values
-    filtered = tuple(value for value in values if value.replace(" ", "").casefold() not in locked)
+    filtered = tuple(value for value in values if _normalize_shortcut_for_filter(value) not in locked)
     return filtered or DEFAULT_SHORTCUTS[key]
+
+
+def _normalize_shortcut_for_filter(value: str) -> str:
+    aliases = {
+        "enter": "return",
+        "escape": "esc",
+        "ctrl": "control",
+        "cmd": "meta",
+        "command": "meta",
+        "option": "alt",
+    }
+    return "+".join(aliases.get(part, part) for part in value.replace(" ", "").casefold().split("+"))
 
 
 def _remote_name_from_section(section: str) -> str | None:

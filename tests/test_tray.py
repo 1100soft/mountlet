@@ -1087,11 +1087,16 @@ class TrayTests(unittest.TestCase):
         button = mock.Mock()
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
-        window._update_browser_button(button, remote)
+        with mock.patch.object(tray, "_shortcut_hint", return_value=""):
+            window._update_browser_button(button, remote)
 
         button.setEnabled.assert_called_once_with(True)
         button.setStyleSheet.assert_called_once_with(f"color: {tray.PROVIDER_COLORS['drive']};")
         button.setToolTip.assert_called_once_with("Open Drive in browser")
+
+    def test_shortcut_hint_uses_first_assigned_shortcut(self):
+        with mock.patch.object(tray, "shortcut_values", return_value=("Alt+B", "Ctrl+B")):
+            self.assertEqual(tray._shortcut_hint("remote_open_browser"), "\nShortcut: Alt+B")
 
     def test_mountlet_window_remote_title_escapes_rich_text(self):
         window = object.__new__(tray.MountletWindow)
@@ -2430,7 +2435,7 @@ class TrayTests(unittest.TestCase):
         )
 
         def matches(_qt: object, _event: object, action: str) -> bool:
-            return action == "remote_next"
+            return action == "common_next"
 
         with mock.patch.object(tray, "matches_shortcut", side_effect=matches):
             with mock.patch.object(window, "_focused_remote_name", return_value="Beta"):
@@ -2438,6 +2443,72 @@ class TrayTests(unittest.TestCase):
                     self.assertTrue(window._handle_main_key(Event()))
 
         focus.assert_called_once_with("Beta", 1)
+
+    def test_remote_row_toggle_shortcut_uses_mount_action(self):
+        remote = SimpleNamespace(name="Docs", display_name="Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=SimpleNamespace(
+                    Key_Up="up",
+                    Key_Down="down",
+                    Key_Return="return",
+                    Key_Enter="enter",
+                    Key_Left="left",
+                    Key_Right="right",
+                )
+            )
+        )
+
+        class Event:
+            def key(self) -> object:
+                return "custom"
+
+            def accept(self) -> None:
+                return
+
+        def matches(_qt: object, _event: object, action: str) -> bool:
+            return action == "remote_toggle_mount"
+
+        with mock.patch.object(tray, "matches_shortcut", side_effect=matches):
+            with mock.patch.object(window, "_toggle_remote_mount") as toggle:
+                window._handle_remote_row_key(Event(), remote, object())
+
+        toggle.assert_called_once_with(remote)
+
+    def test_main_remote_config_shortcut_opens_focused_remote(self):
+        remote = SimpleNamespace(name="Docs", display_name="Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=SimpleNamespace(
+                    Key_Up="up",
+                    Key_Down="down",
+                    Key_Return="return",
+                    Key_Enter="enter",
+                    Key_Left="left",
+                    Key_Right="right",
+                )
+            )
+        )
+
+        class Event:
+            def key(self) -> object:
+                return "custom"
+
+            def accept(self) -> None:
+                return
+
+        def matches(_qt: object, _event: object, action: str) -> bool:
+            return action == "remote_config"
+
+        with mock.patch.object(tray, "matches_shortcut", side_effect=matches):
+            with mock.patch.object(window, "_focused_remote_name", return_value="Docs"):
+                with mock.patch.object(window, "_remote_by_name", return_value=remote):
+                    with mock.patch.object(window, "_show_mount_config_editor") as configure:
+                        self.assertTrue(window._handle_main_key(Event()))
+
+        configure.assert_called_once_with(remote)
 
     def test_remote_list_reorder_shortcut_moves_and_refocuses_remote(self):
         window = object.__new__(tray.MountletWindow)

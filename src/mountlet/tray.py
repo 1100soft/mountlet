@@ -5563,10 +5563,16 @@ class MountletWindow:
             self._move_focused_remote(remote.name, -1)
         elif matches_shortcut(self.qt, event, "remote_move_down"):
             self._move_focused_remote(remote.name, 1)
-        elif matches_shortcut(self.qt, event, "remote_previous"):
+        elif matches_shortcut(self.qt, event, "common_previous"):
             self._focus_relative_remote(remote.name, -1)
-        elif matches_shortcut(self.qt, event, "remote_next"):
+        elif matches_shortcut(self.qt, event, "common_next"):
             self._focus_relative_remote(remote.name, 1)
+        elif matches_shortcut(self.qt, event, "remote_toggle_mount"):
+            self._toggle_remote_mount(remote)
+        elif matches_shortcut(self.qt, event, "remote_config"):
+            self._show_mount_config_editor(remote)
+        elif matches_shortcut(self.qt, event, "remote_open_browser"):
+            self._open_remote_in_browser(remote)
         elif key == self.qt.Qt.Key.Key_Up:
             self._focus_relative_remote(remote.name, -1)
         elif key == self.qt.Qt.Key.Key_Down:
@@ -5588,19 +5594,26 @@ class MountletWindow:
 
     def _handle_main_key(self, event: Any) -> bool:
         key = event.key()
-        focused_remote = self._focused_remote_name()
+        focused_remote_name = self._focused_remote_name()
+        focused_remote = self._remote_by_name(focused_remote_name)
         if matches_shortcut(self.qt, event, "remote_move_up"):
-            self._move_focused_remote(focused_remote, -1)
+            self._move_focused_remote(focused_remote_name, -1)
         elif matches_shortcut(self.qt, event, "remote_move_down"):
-            self._move_focused_remote(focused_remote, 1)
-        elif matches_shortcut(self.qt, event, "remote_previous"):
-            self._focus_relative_remote(focused_remote, -1)
-        elif matches_shortcut(self.qt, event, "remote_next"):
-            self._focus_relative_remote(focused_remote, 1)
+            self._move_focused_remote(focused_remote_name, 1)
+        elif matches_shortcut(self.qt, event, "common_previous"):
+            self._focus_relative_remote(focused_remote_name, -1)
+        elif matches_shortcut(self.qt, event, "common_next"):
+            self._focus_relative_remote(focused_remote_name, 1)
+        elif matches_shortcut(self.qt, event, "remote_toggle_mount") and focused_remote is not None:
+            self._toggle_remote_mount(focused_remote)
+        elif matches_shortcut(self.qt, event, "remote_config") and focused_remote is not None:
+            self._show_mount_config_editor(focused_remote)
+        elif matches_shortcut(self.qt, event, "remote_open_browser") and focused_remote is not None:
+            self._open_remote_in_browser(focused_remote)
         elif key == self.qt.Qt.Key.Key_Up:
-            self._focus_relative_remote(focused_remote, -1)
+            self._focus_relative_remote(focused_remote_name, -1)
         elif key == self.qt.Qt.Key.Key_Down:
-            self._focus_relative_remote(focused_remote, 1)
+            self._focus_relative_remote(focused_remote_name, 1)
         elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
             self._focus_current_browser()
         elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
@@ -5669,9 +5682,16 @@ class MountletWindow:
     def _focus_current_browser(self) -> None:
         name = self._focused_remote_name()
         row = self._row_widgets.get(name)
-        remote = next((item for item in _load_visible_remotes() if item.name == name), None)
+        remote = self._remote_by_name(name)
         if row is not None and remote is not None:
             self._browse_remote(remote, row.frame)
+
+    def _remote_by_name(self, name: str) -> core.RemoteInfo | None:
+        return next((item for item in _load_visible_remotes() if item.name == name), None)
+
+    def _toggle_remote_mount(self, remote: core.RemoteInfo) -> None:
+        action = core.unmount_remote if core.is_mounted(remote) else core.mount_remote
+        self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
         if not event.mimeData().hasFormat(MIME_TYPE):

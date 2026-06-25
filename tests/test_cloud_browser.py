@@ -350,6 +350,74 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertIs(browser.tree.current, browser.tree.item)
         self.assertEqual(browser.tree.selection.calls, [(browser.tree.index, 3)])
 
+    def test_common_browser_navigation_shortcut_moves_current_item(self):
+        class Tree:
+            def __init__(self) -> None:
+                self.items = [object(), object(), object()]
+                self.current = self.items[0]
+
+            def topLevelItemCount(self) -> int:
+                return len(self.items)
+
+            def currentItem(self) -> object | None:
+                return self.current
+
+            def topLevelItem(self, index: int) -> object:
+                return self.items[index]
+
+            def indexOfTopLevelItem(self, item: object) -> int:
+                return self.items.index(item)
+
+            def setCurrentItem(self, item: object) -> None:
+                self.current = item
+
+            def selectedItems(self) -> list[object]:
+                return []
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser._ensure_tree_selection = mock.Mock()
+
+        browser._focus_relative_item(1)
+
+        self.assertIs(browser.tree.current, browser.tree.items[1])
+        browser._ensure_tree_selection.assert_called_once_with()
+
+    def test_browser_copy_alternative_shortcut_uses_copy_action(self):
+        class Event:
+            def key(self) -> object:
+                return "custom"
+
+            def modifiers(self) -> object:
+                return 0
+
+            def accept(self) -> None:
+                return
+
+        key = SimpleNamespace(
+            Key_C="c",
+            Key_X="x",
+            Key_V="v",
+            Key_Delete="delete",
+            Key_Escape="esc",
+            Key_Left="left",
+            Key_Right="right",
+            Key_Return="return",
+            Key_Enter="enter",
+        )
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(Key=key, KeyboardModifier=SimpleNamespace(ControlModifier=1)))
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser.copy_selected = mock.Mock()
+
+        def matches(_qt: object, _event: object, action: str) -> bool:
+            return action == "browser_copy"
+
+        with mock.patch("mountlet.cloud_browser_ui.matches_shortcut", side_effect=matches):
+            self.assertTrue(browser._handle_key(Event()))
+
+        browser.copy_selected.assert_called_once_with()
+
     def test_browser_direction_key_returns_only_toward_main_window(self):
         class Event:
             def __init__(self, key: object) -> None:

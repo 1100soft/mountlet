@@ -351,15 +351,17 @@ remote does not need to be mounted.
   key points toward the side where the browser is displayed; the opposite arrow
   does nothing. Shift+Up and Shift+Down move the selected remote. In the
   browser, Return opens an item, Escape returns to the selected strip, and the
-  arrow pointing back toward the main window also returns. Space, Shift+Up,
-  Shift+Down, Backspace, Alt+Home, F5, Ctrl+Return, and other optional shortcut
-  alternatives can be changed from `Config` > `Keyboard shortcuts`.
+  arrow pointing back toward the main window also returns. Fixed inputs are
+  shown separately from configurable alternatives in `Config` > `Keyboard
+  shortcuts`; alternatives can be added for common list navigation, per-remote
+  actions, and file-browser commands.
 - Editing inside Mountlet Files is disabled by default. Enable it from `App`
   > `Settings` > `Allow edits in Mountlet Files` only if you want direct cloud
   edits from the integrated browser.
 - When integrated edits are enabled, use item and folder context menus, or
   `Ctrl+C`, `Ctrl+X`, and `Ctrl+V`, to transfer files and folders within or
-  between remotes.
+  between remotes. These standard shortcuts remain fixed, and optional
+  alternatives can be assigned in the shortcut settings.
 - Press Delete to permanently delete selected cloud items after confirmation.
 - Right-click an item for open, copy, cut, and delete commands. Folder menus
   can also open the mounted location in the configured file manager. Right-click

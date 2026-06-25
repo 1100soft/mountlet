@@ -48,11 +48,11 @@ Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
 Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
-Down, Return, Escape, and side-aware Left/Right handoff should be shown as
-fixed guidance rather than exposed as editable shortcuts. Optional alternatives
-for remote selection, remote reordering, browser entry, and file-browser actions
-can be reused between contexts, but conflicts inside one context should remain
-blocked in the shortcut editor.
+Down, Return, Escape, side-aware Left/Right handoff, and Qt's standard copy,
+cut, paste, and delete keys should be shown as fixed guidance. Optional
+alternatives for common list navigation, remote reordering, browser entry,
+per-remote actions, and file-browser actions can be reused between contexts,
+but conflicts inside one context should remain blocked in the shortcut editor.
 Folder listings are session caches and are preloaded for each remembered remote
 path. When a folder is displayed, Mountlet silently prefetches one displayed
 level deeper with a bounded queue so navigation into visible folders is often

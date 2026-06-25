@@ -60,8 +60,8 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
         self.assertEqual(config.shortcuts["browser_root"], ("Ctrl+Home",))
         self.assertEqual(config.shortcuts["remote_enter_browser"], settings.DEFAULT_SHORTCUTS["remote_enter_browser"])
-        self.assertEqual(config.shortcuts["remote_previous"], ())
-        self.assertEqual(config.shortcuts["remote_next"], ())
+        self.assertEqual(config.shortcuts["common_previous"], ())
+        self.assertEqual(config.shortcuts["common_next"], ())
         self.assertEqual(config.shortcuts["remote_move_up"], ("Shift+Up",))
         self.assertEqual(config.shortcuts["remote_move_down"], ("Shift+Down",))
 
@@ -97,9 +97,11 @@ order = 2
             path.write_text(
                 """
 [shortcuts]
-remote_previous = "Up, PageUp"
-remote_next = "Down, PageDown"
+common_previous = "Up, PageUp"
+common_next = "Down, PageDown"
 remote_enter_browser = "Return, Space, Left, Right"
+browser_copy = "Ctrl+C, Alt+C"
+browser_delete = "Delete, Alt+Delete"
 remote_move_up = "Shift+Up"
 remote_move_down = "Shift+Down"
 """.strip(),
@@ -108,11 +110,30 @@ remote_move_down = "Shift+Down"
 
             config = settings.load_app_settings(path)
 
-        self.assertEqual(config.shortcuts["remote_previous"], ("PageUp",))
-        self.assertEqual(config.shortcuts["remote_next"], ("PageDown",))
+        self.assertEqual(config.shortcuts["common_previous"], ("PageUp",))
+        self.assertEqual(config.shortcuts["common_next"], ("PageDown",))
         self.assertEqual(config.shortcuts["remote_enter_browser"], ("Space",))
+        self.assertEqual(config.shortcuts["browser_copy"], ("Alt+C",))
+        self.assertEqual(config.shortcuts["browser_delete"], ("Alt+Delete",))
         self.assertEqual(config.shortcuts["remote_move_up"], ("Shift+Up",))
         self.assertEqual(config.shortcuts["remote_move_down"], ("Shift+Down",))
+
+    def test_load_app_settings_migrates_legacy_remote_navigation_shortcuts(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "config.toml"
+            path.write_text(
+                """
+[shortcuts]
+remote_previous = "W, PageUp"
+remote_next = "S, PageDown"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = settings.load_app_settings(path)
+
+        self.assertEqual(config.shortcuts["common_previous"], ("W", "PageUp"))
+        self.assertEqual(config.shortcuts["common_next"], ("S", "PageDown"))
 
     def test_ensure_default_config_files_creates_app_and_mount_files(self):
         with tempfile.TemporaryDirectory() as tempdir:

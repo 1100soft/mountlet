@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reorganized the keyboard shortcut dialog around fixed inputs and configurable
+  alternatives, added shared list-navigation alternatives, added configurable
+  per-remote and file-operation alternatives, and surfaced assigned remote
+  action shortcuts in button tooltips.
+
 ## 0.4.0 - 2026-06-25
 
 - Added a compact rclone-backed file browser connected directly to the remote
