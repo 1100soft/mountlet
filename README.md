@@ -370,10 +370,10 @@ remote does not need to be mounted.
 - Drag files onto another remote strip to copy them to that remote's remembered
   folder. Hold Shift while dropping to move them.
 - Use **Make available offline** to download selected files or folders as local
-  snapshots. Mountlet remembers the folder path leading to each offline file,
-  so cached items remain browseable when the remote is not reachable. Offline
-  snapshots are not two-way sync; edits to the cached copy are not uploaded.
-  Remove and recreate the snapshot to refresh it.
+  snapshots under `~/Mountlet Offline`. Mountlet remembers the folder path
+  leading to each offline file, so cached items remain browseable when the
+  remote is not reachable. Offline snapshots are not two-way sync; edits to the
+  cached copy are not uploaded. Remove and recreate the snapshot to refresh it.
 - When a remote is mounted, opening a file uses the mounted file path. When it
   is unmounted, opening uses the offline snapshot if one exists. Offline
   folders can also be opened in the configured system file manager.

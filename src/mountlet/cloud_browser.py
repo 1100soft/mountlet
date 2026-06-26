@@ -15,6 +15,7 @@ from .config_tools.shared import app_cache_dir, app_state_dir, ensure_app_direct
 BROWSER_STATE_FILE = "browser.json"
 OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
+OFFLINE_STORAGE_NAME = "Mountlet Offline"
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,9 @@ class CloudBrowserBackend:
     ) -> None:
         ensure_app_directories()
         self.state_path = state_path or app_state_dir() / BROWSER_STATE_FILE
-        self.cache_root = cache_root or app_cache_dir() / OFFLINE_CACHE_DIR
+        self.cache_root = cache_root or _default_offline_cache_root()
+        if cache_root is None:
+            self._migrate_legacy_offline_cache()
         self.manifest_path = manifest_path or self.state_path.with_name(OFFLINE_MANIFEST_FILE)
         self._paths = self._load_paths()
         self._offline_records = self._load_offline_manifest()
@@ -423,7 +426,8 @@ class CloudBrowserBackend:
 
     def _make_file_writable(self, path: Path) -> None:
         try:
-            path.chmod(path.stat().st_mode | 0o600)
+            mode = 0o700 if path.is_dir() else 0o600
+            path.chmod(path.stat().st_mode | mode)
         except OSError:
             return
 
@@ -441,10 +445,24 @@ class CloudBrowserBackend:
                 return
             current = current.parent
 
+    def _migrate_legacy_offline_cache(self) -> None:
+        legacy = app_cache_dir() / OFFLINE_CACHE_DIR
+        if not legacy.exists() or legacy == self.cache_root or self.cache_root.exists():
+            return
+        try:
+            self.cache_root.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(self.cache_root))
+        except OSError:
+            return
+
 
 def _safe_component(value: str) -> str:
     safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
     return safe.strip(".") or "remote"
+
+
+def _default_offline_cache_root() -> Path:
+    return core.PLATFORM.default_mount_base().parent / OFFLINE_STORAGE_NAME
 
 
 def _ancestor_paths(path: str) -> list[str]:

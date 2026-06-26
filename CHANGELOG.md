@@ -10,6 +10,8 @@
   local file opens.
 - Kept offline cache files user-writable so external apps such as PDF readers
   and spreadsheet editors can open cached files normally.
+- Moved offline snapshots out of the hidden app cache and into
+  `~/Mountlet Offline`, with best-effort migration of the previous cache.
 
 ## 0.4.1 - 2026-06-26
 

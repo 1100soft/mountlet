@@ -47,10 +47,12 @@ and must keep every rclone operation off the UI thread.
 Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
-Offline snapshots are local cache files, not two-way sync; refresh them by
-removing and recreating the snapshot. Do not make cache files OS-level
-read-only because some external viewers need write access for lock or temporary
-files.
+Offline snapshots are local files under `~/Mountlet Offline`, not two-way sync;
+refresh them by removing and recreating the snapshot. Keep this location
+user-visible because sandboxed viewers and office applications may not be able
+to open files from hidden app cache directories. Do not make cache files
+OS-level read-only because some external viewers need write access for lock or
+temporary files.
 Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
 Down, Return, Escape, side-aware Left/Right handoff, and Qt's standard copy,
 cut, paste, and delete keys should be shown as fixed guidance. Optional
