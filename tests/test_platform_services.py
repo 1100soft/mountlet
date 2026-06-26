@@ -229,6 +229,21 @@ Categories=Utility;FileManager;
         startfile.assert_called_once_with(r"C:\Users\test\Mountlet\Docs\a.txt")
         qt.QDesktopServices.openUrl.assert_not_called()
 
+    def test_linux_desktop_service_opens_files_with_system_association(self):
+        qt = SimpleNamespace(
+            QDesktopServices=SimpleNamespace(openUrl=mock.Mock(return_value=False)),
+            QUrl=SimpleNamespace(fromLocalFile=lambda path: f"file:{path}"),
+        )
+        desktop = DesktopServices(qt)
+
+        with mock.patch("mountlet.platform_services.desktop.platform.system", return_value="Linux"):
+            with mock.patch("mountlet.platform_services.desktop.shutil.which", return_value="/usr/bin/xdg-open"):
+                with mock.patch("mountlet.platform_services.desktop.subprocess.Popen") as popen:
+                    self.assertTrue(desktop.open_file(Path("/tmp/report.ods")))
+
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", "/tmp/report.ods"])
+        qt.QDesktopServices.openUrl.assert_not_called()
+
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
         with mock.patch("pathlib.Path.home", return_value=Path("/Users/tester")):

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Callable
+
+from .processes import external_process_environment
 
 
 class DesktopServices:
@@ -55,6 +59,20 @@ class DesktopServices:
             except OSError:
                 return False
             return True
+        command = _file_opener_command()
+        if command:
+            try:
+                subprocess.Popen(
+                    [*command, str(path)],
+                    env=external_process_environment(),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError:
+                pass
+            else:
+                return True
         return bool(self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))))
 
     def window_is_on_current_workspace(self, window: Any) -> bool | None:
@@ -71,3 +89,17 @@ class DesktopServices:
         if not self._keep_above_setter:
             return False
         return self._keep_above_setter(window, enabled)
+
+
+def _file_opener_command() -> list[str]:
+    system = platform.system()
+    if system == "Darwin":
+        command = shutil.which("open")
+        return [command] if command else []
+    if system == "Linux":
+        command = shutil.which("xdg-open")
+        if command:
+            return [command]
+        command = shutil.which("gio")
+        return [command, "open"] if command else []
+    return []

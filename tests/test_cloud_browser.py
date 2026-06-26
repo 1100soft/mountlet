@@ -579,6 +579,37 @@ class CloudBrowserTests(unittest.TestCase):
         browser.offline_button.setText.assert_called_with("✓")
         self.assertIn("Remove", browser.offline_button.setToolTip.call_args.args[0])
 
+    def test_open_file_prefers_mounted_path_over_offline_copy(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")))
+        browser.remote = _remote()
+        browser.backend = mock.Mock()
+        browser.backend.offline_path.return_value = Path("/cache/Docs/a.ods")
+        browser._open_local_file = mock.Mock()
+        browser._notify = mock.Mock()
+        item = mock.Mock()
+        item.data.return_value = BrowserEntry("a.ods", "Reports/a.ods", False)
+
+        with mock.patch.object(core, "is_mounted", return_value=True):
+            browser._open_item(item)
+
+        browser._open_local_file.assert_called_once_with(Path("/mnt/Docs/Reports/a.ods"))
+
+    def test_open_folder_uses_offline_cache_when_remote_is_unmounted(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.backend = mock.Mock()
+        browser.backend.offline_path.return_value = Path("/cache/Docs/Reports")
+        browser._open_local_folder = mock.Mock(return_value=True)
+        browser._notify = mock.Mock()
+
+        with mock.patch.object(core, "is_mounted", return_value=False):
+            with mock.patch.object(Path, "is_dir", return_value=True):
+                browser._open_external_folder("Reports")
+
+        browser._open_local_folder.assert_called_once_with(Path("/cache/Docs/Reports"))
+        browser._notify.assert_not_called()
+
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

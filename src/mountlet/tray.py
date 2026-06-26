@@ -4100,6 +4100,7 @@ class MountletWindow:
             notify=lambda title, message, success: self.tray_app._notify(title, message, success=success),
             open_mount=self._open_remote_path,
             open_file=self.desktop.open_file,
+            open_local_folder=lambda path: self.desktop.open_folder(str(path)),
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,

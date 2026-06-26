@@ -46,6 +46,7 @@ class CompactCloudBrowser:
         open_mount: Callable[[core.RemoteInfo, str], None],
         file_manager_label: Callable[[], str],
         open_file: Callable[[Path], bool] | None = None,
+        open_local_folder: Callable[[Path], bool] | None = None,
         embedded: bool = False,
         layout_changed: Callable[[], None] | None = None,
     ) -> None:
@@ -55,6 +56,7 @@ class CompactCloudBrowser:
         self._notify = notify
         self._open_mount = open_mount
         self._open_file = open_file
+        self._open_local_folder = open_local_folder
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -812,12 +814,13 @@ class CompactCloudBrowser:
             self.backend.remember_path(self.remote.name, self.path)
             self.refresh()
             return
+        if core.is_mounted(self.remote):
+            local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
+            self._open_local_file(local)
+            return
         offline = self.backend.offline_path(self.remote.name, entry.path)
         if offline.is_file():
             self._open_local_file(offline)
-        elif core.is_mounted(self.remote):
-            local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
-            self._open_local_file(local)
         else:
             self._notify("Open file", "Mount the remote or make this file available offline first.", False)
 
@@ -849,7 +852,17 @@ class CompactCloudBrowser:
         if self.remote is None:
             return
         if not core.is_mounted(self.remote):
-            self._notify("Open folder", "Mount this remote before opening it in the system file manager.", False)
+            offline = self.backend.offline_path(self.remote.name, path)
+            if offline.is_dir():
+                if self._open_local_folder and self._open_local_folder(offline):
+                    return
+                if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(offline))):
+                    return
+            self._notify(
+                "Open folder",
+                "Mount this remote or make this folder available offline before opening it in the system file manager.",
+                False,
+            )
             return
         self._open_mount(self.remote, path)
 
