@@ -31,11 +31,11 @@ def _event_sequence(qt: Any, event: Any) -> str:
     }
     if key in modifier_keys:
         return ""
-    value = key
     try:
         modifiers = event.modifiers()
     except Exception:
         modifiers = qt.Qt.KeyboardModifier.NoModifier
+    active_modifiers = qt.Qt.KeyboardModifier.NoModifier
     for modifier in (
         qt.Qt.KeyboardModifier.ControlModifier,
         qt.Qt.KeyboardModifier.AltModifier,
@@ -43,8 +43,36 @@ def _event_sequence(qt: Any, event: Any) -> str:
         qt.Qt.KeyboardModifier.MetaModifier,
     ):
         if modifiers & modifier:
-            value = value | modifier
+            active_modifiers = active_modifiers | modifier
+    return _key_sequence_text(qt, key, active_modifiers)
+
+
+def _key_sequence_text(qt: Any, key: Any, modifiers: Any) -> str:
+    key_value = _qt_key(qt, key)
+    key_combination = getattr(qt, "QKeyCombination", None)
+    if key_combination is not None:
+        try:
+            value = key_combination(modifiers, key_value)
+            return qt.QKeySequence(value).toString(qt.QKeySequence.SequenceFormat.PortableText)
+        except Exception:
+            pass
+    value = _qt_value(key_value) | _qt_value(modifiers)
     return qt.QKeySequence(value).toString(qt.QKeySequence.SequenceFormat.PortableText)
+
+
+def _qt_key(qt: Any, key: Any) -> Any:
+    key_type = qt.Qt.Key
+    try:
+        return key_type(key)
+    except Exception:
+        return key
+
+
+def _qt_value(value: Any) -> int:
+    raw_value = getattr(value, "value", value)
+    if callable(raw_value):
+        raw_value = raw_value()
+    return int(raw_value)
 
 
 def _normalized(sequence: str) -> str:

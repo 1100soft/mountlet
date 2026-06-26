@@ -32,6 +32,7 @@ def _fake_qt() -> SimpleNamespace:
         Key_Alt=0x01000023,
         Key_Meta=0x01000022,
         Key_Home=0x01000010,
+        Key_Up=0x01000013,
         Key_Return=0x01000004,
         Key_Right=0x01000014,
     )
@@ -44,6 +45,7 @@ def _fake_qt() -> SimpleNamespace:
     )
     FakeQKeySequence._text_by_value = {
         key.Key_Home | modifier.AltModifier: "Alt+Home",
+        key.Key_Up | modifier.ShiftModifier: "Shift+Up",
         key.Key_Return: "Return",
         key.Key_Right: "Right",
     }
@@ -86,6 +88,17 @@ class ShortcutTests(unittest.TestCase):
 
         with mock.patch.object(shortcuts, "load_app_settings", return_value=settings):
             self.assertTrue(shortcuts.matches_shortcut(qt, event, "remote_enter_browser"))
+
+    def test_matches_shift_arrow_from_integer_key_event(self):
+        qt = _fake_qt()
+        event = SimpleNamespace(
+            key=lambda: qt.Qt.Key.Key_Up,
+            modifiers=lambda: qt.Qt.KeyboardModifier.ShiftModifier,
+        )
+        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "remote_move_up": ("Shift+Up",)})
+
+        with mock.patch.object(shortcuts, "load_app_settings", return_value=settings):
+            self.assertTrue(shortcuts.matches_shortcut(qt, event, "remote_move_up"))
 
 
 if __name__ == "__main__":

@@ -470,7 +470,20 @@ def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
 
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QEvent, QLockFile, QMimeData, QObject, QPoint, QSize, Qt, QTimer, QUrl, Signal, qVersion
+        from PySide6.QtCore import (
+            QEvent,
+            QKeyCombination,
+            QLockFile,
+            QMimeData,
+            QObject,
+            QPoint,
+            QSize,
+            Qt,
+            QTimer,
+            QUrl,
+            Signal,
+            qVersion,
+        )
         from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
         from PySide6.QtWidgets import (
             QAbstractItemView,
@@ -536,6 +549,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QHBoxLayout=QHBoxLayout,
         QInputDialog=QInputDialog,
         QIcon=QIcon,
+        QKeyCombination=QKeyCombination,
         QKeySequence=QKeySequence,
         QKeySequenceEdit=QKeySequenceEdit,
         QLabel=QLabel,
@@ -2216,7 +2230,24 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         self._button_box = self._buttons()
         root.addWidget(self._button_box)
         self._update_conflicts()
-        self.dialog.adjustSize()
+        self._resize_to_content(content)
+
+    def _resize_to_content(self, content: Any) -> None:
+        try:
+            content.adjustSize()
+            self.dialog.adjustSize()
+            screen = self.dialog.screen() or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            content_hint = content.sizeHint()
+            preferred_width = max(680, content_hint.width() + 44)
+            preferred_height = max(520, content_hint.height() + 120)
+            max_width = max(360, int(available.width() * 0.92))
+            max_height = max(320, int(available.height() * 0.92))
+            self.dialog.resize(min(preferred_width, max_width), min(preferred_height, max_height))
+        except Exception:
+            self.dialog.adjustSize()
 
     def _fixed_shortcut_box(self) -> Any:
         group = self.qt.QGroupBox("Fixed inputs")

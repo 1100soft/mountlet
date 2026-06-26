@@ -5,8 +5,9 @@
 - Restored native title bars for child dialogs, constrained child dialogs to
   the visible desktop, and made the shortcut editor scroll internally on small
   screens.
-- Fixed remote move shortcuts so Shift+Up and Shift+Down do not trigger an
-  unnecessary rclone remote reload before reordering.
+- Fixed remote move shortcuts so Shift+Up and Shift+Down are parsed through
+  Qt's explicit key-combination API and do not trigger an unnecessary rclone
+  remote reload before reordering.
 - Reorganized the keyboard shortcut dialog around fixed inputs and configurable
   alternatives, added shared list-navigation alternatives, added configurable
   per-remote and file-operation alternatives, and surfaced assigned remote
