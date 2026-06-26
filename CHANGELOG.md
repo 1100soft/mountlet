@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-06-26
+
 - Added operating-system metadata to config bundles and showed OS, device, and
   local-time details in config import and pull confirmations.
 - Fixed manual config imports so importing a bundle records the imported
