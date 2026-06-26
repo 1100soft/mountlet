@@ -2743,6 +2743,25 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             self.assertEqual(window._file_dialog_kwargs(), {})
 
+    def test_app_settings_folder_picker_updates_app_folder_field(self):
+        dialog = object.__new__(tray.AppConfigDialog)
+        field = mock.Mock()
+        field.text.return_value = "/home/tester/Mountlet"
+        dialog.fields = {"mount_base": field}
+        dialog.dialog = object()
+        dialog.qt = SimpleNamespace(
+            QFileDialog=SimpleNamespace(getExistingDirectory=mock.Mock(return_value="/home/tester/Storage/Mountlet"))
+        )
+
+        dialog._choose_app_folder()
+
+        dialog.qt.QFileDialog.getExistingDirectory.assert_called_once_with(
+            dialog.dialog,
+            "Choose Mountlet app folder",
+            "/home/tester/Mountlet",
+        )
+        field.setText.assert_called_once_with("/home/tester/Storage/Mountlet")
+
     def test_import_config_confirmation_includes_bundle_os_metadata(self):
         selected = "/tmp/config.mountlet"
         yes = 1

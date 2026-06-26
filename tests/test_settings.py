@@ -65,6 +65,19 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.shortcuts["remote_move_up"], ("Shift+Up",))
         self.assertEqual(config.shortcuts["remote_move_down"], ("Shift+Down",))
 
+    def test_app_folder_derives_mounted_and_offline_roots(self):
+        with mock.patch("pathlib.Path.home", return_value=Path("/home/tester")):
+            with mock.patch.dict("os.environ", {"HOME": "/home/tester"}):
+                default_settings = settings.AppSettings()
+                custom_settings = settings.AppSettings(mount_base="~/CustomMountlet")
+
+                self.assertEqual(settings.app_folder(default_settings), Path("/home/tester/Mountlet"))
+                self.assertEqual(settings.mounted_root(default_settings), Path("/home/tester/Mountlet/mounted"))
+                self.assertEqual(settings.offline_root(default_settings), Path("/home/tester/Mountlet/offline"))
+                self.assertEqual(settings.app_folder(custom_settings), Path("/home/tester/CustomMountlet"))
+                self.assertEqual(settings.mounted_root(custom_settings), Path("/home/tester/CustomMountlet/mounted"))
+                self.assertEqual(settings.offline_root(custom_settings), Path("/home/tester/CustomMountlet/offline"))
+
     def test_load_mount_settings_reads_per_remote_overrides(self):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "mounts.toml"

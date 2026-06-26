@@ -15,11 +15,11 @@ from typing import Dict, Iterable, List, Tuple
 
 from .config_tools.shared import default_config_path
 from .platform_services import get_platform
-from .settings import load_app_settings, load_mount_settings
+from .settings import default_mounted_root, load_app_settings, load_mount_settings, mounted_root
 
 PLATFORM = get_platform()
 CONFIG_PATH = str(default_config_path())
-DEFAULT_HOME_MOUNT = str(PLATFORM.default_mount_base())
+DEFAULT_HOME_MOUNT = str(default_mounted_root())
 
 ENV_BASE_VARS = ("MOUNTLET_MOUNT_BASE", "CLOUD_MOUNT_BASE", "GDRIVE_MOUNT_BASE")
 PRIMARY_BASE_ENV = ENV_BASE_VARS[0]
@@ -31,15 +31,11 @@ def _slugify(value: str) -> str:
 
 
 def _configured_mount_dir() -> str | None:
-    configured = None
     for env in ENV_BASE_VARS:
         val = os.environ.get(env)
         if val:
-            configured = os.path.expanduser(val)
-            break
-    if not configured:
-        configured = load_app_settings().mount_base
-    return configured
+            return os.path.expanduser(val)
+    return str(mounted_root(load_app_settings()))
 
 
 def _mount_dir_candidates() -> List[str]:

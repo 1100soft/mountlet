@@ -140,8 +140,8 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertFalse(backend.is_offline("Docs", "Reports/a.txt"))
 
     def test_default_offline_cache_root_is_user_visible(self):
-        with mock.patch.object(core.PLATFORM, "default_mount_base", return_value=Path("/home/user/cloud_mounts")):
-            self.assertEqual(_default_offline_cache_root(), Path("/home/user/Mountlet Offline"))
+        with mock.patch("pathlib.Path.home", return_value=Path("/home/user")):
+            self.assertEqual(_default_offline_cache_root(), Path("/home/user/Mountlet/offline"))
 
     def test_legacy_hidden_offline_cache_is_migrated(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -151,12 +151,28 @@ class CloudBrowserTests(unittest.TestCase):
             legacy_file.parent.mkdir(parents=True)
             legacy_file.write_text("offline", encoding="utf-8")
 
-            with mock.patch.object(core.PLATFORM, "default_mount_base", return_value=root / "cloud_mounts"):
+            with mock.patch("pathlib.Path.home", return_value=root):
                 with mock.patch("mountlet.cloud_browser.app_cache_dir", return_value=root / ".cache" / "mountlet"):
                     backend = CloudBrowserBackend(state_path=root / "state.json")
 
             self.assertFalse(legacy.exists())
-            self.assertEqual(backend.cache_root, root / "Mountlet Offline")
+            self.assertEqual(backend.cache_root, root / "Mountlet" / "offline")
+            self.assertTrue((backend.cache_root / "Docs" / "Reports" / "a.pdf").is_file())
+
+    def test_legacy_visible_offline_cache_is_migrated(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            legacy = root / "Mountlet Offline"
+            legacy_file = legacy / "Docs" / "Reports" / "a.pdf"
+            legacy_file.parent.mkdir(parents=True)
+            legacy_file.write_text("offline", encoding="utf-8")
+
+            with mock.patch("pathlib.Path.home", return_value=root):
+                with mock.patch("mountlet.cloud_browser.app_cache_dir", return_value=root / ".cache" / "mountlet"):
+                    backend = CloudBrowserBackend(state_path=root / "state.json")
+
+            self.assertFalse(legacy.exists())
+            self.assertEqual(backend.cache_root, root / "Mountlet" / "offline")
             self.assertTrue((backend.cache_root / "Docs" / "Reports" / "a.pdf").is_file())
 
     def test_completed_offline_folder_can_be_browsed_without_rclone(self):

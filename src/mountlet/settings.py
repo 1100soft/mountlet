@@ -12,6 +12,10 @@ from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ens
 from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
+APP_FOLDER_NAME = "Mountlet"
+MOUNTED_FOLDER_NAME = "mounted"
+OFFLINE_FOLDER_NAME = "offline"
+
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "common_previous": (),
     "common_next": (),
@@ -63,7 +67,7 @@ DEFAULT_APP_CONFIG = """# Mountlet app settings.
 # rclone account credentials stay in rclone.conf.
 
 [app]
-# Leave empty to use ~/cloud_mounts.
+# Leave empty to use ~/Mountlet.
 mount_base = ""
 
 # Default for remotes without their own auto_mount setting.
@@ -265,6 +269,27 @@ def _optional_int_value(value: Any) -> int | None:
         return None
 
 
+def default_app_folder() -> Path:
+    return Path.home() / APP_FOLDER_NAME
+
+
+def app_folder(settings: AppSettings | None = None) -> Path:
+    current = settings if settings is not None else load_app_settings()
+    return Path(current.mount_base).expanduser() if current.mount_base else default_app_folder()
+
+
+def mounted_root(settings: AppSettings | None = None) -> Path:
+    return app_folder(settings) / MOUNTED_FOLDER_NAME
+
+
+def offline_root(settings: AppSettings | None = None) -> Path:
+    return app_folder(settings) / OFFLINE_FOLDER_NAME
+
+
+def default_mounted_root() -> Path:
+    return default_app_folder() / MOUNTED_FOLDER_NAME
+
+
 def _toml_string(value: str | None) -> str:
     text = value or ""
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
@@ -389,7 +414,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# rclone account credentials stay in rclone.conf.",
             "",
             "[app]",
-            "# Leave empty to use ~/cloud_mounts.",
+            "# Leave empty to use ~/Mountlet.",
             f"mount_base = {_toml_string(settings.mount_base)}",
             "",
             "# Default for remotes without their own auto_mount setting.",
@@ -472,12 +497,20 @@ def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = 
 
 
 __all__ = [
+    "APP_FOLDER_NAME",
     "AppSettings",
     "DEFAULT_SHORTCUTS",
+    "MOUNTED_FOLDER_NAME",
     "MountSettings",
+    "OFFLINE_FOLDER_NAME",
+    "app_folder",
+    "default_app_folder",
+    "default_mounted_root",
     "ensure_default_config_files",
     "load_app_settings",
     "load_mount_settings",
+    "mounted_root",
+    "offline_root",
     "save_app_settings",
     "save_mount_settings",
     "set_start_at_login",

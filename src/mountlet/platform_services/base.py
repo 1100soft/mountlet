@@ -34,7 +34,7 @@ class PlatformServices:
         return Path.home() / ".config" / "rclone" / "rclone.conf"
 
     def default_mount_base(self) -> Path:
-        return Path.home() / "Mountlet"
+        return Path.home() / "Mountlet" / "mounted"
 
     def legacy_mount_bases(self) -> tuple[Path, ...]:
         return ()

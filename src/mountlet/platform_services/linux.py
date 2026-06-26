@@ -24,7 +24,7 @@ class LinuxPlatformServices(PlatformServices):
         return UserDirectories(config / app_name, state / app_name, cache / app_name)
 
     def default_mount_base(self) -> Path:
-        return Path.home() / "cloud_mounts"
+        return Path.home() / "Mountlet" / "mounted"
 
     def legacy_mount_bases(self) -> tuple[Path, ...]:
         return (Path.home() / "gdrive", Path.home() / "GDrive", Path("/mnt/gdrive"))

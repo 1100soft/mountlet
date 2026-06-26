@@ -252,7 +252,7 @@ Categories=Utility;FileManager;
 
         self.assertEqual(paths.config, Path("/Users/tester/Library/Application Support/mountlet"))
         self.assertEqual(paths.cache, Path("/Users/tester/Library/Caches/mountlet"))
-        self.assertEqual(mount_base, Path("/Users/tester/Mountlet"))
+        self.assertEqual(mount_base, Path("/Users/tester/Mountlet/mounted"))
 
     def test_windows_mountpoint_is_absent_before_rclone_mount(self):
         with tempfile.TemporaryDirectory() as tempdir:

@@ -17,7 +17,7 @@ class MacOSPlatformServices(PlatformServices):
         return UserDirectories(support, support / "State", home / "Library" / "Caches" / app_name)
 
     def default_mount_base(self) -> Path:
-        return Path.home() / "Mountlet"
+        return Path.home() / "Mountlet" / "mounted"
 
     def rclone_candidates(self) -> tuple[Path, ...]:
         return (

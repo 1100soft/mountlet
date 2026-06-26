@@ -12,7 +12,7 @@ from pathlib import Path, PureWindowsPath
 
 from .. import core
 from ..platform_services import get_platform
-from ..settings import ensure_default_config_files
+from ..settings import app_folder, ensure_default_config_files, offline_root
 from .shared import (
     app_cache_dir,
     app_config_file,
@@ -103,9 +103,11 @@ def _print_paths() -> None:
     print("App files:")
     print(f"  Settings: {app_config_file()}")
     print(f"  Mount settings: {app_mounts_file()}")
+    print(f"  App folder: {app_folder()}")
     print(f"  State:    {app_state_dir()}")
     print(f"  Cache:    {app_cache_dir()}")
     print(f"  Mounts:   {core.BASE_MOUNT_DIR}")
+    print(f"  Offline:  {offline_root()}")
     print(f"  rclone:   {default_config_path()}")
 
 

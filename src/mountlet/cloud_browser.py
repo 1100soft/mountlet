@@ -10,12 +10,12 @@ from typing import Iterable
 
 from . import core
 from .config_tools.shared import app_cache_dir, app_state_dir, ensure_app_directories
+from .settings import offline_root
 
 
 BROWSER_STATE_FILE = "browser.json"
 OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
-OFFLINE_STORAGE_NAME = "Mountlet Offline"
 
 
 @dataclass(frozen=True)
@@ -446,13 +446,16 @@ class CloudBrowserBackend:
             current = current.parent
 
     def _migrate_legacy_offline_cache(self) -> None:
-        legacy = app_cache_dir() / OFFLINE_CACHE_DIR
-        if not legacy.exists() or legacy == self.cache_root or self.cache_root.exists():
+        if self.cache_root.exists():
             return
-        try:
-            self.cache_root.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(legacy), str(self.cache_root))
-        except OSError:
+        for legacy in _legacy_offline_roots():
+            if not legacy.exists() or legacy == self.cache_root:
+                continue
+            try:
+                self.cache_root.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(self.cache_root))
+            except OSError:
+                continue
             return
 
 
@@ -462,7 +465,14 @@ def _safe_component(value: str) -> str:
 
 
 def _default_offline_cache_root() -> Path:
-    return core.PLATFORM.default_mount_base().parent / OFFLINE_STORAGE_NAME
+    return offline_root()
+
+
+def _legacy_offline_roots() -> tuple[Path, ...]:
+    return (
+        app_cache_dir() / OFFLINE_CACHE_DIR,
+        Path.home() / "Mountlet Offline",
+    )
 
 
 def _ancestor_paths(path: str) -> list[str]:

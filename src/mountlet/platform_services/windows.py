@@ -41,7 +41,7 @@ class WindowsPlatformServices(PlatformServices):
         return roaming / "rclone" / "rclone.conf"
 
     def default_mount_base(self) -> Path:
-        return self._home() / "Mountlet"
+        return self._home() / "Mountlet" / "mounted"
 
     def rclone_executable_names(self) -> tuple[str, ...]:
         return ("rclone.exe", "rclone")

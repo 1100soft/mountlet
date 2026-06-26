@@ -10,8 +10,11 @@
   local file opens.
 - Kept offline cache files user-writable so external apps such as PDF readers
   and spreadsheet editors can open cached files normally.
-- Moved offline snapshots out of the hidden app cache and into
-  `~/Mountlet Offline`, with best-effort migration of the previous cache.
+- Moved offline snapshots out of hidden or separate cache locations and into
+  the configured app folder, with best-effort migration of previous caches.
+- Consolidated user-visible Mountlet files under one app folder with
+  `mounted` and `offline` subfolders, and added an app-folder picker to App
+  settings.
 
 ## 0.4.1 - 2026-06-26
 

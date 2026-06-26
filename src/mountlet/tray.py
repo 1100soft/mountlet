@@ -45,6 +45,7 @@ from .settings import (
     AppSettings,
     DEFAULT_SHORTCUTS,
     MountSettings,
+    default_app_folder,
     ensure_default_config_files,
     load_app_settings,
     load_mount_settings,
@@ -2129,7 +2130,7 @@ class AppConfigDialog(_ConfigDialogBase):
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
         self.fields = {
-            "mount_base": self._line(app_settings.mount_base, default=core.DEFAULT_HOME_MOUNT),
+            "mount_base": self._line(app_settings.mount_base, default=str(default_app_folder())),
             "auto_mount": self._check(app_settings.auto_mount),
             "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
             "start_at_login": self._check(app_settings.start_at_login),
@@ -2161,7 +2162,7 @@ class AppConfigDialog(_ConfigDialogBase):
         )
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
-        form.addRow("Default mount folder", self.fields["mount_base"])
+        form.addRow("App folder", self._app_folder_selector())
         form.addRow("File manager", self.fields["file_manager"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
@@ -2210,6 +2211,27 @@ class AppConfigDialog(_ConfigDialogBase):
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
+
+    def _app_folder_selector(self) -> Any:
+        container = self.qt.QWidget()
+        layout = self.qt.QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.fields["mount_base"], 1)
+        button = self.qt.QPushButton("Browse")
+        button.setToolTip("Choose the Mountlet app folder. Mounted remotes use its mounted folder; offline files use its offline folder.")
+        button.clicked.connect(self._choose_app_folder)
+        layout.addWidget(button)
+        return container
+
+    def _choose_app_folder(self) -> None:
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        if file_dialog is None:
+            return
+        current = self.fields["mount_base"].text().strip() or str(default_app_folder())
+        selected = file_dialog.getExistingDirectory(self.dialog, "Choose Mountlet app folder", current)
+        if selected:
+            self.fields["mount_base"].setText(selected)
 
 
 class ShortcutConfigDialog(_ConfigDialogBase):
