@@ -2,12 +2,14 @@
 
 ## Unreleased
 
-- Enabled read-only offline snapshots in Mountlet Files, including manifest
-  metadata for deep cached paths so parent folders remain browseable without a
-  live remote connection.
+- Enabled offline snapshots in Mountlet Files, including manifest metadata for
+  deep cached paths so parent folders remain browseable without a live remote
+  connection.
 - Made file opening prefer mounted paths when available, fall back to offline
   snapshots only when needed, and use operating-system file associations for
   local file opens.
+- Kept offline cache files user-writable so external apps such as PDF readers
+  and spreadsheet editors can open cached files normally.
 
 ## 0.4.1 - 2026-06-26
 

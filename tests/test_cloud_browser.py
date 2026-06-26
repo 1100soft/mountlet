@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -154,6 +153,22 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual([entry.name for entry in entries], ["a.txt"])
 
+    def test_prepare_offline_open_repairs_existing_read_only_file(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            path = backend.offline_path("Docs", "Reports/a.pdf")
+            path.parent.mkdir(parents=True)
+            path.write_text("offline", encoding="utf-8")
+            path.chmod(0o400)
+
+            prepared = backend.prepare_offline_open("Docs", "Reports/a.pdf")
+
+            self.assertEqual(prepared, path)
+            self.assertTrue(prepared.stat().st_mode & 0o600)
+
     def test_offline_manifest_preserves_deep_file_ancestors(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -171,7 +186,7 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
                     offline = backend.make_offline(_remote(), entry)
 
-            self.assertFalse(offline.stat().st_mode & stat.S_IWUSR)
+            self.assertTrue(offline.stat().st_mode & 0o600)
 
             with mock.patch.object(backend, "_rclone", side_effect=RuntimeError("rclone was not found")):
                 root_entries = backend.list_entries(_remote(), "")
@@ -600,6 +615,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.remote = _remote()
         browser.backend = mock.Mock()
         browser.backend.offline_path.return_value = Path("/cache/Docs/Reports")
+        browser.backend.prepare_offline_open.return_value = Path("/cache/Docs/Reports")
         browser._open_local_folder = mock.Mock(return_value=True)
         browser._notify = mock.Mock()
 

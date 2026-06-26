@@ -477,7 +477,7 @@ class CompactCloudBrowser:
             item.setIcon(1, directory_icon if entry.is_dir else file_icon)
             if self.remote and self.backend.is_offline(self.remote.name, entry.path, is_dir=entry.is_dir):
                 item.setIcon(0, offline_icon)
-                item.setToolTip(0, "Available offline as a local read-only copy")
+                item.setToolTip(0, "Available offline as a local snapshot")
             self.tree.addTopLevelItem(item)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
@@ -785,7 +785,7 @@ class CompactCloudBrowser:
         self.offline_button.setText("✓" if remove_offline else "↓")
         if selected:
             self.offline_button.setToolTip(
-                "Remove the local read-only copy" if remove_offline else "Download a local read-only copy for offline access"
+                "Remove the local offline snapshot" if remove_offline else "Download a local snapshot for offline access"
             )
         else:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
@@ -820,7 +820,7 @@ class CompactCloudBrowser:
             return
         offline = self.backend.offline_path(self.remote.name, entry.path)
         if offline.is_file():
-            self._open_local_file(offline)
+            self._open_local_file(self.backend.prepare_offline_open(self.remote.name, entry.path))
         else:
             self._notify("Open file", "Mount the remote or make this file available offline first.", False)
 
@@ -854,9 +854,10 @@ class CompactCloudBrowser:
         if not core.is_mounted(self.remote):
             offline = self.backend.offline_path(self.remote.name, path)
             if offline.is_dir():
-                if self._open_local_folder and self._open_local_folder(offline):
+                local_folder = self.backend.prepare_offline_open(self.remote.name, path)
+                if self._open_local_folder and self._open_local_folder(local_folder):
                     return
-                if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(offline))):
+                if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local_folder))):
                     return
             self._notify(
                 "Open folder",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import stat
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -237,7 +236,7 @@ class CloudBrowserBackend:
             self._record_offline_tree(remote.name, entry, destination)
         else:
             self._run_operation(binary, "copyto", remote_target(remote, entry.path), str(destination))
-            self._make_file_read_only(destination)
+            self.prepare_offline_open(remote.name, entry.path)
             self._record_offline_entry(remote.name, entry)
         return destination
 
@@ -251,6 +250,21 @@ class CloudBrowserBackend:
             destination.unlink(missing_ok=True)
         self._remove_empty_parents(destination.parent, self.cache_root / _safe_component(remote_name))
         self._remove_offline_records(remote_name, path)
+
+    def prepare_offline_open(self, remote_name: str, path: str) -> Path:
+        """Return the local cache path and repair permissions for external apps.
+
+        Offline files are read-only from Mountlet's perspective because edits
+        are not synced back. Some desktop apps still need write permission to
+        create locks or temporary state beside the document, so the local cache
+        must stay user-readable and user-writable.
+        """
+        destination = self.offline_path(remote_name, path)
+        if destination.is_dir():
+            self._make_tree_writable(destination)
+        else:
+            self._make_file_writable(destination)
+        return destination
 
     def is_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         destination = self.offline_path(remote_name, path)
@@ -351,7 +365,7 @@ class CloudBrowserBackend:
             except OSError:
                 continue
             if child.is_file():
-                self._make_file_read_only(child)
+                self._make_file_writable(child)
             records[child_path] = {
                 "is_dir": child.is_dir(),
                 "size": 0 if child.is_dir() else stat_result.st_size,
@@ -407,15 +421,9 @@ class CloudBrowserBackend:
     def _offline_marker(self, path: Path) -> Path:
         return path / ".mountlet-offline"
 
-    def _make_file_read_only(self, path: Path) -> None:
-        try:
-            path.chmod(path.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
-        except OSError:
-            return
-
     def _make_file_writable(self, path: Path) -> None:
         try:
-            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+            path.chmod(path.stat().st_mode | 0o600)
         except OSError:
             return
 
