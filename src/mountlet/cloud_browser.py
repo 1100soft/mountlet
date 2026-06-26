@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import stat
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -14,6 +15,7 @@ from .config_tools.shared import app_cache_dir, app_state_dir, ensure_app_direct
 
 BROWSER_STATE_FILE = "browser.json"
 OFFLINE_CACHE_DIR = "offline"
+OFFLINE_MANIFEST_FILE = "offline_manifest.json"
 
 
 @dataclass(frozen=True)
@@ -73,11 +75,19 @@ def format_file_size(size: int) -> str:
 
 
 class CloudBrowserBackend:
-    def __init__(self, *, state_path: Path | None = None, cache_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        state_path: Path | None = None,
+        cache_root: Path | None = None,
+        manifest_path: Path | None = None,
+    ) -> None:
         ensure_app_directories()
         self.state_path = state_path or app_state_dir() / BROWSER_STATE_FILE
         self.cache_root = cache_root or app_cache_dir() / OFFLINE_CACHE_DIR
+        self.manifest_path = manifest_path or self.state_path.with_name(OFFLINE_MANIFEST_FILE)
         self._paths = self._load_paths()
+        self._offline_records = self._load_offline_manifest()
 
     def current_path(self, remote_name: str) -> str:
         return normalize_browser_path(self._paths.get(remote_name, ""))
@@ -132,27 +142,42 @@ class CloudBrowserBackend:
         return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
 
     def _list_offline_entries(self, remote_name: str, path: str) -> list[BrowserEntry] | None:
+        normalized = normalize_browser_path(path)
         directory = self.offline_path(remote_name, path)
+        by_name: dict[str, BrowserEntry] = {}
+        for record_path, record in self._offline_records.get(remote_name, {}).items():
+            if not record_path or parent_browser_path(record_path) != normalized:
+                continue
+            name = PurePosixPath(record_path).name
+            by_name[name] = BrowserEntry(
+                name=name,
+                path=record_path,
+                is_dir=bool(record.get("is_dir")),
+                size=max(int(record.get("size") or 0), 0),
+                modified=str(record.get("modified") or ""),
+            )
         if not directory.is_dir():
-            return None
-        entries: list[BrowserEntry] = []
+            return sorted(by_name.values(), key=lambda entry: (not entry.is_dir, entry.name.casefold())) or None
         for child in directory.iterdir():
-            if child.name == ".mountlet-offline":
+            if child.name.startswith(".mountlet-offline"):
+                continue
+            child_path = join_browser_path(normalized, child.name)
+            if child.name in by_name:
                 continue
             try:
-                stat = child.stat()
+                stat_result = child.stat()
             except OSError:
                 continue
-            entries.append(
-                BrowserEntry(
-                    name=child.name,
-                    path=join_browser_path(path, child.name),
-                    is_dir=child.is_dir(),
-                    size=0 if child.is_dir() else stat.st_size,
-                    modified=datetime.fromtimestamp(stat.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
-                )
+            by_name[child.name] = BrowserEntry(
+                name=child.name,
+                path=child_path,
+                is_dir=child.is_dir(),
+                size=0 if child.is_dir() else stat_result.st_size,
+                modified=datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
             )
-        return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
+        if not by_name:
+            return None
+        return sorted(by_name.values(), key=lambda entry: (not entry.is_dir, entry.name.casefold()))
 
     def transfer(
         self,
@@ -209,16 +234,22 @@ class CloudBrowserBackend:
                 "--create-empty-src-dirs",
             )
             self._offline_marker(destination).touch()
+            self._record_offline_tree(remote.name, entry, destination)
         else:
             self._run_operation(binary, "copyto", remote_target(remote, entry.path), str(destination))
+            self._make_file_read_only(destination)
+            self._record_offline_entry(remote.name, entry)
         return destination
 
     def remove_offline(self, remote_name: str, path: str) -> None:
         destination = self.offline_path(remote_name, path)
         if destination.is_dir():
+            self._make_tree_writable(destination)
             shutil.rmtree(destination)
         else:
+            self._make_file_writable(destination)
             destination.unlink(missing_ok=True)
+        self._remove_offline_records(remote_name, path)
         self._remove_empty_parents(destination.parent, self.cache_root / _safe_component(remote_name))
 
     def is_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
@@ -250,6 +281,109 @@ class CloudBrowserBackend:
             return {}
         return {str(name): normalize_browser_path(str(path)) for name, path in paths.items()}
 
+    def _load_offline_manifest(self) -> dict[str, dict[str, dict[str, object]]]:
+        try:
+            data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        remotes = data.get("remotes", {}) if isinstance(data, dict) else {}
+        if not isinstance(remotes, dict):
+            return {}
+        normalized: dict[str, dict[str, dict[str, object]]] = {}
+        for remote_name, records in remotes.items():
+            if not isinstance(records, dict):
+                continue
+            remote_records: dict[str, dict[str, object]] = {}
+            for raw_path, record in records.items():
+                if not isinstance(record, dict):
+                    continue
+                path = normalize_browser_path(str(raw_path))
+                if path:
+                    remote_records[path] = {
+                        "is_dir": bool(record.get("is_dir")),
+                        "size": max(int(record.get("size") or 0), 0),
+                        "modified": str(record.get("modified") or ""),
+                        "cached_at": str(record.get("cached_at") or ""),
+                    }
+            if remote_records:
+                normalized[str(remote_name)] = remote_records
+        return normalized
+
+    def _save_offline_manifest(self) -> None:
+        self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.manifest_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps({"version": 1, "remotes": self._offline_records}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.replace(self.manifest_path)
+
+    def _record_offline_entry(self, remote_name: str, entry: BrowserEntry) -> None:
+        records = self._offline_records.setdefault(remote_name, {})
+        cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        for ancestor in _ancestor_paths(entry.path):
+            records.setdefault(
+                ancestor,
+                {"is_dir": True, "size": 0, "modified": "", "cached_at": cached_at},
+            )
+        records[normalize_browser_path(entry.path)] = {
+            "is_dir": entry.is_dir,
+            "size": max(entry.size, 0),
+            "modified": entry.modified,
+            "cached_at": cached_at,
+        }
+        self._save_offline_manifest()
+
+    def _record_offline_tree(self, remote_name: str, entry: BrowserEntry, directory: Path) -> None:
+        self._record_offline_entry(remote_name, entry)
+        root_path = normalize_browser_path(entry.path)
+        records = self._offline_records.setdefault(remote_name, {})
+        cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        for child in directory.rglob("*"):
+            if child.name.startswith(".mountlet-offline"):
+                continue
+            relative = child.relative_to(directory)
+            child_path = root_path
+            for part in relative.parts:
+                child_path = join_browser_path(child_path, part)
+            try:
+                stat_result = child.stat()
+            except OSError:
+                continue
+            if child.is_file():
+                self._make_file_read_only(child)
+            records[child_path] = {
+                "is_dir": child.is_dir(),
+                "size": 0 if child.is_dir() else stat_result.st_size,
+                "modified": datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
+                "cached_at": cached_at,
+            }
+        self._save_offline_manifest()
+
+    def _remove_offline_records(self, remote_name: str, path: str) -> None:
+        records = self._offline_records.get(remote_name)
+        if not records:
+            return
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/"
+        for record_path in list(records):
+            if record_path == normalized or record_path.startswith(prefix):
+                records.pop(record_path, None)
+        cache_root = self.cache_root / _safe_component(remote_name)
+        for ancestor in reversed(_ancestor_paths(normalized)):
+            if self.offline_path(remote_name, ancestor).exists():
+                break
+            if any(parent_browser_path(record_path) == ancestor for record_path in records):
+                break
+            records.pop(ancestor, None)
+        if records:
+            self._offline_records[remote_name] = records
+        else:
+            self._offline_records.pop(remote_name, None)
+            if not cache_root.exists():
+                self._remove_empty_parents(cache_root, self.cache_root)
+        self._save_offline_manifest()
+
     def _rclone(self) -> str:
         binary = core.find_rclone()
         if not binary:
@@ -273,6 +407,23 @@ class CloudBrowserBackend:
     def _offline_marker(self, path: Path) -> Path:
         return path / ".mountlet-offline"
 
+    def _make_file_read_only(self, path: Path) -> None:
+        try:
+            path.chmod(path.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+        except OSError:
+            return
+
+    def _make_file_writable(self, path: Path) -> None:
+        try:
+            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+        except OSError:
+            return
+
+    def _make_tree_writable(self, path: Path) -> None:
+        for child in path.rglob("*"):
+            self._make_file_writable(child)
+        self._make_file_writable(path)
+
     def _remove_empty_parents(self, start: Path, stop: Path) -> None:
         current = start
         while current != stop and stop in current.parents:
@@ -286,6 +437,18 @@ class CloudBrowserBackend:
 def _safe_component(value: str) -> str:
     safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
     return safe.strip(".") or "remote"
+
+
+def _ancestor_paths(path: str) -> list[str]:
+    normalized = normalize_browser_path(path)
+    if not normalized:
+        return []
+    ancestors: list[str] = []
+    current = parent_browser_path(normalized)
+    while current:
+        ancestors.append(current)
+        current = parent_browser_path(current)
+    return list(reversed(ancestors))
 
 
 def _display_time(value: str) -> str:

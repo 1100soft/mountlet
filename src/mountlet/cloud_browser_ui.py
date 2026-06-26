@@ -153,8 +153,7 @@ class CompactCloudBrowser:
         navigation.addWidget(
             self._button("↗", self._open_current_mount, "Open this folder in the system file manager", square=True)
         )
-        self.offline_button = self._button("↓", self.toggle_offline, "Offline sync is not available yet", square=True)
-        self.offline_button.setEnabled(False)
+        self.offline_button = self._button("↓", self.toggle_offline, "Make selected items available offline", square=True)
         navigation.addWidget(self.offline_button)
         layout.addLayout(navigation)
 
@@ -476,7 +475,7 @@ class CompactCloudBrowser:
             item.setIcon(1, directory_icon if entry.is_dir else file_icon)
             if self.remote and self.backend.is_offline(self.remote.name, entry.path, is_dir=entry.is_dir):
                 item.setIcon(0, offline_icon)
-                item.setToolTip(0, "Available offline")
+                item.setToolTip(0, "Available offline as a local read-only copy")
             self.tree.addTopLevelItem(item)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
