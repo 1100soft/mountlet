@@ -896,6 +896,25 @@ def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
         return None
 
 
+def _native_dialog_flags(qt: SimpleNamespace) -> Any | None:
+    try:
+        window_type = qt.Qt.WindowType
+        flags = window_type.Dialog
+    except Exception:
+        return None
+    for name in (
+        "WindowTitleHint",
+        "WindowSystemMenuHint",
+        "WindowMinMaxButtonsHint",
+        "WindowCloseButtonHint",
+    ):
+        try:
+            flags |= getattr(window_type, name)
+        except Exception:
+            pass
+    return flags
+
+
 def _main_window_type_name(is_macos: bool, is_wayland: bool = False) -> str:
     return "Window" if is_macos or is_wayland else "Tool"
 
@@ -924,16 +943,14 @@ def _windows_foreground_is_tray() -> bool:
     }
 
 
-def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
-    flags = _frameless_window_flags(qt, "Dialog")
+def _create_child_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
+    flags = _native_dialog_flags(qt)
     if flags is not None:
         try:
             return qt.QDialog(parent, flags)
         except Exception:
             pass
-    dialog = qt.QDialog(parent)
-    _apply_frameless_window_flags(qt, dialog, base_name="Dialog")
-    return dialog
+    return qt.QDialog(parent)
 
 
 class PrerequisiteWizard:
@@ -1995,7 +2012,7 @@ def _config_bool(value: str) -> bool:
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = _create_frameless_dialog(qt, parent)
+        self.dialog = _create_child_dialog(qt, parent)
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
@@ -2171,13 +2188,25 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
-        root.addWidget(self._fixed_shortcut_box())
+        scroll = self.qt.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(self.qt.QFrame.Shape.NoFrame)
+        content = self.qt.QWidget()
+        content_layout = self.qt.QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(6)
+
+        content_layout.addWidget(self._fixed_shortcut_box())
         alternatives = self.qt.QGroupBox("Alternative inputs")
         alternatives_layout = self.qt.QVBoxLayout(alternatives)
         alternatives_layout.setSpacing(6)
         for title, fields in SHORTCUT_GROUPS:
             alternatives_layout.addWidget(self._shortcut_group(title, fields, app_settings.shortcuts))
-        root.addWidget(alternatives, 1)
+        content_layout.addWidget(alternatives)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
+
         self.conflict_label = self.qt.QLabel("")
         self.conflict_label.setStyleSheet("color: #dc2626;")
         root.addWidget(self.conflict_label)
@@ -2575,7 +2604,7 @@ class MountConfigDialog(_ConfigDialogBase):
 class NewRemoteWizard:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = _create_frameless_dialog(qt, parent)
+        self.dialog = _create_child_dialog(qt, parent)
         self.dialog.setWindowTitle("Add remote")
         self.dialog.resize(520, 280)
         self.fields: dict[str, Any] = {}
@@ -4338,7 +4367,6 @@ class MountletWindow:
     def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
-        _apply_frameless_window_flags(self.qt, dialog, base_name="Dialog")
         try:
             dialog.setModal(True)
             dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
@@ -4357,7 +4385,29 @@ class MountletWindow:
         if dialog not in getattr(self, "_child_dialogs", []) or self._tray_is_quitting():
             return
         dialog.show()
+        self._fit_child_dialog_to_screen(dialog)
         self._raise_child_windows()
+
+    def _fit_child_dialog_to_screen(self, dialog: Any) -> None:
+        try:
+            screen = dialog.screen() or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            size = dialog.size()
+            width = min(size.width(), max(320, available.width()))
+            height = min(size.height(), max(240, available.height()))
+            if width != size.width() or height != size.height():
+                dialog.resize(width, height)
+            position = dialog.frameGeometry().topLeft()
+            max_x = max(available.left(), available.left() + available.width() - width)
+            max_y = max(available.top(), available.top() + available.height() - height)
+            x = min(max(position.x(), available.left()), max_x)
+            y = min(max(position.y(), available.top()), max_y)
+            if x != position.x() or y != position.y():
+                dialog.move(x, y)
+        except Exception:
+            return
 
     def _hide_window_stack(self) -> None:
         self._close_child_dialogs()
@@ -5595,7 +5645,6 @@ class MountletWindow:
     def _handle_main_key(self, event: Any) -> bool:
         key = event.key()
         focused_remote_name = self._focused_remote_name()
-        focused_remote = self._remote_by_name(focused_remote_name)
         if matches_shortcut(self.qt, event, "remote_move_up"):
             self._move_focused_remote(focused_remote_name, -1)
         elif matches_shortcut(self.qt, event, "remote_move_down"):
@@ -5604,11 +5653,20 @@ class MountletWindow:
             self._focus_relative_remote(focused_remote_name, -1)
         elif matches_shortcut(self.qt, event, "common_next"):
             self._focus_relative_remote(focused_remote_name, 1)
-        elif matches_shortcut(self.qt, event, "remote_toggle_mount") and focused_remote is not None:
+        elif matches_shortcut(self.qt, event, "remote_toggle_mount"):
+            focused_remote = self._remote_by_name(focused_remote_name)
+            if focused_remote is None:
+                return False
             self._toggle_remote_mount(focused_remote)
-        elif matches_shortcut(self.qt, event, "remote_config") and focused_remote is not None:
+        elif matches_shortcut(self.qt, event, "remote_config"):
+            focused_remote = self._remote_by_name(focused_remote_name)
+            if focused_remote is None:
+                return False
             self._show_mount_config_editor(focused_remote)
-        elif matches_shortcut(self.qt, event, "remote_open_browser") and focused_remote is not None:
+        elif matches_shortcut(self.qt, event, "remote_open_browser"):
+            focused_remote = self._remote_by_name(focused_remote_name)
+            if focused_remote is None:
+                return False
             self._open_remote_in_browser(focused_remote)
         elif key == self.qt.Qt.Key.Key_Up:
             self._focus_relative_remote(focused_remote_name, -1)

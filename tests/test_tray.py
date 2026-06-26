@@ -1646,7 +1646,7 @@ class TrayTests(unittest.TestCase):
         self.assertIs(mountlet_window._child_dialog_owners[owner.dialog], owner)
         owner.dialog.accepted.connect.assert_called_once_with(on_accepted)
         owner.dialog.finished.connect.assert_called_once()
-        owner.dialog.setWindowFlags.assert_called_once_with(3)
+        owner.dialog.setWindowFlags.assert_not_called()
         owner.dialog.setModal.assert_called_once_with(True)
         owner.dialog.setWindowModality.assert_called_once_with("window-modal")
         owner.dialog.show.assert_called_once_with()
@@ -2520,6 +2520,40 @@ class TrayTests(unittest.TestCase):
 
         move.assert_called_once_with("Beta", -1)
         focus.assert_called_once_with("Beta")
+
+    def test_remote_list_reorder_shortcut_does_not_load_remote_metadata(self):
+        class Event:
+            def key(self) -> object:
+                return "custom"
+
+            def accept(self) -> None:
+                return
+
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                Key=SimpleNamespace(
+                    Key_Up="up",
+                    Key_Down="down",
+                    Key_Return="return",
+                    Key_Enter="enter",
+                    Key_Left="left",
+                    Key_Right="right",
+                )
+            )
+        )
+
+        def matches(_qt: object, _event: object, action: str) -> bool:
+            return action == "remote_move_up"
+
+        with mock.patch.object(tray, "matches_shortcut", side_effect=matches):
+            with mock.patch.object(window, "_focused_remote_name", return_value="Beta"):
+                with mock.patch.object(window, "_move_focused_remote") as move:
+                    with mock.patch.object(window, "_remote_by_name") as remote_by_name:
+                        self.assertTrue(window._handle_main_key(Event()))
+
+        move.assert_called_once_with("Beta", -1)
+        remote_by_name.assert_not_called()
 
     def test_sync_metadata_summary_is_human_readable(self):
         with mock.patch.object(tray.platform, "node", return_value="laptop"):
