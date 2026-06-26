@@ -2558,12 +2558,26 @@ class TrayTests(unittest.TestCase):
     def test_sync_metadata_summary_is_human_readable(self):
         with mock.patch.object(tray.platform, "node", return_value="laptop"):
             summary = tray._sync_metadata_summary(
-                {"created_at": "2026-06-25T10:00:00Z", "device": "desktop-7f3a"}
+                {
+                    "created_at": "2026-06-25T10:00:00Z",
+                    "device": "desktop-7f3a",
+                    "system": "Linux",
+                    "system_release": "6.8.0",
+                }
             )
 
         self.assertIn("Updated on Jun 25, 2026 at", summary)
-        self.assertIn('on another device named "desktop-7f3a"', summary)
+        self.assertIn("from Linux 6.8.0", summary)
+        self.assertIn('on device "desktop-7f3a"', summary)
         self.assertNotIn("2026-06-25T10:00:00Z", summary)
+
+    def test_sync_metadata_summary_handles_legacy_metadata(self):
+        with mock.patch.object(tray.platform, "node", return_value="desktop-7f3a"):
+            summary = tray._sync_metadata_summary(
+                {"created_at": "2026-06-25T10:00:00Z", "device": "desktop-7f3a"}
+            )
+
+        self.assertIn("from an unknown OS on this device", summary)
 
     def test_hover_focuses_remote_row_for_keyboard_navigation(self):
         class Row:
@@ -2728,6 +2742,39 @@ class TrayTests(unittest.TestCase):
 
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             self.assertEqual(window._file_dialog_kwargs(), {})
+
+    def test_import_config_confirmation_includes_bundle_os_metadata(self):
+        selected = "/tmp/config.mountlet"
+        yes = 1
+        window = object.__new__(tray.MountletWindow)
+        question = mock.Mock(return_value=yes)
+        window.qt = SimpleNamespace(
+            QFileDialog=SimpleNamespace(getOpenFileName=mock.Mock(return_value=(selected, ""))),
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=yes, No=2),
+                question=question,
+            ),
+        )
+        window.window = object()
+        window.tray_app = SimpleNamespace(_notify=mock.Mock())
+        window._file_dialog_kwargs = mock.Mock(return_value={})
+        window._ask_bundle_password = mock.Mock(return_value="")
+        window._mounted_remote_file = mock.Mock(return_value=None)
+        window._rclone_config_replaced = mock.Mock()
+
+        metadata = {
+            "created_at": "2026-06-25T10:00:00Z",
+            "device": "desktop-7f3a",
+            "system": "Windows",
+            "system_release": "11",
+        }
+        with mock.patch.object(tray.bundle_file, "bundle_metadata", return_value=metadata):
+            with mock.patch.object(tray.bundle_file, "import_bundle_file", return_value=None):
+                window._import_config_bundle()
+
+        message = question.call_args.args[2]
+        self.assertIn("from Windows 11", message)
+        self.assertIn('on device "desktop-7f3a"', message)
 
     def test_mounted_remote_file_maps_local_mount_path_to_remote_path(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")

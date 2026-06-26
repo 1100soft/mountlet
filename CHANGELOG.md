@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added operating-system metadata to config bundles and showed OS, device, and
+  local-time details in config import and pull confirmations.
 - Restored native title bars for child dialogs, constrained child dialogs to
   the visible desktop, and made the shortcut editor scroll internally on small
   screens.

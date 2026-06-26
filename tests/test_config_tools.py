@@ -160,6 +160,9 @@ class ConfigToolTests(unittest.TestCase):
                 self.assertEqual(manifest["format"], "mountlet-config-bundle")
                 self.assertIn("created_at", manifest)
                 self.assertIn("device", manifest)
+                self.assertIn("system", manifest)
+                self.assertIn("system_release", manifest)
+                self.assertIn("platform", manifest)
                 self.assertIn("config_hash", manifest)
 
     def test_encrypted_single_file_bundle_hides_config_and_imports_with_password(self):
@@ -185,6 +188,9 @@ class ConfigToolTests(unittest.TestCase):
                 self.assertTrue(public_metadata["encrypted"])
                 self.assertIn("created_at", public_metadata)
                 self.assertIn("device", public_metadata)
+                self.assertIn("system", public_metadata)
+                self.assertIn("system_release", public_metadata)
+                self.assertIn("platform", public_metadata)
                 self.assertIn("config_hash", public_metadata)
 
                 rclone_config.write_text("[Old]\ntype = s3\n", encoding="utf-8")

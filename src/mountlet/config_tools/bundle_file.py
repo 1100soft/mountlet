@@ -99,6 +99,9 @@ def export_bundle_file(destination: Path, *, overwrite: bool = False, password: 
             "encrypted": True,
             "created_at": payload_manifest["created_at"],
             "device": payload_manifest["device"],
+            "system": payload_manifest.get("system", ""),
+            "system_release": payload_manifest.get("system_release", ""),
+            "platform": payload_manifest.get("platform", ""),
             "config_hash": payload_manifest["config_hash"],
             "cipher": "AES-256-GCM",
             "kdf": "PBKDF2-HMAC-SHA256",
@@ -173,6 +176,9 @@ def _manifest(files: dict[str, Path], *, backup: bool = False) -> dict[str, obje
         "files": sorted(files),
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "device": platform.node() or "unknown device",
+        "system": platform.system() or "Unknown",
+        "system_release": platform.release() or "",
+        "platform": platform.platform() or "",
         "config_hash": _operation_config_hash(),
     }
     if backup:

@@ -662,7 +662,33 @@ def _save_config_sync_state(state: dict[str, Any]) -> None:
 
 
 def _sync_metadata_summary(metadata: dict[str, object]) -> str:
-    return f"Updated {_human_sync_time(metadata.get('created_at'))} {_human_sync_device(metadata.get('device'))}."
+    return (
+        f"Updated {_human_sync_time(metadata.get('created_at'))} "
+        f"{_human_sync_platform(metadata)} {_human_sync_device(metadata.get('device'))}."
+    )
+
+
+def _human_sync_platform(metadata: dict[str, object]) -> str:
+    system = str(metadata.get("system") or "").strip()
+    release = str(metadata.get("system_release") or "").strip()
+    raw_platform = str(metadata.get("platform") or "").strip()
+    if system:
+        label = _friendly_system_name(system)
+        if release and release.casefold() not in label.casefold():
+            label = f"{label} {release}"
+        return f"from {label}"
+    if raw_platform:
+        return f"from {raw_platform}"
+    return "from an unknown OS"
+
+
+def _friendly_system_name(system: str) -> str:
+    names = {
+        "darwin": "macOS",
+        "linux": "Linux",
+        "windows": "Windows",
+    }
+    return names.get(system.casefold(), system)
 
 
 def _human_sync_device(value: object) -> str:
@@ -672,7 +698,7 @@ def _human_sync_device(value: object) -> str:
     local_device = platform.node()
     if local_device and device.casefold() == local_device.casefold():
         return "on this device"
-    return f'on another device named "{device}"'
+    return f'on device "{device}"'
 
 
 def _human_sync_time(value: object) -> str:
@@ -6354,11 +6380,17 @@ class MountletWindow:
             )
         if not selected:
             return
+        selected_path = Path(selected).expanduser()
+        try:
+            import_metadata = bundle_file.bundle_metadata(selected_path)
+        except Exception:
+            import_metadata = None
+        detail = f"\n\n{_sync_metadata_summary(import_metadata)}" if isinstance(import_metadata, dict) else ""
         reply = self.qt.QMessageBox.question(
             self.window,
             "Import Mountlet config?",
             "Replace this device's Mountlet and rclone settings with this bundle?\n\n"
-            "Mountlet will first save a restorable backup bundle.",
+            f"Mountlet will first save a restorable backup bundle.{detail}",
             self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
             self.qt.QMessageBox.StandardButton.No,
         )
@@ -6371,7 +6403,6 @@ class MountletWindow:
         if password is None:
             return
         try:
-            selected_path = Path(selected).expanduser()
             remote_source = self._mounted_remote_file(selected_path)
             if remote_source is None:
                 backup_path = bundle_file.import_bundle_file(selected_path, backup=True, password=password)
@@ -6533,7 +6564,7 @@ class MountletWindow:
             state["last_synced_hash_kind"] = "operation"
             state["last_pushed_hash"] = local_hash
             state["last_pulled_hash"] = local_hash
-        for key in ("config_hash", "created_at", "device"):
+        for key in ("config_hash", "created_at", "device", "system", "system_release", "platform"):
             value = metadata.get(key)
             if value:
                 state[f"remote_{key}"] = value
