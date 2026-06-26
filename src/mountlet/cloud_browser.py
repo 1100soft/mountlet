@@ -249,8 +249,8 @@ class CloudBrowserBackend:
         else:
             self._make_file_writable(destination)
             destination.unlink(missing_ok=True)
-        self._remove_offline_records(remote_name, path)
         self._remove_empty_parents(destination.parent, self.cache_root / _safe_component(remote_name))
+        self._remove_offline_records(remote_name, path)
 
     def is_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         destination = self.offline_path(remote_name, path)

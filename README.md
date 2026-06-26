@@ -369,8 +369,11 @@ remote does not need to be mounted.
   or create a folder.
 - Drag files onto another remote strip to copy them to that remote's remembered
   folder. Hold Shift while dropping to move them.
-- **Make available offline** is visible but disabled while snapshot metadata,
-  local-edit behavior, and conflict handling are designed.
+- Use **Make available offline** to download selected files or folders as local
+  read-only snapshots. Mountlet remembers the folder path leading to each
+  offline file, so cached items remain browseable when the remote is not
+  reachable. Offline snapshots are not two-way sync; remove and recreate the
+  snapshot to refresh it.
 
 Integrated edits are direct rclone operations. Mountlet does not keep an
 undo/redo history, and deleted cloud items are not moved to the system trash.

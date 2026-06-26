@@ -632,7 +632,12 @@ class CompactCloudBrowser:
         edits_enabled = self._edits_enabled()
         self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
         self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
-        self._menu_action(menu, "Make available offline", self.toggle_offline, enabled=False)
+        self._menu_action(
+            menu,
+            self._offline_action_label(),
+            self.toggle_offline,
+            enabled=not self._operation_pending,
+        )
         self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
@@ -718,6 +723,14 @@ class CompactCloudBrowser:
             message = "Downloading for offline use…"
         self._run_operation(message, action)
 
+    def _offline_action_label(self) -> str:
+        entries = self._selected_entries()
+        remote = getattr(self, "remote", None)
+        if not entries or remote is None:
+            return "Make available offline"
+        all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
+        return "Remove offline copy" if all_offline else "Make available offline"
+
     def _run_operation(
         self,
         message: str,
@@ -758,16 +771,22 @@ class CompactCloudBrowser:
         self.refresh(force=current_key in changed_keys)
 
     def _selection_changed(self) -> None:
-        entries = self._selected_entries()
-        if self.remote and entries:
-            self.offline_button.setToolTip("Offline sync is not available yet")
         self._update_actions()
 
     def _update_actions(self) -> None:
         selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
         edits_enabled = self._edits_enabled()
+        operation_pending = bool(getattr(self, "_operation_pending", False))
         self.tree.setDragEnabled(edits_enabled and selected)
-        self.offline_button.setEnabled(False)
+        self.offline_button.setEnabled(selected and not operation_pending)
+        remove_offline = selected and self._offline_action_label() == "Remove offline copy"
+        self.offline_button.setText("✓" if remove_offline else "↓")
+        if selected:
+            self.offline_button.setToolTip(
+                "Remove the local read-only copy" if remove_offline else "Download a local read-only copy for offline access"
+            )
+        else:
+            self.offline_button.setToolTip("Select files or folders to make them available offline")
         self.offline_button.setProperty("hasSelection", selected)
 
     def _edits_enabled(self) -> bool:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -152,6 +153,45 @@ class CloudBrowserTests(unittest.TestCase):
                 entries = backend.list_entries(_remote(), "Reports")
 
         self.assertEqual([entry.name for entry in entries], ["a.txt"])
+
+    def test_offline_manifest_preserves_deep_file_ancestors(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("a.txt", "Reports/Deep/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("offline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    offline = backend.make_offline(_remote(), entry)
+
+            self.assertFalse(offline.stat().st_mode & stat.S_IWUSR)
+
+            with mock.patch.object(backend, "_rclone", side_effect=RuntimeError("rclone was not found")):
+                root_entries = backend.list_entries(_remote(), "")
+                reports_entries = backend.list_entries(_remote(), "Reports")
+                deep_entries = backend.list_entries(_remote(), "Reports/Deep")
+
+            self.assertEqual([entry.name for entry in root_entries], ["Reports"])
+            self.assertEqual([entry.name for entry in reports_entries], ["Deep"])
+            self.assertEqual([entry.name for entry in deep_entries], ["a.txt"])
+
+            loaded = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(loaded, "_rclone", side_effect=RuntimeError("rclone was not found")):
+                self.assertEqual([entry.name for entry in loaded.list_entries(_remote(), "Reports/Deep")], ["a.txt"])
+
+            loaded.remove_offline("Docs", "Reports/Deep/a.txt")
+            with mock.patch.object(loaded, "_rclone", side_effect=RuntimeError("rclone was not found")):
+                self.assertIsNone(loaded._list_offline_entries("Docs", ""))
 
     def test_browser_cascades_to_side_with_room_and_clamps_height(self):
         right = cascade_position((100, 100, 300, 400), 180, (0, 0, 1200, 800), (500, 390))
@@ -515,6 +555,29 @@ class CloudBrowserTests(unittest.TestCase):
         browser._update_actions()
 
         self.assertTrue(browser.tree.drag_enabled)
+
+    def test_offline_button_tracks_selected_item_state(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._operation_pending = False
+        browser.tree = mock.Mock()
+        browser.offline_button = mock.Mock()
+        browser._edits_enabled = mock.Mock(return_value=False)
+        browser._selected_entries = mock.Mock(return_value=[BrowserEntry("a.txt", "a.txt", False)])
+        browser.backend = mock.Mock()
+        browser.backend.is_offline.return_value = False
+
+        browser._update_actions()
+
+        browser.offline_button.setEnabled.assert_called_with(True)
+        browser.offline_button.setText.assert_called_with("↓")
+        self.assertIn("Download", browser.offline_button.setToolTip.call_args.args[0])
+
+        browser.backend.is_offline.return_value = True
+        browser._update_actions()
+
+        browser.offline_button.setText.assert_called_with("✓")
+        self.assertIn("Remove", browser.offline_button.setToolTip.call_args.args[0])
 
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)

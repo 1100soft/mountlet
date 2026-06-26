@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Enabled read-only offline snapshots in Mountlet Files, including manifest
+  metadata for deep cached paths so parent folders remain browseable without a
+  live remote connection.
+
 ## 0.4.1 - 2026-06-26
 
 - Added operating-system metadata to config bundles and showed OS, device, and

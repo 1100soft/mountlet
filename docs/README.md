@@ -42,11 +42,13 @@ and macOS. Windows and macOS remain experimental until native packaging and
 broader end-to-end testing are complete.
 
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
-paths, and the future managed-offline storage layer. `cloud_browser_ui.py` owns
-the compact Qt view and must keep every rclone operation off the UI thread.
+paths, and read-only offline snapshots. `cloud_browser_ui.py` owns the compact
+Qt view and must keep every rclone operation off the UI thread.
 Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
+Offline snapshots are local read-only copies, not two-way sync; refresh them by
+removing and recreating the snapshot.
 Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
 Down, Return, Escape, side-aware Left/Right handoff, and Qt's standard copy,
 cut, paste, and delete keys should be shown as fixed guidance. Optional
