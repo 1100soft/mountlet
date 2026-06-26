@@ -6415,6 +6415,9 @@ class MountletWindow:
         except Exception as exc:
             self.tray_app._notify("Import config", str(exc), success=False)
             return
+        if isinstance(import_metadata, dict):
+            self._record_config_sync_state(import_metadata)
+            self._remote_sync_metadata = import_metadata
         self._rclone_config_replaced()
         message = "Imported bundle and refreshed remotes."
         if backup_path is not None:

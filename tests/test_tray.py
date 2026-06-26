@@ -2761,6 +2761,7 @@ class TrayTests(unittest.TestCase):
         window._ask_bundle_password = mock.Mock(return_value="")
         window._mounted_remote_file = mock.Mock(return_value=None)
         window._rclone_config_replaced = mock.Mock()
+        window._record_config_sync_state = mock.Mock()
 
         metadata = {
             "created_at": "2026-06-25T10:00:00Z",
@@ -2775,6 +2776,8 @@ class TrayTests(unittest.TestCase):
         message = question.call_args.args[2]
         self.assertIn("from Windows 11", message)
         self.assertIn('on device "desktop-7f3a"', message)
+        window._record_config_sync_state.assert_called_once_with(metadata)
+        self.assertIs(window._remote_sync_metadata, metadata)
 
     def test_mounted_remote_file_maps_local_mount_path_to_remote_path(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
@@ -2887,6 +2890,31 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(saved["last_pushed_hash"], "local-hash")
         self.assertEqual(saved["last_pulled_hash"], "local-hash")
         self.assertEqual(saved["remote_config_hash"], "local-hash")
+
+    def test_imported_cross_platform_bundle_clears_push_dot_against_local_hash(self):
+        window = object.__new__(tray.MountletWindow)
+        saved = {}
+        push = mock.Mock()
+        pull = mock.Mock()
+        window._push_sync_button = push
+        window._pull_sync_button = pull
+        window._remote_sync_metadata = {"config_hash": "linux-bundle-hash", "created_at": "time", "device": "linux"}
+
+        with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="windows-local-hash"):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value={}):
+                with mock.patch.object(tray, "_save_config_sync_state", side_effect=lambda state: saved.update(state)):
+                    window._record_config_sync_state(window._remote_sync_metadata)
+
+        self.assertEqual(saved["last_synced_hash"], "windows-local-hash")
+        self.assertEqual(saved["remote_config_hash"], "linux-bundle-hash")
+
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value=saved):
+                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="windows-local-hash"):
+                    window._update_config_sync_buttons()
+
+        push.setText.assert_called_once_with("↑")
+        pull.setText.assert_called_once_with("↓")
 
     def test_sync_button_dots_compare_against_last_synced_hash(self):
         window = object.__new__(tray.MountletWindow)

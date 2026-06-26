@@ -4,6 +4,8 @@
 
 - Added operating-system metadata to config bundles and showed OS, device, and
   local-time details in config import and pull confirmations.
+- Fixed manual config imports so importing a bundle records the imported
+  configuration as the sync baseline and does not immediately show a push dot.
 - Restored native title bars for child dialogs, constrained child dialogs to
   the visible desktop, and made the shortcut editor scroll internally on small
   screens.
