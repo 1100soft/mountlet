@@ -66,6 +66,10 @@ class PlatformServices:
     def mount_process_options(self) -> dict[str, Any]:
         return {"close_fds": True, "start_new_session": True}
 
+    def command_process_options(self) -> dict[str, Any]:
+        """Options for short-lived, non-interactive child commands."""
+        return {}
+
     def is_mounted(self, path: str) -> bool:
         return os.path.ismount(path)
 

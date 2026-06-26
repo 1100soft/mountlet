@@ -1,5 +1,89 @@
 # Changelog
 
+## Unreleased
+
+## 0.4.1 - 2026-06-26
+
+- Added operating-system metadata to config bundles and showed OS, device, and
+  local-time details in config import and pull confirmations.
+- Fixed manual config imports so importing a bundle records the imported
+  configuration as the sync baseline and does not immediately show a push dot.
+- Restored native title bars for child dialogs, constrained child dialogs to
+  the visible desktop, and made the shortcut editor scroll internally on small
+  screens.
+- Fixed remote move shortcuts so Shift+Up and Shift+Down are parsed through
+  Qt's explicit key-combination API and do not trigger an unnecessary rclone
+  remote reload before reordering.
+- Reorganized the keyboard shortcut dialog around fixed inputs and configurable
+  alternatives, added shared list-navigation alternatives, added configurable
+  per-remote and file-operation alternatives, and surfaced assigned remote
+  action shortcuts in button tooltips.
+
+## 0.4.0 - 2026-06-25
+
+- Added a compact rclone-backed file browser connected directly to the remote
+  strips, with remembered per-remote paths and adaptive left/right placement.
+- Added cross-remote copy, cut, paste, and drag-and-drop transfers that run
+  outside the UI thread.
+- Added the managed-offline storage foundation and availability icons, while
+  leaving offline creation disabled until edit and conflict semantics are safe.
+- Added hover-open remote switching, keyboard focus navigation, retained Qt
+  input handlers for X11 stability, file and folder context menus, permanent
+  delete confirmation, and remote folder creation.
+- Disabled integrated file edits by default and added an app setting with an
+  explicit warning before enabling direct, non-undoable cloud file operations.
+- Added a remote-root navigation button and configurable keyboard shortcuts for
+  optional remote-list navigation, remote reordering, and file-browser actions,
+  with up to three alternatives per action, grouped contexts, conflict checks,
+  fixed-key guidance, and restore defaults.
+- Added background preloading, one-level child-folder prefetch, and session
+  caching for each remote's remembered folder, default remote-list keyboard
+  focus, deterministic X11 row/pin visual state, and an embedded side-by-side
+  browser on Wayland.
+- Fixed remote row highlight geometry so focus and hover changes do not resize
+  the row list, reserved a minimum embedded-browser size on Wayland, and kept
+  the App/Mount/Config menus in the Mountlet window on macOS.
+- Synchronized hover-selected and keyboard-selected remote rows by focusing the
+  hovered Qt row, so Up and Down navigation starts from the row currently
+  highlighted by the pointer.
+- Made Left and Right navigation side-aware between the main window and file
+  browser, while keeping Up, Down, Return, and Escape as fixed navigation keys.
+- Guarded mounted-folder opening so Windows does not fall back to an unrelated
+  Explorer location when a stale mount path is no longer reachable.
+- Added PyInstaller-based native bundle definitions and GitHub Actions builds
+  for Linux x64, Windows x64, macOS arm64, and macOS x64.
+- Added automated frozen-executable smoke checks and macOS bundle validation
+  for menu-bar-only operation.
+- Added platform-native artifact archives that preserve macOS bundle links and
+  avoid redundant GitHub upload compression.
+- Added test installers for Linux (`.deb`), Windows (setup `.exe` with an
+  uninstaller), and macOS (`.dmg`), with CI validation and portable bundles
+  retained alongside them.
+- Added a resumable graphical prerequisite check that opens installation
+  guidance and starts Mountlet when rclone and filesystem support are ready.
+- Fixed Wayland tray activation and top-level window handling, and prevented
+  frozen Linux builds from passing bundled library paths to Dolphin.
+- Added editable Google Drive client IDs and client secrets to remote settings.
+- Improved Windows mountpoint detection, rclone mount diagnostics, and installer
+  maintenance options for repair/update and uninstall.
+- Added encrypted config-bundle metadata with device, time, and content hash,
+  compact top-row config sync buttons, and a nested raw-config-file menu.
+- Added a Proton Drive setup path using current rclone's `protondrive` backend,
+  with Proton username, password, optional 2FA, and mailbox-password fields.
+- Improved first-show tray positioning, config sync dot clearing after
+  successful push or pull, Proton Drive backend preflight errors for older
+  rclone builds, and one-click reauthentication prompts for mount failures that
+  look like expired or invalid cloud credentials.
+- Tightened tray anchoring against transient `(0, 0)` tray geometry, re-anchored
+  after config replacement, and changed sync-dot detection to use a semantic
+  remote-operation config hash instead of raw app config bytes.
+- Added an About dialog with app, Python, Qt, rclone, filesystem-driver,
+  platform, config-path, and mount-folder details.
+- Made config sync pull metadata easier to read by translating bundle device
+  and timestamp values into user-facing device and local-time wording.
+- Fixed config sync push-dot updates after shortcut, app, mount, remote-order,
+  import, and new-remote changes.
+
 ## 0.3.0 - 2026-06-20
 
 - Refactored paths, prerequisites, mount lifecycle, process handling,

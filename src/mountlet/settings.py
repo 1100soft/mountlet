@@ -12,6 +12,27 @@ from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ens
 from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
+DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
+    "common_previous": (),
+    "common_next": (),
+    "remote_enter_browser": ("Space",),
+    "remote_move_up": ("Shift+Up",),
+    "remote_move_down": ("Shift+Down",),
+    "remote_toggle_mount": (),
+    "remote_config": (),
+    "remote_open_browser": (),
+    "browser_open": (),
+    "browser_parent": ("Backspace",),
+    "browser_root": ("Alt+Home",),
+    "browser_refresh": ("F5",),
+    "browser_open_folder": ("Ctrl+Return",),
+    "browser_copy": (),
+    "browser_cut": (),
+    "browser_paste": (),
+    "browser_delete": (),
+    "browser_new_folder": (),
+}
+
 
 @dataclass(frozen=True)
 class AppSettings:
@@ -22,6 +43,10 @@ class AppSettings:
     file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
+    integrated_file_edits: bool = False
+    config_sync_remote: str = ""
+    config_sync_path: str = "Mountlet/config.mountlet"
+    shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
 
 @dataclass(frozen=True)
@@ -45,6 +70,7 @@ mount_base = ""
 auto_mount = false
 auto_mount_delay = 2.0
 start_at_login = false
+integrated_file_edits = false
 
 [tray]
 # Leave empty to use this platform's default file manager.
@@ -54,6 +80,31 @@ file_manager = ""
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
+
+[sync]
+# Optional encrypted config-bundle location, stored as an rclone remote and path.
+config_remote = ""
+config_path = "Mountlet/config.mountlet"
+
+[shortcuts]
+common_previous = ""
+common_next = ""
+remote_enter_browser = "Space"
+remote_move_up = "Shift+Up"
+remote_move_down = "Shift+Down"
+remote_toggle_mount = ""
+remote_config = ""
+remote_open_browser = ""
+browser_open = ""
+browser_parent = "Backspace"
+browser_root = "Alt+Home"
+browser_refresh = "F5"
+browser_open_folder = "Ctrl+Return"
+browser_copy = ""
+browser_cut = ""
+browser_paste = ""
+browser_delete = ""
+browser_new_folder = ""
 """
 
 
@@ -229,15 +280,74 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     data = _read_simple_toml(source)
     app = data.get("app", {})
     tray = data.get("tray", {})
+    sync = data.get("sync", {})
+    shortcuts = _shortcut_values(data.get("shortcuts", {}))
     return AppSettings(
         mount_base=_string_value(app.get("mount_base")),
         auto_mount=_bool_value(app.get("auto_mount"), False),
         auto_mount_delay=max(_float_value(app.get("auto_mount_delay"), 2.0), 0.0),
         start_at_login=_bool_value(app.get("start_at_login"), _autostart_file().exists()),
+        integrated_file_edits=_bool_value(app.get("integrated_file_edits"), False),
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        config_sync_remote=str(sync.get("config_remote", "")).strip(),
+        config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
+        shortcuts=shortcuts,
     )
+
+
+def _shortcut_values(values: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    shortcuts = dict(DEFAULT_SHORTCUTS)
+    for key in DEFAULT_SHORTCUTS:
+        source_value = values.get(key)
+        if source_value is None and key == "common_previous":
+            source_value = values.get("remote_previous")
+        elif source_value is None and key == "common_next":
+            source_value = values.get("remote_next")
+        shortcuts[key] = _filter_locked_shortcuts(key, _shortcut_list(source_value, DEFAULT_SHORTCUTS[key]))
+    return shortcuts
+
+
+def _shortcut_list(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    if isinstance(value, (list, tuple)):
+        entries = [str(item).strip() for item in value]
+    else:
+        entries = [item.strip() for item in str(value).split(",")]
+    shortcuts = tuple(item for item in entries if item)
+    return shortcuts[:3] or default
+
+
+def _filter_locked_shortcuts(key: str, values: tuple[str, ...]) -> tuple[str, ...]:
+    locked_by_key = {
+        "common_previous": {"up"},
+        "common_next": {"down"},
+        "remote_enter_browser": {"return", "enter", "left", "right"},
+        "browser_open": {"return", "enter"},
+        "browser_copy": {"control+c"},
+        "browser_cut": {"control+x"},
+        "browser_paste": {"control+v"},
+        "browser_delete": {"delete"},
+    }
+    locked = locked_by_key.get(key)
+    if locked is None:
+        return values
+    filtered = tuple(value for value in values if _normalize_shortcut_for_filter(value) not in locked)
+    return filtered or DEFAULT_SHORTCUTS[key]
+
+
+def _normalize_shortcut_for_filter(value: str) -> str:
+    aliases = {
+        "enter": "return",
+        "escape": "esc",
+        "ctrl": "control",
+        "cmd": "meta",
+        "command": "meta",
+        "option": "alt",
+    }
+    return "+".join(aliases.get(part, part) for part in value.replace(" ", "").casefold().split("+"))
 
 
 def _remote_name_from_section(section: str) -> str | None:
@@ -286,6 +396,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"auto_mount = {_toml_bool(settings.auto_mount)}",
             f"auto_mount_delay = {settings.auto_mount_delay:g}",
             f"start_at_login = {_toml_bool(settings.start_at_login)}",
+            f"integrated_file_edits = {_toml_bool(settings.integrated_file_edits)}",
             "",
             "[tray]",
             "# File-manager identifier discovered by Mountlet.",
@@ -295,6 +406,17 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# default uses the desktop's normal folder opener.",
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
+            "",
+            "[sync]",
+            "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
+            f"config_remote = {_toml_string(settings.config_sync_remote)}",
+            f"config_path = {_toml_string(settings.config_sync_path)}",
+            "",
+            "[shortcuts]",
+            *(
+                f"{key} = {_toml_string(', '.join(settings.shortcuts.get(key, default)))}"
+                for key, default in DEFAULT_SHORTCUTS.items()
+            ),
             "",
         ]
     )
@@ -351,6 +473,7 @@ def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = 
 
 __all__ = [
     "AppSettings",
+    "DEFAULT_SHORTCUTS",
     "MountSettings",
     "ensure_default_config_files",
     "load_app_settings",

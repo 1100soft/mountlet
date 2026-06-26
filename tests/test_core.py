@@ -10,8 +10,16 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mountlet.platform_services.linux import LinuxPlatformServices
+
 
 class CoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.platform = LinuxPlatformServices()
+        patcher = mock.patch("mountlet.config_tools.shared.get_platform", return_value=self.platform)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def load_core(self, tempdir: str, config_text: str = "", *, set_mount_base: bool = True):
         config_path = Path(tempdir) / "rclone.conf"
         config_path.write_text(config_text, encoding="utf-8")
@@ -33,7 +41,10 @@ class CoreTests(unittest.TestCase):
 
         import mountlet.core as core
 
-        return importlib.reload(core)
+        core = importlib.reload(core)
+        core.PLATFORM = self.platform
+        core.DEFAULT_HOME_MOUNT = str(self.platform.default_mount_base())
+        return core
 
     def test_load_remotes_parses_provider_alias_and_mount_flags(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -53,7 +64,7 @@ mount_flags = --read-only --dir-cache-time 10m
             self.assertEqual(remote.name, "Work__Drive")
             self.assertEqual(remote.alias, "Work")
             self.assertEqual(remote.provider, "Drive")
-            self.assertTrue(remote.mount_path.endswith("/drive/Work"))
+            self.assertEqual(Path(remote.mount_path).parts[-2:], ("drive", "Work"))
             self.assertIn("--links", remote.flags)
             self.assertIn("--read-only", remote.flags)
             self.assertIn("10m", remote.flags)
@@ -84,8 +95,8 @@ type = dropbox
             self.assertTrue(success)
             self.assertEqual(message, "mounted")
             args = launch.call_args.args[1]
-            self.assertEqual(args[:3], ["/usr/bin/rclone", "mount", "Docs:"])
-            self.assertEqual(args[3], remote.mount_path)
+            self.assertEqual(args[:5], ["/usr/bin/rclone", "--config", core.CONFIG_PATH, "mount", "Docs:"])
+            self.assertEqual(args[5], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
 
     def test_mount_remote_can_mount_remote_path(self):
@@ -105,26 +116,28 @@ type = dropbox
                         success, _message = core.mount_remote(remote)
 
             self.assertTrue(success)
-            self.assertEqual(launch.call_args.args[1][:3], ["/usr/bin/rclone", "mount", "R2__S3:bucket/prefix"])
+            self.assertEqual(
+                launch.call_args.args[1][:5],
+                ["/usr/bin/rclone", "--config", core.CONFIG_PATH, "mount", "R2__S3:bucket/prefix"],
+            )
 
-    def test_mount_remote_unmounts_when_connection_check_fails(self):
+    def test_mount_remote_does_not_start_mount_when_connection_check_fails(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Archive__S3]\ntype = s3\n")
             remote = core.load_remotes()[0]
 
             with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
-                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")):
+                with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")) as launch:
                     with mock.patch.object(
                         core,
                         "check_remote_connection",
                         return_value=(False, "[!] Archive (S3) is not connected."),
                     ):
-                        with mock.patch.object(core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
-                            success, message = core.mount_remote(remote)
+                        success, message = core.mount_remote(remote)
 
             self.assertFalse(success)
             self.assertIn("not connected", message)
-            unmount.assert_called_once_with(remote)
+            launch.assert_not_called()
 
     def test_check_remote_connection_uses_remote_source(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -145,7 +158,42 @@ type = dropbox
             self.assertIn("connected", message)
             self.assertEqual(
                 run.call_args.args[0],
-                ["/usr/bin/rclone", "lsf", "R2__S3:bucket/prefix", "--max-depth", "1"],
+                [
+                    "/usr/bin/rclone",
+                    "--config",
+                    core.CONFIG_PATH,
+                    "lsf",
+                    "R2__S3:bucket/prefix",
+                    "--max-depth",
+                    "1",
+                ],
+            )
+
+    def test_reconnect_remote_uses_active_rclone_config(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\ntoken = REDACTED\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.subprocess, "run") as run:
+                    run.return_value.returncode = 0
+                    run.return_value.stdout = ""
+                    run.return_value.stderr = ""
+                    success, message = core.reconnect_remote(remote)
+
+            self.assertTrue(success)
+            self.assertIn("reauthenticated", message)
+            self.assertEqual(
+                run.call_args.args[0],
+                [
+                    "/usr/bin/rclone",
+                    "--config",
+                    core.CONFIG_PATH,
+                    "config",
+                    "reconnect",
+                    "Docs:",
+                    "--auto-confirm",
+                ],
             )
 
     def test_mount_remote_rejects_non_empty_mount_directory(self):
@@ -156,12 +204,38 @@ type = dropbox
             (Path(remote.mount_path) / "existing.txt").write_text("keep", encoding="utf-8")
 
             with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
-                with mock.patch.object(core, "_launch_mount_process") as launch:
-                    success, message = core.mount_remote(remote)
+                with mock.patch.object(core, "check_remote_connection", return_value=(True, "connected")):
+                    with mock.patch.object(core, "_launch_mount_process") as launch:
+                        success, message = core.mount_remote(remote)
 
             self.assertFalse(success)
             self.assertIn("is not empty", message)
             launch.assert_not_called()
+
+    def test_launch_mount_process_preserves_complete_rclone_error(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            process = mock.Mock(pid=42)
+            process.poll.return_value = 1
+
+            def failed_process(_args, *, stderr, **_kwargs):
+                stderr.write("first diagnostic line\nfinal diagnostic line\n")
+                stderr.flush()
+                return process
+
+            with mock.patch.object(core.subprocess, "Popen", side_effect=failed_process):
+                with mock.patch.object(core, "wait_for", return_value=False):
+                    success, message = core._launch_mount_process(
+                        remote,
+                        ["rclone", "mount"],
+                        wait_timeout=0,
+                    )
+
+            self.assertFalse(success)
+            self.assertIn("rclone exited with code 1", message)
+            self.assertIn("first diagnostic line", message)
+            self.assertIn("final diagnostic line", message)
 
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -199,7 +273,7 @@ type = dropbox
             remotes = core.load_remotes()
 
         self.assertEqual([remote.name for remote in remotes], ["Docs"])
-        self.assertTrue(remotes[0].mount_path.endswith("/custom-docs"))
+        self.assertEqual(Path(remotes[0].mount_path).name, "custom-docs")
         self.assertEqual(remotes[0].remote_path, "bucket/docs")
         self.assertTrue(Path(remotes[0].mount_path).is_absolute())
         self.assertFalse(remotes[0].auto_mount)
@@ -222,7 +296,7 @@ endpoint = https://account.r2.cloudflarestorage.com
             remote = core.load_remotes()[0]
 
         self.assertEqual(remote.provider, "Cloudflare R2")
-        self.assertTrue(remote.mount_path.endswith("/s3/Archive"))
+        self.assertEqual(Path(remote.mount_path).parts[-2:], ("s3", "Archive"))
 
     def test_load_remotes_uses_mountlet_order_when_configured(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -345,14 +419,27 @@ token = REDACTED
 
             fields = core.editable_rclone_fields(remote)
 
-            self.assertEqual(list(fields)[:4], ["shared_with_me", "root_folder_id", "team_drive", "scope"])
+            self.assertEqual(
+                list(fields)[:6],
+                ["client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"],
+            )
             self.assertEqual(fields["root_folder_id"], "abc")
             self.assertIn("team_drive", fields)
             self.assertNotIn("token", fields)
 
-            core.save_rclone_fields("Docs", {"root_folder_id": "def", "token": "REDACTED"})
+            core.save_rclone_fields(
+                "Docs",
+                {
+                    "client_id": "client.apps.googleusercontent.com",
+                    "client_secret": "new-secret",
+                    "root_folder_id": "def",
+                    "token": "REDACTED",
+                },
+            )
             remote = core.load_remotes()[0]
 
+            self.assertEqual(remote.extra_info["client_id"], "client.apps.googleusercontent.com")
+            self.assertEqual(remote.extra_info["client_secret"], "new-secret")
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
             self.assertEqual(remote.extra_info["token"], "REDACTED")
 
@@ -446,7 +533,10 @@ client_secret = work-secret
                     usage = core.get_storage_usage(remote)
 
             self.assertEqual(usage, "1.0 / 2.0 GB")
-            self.assertEqual(check_output.call_args.args[0][0], "/custom/rclone")
+            self.assertEqual(
+                check_output.call_args.args[0][:3],
+                ["/custom/rclone", "--config", core.CONFIG_PATH],
+            )
 
     def test_get_storage_usage_details_includes_numeric_percent(self):
         with tempfile.TemporaryDirectory() as tempdir:

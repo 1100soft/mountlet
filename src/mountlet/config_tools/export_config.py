@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 from .shared import (
+    app_mounts_file,
     copy_file,
     default_config_path,
     find_client_secrets,
@@ -51,6 +52,13 @@ def export_bundle(args: argparse.Namespace) -> int:
             action = "would copy" if args.dry_run else "copied"
             print(f"[*] {action} {secret} -> {copied_secret}")
 
+    if args.mountlet_settings:
+        mounts = app_mounts_file()
+        copied_mounts = copy_file(mounts, destination / mounts.name, backup=args.backup, dry_run=args.dry_run)
+        if copied_mounts:
+            action = "would copy" if args.dry_run else "copied"
+            print(f"[*] {action} {mounts} -> {copied_mounts}")
+
     if not args.dry_run:
         remotes = read_remotes(source_conf)
         print_remote_list(remotes, source_conf)
@@ -83,8 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Do not backup existing files in destination.",
     )
+    parser.add_argument(
+        "--no-mountlet-settings",
+        dest="mountlet_settings",
+        action="store_false",
+        help="Do not include Mountlet's per-remote settings file.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Preview without copying.")
-    parser.set_defaults(auto_discover_secrets=True, backup=True)
+    parser.set_defaults(auto_discover_secrets=True, backup=True, mountlet_settings=True)
     return parser
 
 

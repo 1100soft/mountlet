@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from mountlet import cli
+from mountlet import __version__, cli
 
 
 class CliTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(cli.main(["--version"]), 0)
 
-        self.assertIn("mountlet 0.3.0", output.getvalue())
+        self.assertIn(f"mountlet {__version__}", output.getvalue())
 
     def test_no_args_opens_menu(self):
         with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=True):

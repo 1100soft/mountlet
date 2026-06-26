@@ -34,6 +34,15 @@ class Readiness:
     remotes: list[str]
 
 
+@dataclass(frozen=True)
+class Prerequisite:
+    key: str
+    label: str
+    ready: bool
+    detail: str
+    help_url: str
+
+
 def _status(ok: bool, message: str) -> str:
     return ("OK   " if ok else "TODO ") + message
 
@@ -44,6 +53,37 @@ def _fuse_available() -> bool:
 
 def _install_guidance() -> tuple[str, ...]:
     return get_platform().prerequisite_guidance()
+
+
+def check_prerequisites() -> tuple[Prerequisite, ...]:
+    platform = get_platform()
+    guidance = _install_guidance()
+    rclone_bin = find_rclone()
+    fuse_ok = _fuse_available()
+    driver_name = {
+        "Windows": "WinFsp",
+        "Darwin": "macFUSE",
+    }.get(platform.system_name, "FUSE")
+    driver_url = {
+        "Windows": "https://winfsp.dev/rel/",
+        "Darwin": "https://macfuse.github.io/",
+    }.get(platform.system_name, "https://rclone.org/install/#installing-on-linux")
+    return (
+        Prerequisite(
+            key="rclone",
+            label="rclone",
+            ready=bool(rclone_bin),
+            detail=f"Found {rclone_bin}" if rclone_bin else guidance[0],
+            help_url="https://rclone.org/install/",
+        ),
+        Prerequisite(
+            key="mount_driver",
+            label=driver_name,
+            ready=fuse_ok,
+            detail=f"Found {driver_name} mount support." if fuse_ok else guidance[1],
+            help_url=driver_url,
+        ),
+    )
 
 
 def _mountlet_command() -> str:
@@ -76,12 +116,9 @@ def check_readiness() -> Readiness:
     core.ensure_base_mount_dir()
     Path(core.BASE_MOUNT_DIR).mkdir(parents=True, exist_ok=True)
 
+    prerequisites = check_prerequisites()
+    messages.extend(item.detail for item in prerequisites if not item.ready)
     rclone_bin = find_rclone()
-    if not rclone_bin:
-        messages.append(_install_guidance()[0])
-
-    if not _fuse_available():
-        messages.append(_install_guidance()[1])
 
     config_path = default_config_path()
     if rclone_bin:

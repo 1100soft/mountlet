@@ -134,6 +134,7 @@ PIDS: Dict[str, int] = {}
 OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 RCLONE_STATUS_TIMEOUT_SECONDS = 20
 RCLONE_CONNECT_TIMEOUT_SECONDS = 20
+RCLONE_RECONNECT_TIMEOUT_SECONDS = 300
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -167,6 +168,14 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
         "--buffer-size",
         "16M",
     ],
+    "protondrive": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+        "--dir-cache-time",
+        "30s",
+    ],
     "s3": [
         "--vfs-cache-mode",
         "full",
@@ -186,11 +195,12 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
 COMMON_SAFE_RCLONE_KEYS = ("description",)
 SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
-    "drive": ("shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "drive": ("client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
     "koofr": ("provider", "user", "mountid"),
+    "protondrive": ("username", "2fa", "mailbox_password", "enable_caching"),
 }
 S3_PROVIDER_DISPLAY_NAMES = {
     "cloudflare": "Cloudflare R2",
@@ -418,6 +428,10 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
             return values.get("url", "").strip().startswith(("http://", "https://"))
         if backend_type == "koofr":
             return bool(values.get("provider", "").strip() and values.get("user", "").strip() and values.get("password", "").strip())
+        if backend_type == "protondrive":
+            user = values.get("username", "").strip() or values.get("user", "").strip()
+            password = values.get("password", "").strip() or values.get("pass", "").strip()
+            return bool(user and password)
         return bool(backend_type)
     if backend_type == "onedrive":
         return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))
@@ -437,6 +451,10 @@ def remote_source(remote: RemoteInfo) -> str:
     return f"{remote.name}:{path}" if path else f"{remote.name}:"
 
 
+def _rclone_command(binary: str, *arguments: str) -> List[str]:
+    return [binary, "--config", CONFIG_PATH, *arguments]
+
+
 def is_mounted(remote: RemoteInfo) -> bool:
     return PLATFORM.is_mounted(mount_path(remote))
 
@@ -451,43 +469,47 @@ def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, inter
 
 
 def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
-    try:
-        proc = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **PLATFORM.mount_process_options(),
-        )
-    except Exception as exc:
-        return False, f"[!] Failed to mount {remote.name}: {exc}"
-
-    PIDS[remote.name] = proc.pid
-
-    if wait_for(remote, True, timeout=wait_timeout):
-        return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
-
-    exit_code = proc.poll()
-    if exit_code is None:
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as error_output:
         try:
-            proc.terminate()
-        except Exception:
-            pass
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=error_output,
+                **PLATFORM.mount_process_options(),
+            )
+        except Exception as exc:
+            return False, f"[!] Failed to mount {remote.name}: {exc}"
+
+        PIDS[remote.name] = proc.pid
+
+        if wait_for(remote, True, timeout=wait_timeout):
+            return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
+
+        exit_code = proc.poll()
+        if exit_code is None:
             try:
-                proc.kill()
-                proc.wait(timeout=3)
+                proc.terminate()
             except Exception:
                 pass
-        exit_code = proc.poll()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+            exit_code = proc.poll()
 
-    PIDS.pop(remote.name, None)
+        PIDS.pop(remote.name, None)
+        error_output.seek(0)
+        detail = error_output.read().strip()
 
-    if exit_code is None:
-        return False, f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
-
-    return False, f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
+        if exit_code is None:
+            message = f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
+        else:
+            message = f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
+        return False, f"{message}\n{detail}".rstrip()
 
 
 def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
@@ -501,25 +523,44 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not rclone_bin:
         return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
 
+    connected, connection_message = check_remote_connection(remote, rclone_bin)
+    if not connected:
+        return False, connection_message
+
     ok, err = _ensure_mount_dir(mount_path(remote))
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
 
-    args = [rclone_bin, "mount", remote_source(remote), remote.mount_path]
+    args = _rclone_command(rclone_bin, "mount", remote_source(remote), remote.mount_path)
     args.extend(remote.flags)
 
-    success, message = _launch_mount_process(remote, args)
-    if not success:
-        return success, message
+    return _launch_mount_process(remote, args)
 
-    connected, connection_message = check_remote_connection(remote, rclone_bin)
-    if connected:
-        return success, message
 
-    unmounted, unmount_message = unmount_remote(remote)
-    if not unmounted:
-        return False, f"{connection_message}\n{unmount_message}"
-    return False, connection_message
+def reconnect_remote(remote: RemoteInfo, *, auto_confirm: bool = True) -> Tuple[bool, str]:
+    binary = find_rclone()
+    if not binary:
+        return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+    command = _rclone_command(binary, "config", "reconnect", f"{remote.name}:")
+    if auto_confirm:
+        command.append("--auto-confirm")
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=RCLONE_RECONNECT_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"[!] Reauthentication timed out for {remote.display_name}."
+    except Exception as exc:
+        return False, f"[!] Failed to reauthenticate {remote.display_name}: {exc}"
+    if result.returncode == 0:
+        return True, f"[*] reauthenticated {remote.display_name}."
+    detail = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    return False, f"[!] Reauthentication failed for {remote.display_name}.\n{detail}".rstrip()
 
 
 def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -> Tuple[bool, str]:
@@ -529,11 +570,12 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
     source = remote_source(remote)
     try:
         result = subprocess.run(
-            [binary, "lsf", source, "--max-depth", "1"],
+            _rclone_command(binary, "lsf", source, "--max-depth", "1"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
             timeout=RCLONE_CONNECT_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
         )
     except subprocess.TimeoutExpired:
         return False, f"[!] {remote.display_name} did not respond while checking {source}."
@@ -542,8 +584,8 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
     if result.returncode == 0:
         return True, f"[*] connected {remote.display_name}."
     detail = result.stderr.strip()
-    summary = detail.splitlines()[0] if detail else f"exit code {result.returncode}"
-    return False, f"[!] {remote.display_name} is not connected to {source}: {summary}"
+    summary = detail or f"rclone exited with code {result.returncode}."
+    return False, f"[!] {remote.display_name} is not connected to {source}:\n{summary}"
 
 
 def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
@@ -602,10 +644,11 @@ def get_storage_usage_details(remote: RemoteInfo) -> StorageUsage:
         return StorageUsage("?")
     try:
         output = subprocess.check_output(
-            [rclone_bin, "about", remote_source(remote), "--json"],
+            _rclone_command(rclone_bin, "about", remote_source(remote), "--json"),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=RCLONE_STATUS_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
         )
         data = json.loads(output)
         used = int(data.get("used", 0))
@@ -629,10 +672,11 @@ def verify_remote(remote: RemoteInfo) -> Tuple[bool, str]:
         return False, "[!] rclone not found."
     try:
         result = subprocess.run(
-            [rclone_bin, "about", remote_source(remote)],
+            _rclone_command(rclone_bin, "about", remote_source(remote)),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **PLATFORM.command_process_options(),
         )
     except Exception as exc:
         return False, f"[!] Failed to verify {remote.name}: {exc}"
@@ -666,6 +710,7 @@ __all__ = [
     "editable_rclone_fields",
     "save_rclone_fields",
     "mount_remote",
+    "reconnect_remote",
     "check_remote_connection",
     "unmount_remote",
     "refresh_remote",

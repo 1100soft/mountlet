@@ -12,9 +12,20 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mountlet.config_tools import setup_wizard
+from mountlet.platform_services.linux import LinuxPlatformServices
 
 
 class SetupWizardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        platform = LinuxPlatformServices()
+        patchers = (
+            mock.patch.object(setup_wizard, "get_platform", return_value=platform),
+            mock.patch("mountlet.config_tools.shared.get_platform", return_value=platform),
+        )
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_windows_command_hint_uses_running_virtualenv_launcher(self):
         launcher = r"C:\Users\Example User\AppData\Local\Mountlet\preview\Scripts\mountlet.exe"
         platform = mock.Mock(system_name="Windows")
@@ -31,6 +42,22 @@ class SetupWizardTests(unittest.TestCase):
             command = setup_wizard._mountlet_command()
 
         self.assertEqual(command, "mountlet")
+
+    def test_prerequisites_report_existing_tools(self):
+        with mock.patch.object(setup_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+            with mock.patch.object(setup_wizard, "_fuse_available", return_value=True):
+                prerequisites = setup_wizard.check_prerequisites()
+
+        self.assertTrue(all(item.ready for item in prerequisites))
+        self.assertEqual([item.label for item in prerequisites], ["rclone", "FUSE"])
+
+    def test_prerequisites_include_install_help_when_missing(self):
+        with mock.patch.object(setup_wizard, "find_rclone", return_value=None):
+            with mock.patch.object(setup_wizard, "_fuse_available", return_value=False):
+                prerequisites = setup_wizard.check_prerequisites()
+
+        self.assertFalse(any(item.ready for item in prerequisites))
+        self.assertTrue(all(item.help_url.startswith("https://") for item in prerequisites))
 
     def test_setup_succeeds_when_requirements_and_remotes_exist(self):
         with tempfile.TemporaryDirectory() as tempdir:

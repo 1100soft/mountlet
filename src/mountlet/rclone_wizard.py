@@ -23,6 +23,7 @@ RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS = 300
 _ACTIVE_CONFIG_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 _ACTIVE_CONFIG_LOCK = threading.Lock()
 PLATFORM = get_platform()
+_BACKEND_CACHE: set[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,49 @@ def continue_drive_remote(
 
 def start_remote(remote_name: str, remote_type: str, args: list[str] | None = None) -> RcloneConfigStep:
     return _run_config_create(remote_name, remote_type, list(args or []))
+
+
+def backend_is_available(remote_type: str) -> bool | None:
+    global _BACKEND_CACHE
+    normalized = remote_type.strip().lower()
+    if not normalized:
+        return None
+    if _BACKEND_CACHE is None:
+        binary = find_rclone()
+        if not binary:
+            return None
+        try:
+            result = subprocess.run(
+                [binary, "help", "backends"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=10,
+                **PLATFORM.command_process_options(),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        _BACKEND_CACHE = set(_parse_backend_names(result.stdout))
+    return normalized in _BACKEND_CACHE
+
+
+def _parse_backend_names(output: str) -> list[str]:
+    names: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("\\"):
+            parts = stripped.split('"')
+            if len(parts) >= 2:
+                names.append(parts[1].strip().lower())
+                continue
+        first = stripped.split(maxsplit=1)[0].strip('"').lower()
+        if first and first.replace("_", "").replace("-", "").isalnum():
+            names.append(first)
+    return names
 
 
 def continue_remote(

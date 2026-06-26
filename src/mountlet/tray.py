@@ -7,6 +7,7 @@ import ctypes
 import ctypes.util
 import errno
 import html
+import json
 import os
 import platform
 import re
@@ -16,16 +17,21 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import core, rclone_wizard
+from . import __version__, core, rclone_wizard
+from .cloud_browser import normalize_browser_path, remote_target
+from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
+from .config_tools import bundle_file
 from .config_tools import setup_wizard
-from .config_tools.shared import app_config_file, app_mounts_file, ensure_app_directories
+from .config_tools.shared import app_config_file, app_mounts_file, app_state_dir, ensure_app_directories
 from .platform_services import get_platform
 from .platform_services.desktop import DesktopServices
 from .platform_services.file_managers import (
@@ -34,8 +40,10 @@ from .platform_services.file_managers import (
     open_with_file_manager,
     resolve_file_manager,
 )
+from .platform_services.processes import external_process_environment
 from .settings import (
     AppSettings,
+    DEFAULT_SHORTCUTS,
     MountSettings,
     ensure_default_config_files,
     load_app_settings,
@@ -44,6 +52,7 @@ from .settings import (
     save_mount_settings,
     set_start_at_login,
 )
+from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -66,11 +75,70 @@ REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
     ("remaining", "Remaining space, lowest first"),
 )
 STORAGE_SORT_MODES = {"size", "used", "remaining"}
+REMOTE_ROW_HEIGHT = 40
+REMOTE_LIST_MIN_HEIGHT = 180
+EMBEDDED_BROWSER_MIN_WIDTH = 540
+EMBEDDED_BROWSER_MIN_HEIGHT = 340
+FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "Common",
+        (
+            ("Up / Down", "Move selection in the focused list"),
+            ("Left / Right", "Move between the remote list and file browser when the key points toward the other pane"),
+            ("Enter", "Select the focused remote or open the focused file item"),
+            ("Esc", "Return from the file browser to the remote list"),
+        ),
+    ),
+    (
+        "File operations",
+        (
+            ("Ctrl+C", "Copy selected file-browser items"),
+            ("Ctrl+X", "Cut selected file-browser items"),
+            ("Ctrl+V", "Paste into the current file-browser folder"),
+            ("Delete", "Delete selected file-browser items"),
+        ),
+    ),
+)
+COMMON_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("common_previous", "Previous item"),
+    ("common_next", "Next item"),
+)
+REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("remote_enter_browser", "Enter file browser"),
+    ("remote_move_up", "Move remote up"),
+    ("remote_move_down", "Move remote down"),
+    ("remote_toggle_mount", "Mount or unmount remote"),
+    ("remote_config", "Open remote settings"),
+    ("remote_open_browser", "Open provider website"),
+)
+BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("browser_open", "Open selected item"),
+    ("browser_parent", "Parent folder"),
+    ("browser_root", "Remote root"),
+    ("browser_refresh", "Refresh folder"),
+    ("browser_open_folder", "Open folder in file manager"),
+    ("browser_copy", "Copy selected items"),
+    ("browser_cut", "Cut selected items"),
+    ("browser_paste", "Paste into current folder"),
+    ("browser_delete", "Delete selected items"),
+    ("browser_new_folder", "Create new folder"),
+)
+SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Common alternatives", COMMON_SHORTCUT_CONFIG_FIELDS),
+    ("Remote list", REMOTE_SHORTCUT_CONFIG_FIELDS),
+    ("File browser", BROWSER_SHORTCUT_CONFIG_FIELDS),
+)
+SHORTCUT_CONTEXTS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("Remote list", COMMON_SHORTCUT_CONFIG_FIELDS + REMOTE_SHORTCUT_CONFIG_FIELDS),
+    ("File browser", COMMON_SHORTCUT_CONFIG_FIELDS + BROWSER_SHORTCUT_CONFIG_FIELDS),
+)
 MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Read-only", "Mount this remote without allowing writes.", ("--read-only",)),
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
 )
 RCLONE_FIELD_TOOLTIPS = {
+    "client_id": "Google OAuth client ID used by this Drive remote. Changing it may require reconnecting the account.",
+    "client_secret": "Google OAuth client secret used by this Drive remote. Changing it may require reconnecting the account.",
     "description": "Optional note stored in rclone.conf. Mountlet does not use this value.",
     "root_folder_id": "Limit this Drive remote to one Google Drive folder ID. rclone uses it when accessing the remote.",
     "team_drive": "Google shared drive ID. rclone uses it when this remote points at a shared drive.",
@@ -86,8 +154,12 @@ RCLONE_FIELD_TOOLTIPS = {
     "endpoint": "Provider endpoint URL. rclone uses it for S3-compatible services.",
     "acl": "Default access-control setting used by the remote provider.",
     "storage_class": "Default storage class used by the remote provider.",
+    "username": "Proton account username used by this remote.",
+    "2fa": "Current Proton 2FA code. Usually only needed while configuring the remote.",
+    "mailbox_password": "Mailbox password for two-password Proton accounts.",
+    "enable_caching": "Proton Drive metadata cache. Mountlet disables it by default to avoid stale mounted folders.",
 }
-RCLONE_BOOLEAN_FIELDS = {"shared_with_me", "env_auth"}
+RCLONE_BOOLEAN_FIELDS = {"shared_with_me", "env_auth", "enable_caching"}
 RCLONE_SELECT_FIELDS = {
     "scope": (
         ("drive", "Full Drive access"),
@@ -115,6 +187,7 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Box", "box"),
     ("pCloud", "pcloud"),
     ("Koofr", "koofr"),
+    ("Proton Drive", "protondrive"),
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
 )
@@ -125,6 +198,7 @@ REMOTE_PROVIDER_STATUSES = {
     "box": "tested",
     "pcloud": "tested",
     "koofr": "tested",
+    "protondrive": "tested",
     "s3": "partial",
     "webdav": "untested",
 }
@@ -136,6 +210,7 @@ REMOTE_CONFIG_SUFFIXES = {
     "box": "Box",
     "pcloud": "pCloud",
     "koofr": "Koofr",
+    "protondrive": "Proton Drive",
     "s3": "S3",
     "webdav": "WebDAV",
 }
@@ -343,6 +418,7 @@ PROVIDER_COLORS = {
     "box": "#0057c2",
     "pcloud": "#17a2d4",
     "koofr": "#f59e0b",
+    "protondrive": "#6d4aff",
     "s3": "#ff9900",
     "webdav": "#64748b",
 }
@@ -353,6 +429,7 @@ REMOTE_BROWSER_URLS = {
     "box": "https://app.box.com/files",
     "pcloud": "https://my.pcloud.com/",
     "koofr": "https://app.koofr.net/",
+    "protondrive": "https://drive.proton.me/",
 }
 _wizard_pending_remote_names: set[str] = set()
 
@@ -372,21 +449,58 @@ def _packaged_icon_path() -> str | None:
     return str(fallback) if fallback.is_file() else None
 
 
+def _is_gnome_wayland() -> bool:
+    if get_platform().system_name != "Linux" or not os.environ.get("WAYLAND_DISPLAY"):
+        return False
+    desktop = ":".join(
+        (os.environ.get("XDG_CURRENT_DESKTOP", ""), os.environ.get("DESKTOP_SESSION", ""))
+    ).casefold()
+    return "gnome" in desktop
+
+
+def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
+    lock_type = getattr(qt, "QLockFile", None)
+    if lock_type is None:
+        return SimpleNamespace()
+    user_id = str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "user")
+    lock = lock_type(str(Path(tempfile.gettempdir()) / f"mountlet-desktop-{user_id}.lock"))
+    lock.setStaleLockTime(30_000)
+    return lock if lock.tryLock(0) else None
+
+
 def _load_qt_bindings() -> SimpleNamespace:
     try:
-        from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
-        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter
+        from PySide6.QtCore import (
+            QEvent,
+            QKeyCombination,
+            QLockFile,
+            QMimeData,
+            QObject,
+            QPoint,
+            QSize,
+            Qt,
+            QTimer,
+            QUrl,
+            Signal,
+            qVersion,
+        )
+        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
         from PySide6.QtWidgets import (
+            QAbstractItemView,
             QApplication,
             QButtonGroup,
             QCheckBox,
             QComboBox,
             QDialog,
             QDialogButtonBox,
+            QFileDialog,
             QFrame,
             QFormLayout,
             QGridLayout,
+            QGroupBox,
             QHBoxLayout,
+            QInputDialog,
+            QKeySequenceEdit,
             QLabel,
             QLineEdit,
             QMainWindow,
@@ -401,6 +515,8 @@ def _load_qt_bindings() -> SimpleNamespace:
             QStyle,
             QSystemTrayIcon,
             QToolTip,
+            QTreeWidget,
+            QTreeWidgetItem,
             QVBoxLayout,
             QWidget,
         )
@@ -414,6 +530,7 @@ def _load_qt_bindings() -> SimpleNamespace:
 
     return SimpleNamespace(
         QAction=QAction,
+        QAbstractItemView=QAbstractItemView,
         QApplication=QApplication,
         QButtonGroup=QButtonGroup,
         QColor=QColor,
@@ -423,18 +540,29 @@ def _load_qt_bindings() -> SimpleNamespace:
         QDialog=QDialog,
         QDialogButtonBox=QDialogButtonBox,
         QDesktopServices=QDesktopServices,
+        QFileDialog=QFileDialog,
+        QDrag=QDrag,
         QFormLayout=QFormLayout,
         QFrame=QFrame,
         QGridLayout=QGridLayout,
+        QGroupBox=QGroupBox,
         QHBoxLayout=QHBoxLayout,
+        QInputDialog=QInputDialog,
         QIcon=QIcon,
+        QKeyCombination=QKeyCombination,
+        QKeySequence=QKeySequence,
+        QKeySequenceEdit=QKeySequenceEdit,
         QLabel=QLabel,
         QLineEdit=QLineEdit,
+        QLockFile=QLockFile,
+        QMimeData=QMimeData,
+        QEvent=QEvent,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
         QPlainTextEdit=QPlainTextEdit,
         QObject=QObject,
+        QPoint=QPoint,
         QPainter=QPainter,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
@@ -446,7 +574,10 @@ def _load_qt_bindings() -> SimpleNamespace:
         QSystemTrayIcon=QSystemTrayIcon,
         QTimer=QTimer,
         QToolTip=QToolTip,
+        QTreeWidget=QTreeWidget,
+        QTreeWidgetItem=QTreeWidgetItem,
         Qt=Qt,
+        qVersion=qVersion,
         QUrl=QUrl,
         Signal=Signal,
         QVBoxLayout=QVBoxLayout,
@@ -488,6 +619,13 @@ def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
     return f"Open {_remote_service_label(remote)} in browser"
 
 
+def _shortcut_hint(action: str) -> str:
+    for value in shortcut_values(action):
+        if value:
+            return f"\nShortcut: {value}"
+    return ""
+
+
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
     if not remotes:
         return "Mountlet - no rclone remotes"
@@ -500,6 +638,103 @@ def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) ->
     if len(mounted_names) > 3:
         names += f", +{len(mounted_names) - 3} more"
     return f"Mountlet - mounted: {names}"
+
+
+def _config_sync_state_path() -> Path:
+    return app_state_dir() / "config-sync.json"
+
+
+def _load_config_sync_state() -> dict[str, Any]:
+    path = _config_sync_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_config_sync_state(state: dict[str, Any]) -> None:
+    path = _config_sync_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _sync_metadata_summary(metadata: dict[str, object]) -> str:
+    return (
+        f"Updated {_human_sync_time(metadata.get('created_at'))} "
+        f"{_human_sync_platform(metadata)} {_human_sync_device(metadata.get('device'))}."
+    )
+
+
+def _human_sync_platform(metadata: dict[str, object]) -> str:
+    system = str(metadata.get("system") or "").strip()
+    release = str(metadata.get("system_release") or "").strip()
+    raw_platform = str(metadata.get("platform") or "").strip()
+    if system:
+        label = _friendly_system_name(system)
+        if release and release.casefold() not in label.casefold():
+            label = f"{label} {release}"
+        return f"from {label}"
+    if raw_platform:
+        return f"from {raw_platform}"
+    return "from an unknown OS"
+
+
+def _friendly_system_name(system: str) -> str:
+    names = {
+        "darwin": "macOS",
+        "linux": "Linux",
+        "windows": "Windows",
+    }
+    return names.get(system.casefold(), system)
+
+
+def _human_sync_device(value: object) -> str:
+    device = str(value or "").strip()
+    if not device:
+        return "on an unknown device"
+    local_device = platform.node()
+    if local_device and device.casefold() == local_device.casefold():
+        return "on this device"
+    return f'on device "{device}"'
+
+
+def _human_sync_time(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "at an unknown time"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return f"at {raw}"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone()
+    month = local.strftime("%b")
+    hour = local.strftime("%I").lstrip("0") or "0"
+    return f"on {month} {local.day}, {local.year} at {hour}:{local:%M} {local:%p}"
+
+
+def _message_might_be_auth_failure(message: str) -> bool:
+    text = message.casefold()
+    indicators = (
+        "token expired",
+        "expired token",
+        "refresh token",
+        "invalid_grant",
+        "unauthorized",
+        "401",
+        "403",
+        "access_denied",
+        "authentication",
+        "authorization",
+        "oauth",
+        "login required",
+        "reauth",
+    )
+    return any(indicator in text for indicator in indicators)
 
 
 def _drive_credential_option_label(credentials: core.DriveOAuthCredentials, unique_count: int) -> str:
@@ -538,6 +773,127 @@ def _provider_status_color(status: str, widget: Any) -> str:
         return _palette_text_color(widget)
     background = widget.palette().color(widget.backgroundRole())
     return "#facc15" if _color_luminance(background) < 128 else "#92400e"
+
+
+def _command_version_line(command: list[str], *, timeout: int = 5) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            **core.PLATFORM.command_process_options(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"version check failed: {exc}"
+    output = (result.stdout or "").strip()
+    if not output:
+        return f"version check exited with code {result.returncode}"
+    return output.splitlines()[0].strip()
+
+
+def _rclone_about_line() -> str:
+    binary = core.find_rclone()
+    if not binary:
+        return "rclone: not found"
+    return f"rclone: {_command_version_line([binary, 'version'])} ({binary})"
+
+
+def _mount_driver_about_line() -> str:
+    platform_services = get_platform()
+    if platform_services.system_name == "Linux":
+        tool = shutil.which("fusermount3") or shutil.which("fusermount")
+        if not tool:
+            return "FUSE: not found"
+        return f"FUSE: {_command_version_line([tool, '--version'])} ({tool})"
+    if platform_services.system_name == "Darwin":
+        for package_id in ("io.macfuse.filesystems.macfuse", "com.github.osxfuse.pkg.Core"):
+            version = _macos_package_version(package_id)
+            if version:
+                return f"macFUSE: {version}"
+        return "macFUSE: detected" if platform_services.mount_driver_available() else "macFUSE: not found"
+    if platform_services.system_name == "Windows":
+        version = _windows_winfsp_version()
+        if version:
+            return f"WinFsp: {version}"
+        return "WinFsp: detected" if platform_services.mount_driver_available() else "WinFsp: not found"
+    return "Filesystem driver: detected" if platform_services.mount_driver_available() else "Filesystem driver: not found"
+
+
+def _macos_package_version(package_id: str) -> str:
+    try:
+        result = subprocess.run(
+            ["pkgutil", "--pkg-info", package_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            **core.PLATFORM.command_process_options(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    for line in (result.stdout or "").splitlines():
+        key, _separator, value = line.partition(":")
+        if key.strip() == "version":
+            return value.strip()
+    return ""
+
+
+def _windows_winfsp_version() -> str:
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    roots = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    )
+    for root, key_path in roots:
+        try:
+            with winreg.OpenKey(root, key_path) as parent:
+                for index in range(winreg.QueryInfoKey(parent)[0]):
+                    try:
+                        subkey_name = winreg.EnumKey(parent, index)
+                        with winreg.OpenKey(parent, subkey_name) as subkey:
+                            name = str(winreg.QueryValueEx(subkey, "DisplayName")[0])
+                            if "WinFsp" not in name:
+                                continue
+                            return str(winreg.QueryValueEx(subkey, "DisplayVersion")[0])
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return ""
+
+
+def _qt_about_line(qt: SimpleNamespace) -> str:
+    qversion = getattr(qt, "qVersion", None)
+    if callable(qversion):
+        try:
+            return f"Qt: {qversion()}"
+        except Exception:
+            pass
+    return "Qt: unknown"
+
+
+def _about_text(qt: SimpleNamespace) -> str:
+    return "\n".join(
+        [
+            f"Mountlet: {__version__}",
+            f"Python: {platform.python_version()}",
+            _qt_about_line(qt),
+            _rclone_about_line(),
+            _mount_driver_about_line(),
+            f"Platform: {platform.platform()}",
+            f"rclone config: {core.CONFIG_PATH}",
+            f"Mount folder: {core.BASE_MOUNT_DIR}",
+        ]
+    )
 
 
 def _popup_position(
@@ -580,20 +936,155 @@ def _frameless_window_flags(qt: SimpleNamespace, base_name: str) -> Any | None:
         return None
 
 
-def _main_window_type_name(is_macos: bool) -> str:
-    return "Window" if is_macos else "Tool"
+def _native_dialog_flags(qt: SimpleNamespace) -> Any | None:
+    try:
+        window_type = qt.Qt.WindowType
+        flags = window_type.Dialog
+    except Exception:
+        return None
+    for name in (
+        "WindowTitleHint",
+        "WindowSystemMenuHint",
+        "WindowMinMaxButtonsHint",
+        "WindowCloseButtonHint",
+    ):
+        try:
+            flags |= getattr(window_type, name)
+        except Exception:
+            pass
+    return flags
 
 
-def _create_frameless_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
-    flags = _frameless_window_flags(qt, "Dialog")
+def _main_window_type_name(is_macos: bool, is_wayland: bool = False) -> str:
+    return "Window" if is_macos or is_wayland else "Tool"
+
+
+def _main_window_uses_native_frame(is_wayland: bool) -> bool:
+    return bool(is_wayland)
+
+
+def _windows_foreground_is_tray() -> bool:
+    if platform.system() != "Windows":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        foreground = user32.GetForegroundWindow()
+        if not foreground:
+            return False
+        buffer = ctypes.create_unicode_buffer(256)
+        if not user32.GetClassNameW(foreground, buffer, len(buffer)):
+            return False
+    except (AttributeError, OSError):
+        return False
+    return buffer.value in {
+        "Shell_TrayWnd",
+        "NotifyIconOverflowWindow",
+        "TopLevelWindowForOverflowXamlIsland",
+    }
+
+
+def _create_child_dialog(qt: SimpleNamespace, parent: Any | None = None) -> Any:
+    flags = _native_dialog_flags(qt)
     if flags is not None:
         try:
             return qt.QDialog(parent, flags)
         except Exception:
             pass
-    dialog = qt.QDialog(parent)
-    _apply_frameless_window_flags(qt, dialog, base_name="Dialog")
-    return dialog
+    return qt.QDialog(parent)
+
+
+class PrerequisiteWizard:
+    """Keep the graphical startup alive while external prerequisites are installed."""
+
+    def __init__(self, qt: SimpleNamespace) -> None:
+        self.qt = qt
+        self.dialog = qt.QDialog()
+        self.dialog.setWindowTitle("Mountlet setup")
+        icon_path = _packaged_icon_path()
+        if icon_path:
+            self.dialog.setWindowIcon(qt.QIcon(icon_path))
+        self.dialog.setMinimumWidth(480)
+
+        layout = qt.QVBoxLayout(self.dialog)
+        heading = qt.QLabel("Prepare Mountlet")
+        font = heading.font()
+        font.setBold(True)
+        font.setPointSize(font.pointSize() + 2)
+        heading.setFont(font)
+        layout.addWidget(heading)
+
+        description = qt.QLabel(
+            "Mountlet uses your existing rclone configuration and your operating "
+            "system's filesystem driver. Install anything marked as missing, then "
+            "return here."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        self.rows = qt.QGridLayout()
+        layout.addLayout(self.rows)
+        self._row_widgets: dict[str, tuple[Any, Any, Any]] = {}
+
+        actions = qt.QHBoxLayout()
+        actions.addStretch(1)
+        self.recheck_button = qt.QPushButton("Check again")
+        self.close_button = qt.QPushButton("Close")
+        actions.addWidget(self.recheck_button)
+        actions.addWidget(self.close_button)
+        layout.addLayout(actions)
+
+        self.recheck_button.clicked.connect(self.refresh)
+        self.close_button.clicked.connect(self.dialog.reject)
+        self.timer = qt.QTimer(self.dialog)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self.refresh)
+        self._accept_pending = False
+        self.refresh()
+        self.timer.start()
+
+    def refresh(self) -> None:
+        prerequisites = setup_wizard.check_prerequisites()
+        for row, item in enumerate(prerequisites):
+            widgets = self._row_widgets.get(item.key)
+            if widgets is None:
+                name = self.qt.QLabel()
+                status = self.qt.QLabel()
+                help_button = self.qt.QPushButton("Installation instructions")
+                help_button.clicked.connect(
+                    lambda _checked=False, url=item.help_url: self.qt.QDesktopServices.openUrl(self.qt.QUrl(url))
+                )
+                self.rows.addWidget(name, row, 0)
+                self.rows.addWidget(status, row, 1)
+                self.rows.addWidget(help_button, row, 2)
+                widgets = (name, status, help_button)
+                self._row_widgets[item.key] = widgets
+            name, status, help_button = widgets
+            name.setText(item.label)
+            status.setText("Ready" if item.ready else item.detail)
+            status.setToolTip(item.detail)
+            help_button.setVisible(not item.ready)
+
+        ready = all(item.ready for item in prerequisites)
+        self.recheck_button.setEnabled(not ready)
+        if ready and not self._accept_pending:
+            self._accept_pending = True
+            self.timer.stop()
+            self.qt.QTimer.singleShot(150, self.dialog.accept)
+
+    def run(self) -> bool:
+        accepted = int(self.dialog.exec() or 0)
+        try:
+            return accepted == int(self.qt.QDialog.DialogCode.Accepted)
+        except Exception:
+            return accepted != 0
+
+
+def _run_prerequisite_wizard(qt: SimpleNamespace) -> bool:
+    if get_platform().system_name == "Darwin":
+        _set_macos_accessory_mode()
+    app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+    app.setQuitOnLastWindowClosed(False)
+    return PrerequisiteWizard(qt).run()
 
 
 def _apply_frameless_window_flags(qt: SimpleNamespace, window: Any, *, base_name: str = "Window") -> None:
@@ -916,6 +1407,7 @@ def _open_folder_in_dolphin_new_window(path: str) -> bool:
     try:
         subprocess.Popen(
             [dolphin, "--new-window", path],
+            env=external_process_environment(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -1485,7 +1977,7 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
         ),
     ):
         return True
-    if manager.identifier != SYSTEM_FILE_MANAGER_ID and open_with_file_manager(
+    if (platform.system() == "Windows" or manager.identifier != SYSTEM_FILE_MANAGER_ID) and open_with_file_manager(
         manager,
         path,
         new_window=strategy == "new_window",
@@ -1505,7 +1997,12 @@ def _open_text_file_focused(path: Path) -> bool:
             commands.append([editor_path, path_text])
     for command in commands:
         try:
-            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(
+                command,
+                env=external_process_environment(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             return True
         except OSError:
             continue
@@ -1555,7 +2052,7 @@ def _config_bool(value: str) -> bool:
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = _create_frameless_dialog(qt, parent)
+        self.dialog = _create_child_dialog(qt, parent)
 
     def exec(self) -> int:
         return int(self.dialog.exec() or 0)
@@ -1616,7 +2113,7 @@ class AppConfigDialog(_ConfigDialogBase):
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("App settings")
-        self.dialog.resize(460, 210)
+        self.dialog.resize(460, 280)
         self.fields: dict[str, Any] = {}
         self._build()
 
@@ -1645,6 +2142,12 @@ class AppConfigDialog(_ConfigDialogBase):
             ),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
+            "integrated_file_edits": self._check(app_settings.integrated_file_edits),
+            "config_sync_remote": self._combo(
+                (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
+                app_settings.config_sync_remote,
+            ),
+            "config_sync_path": self._line(app_settings.config_sync_path),
         }
         self.fields["auto_mount"].setText("Auto-mount by default")
         self.fields["auto_mount"].setToolTip("Mount remotes automatically unless a remote overrides it.")
@@ -1652,6 +2155,10 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["start_at_login"].setToolTip("Start Mountlet automatically after signing in.")
         self.fields["focus_file_manager"].setText("Focus file manager")
         self.fields["focus_file_manager"].setToolTip("Bring the file manager forward after opening a mount folder.")
+        self.fields["integrated_file_edits"].setText("Allow edits in Mountlet Files")
+        self.fields["integrated_file_edits"].setToolTip(
+            "Allow direct copy, move, delete, drag-and-drop, and folder creation in Mountlet Files."
+        )
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("Default mount folder", self.fields["mount_base"])
@@ -1659,15 +2166,30 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
+        form.addRow(self.fields["integrated_file_edits"])
+        form.addRow("Config sync remote", self.fields["config_sync_remote"])
+        form.addRow("Config sync path", self.fields["config_sync_path"])
+        warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
+        warning.setWordWrap(True)
+        warning.setStyleSheet(_muted_text_style(warning))
+        form.addRow("", warning)
         root.addWidget(frame)
         root.addWidget(self._buttons())
         self.dialog.adjustSize()
 
     def _save(self) -> None:
+        current = load_app_settings()
         try:
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
         except ValueError:
             delay = 0.0
+        if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Direct file edits",
+                "Edits made in Mountlet Files are direct and not undoable. Deleted files are not sent to "
+                "the system trash. Use the system file manager when you want buffered file-manager behavior.",
+            )
 
         save_app_settings(
             AppSettings(
@@ -1678,11 +2200,278 @@ class AppConfigDialog(_ConfigDialogBase):
                 file_manager=self.fields["file_manager"].currentData() or "",
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
+                integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
+                config_sync_remote=self.fields["config_sync_remote"].currentData() or "",
+                config_sync_path=self.fields["config_sync_path"].text().strip() or "Mountlet/config.mountlet",
+                shortcuts=current.shortcuts,
             )
         )
         global _file_manager_label_cache
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
+        self.dialog.accept()
+
+
+class ShortcutConfigDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("Keyboard shortcuts")
+        self.dialog.resize(680, 620)
+        self.fields: dict[str, list[Any]] = {}
+        self.conflict_label: Any | None = None
+        self._build()
+
+    def _build(self) -> None:
+        ensure_default_config_files()
+        app_settings = load_app_settings()
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+
+        scroll = self.qt.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(self.qt.QFrame.Shape.NoFrame)
+        content = self.qt.QWidget()
+        content_layout = self.qt.QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(6)
+
+        content_layout.addWidget(self._fixed_shortcut_box())
+        alternatives = self.qt.QGroupBox("Alternative inputs")
+        alternatives_layout = self.qt.QVBoxLayout(alternatives)
+        alternatives_layout.setSpacing(6)
+        for title, fields in SHORTCUT_GROUPS:
+            alternatives_layout.addWidget(self._shortcut_group(title, fields, app_settings.shortcuts))
+        content_layout.addWidget(alternatives)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
+
+        self.conflict_label = self.qt.QLabel("")
+        self.conflict_label.setStyleSheet("color: #dc2626;")
+        root.addWidget(self.conflict_label)
+        restore = self.qt.QPushButton("Restore defaults")
+        restore.clicked.connect(lambda _checked=False: self._restore_defaults())
+        root.addWidget(restore)
+        self._button_box = self._buttons()
+        root.addWidget(self._button_box)
+        self._update_conflicts()
+        self._resize_to_content(content)
+
+    def _resize_to_content(self, content: Any) -> None:
+        try:
+            content.adjustSize()
+            self.dialog.adjustSize()
+            screen = self.dialog.screen() or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            content_hint = content.sizeHint()
+            preferred_width = max(680, content_hint.width() + 44)
+            preferred_height = max(520, content_hint.height() + 120)
+            max_width = max(360, int(available.width() * 0.92))
+            max_height = max(320, int(available.height() * 0.92))
+            self.dialog.resize(min(preferred_width, max_width), min(preferred_height, max_height))
+        except Exception:
+            self.dialog.adjustSize()
+
+    def _fixed_shortcut_box(self) -> Any:
+        group = self.qt.QGroupBox("Fixed inputs")
+        layout = self.qt.QVBoxLayout(group)
+        layout.setSpacing(6)
+        for title, rows in FIXED_SHORTCUT_GROUPS:
+            layout.addWidget(self._fixed_shortcut_group(title, rows))
+        return group
+
+    def _fixed_shortcut_group(self, title: str, rows: tuple[tuple[str, str], ...]) -> Any:
+        group = self.qt.QGroupBox(title)
+        form = self.qt.QFormLayout(group)
+        for keys, description in rows:
+            label = self.qt.QLabel(description)
+            label.setWordWrap(True)
+            label.setStyleSheet(_muted_text_style(label))
+            form.addRow(keys, label)
+        return group
+
+    def _shortcut_group(
+        self,
+        title: str,
+        fields: tuple[tuple[str, str], ...],
+        shortcuts: dict[str, tuple[str, ...]],
+    ) -> Any:
+        group = self.qt.QGroupBox(title)
+        form = self.qt.QFormLayout(group)
+        for key, label in fields:
+            row = self.qt.QWidget()
+            row_layout = self.qt.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+            values = list(shortcuts.get(key, DEFAULT_SHORTCUTS[key]))[:3]
+            values.extend([""] * (3 - len(values)))
+            self.fields[key] = []
+            for index, value in enumerate(values):
+                field = self.qt.QKeySequenceEdit(self.qt.QKeySequence(value))
+                field.setToolTip(
+                    f"Alternative shortcut {index + 1}"
+                )
+                field.keySequenceChanged.connect(lambda _sequence=None: self._update_conflicts())
+                self.fields[key].append(field)
+                row_layout.addWidget(field)
+            form.addRow(label, row)
+        return group
+
+    def _save(self) -> None:
+        conflicts = self._shortcut_conflicts(self._current_shortcuts())
+        if conflicts:
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Shortcut conflict",
+                "\n".join(conflicts),
+            )
+            self._update_conflicts()
+            return
+        current = load_app_settings()
+        shortcuts = self._current_shortcuts()
+        save_app_settings(
+            AppSettings(
+                mount_base=current.mount_base,
+                auto_mount=current.auto_mount,
+                auto_mount_delay=current.auto_mount_delay,
+                start_at_login=current.start_at_login,
+                file_manager=current.file_manager,
+                open_folder_behavior=current.open_folder_behavior,
+                focus_file_manager=current.focus_file_manager,
+                integrated_file_edits=current.integrated_file_edits,
+                config_sync_remote=current.config_sync_remote,
+                config_sync_path=current.config_sync_path,
+                shortcuts=shortcuts,
+            )
+        )
+        self.dialog.accept()
+
+    def _restore_defaults(self) -> None:
+        for key, fields in self.fields.items():
+            values = list(DEFAULT_SHORTCUTS[key])
+            values.extend([""] * (3 - len(values)))
+            for field, value in zip(fields, values, strict=False):
+                field.setKeySequence(self.qt.QKeySequence(value))
+        self._update_conflicts()
+
+    def _current_shortcuts(self) -> dict[str, tuple[str, ...]]:
+        shortcuts: dict[str, tuple[str, ...]] = {}
+        for key, fields in self.fields.items():
+            values = []
+            for field in fields:
+                value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
+                if value:
+                    values.append(value)
+            shortcuts[key] = tuple(values[:3]) or DEFAULT_SHORTCUTS[key]
+        return shortcuts
+
+    def _update_conflicts(self) -> None:
+        conflicts = self._shortcut_conflicts(self._current_shortcuts())
+        conflict_keys = self._conflict_keys(self._current_shortcuts())
+        for key, fields in self.fields.items():
+            for field in fields:
+                value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
+                normalized = normalize_shortcut_text(value)
+                field.setStyleSheet("border: 1px solid #dc2626;" if normalized in conflict_keys else "")
+        if self.conflict_label is not None:
+            self.conflict_label.setText("\n".join(conflicts[:2]))
+        try:
+            self._button_box.button(self.qt.QDialogButtonBox.StandardButton.Save).setEnabled(not conflicts)
+        except Exception:
+            pass
+
+    def _shortcut_conflicts(self, shortcuts: dict[str, tuple[str, ...]]) -> list[str]:
+        conflicts = []
+        for title, fields in SHORTCUT_CONTEXTS:
+            names = dict(fields)
+            seen: dict[str, str] = {}
+            context_conflicts: set[str] = set()
+            for key, _label in fields:
+                for value in shortcuts.get(key, ()):
+                    normalized = normalize_shortcut_text(value)
+                    if not normalized:
+                        continue
+                    if normalized in seen:
+                        context_conflicts.add(
+                            f"{title}: {value} is assigned to {seen[normalized]} and {names[key]}."
+                        )
+                    else:
+                        seen[normalized] = names[key]
+            conflicts.extend(sorted(context_conflicts))
+        return conflicts
+
+    def _conflict_keys(self, shortcuts: dict[str, tuple[str, ...]]) -> set[str]:
+        result: set[str] = set()
+        for _title, fields in SHORTCUT_CONTEXTS:
+            seen: set[str] = set()
+            for key, _label in fields:
+                for value in shortcuts.get(key, ()):
+                    normalized = normalize_shortcut_text(value)
+                    if not normalized:
+                        continue
+                    if normalized in seen:
+                        result.add(normalized)
+                    seen.add(normalized)
+        return result
+
+
+class ConfigSyncDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("Config sync")
+        self.dialog.resize(420, 160)
+        self.fields: dict[str, Any] = {}
+        self._build()
+
+    def _build(self) -> None:
+        app_settings = load_app_settings()
+        root = self.qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+
+        frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        self.fields = {
+            "remote": self._combo(
+                (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
+                app_settings.config_sync_remote,
+            ),
+            "path": self._line(app_settings.config_sync_path),
+        }
+        self.fields["path"].setPlaceholderText("Mountlet/config.mountlet")
+        self.fields["path"].setToolTip("Remote path for the encrypted config bundle.")
+        form.addRow("Remote", self.fields["remote"])
+        form.addRow("Bundle path", self.fields["path"])
+        note = self.qt.QLabel("The sync password is not stored. Mountlet will ask before each push or pull.")
+        note.setWordWrap(True)
+        note.setStyleSheet(_muted_text_style(note))
+        form.addRow("", note)
+        root.addWidget(frame)
+        root.addWidget(self._buttons())
+        self.dialog.adjustSize()
+
+    def _save(self) -> None:
+        current = load_app_settings()
+        save_app_settings(
+            AppSettings(
+                mount_base=current.mount_base,
+                auto_mount=current.auto_mount,
+                auto_mount_delay=current.auto_mount_delay,
+                start_at_login=current.start_at_login,
+                file_manager=current.file_manager,
+                open_folder_behavior=current.open_folder_behavior,
+                focus_file_manager=current.focus_file_manager,
+                integrated_file_edits=current.integrated_file_edits,
+                config_sync_remote=self.fields["remote"].currentData() or "",
+                config_sync_path=self.fields["path"].text().strip() or "Mountlet/config.mountlet",
+                shortcuts=current.shortcuts,
+            )
+        )
         self.dialog.accept()
 
 
@@ -1856,7 +2645,10 @@ class MountConfigDialog(_ConfigDialogBase):
             return "bool", self._check(_config_bool(value))
         if key in RCLONE_SELECT_FIELDS:
             return "combo", self._editable_config_combo(RCLONE_SELECT_FIELDS[key], value)
-        return "text", self._line(value)
+        field = self._line(value)
+        if key == "client_secret":
+            field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        return "text", field
 
     def _rclone_config_value(self, kind: str, field: Any) -> str:
         if kind == "bool":
@@ -1869,7 +2661,7 @@ class MountConfigDialog(_ConfigDialogBase):
 class NewRemoteWizard:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
-        self.dialog = _create_frameless_dialog(qt, parent)
+        self.dialog = _create_child_dialog(qt, parent)
         self.dialog.setWindowTitle("Add remote")
         self.dialog.resize(520, 280)
         self.fields: dict[str, Any] = {}
@@ -2052,6 +2844,29 @@ class NewRemoteWizard:
         koofr_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         koofr_help.setStyleSheet(_muted_text_style(koofr_help))
 
+        proton_user = self.qt.QLineEdit()
+        proton_user.setPlaceholderText("Proton email address")
+        proton_user.setToolTip("Your Proton account username or email address.")
+        proton_pass = self.qt.QLineEdit()
+        proton_pass.setPlaceholderText("Proton password")
+        proton_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        proton_pass.setToolTip("Your Proton account password. rclone stores this obscured in rclone.conf.")
+        proton_2fa = self.qt.QLineEdit()
+        proton_2fa.setPlaceholderText("Optional")
+        proton_2fa.setToolTip("Current 2FA code, if Proton asks for one during setup.")
+        proton_mailbox_pass = self.qt.QLineEdit()
+        proton_mailbox_pass.setPlaceholderText("Optional")
+        proton_mailbox_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        proton_mailbox_pass.setToolTip("Only needed for two-password Proton accounts.")
+        proton_help = self.qt.QLabel(
+            "Proton Drive support is beta in rclone. Log in to Proton Drive in a browser first so Proton has generated "
+            'your Drive encryption keys. <a href="https://rclone.org/protondrive/">rclone Proton Drive guide</a>'
+        )
+        proton_help.setWordWrap(True)
+        proton_help.setOpenExternalLinks(True)
+        proton_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        proton_help.setStyleSheet(_muted_text_style(proton_help))
+
         webdav_url = self.qt.QLineEdit()
         webdav_vendor = self.qt.QComboBox()
         for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
@@ -2079,6 +2894,10 @@ class NewRemoteWizard:
             s3_remote_path,
             koofr_user,
             koofr_pass,
+            proton_user,
+            proton_pass,
+            proton_2fa,
+            proton_mailbox_pass,
             webdav_url,
             webdav_user,
             webdav_pass,
@@ -2110,6 +2929,11 @@ class NewRemoteWizard:
             "koofr_user": koofr_user,
             "koofr_pass": koofr_pass,
             "koofr_help": koofr_help,
+            "proton_user": proton_user,
+            "proton_pass": proton_pass,
+            "proton_2fa": proton_2fa,
+            "proton_mailbox_pass": proton_mailbox_pass,
+            "proton_help": proton_help,
             "webdav_url": webdav_url,
             "webdav_vendor": webdav_vendor,
             "webdav_user": webdav_user,
@@ -2135,6 +2959,11 @@ class NewRemoteWizard:
         form.addRow("Koofr user", koofr_user)
         form.addRow("Koofr app password", koofr_pass)
         form.addRow(koofr_help)
+        form.addRow("Proton user", proton_user)
+        form.addRow("Proton password", proton_pass)
+        form.addRow("Proton 2FA code", proton_2fa)
+        form.addRow("Proton mailbox password", proton_mailbox_pass)
+        form.addRow(proton_help)
         form.addRow("WebDAV URL", webdav_url)
         form.addRow("WebDAV vendor", webdav_vendor)
         form.addRow(webdav_help)
@@ -2190,6 +3019,8 @@ class NewRemoteWizard:
             return self._s3_fields_are_valid()
         if remote_type == "koofr":
             return self._koofr_fields_are_valid()
+        if remote_type == "protondrive":
+            return self._proton_fields_are_valid()
         if remote_type == "webdav":
             return self._webdav_fields_are_valid()
         return True
@@ -2209,6 +3040,9 @@ class NewRemoteWizard:
 
     def _koofr_fields_are_valid(self) -> bool:
         return bool(self.fields["koofr_user"].text().strip() and self.fields["koofr_pass"].text().strip())
+
+    def _proton_fields_are_valid(self) -> bool:
+        return bool(self.fields["proton_user"].text().strip() and self.fields["proton_pass"].text().strip())
 
     def _webdav_fields_are_valid(self) -> bool:
         url = self.fields["webdav_url"].text().strip()
@@ -2253,6 +3087,18 @@ class NewRemoteWizard:
             return
         if self._remote_type == "koofr" and not self._koofr_fields_are_valid():
             self._warning("Add remote", "Enter the Koofr user and app password before creating the remote.")
+            return
+        if self._remote_type == "protondrive" and not self._proton_fields_are_valid():
+            self._warning("Add remote", "Enter the Proton user and password before creating the remote.")
+            return
+        if self._remote_type == "protondrive" and rclone_wizard.backend_is_available("protondrive") is False:
+            self._warning(
+                "Add remote",
+                "This rclone installation does not include Proton Drive support.\n\n"
+                "Update rclone to v1.64.0 or newer, then try again.",
+            )
+            self._remote_name = ""
+            self._remote_alias = ""
             return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
             self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
@@ -2469,6 +3315,8 @@ class NewRemoteWizard:
             return self._s3_config_args()
         if self._remote_type == "koofr":
             return self._koofr_config_args()
+        if self._remote_type == "protondrive":
+            return self._proton_config_args()
         if self._remote_type == "webdav":
             return self._webdav_config_args()
         return []
@@ -2502,6 +3350,23 @@ class NewRemoteWizard:
             "password",
             self.fields["koofr_pass"].text().strip(),
         ]
+
+    def _proton_config_args(self) -> list[str]:
+        args = [
+            "username",
+            self.fields["proton_user"].text().strip(),
+            "password",
+            self.fields["proton_pass"].text(),
+            "enable_caching",
+            "false",
+        ]
+        code = self.fields["proton_2fa"].text().strip()
+        mailbox_password = self.fields["proton_mailbox_pass"].text()
+        if code:
+            args.extend(["2fa", code])
+        if mailbox_password:
+            args.extend(["mailbox_password", mailbox_password])
+        return args
 
     def _webdav_config_args(self) -> list[str]:
         args = [
@@ -2703,6 +3568,10 @@ class NewRemoteWizard:
             "s3_remote_path",
             "koofr_user",
             "koofr_pass",
+            "proton_user",
+            "proton_pass",
+            "proton_2fa",
+            "proton_mailbox_pass",
             "webdav_url",
             "webdav_vendor",
             "webdav_user",
@@ -2739,6 +3608,7 @@ class NewRemoteWizard:
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
         is_s3 = remote_type == "s3"
         is_koofr = remote_type == "koofr"
+        is_proton = remote_type == "protondrive"
         is_webdav = remote_type == "webdav"
         for field_name in (
             "credential_source",
@@ -2764,6 +3634,14 @@ class NewRemoteWizard:
             "koofr_help",
         ):
             self._set_form_row_visible(self.fields[field_name], is_koofr)
+        for field_name in (
+            "proton_user",
+            "proton_pass",
+            "proton_2fa",
+            "proton_mailbox_pass",
+            "proton_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_proton)
         for field_name in (
             "webdav_url",
             "webdav_vendor",
@@ -2851,6 +3729,7 @@ class NewRemoteWizard:
             "box": "Work Box",
             "pcloud": "Personal pCloud",
             "koofr": "Personal Koofr",
+            "protondrive": "Personal Proton Drive",
             "s3": "Archive S3",
             "webdav": "Nextcloud",
         }
@@ -3186,6 +4065,7 @@ class MountletWindow:
         self._action_pending: set[str] = set()
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
+        self._selected_remote_name = ""
         self._name_column_width = 160
         self._refresh_pending = False
         self._child_dialogs: list[Any] = []
@@ -3194,15 +4074,40 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._keep_above = False
         self._keep_above_button: Any | None = None
+        self._settings_button: Any | None = None
+        self._push_sync_button: Any | None = None
+        self._pull_sync_button: Any | None = None
+        self._remote_sync_metadata: dict[str, object] | None = None
+        self._remote_sync_check_pending = False
+        self._position_after_fit = False
+        self._last_tray_anchor: Any | None = None
+        self._last_popup_position: tuple[int, int] | None = None
         self._drag_offset: Any | None = None
+        self._deactivated_for_tray = False
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self._bridge.folder_opened.connect(self._handle_folder_opened)
+        self._bridge.sync_metadata_ready.connect(self._handle_sync_metadata_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
+        self.file_browser = CompactCloudBrowser(
+            self.qt,
+            self.window,
+            remotes=_load_visible_remotes,
+            notify=lambda title, message, success: self.tray_app._notify(title, message, success=success),
+            open_mount=self._open_remote_path,
+            open_file=self.desktop.open_file,
+            file_manager_label=self.desktop.file_manager_label,
+            embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
+            layout_changed=self._browser_layout_changed,
+        )
+        self.window.focus_remote_row = self._focus_current_remote_row
+        self.window.update_focus_style = self._update_main_focus_style
+        self.file_browser.window.setWindowIcon(self.tray_app.icon)
+        self.file_browser.preload(_load_visible_remotes())
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -3223,6 +4128,7 @@ class MountletWindow:
             action_finished = qt.Signal(str, bool, str)
             bulk_action_finished = qt.Signal(str, object, object)
             folder_opened = qt.Signal(bool)
+            sync_metadata_ready = qt.Signal(object, object)
 
         return Bridge()
 
@@ -3234,8 +4140,17 @@ class MountletWindow:
             def __init__(self) -> None:
                 tray_app = getattr(outer, "tray_app", None)
                 base_name = _main_window_type_name(
-                    bool(getattr(tray_app, "_is_macos", False))
+                    bool(getattr(tray_app, "_is_macos", False)),
+                    bool(getattr(tray_app, "_is_wayland", False)),
                 )
+                if _main_window_uses_native_frame(bool(getattr(tray_app, "_is_wayland", False))):
+                    try:
+                        super().__init__(None, getattr(qt.Qt.WindowType, base_name))
+                        return
+                    except Exception:
+                        pass
+                    super().__init__()
+                    return
                 flags = _frameless_window_flags(qt, base_name)
                 if flags is not None:
                     try:
@@ -3252,6 +4167,20 @@ class MountletWindow:
                         return
                 except Exception:
                     pass
+
+            def keyPressEvent(self, event: Any) -> None:
+                if outer._handle_main_key(event):
+                    return
+                super().keyPressEvent(event)
+
+            def changeEvent(self, event: Any) -> None:
+                super().changeEvent(event)
+                if event.type() in {
+                    qt.QEvent.Type.ActivationChange,
+                    qt.QEvent.Type.WindowActivate,
+                    qt.QEvent.Type.WindowDeactivate,
+                }:
+                    outer._update_main_focus_style()
                 try:
                     super().closeEvent(event)
                 except Exception:
@@ -3266,8 +4195,14 @@ class MountletWindow:
         class CloseFilter(qt.QObject):
             def eventFilter(self, watched: object, event: object) -> bool:
                 try:
-                    if watched is outer.window and event.type() == qt.QEvent.Type.Close:
-                        return outer._handle_window_close(event)
+                    if watched is outer.window:
+                        event_type = event.type()
+                        if event_type == qt.QEvent.Type.Close:
+                            return outer._handle_window_close(event)
+                        if event_type == qt.QEvent.Type.WindowActivate:
+                            outer._deactivated_for_tray = False
+                        elif event_type == qt.QEvent.Type.WindowDeactivate:
+                            outer._deactivated_for_tray = _windows_foreground_is_tray()
                 except Exception:
                     return False
                 return False
@@ -3285,30 +4220,47 @@ class MountletWindow:
         return True
 
     def _build_app_menu(self) -> None:
-        app_menu = self.window.menuBar().addMenu("App")
+        menu_bar = self.window.menuBar()
+        try:
+            menu_bar.setNativeMenuBar(False)
+        except Exception:
+            pass
+        app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
 
-        mount_menu = self.window.menuBar().addMenu("Mount")
+        mount_menu = menu_bar.addMenu("Mount")
         self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
         self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
         mount_menu.addSeparator()
         self.tray_app._add_action(mount_menu, "Add remote", self._show_new_remote_wizard)
 
-        config_menu = self.window.menuBar().addMenu("Config")
-        self.tray_app._add_action(config_menu, "App settings", self._show_app_config_editor)
+        config_menu = menu_bar.addMenu("Config")
+        self.tray_app._add_action(config_menu, "Keyboard shortcuts", self._show_shortcut_config_editor)
         config_menu.addSeparator()
-        self.tray_app._add_action(config_menu, "Open app config file", self._open_app_config_file)
-        self.tray_app._add_action(config_menu, "Open mount config file", self._open_mount_config_file)
+        self.tray_app._add_action(config_menu, "Export config bundle", self._export_config_bundle)
+        self.tray_app._add_action(config_menu, "Import config bundle", self._import_config_bundle)
+        self.tray_app._add_action(config_menu, "Open config backup folder", self._open_config_backup_folder)
         config_menu.addSeparator()
-        self.tray_app._add_action(config_menu, "Open rclone config file", self._open_rclone_config_file)
+        self.tray_app._add_action(config_menu, "Set config sync location", self._show_config_sync_editor)
+        self.tray_app._add_action(config_menu, "Push config to sync location", self._push_config_sync_bundle)
+        self.tray_app._add_action(config_menu, "Pull config from sync location", self._pull_config_sync_bundle)
+        config_menu.addSeparator()
+        self._add_open_config_files_menu(config_menu)
+
+    def _add_open_config_files_menu(self, parent_menu: Any) -> Any:
+        files_menu = parent_menu.addMenu("Open config file")
+        self.tray_app._add_action(files_menu, "rclone", self._open_rclone_config_file)
+        self.tray_app._add_action(files_menu, "App", self._open_app_config_file)
+        self.tray_app._add_action(files_menu, "Mounts", self._open_mount_config_file)
         if _has_mount_driver_config():
-            self.tray_app._add_action(
-                config_menu,
-                "Open filesystem driver config",
-                self._open_fuse_config_file,
-            )
+            self.tray_app._add_action(files_menu, "Filesystem driver", self._open_fuse_config_file)
+        return files_menu
+
+    def _show_about(self) -> None:
+        self.qt.QMessageBox.information(self.window, "About Mountlet", _about_text(self.qt))
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -3318,7 +4270,12 @@ class MountletWindow:
             return
         visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
-            if self._window_is_active() or self._has_visible_child_dialog():
+            if (
+                self._window_is_active()
+                or getattr(self, "_deactivated_for_tray", False)
+                or self._has_visible_child_dialog()
+            ):
+                self._deactivated_for_tray = False
                 self._hide_window_stack()
             else:
                 self.show()
@@ -3337,9 +4294,12 @@ class MountletWindow:
             was_visible = False
         self.refresh()
         if not was_visible:
+            self._position_after_fit = True
             self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
+        if not was_visible:
+            self._schedule_position_near_tray()
 
     def _window_is_active(self) -> bool:
         try:
@@ -3376,6 +4336,14 @@ class MountletWindow:
         timer.singleShot(150, self._activate_main_window_if_current_desktop)
         timer.singleShot(300, self._activate_main_window_if_current_desktop)
 
+    def _schedule_position_near_tray(self) -> None:
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            return
+        timer.singleShot(0, self._position_near_tray)
+        timer.singleShot(50, self._position_near_tray)
+        timer.singleShot(150, self._position_near_tray)
+
     def _activate_main_window_if_current_desktop(self) -> None:
         desktop = self._desktop_api()
         desktop.move_window_to_current_workspace(self.window)
@@ -3391,6 +4359,9 @@ class MountletWindow:
     def _activate_main_window(self) -> None:
         self.window.raise_()
         self.window.activateWindow()
+        qt = getattr(self, "qt", None)
+        if qt is not None:
+            qt.QTimer.singleShot(0, self._focus_current_remote_row)
 
     def _schedule_child_window_raises(self) -> None:
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
@@ -3453,7 +4424,6 @@ class MountletWindow:
     def _open_child_dialog(self, owner: Any, on_accepted: Any | None = None) -> None:
         dialog = owner.dialog
         self._track_child_dialog(dialog, owner)
-        _apply_frameless_window_flags(self.qt, dialog, base_name="Dialog")
         try:
             dialog.setModal(True)
             dialog.setWindowModality(self.qt.Qt.WindowModality.WindowModal)
@@ -3472,10 +4442,35 @@ class MountletWindow:
         if dialog not in getattr(self, "_child_dialogs", []) or self._tray_is_quitting():
             return
         dialog.show()
+        self._fit_child_dialog_to_screen(dialog)
         self._raise_child_windows()
+
+    def _fit_child_dialog_to_screen(self, dialog: Any) -> None:
+        try:
+            screen = dialog.screen() or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            size = dialog.size()
+            width = min(size.width(), max(320, available.width()))
+            height = min(size.height(), max(240, available.height()))
+            if width != size.width() or height != size.height():
+                dialog.resize(width, height)
+            position = dialog.frameGeometry().topLeft()
+            max_x = max(available.left(), available.left() + available.width() - width)
+            max_y = max(available.top(), available.top() + available.height() - height)
+            x = min(max(position.x(), available.left()), max_x)
+            y = min(max(position.y(), available.top()), max_y)
+            if x != position.x() or y != position.y():
+                dialog.move(x, y)
+        except Exception:
+            return
 
     def _hide_window_stack(self) -> None:
         self._close_child_dialogs()
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser.hide()
         self._window_stack_hidden = True
         try:
             self.window.hide()
@@ -3570,8 +4565,7 @@ class MountletWindow:
 
     def _position_near_tray(self) -> None:
         try:
-            tray_geometry = self.tray_app.tray.geometry()
-            anchor = tray_geometry.center() if tray_geometry.isValid() else self.qt.QCursor.pos()
+            anchor, geometry_valid = self._tray_anchor()
             screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
             if screen is None:
                 return
@@ -3579,15 +4573,92 @@ class MountletWindow:
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
-            x, y = _popup_position(
-                anchor.x(),
-                anchor.y(),
-                (available.left(), available.top(), available.width(), available.height()),
-                (size.width(), size.height()),
-            )
+            if getattr(self.tray_app, "_is_gnome_wayland", False) and not geometry_valid:
+                x = available.left() + available.width() - size.width() - 8
+                y = available.top() + 8
+            else:
+                x, y = _popup_position(
+                    anchor.x(),
+                    anchor.y(),
+                    (available.left(), available.top(), available.width(), available.height()),
+                    (size.width(), size.height()),
+                )
+            x, y = self._safe_popup_position(x, y, available, size)
             self.window.move(x, y)
+            self._last_popup_position = (x, y)
         except Exception:
             return
+
+    def _tray_anchor(self) -> tuple[Any, bool]:
+        tray_geometry = self.tray_app.tray.geometry()
+        primary_screen = self.qt.QApplication.primaryScreen()
+        available = primary_screen.availableGeometry() if primary_screen is not None else None
+        if tray_geometry.isValid() and available is not None and not self._tray_geometry_is_suspicious(tray_geometry, available):
+            anchor = tray_geometry.center()
+            self._last_tray_anchor = anchor
+            return anchor, True
+        cursor = self.qt.QCursor.pos()
+        screen = self.qt.QApplication.screenAt(cursor) or primary_screen
+        available = screen.availableGeometry() if screen is not None else available
+        if available is not None and not self._point_is_suspicious_anchor(cursor, available):
+            self._last_tray_anchor = cursor
+            return cursor, False
+        remembered = getattr(self, "_last_tray_anchor", None)
+        if remembered is not None:
+            return remembered, False
+        if available is not None:
+            point = self.qt.QPoint(available.right() - 8, available.top() + 8)
+            return point, False
+        return cursor, False
+
+    def _tray_geometry_is_suspicious(self, tray_geometry: Any, available: Any) -> bool:
+        try:
+            center = tray_geometry.center()
+            return (
+                tray_geometry.width() <= 1
+                or tray_geometry.height() <= 1
+                or self._point_is_suspicious_anchor(center, available)
+            )
+        except Exception:
+            return True
+
+    def _point_is_suspicious_anchor(self, point: Any, available: Any) -> bool:
+        try:
+            return (
+                abs(point.x() - available.left()) <= 1
+                and abs(point.y() - available.top()) <= 1
+            )
+        except Exception:
+            return True
+
+    def _safe_popup_position(self, x: int, y: int, available: Any, size: Any) -> tuple[int, int]:
+        if not self._position_is_suspicious(x, y, available):
+            return x, y
+        remembered = getattr(self, "_last_popup_position", None)
+        if remembered is not None:
+            remembered_x, remembered_y = remembered
+            if not self._position_is_suspicious(remembered_x, remembered_y, available):
+                return self._clamped_popup_position(remembered_x, remembered_y, available, size)
+        fallback_x = available.left() + available.width() - size.width() - 8
+        fallback_y = available.top() + 8
+        return self._clamped_popup_position(fallback_x, fallback_y, available, size)
+
+    def _position_is_suspicious(self, x: int, y: int, available: Any) -> bool:
+        try:
+            return (
+                abs(x) <= 1
+                and abs(y) <= 1
+            ) or (
+                abs(x - available.left()) <= 1
+                and abs(y - available.top()) <= 1
+            )
+        except Exception:
+            return True
+
+    def _clamped_popup_position(self, x: int, y: int, available: Any, size: Any) -> tuple[int, int]:
+        max_x = max(available.left(), available.left() + available.width() - size.width())
+        max_y = max(available.top(), available.top() + available.height() - size.height())
+        return min(max(x, available.left()), max_x), min(max(y, available.top()), max_y)
 
     def _clamp_to_screen(self, screen: Any | None = None) -> None:
         try:
@@ -3611,15 +4682,18 @@ class MountletWindow:
             return
         self._refresh_pending = False
         remotes = _load_visible_remotes()
+        self._request_config_sync_metadata_check(remotes)
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
             self._name_column_width = name_width
+            self._update_config_sync_buttons()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if mounted_by_name[remote.name]:
                     self._schedule_storage_load(remote)
+            self._browser_layout_changed()
             return
 
         root = self.qt.QWidget()
@@ -3631,12 +4705,15 @@ class MountletWindow:
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(REMOTE_LIST_MIN_HEIGHT)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
         rows.setSpacing(6)
         self._row_widgets = {}
         self._current_remote_names = remote_names
+        if self._selected_remote_name not in remote_names:
+            self._selected_remote_name = remote_names[0] if remote_names else ""
         self._name_column_width = name_width
         if remotes:
             for remote in remotes:
@@ -3649,8 +4726,179 @@ class MountletWindow:
         outer.addWidget(scroll)
         outer.addWidget(self._add_remote_row())
 
-        self.window.setCentralWidget(root)
+        central = root
+        if getattr(self.tray_app, "_is_wayland", False):
+            central = self.qt.QWidget()
+            shell = self.qt.QHBoxLayout(central)
+            shell.setContentsMargins(0, 0, 0, 0)
+            shell.setSpacing(6)
+            try:
+                root.setSizePolicy(
+                    self.qt.QSizePolicy.Policy.Fixed,
+                    self.qt.QSizePolicy.Policy.Preferred,
+                )
+            except Exception:
+                pass
+            shell.addWidget(root, 0)
+            self.file_browser.embed_into(shell)
+        central.setObjectName("mountletMainSurface")
+        self._main_surface = central
+        self.window.setCentralWidget(central)
+        self._update_main_focus_style()
+        self._content_fit_widgets = (root, scroll, container)
+        self.file_browser.preload(remotes)
         self._fit_to_content(root, scroll, container)
+        self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
+
+    def _finish_content_fit(self, root: Any, scroll: Any, container: Any, central: Any | None = None) -> None:
+        expected = central or root
+        if self.window.centralWidget() is not expected or self._tray_is_quitting():
+            return
+        self._fit_to_content(root, scroll, container)
+        if getattr(self, "_position_after_fit", False):
+            self._position_after_fit = False
+            self._position_near_tray()
+        self._reposition_file_browser()
+
+    def _browser_layout_changed(self) -> None:
+        widgets = getattr(self, "_content_fit_widgets", None)
+        if widgets is None or self._tray_is_quitting():
+            return
+        self.qt.QTimer.singleShot(0, lambda: self._fit_to_content(*widgets))
+
+    def _update_main_focus_style(self) -> None:
+        root = getattr(self, "_main_surface", None)
+        if root is None:
+            return
+        file_browser = getattr(self, "file_browser", None)
+        browser_focused = bool(file_browser and file_browser.has_focus())
+        active = bool(self.window.isActiveWindow()) and not browser_focused
+        color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
+        root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
+
+    def _toolbar_button(self, text: str, tooltip: str, callback: Any) -> Any:
+        button = self.qt.QPushButton(text)
+        button.setFixedSize(30, 26)
+        button.setToolTip(tooltip)
+        button.clicked.connect(lambda checked=False: callback())
+        return button
+
+    def _settings_toolbar_button(self) -> Any:
+        button = self._toolbar_button("⚙", "App settings", self._show_app_config_editor)
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 2, 12))
+            button.setFont(font)
+        except Exception:
+            pass
+        self._settings_button = button
+        return button
+
+    def _push_sync_toolbar_button(self) -> Any:
+        button = self._toolbar_button("↑", "Push config to sync location", self._push_config_sync_bundle)
+        self._push_sync_button = button
+        return button
+
+    def _pull_sync_toolbar_button(self) -> Any:
+        button = self._toolbar_button("↓", "Pull config from sync location", self._pull_config_sync_bundle)
+        self._pull_sync_button = button
+        return button
+
+    def _update_config_sync_buttons(self) -> None:
+        push_button = getattr(self, "_push_sync_button", None)
+        pull_button = getattr(self, "_pull_sync_button", None)
+        if push_button is None and pull_button is None:
+            return
+        settings = load_app_settings()
+        sync_configured = bool(settings.config_sync_remote)
+        state = _load_config_sync_state()
+        try:
+            local_hash = bundle_file.current_config_fingerprint()
+        except Exception:
+            local_hash = ""
+        last_synced_hash = str(state.get("last_synced_hash") or "")
+        original_last_synced_hash = last_synced_hash
+        hash_kind = str(state.get("last_synced_hash_kind") or "")
+        remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
+        remote_hash = str(remote_metadata.get("config_hash", ""))
+        known_remote_hashes = {
+            value
+            for value in (
+                original_last_synced_hash,
+                str(state.get("remote_config_hash") or ""),
+                str(state.get("last_pushed_hash") or ""),
+                str(state.get("last_pulled_hash") or ""),
+            )
+            if value
+        }
+        if (
+            sync_configured
+            and hash_kind != "operation"
+            and local_hash
+            and remote_hash
+            and remote_hash == original_last_synced_hash
+            and local_hash != original_last_synced_hash
+        ):
+            last_synced_hash = local_hash
+            state["last_synced_hash"] = local_hash
+            state["last_synced_hash_kind"] = "operation"
+            _save_config_sync_state(state)
+        local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
+        remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
+        if push_button is not None:
+            push_button.setText("↑•" if local_changed else "↑")
+            push_button.setEnabled(sync_configured)
+            push_button.setToolTip(
+                "Local config changed since the last push." if local_changed else "Push config to sync location"
+            )
+        if pull_button is not None:
+            pull_button.setText("↓•" if remote_changed else "↓")
+            pull_button.setEnabled(sync_configured)
+            if remote_changed:
+                detail = _sync_metadata_summary(remote_metadata)
+                pull_button.setToolTip(f"Synced config differs from this device.\n{detail}".strip())
+            else:
+                pull_button.setToolTip("Pull config from sync location")
+
+    def _configuration_changed(self) -> None:
+        self._update_config_sync_buttons()
+
+    def _request_config_sync_metadata_check(self, remotes: list[core.RemoteInfo]) -> None:
+        if self._remote_sync_check_pending or self._tray_is_quitting():
+            return
+        settings = load_app_settings()
+        if not settings.config_sync_remote:
+            self._remote_sync_metadata = None
+            self._update_config_sync_buttons()
+            return
+        remote = next((item for item in remotes if item.name == settings.config_sync_remote), None)
+        if remote is None:
+            self._remote_sync_metadata = None
+            self._update_config_sync_buttons()
+            return
+        relative_path = normalize_browser_path(settings.config_sync_path) or "Mountlet/config.mountlet"
+        if Path(relative_path).suffix.casefold() != bundle_file.BUNDLE_EXTENSION:
+            relative_path = f"{relative_path}{bundle_file.BUNDLE_EXTENSION}"
+        self._remote_sync_check_pending = True
+
+        def worker() -> None:
+            try:
+                with tempfile.TemporaryDirectory(prefix="mountlet-sync-status-") as tempdir:
+                    temporary = Path(tempdir) / Path(relative_path).name
+                    self._copy_remote_file_to_local(remote, relative_path, temporary)
+                    metadata = bundle_file.bundle_metadata(temporary)
+                self._bridge.sync_metadata_ready.emit(metadata, None)
+            except Exception as exc:
+                self._bridge.sync_metadata_ready.emit(None, exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_sync_metadata_ready(self, metadata: object, error: object) -> None:
+        self._remote_sync_check_pending = False
+        if self._tray_is_quitting():
+            return
+        self._remote_sync_metadata = metadata if isinstance(metadata, dict) else None
+        self._update_config_sync_buttons()
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")
@@ -3668,6 +4916,10 @@ class MountletWindow:
         except Exception:
             pass
         button.clicked.connect(lambda checked=False: self._toggle_keep_above(bool(checked)))
+        pin_supported = not getattr(self.tray_app, "_is_gnome_wayland", False)
+        button.setEnabled(pin_supported)
+        if not pin_supported:
+            button.setToolTip("GNOME on Wayland does not allow apps to pin their own windows.")
         self._keep_above_button = button
         self._update_keep_above_button()
         return button
@@ -3709,6 +4961,13 @@ class MountletWindow:
         if button is None:
             return
         try:
+            if not button.isEnabled():
+                button.setToolTip("GNOME on Wayland does not allow apps to pin their own windows.")
+                button.setStyleSheet("")
+                return
+        except Exception:
+            pass
+        try:
             button.setChecked(self._keep_above)
         except Exception:
             pass
@@ -3721,7 +4980,14 @@ class MountletWindow:
                 )
             else:
                 button.setToolTip("Keep Mountlet above other windows")
-                button.setStyleSheet("")
+                button.setStyleSheet(
+                    "QPushButton, QPushButton:checked { background: transparent; "
+                    "border: 1px solid transparent; border-radius: 4px; }"
+                )
+                button.setDown(False)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
         except Exception:
             pass
 
@@ -3761,10 +5027,14 @@ class MountletWindow:
         reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
 
         layout.addWidget(drag_handle)
+        layout.addWidget(self._settings_toolbar_button())
+        layout.addWidget(self._push_sync_toolbar_button())
+        layout.addWidget(self._pull_sync_toolbar_button())
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         layout.addWidget(self._pin_button())
+        self._update_config_sync_buttons()
         return widget
 
     def _event_global_point(self, event: Any) -> Any:
@@ -3774,6 +5044,11 @@ class MountletWindow:
     def _begin_window_drag(self, event: Any) -> None:
         try:
             if event.button() != self.qt.Qt.MouseButton.LeftButton:
+                return
+            handle = self.window.windowHandle() if hasattr(self.window, "windowHandle") else None
+            if handle is not None and hasattr(handle, "startSystemMove") and handle.startSystemMove():
+                self._drag_offset = None
+                event.accept()
                 return
             self._drag_offset = self._event_global_point(event) - self.window.frameGeometry().topLeft()
             event.accept()
@@ -3838,6 +5113,7 @@ class MountletWindow:
             )
         save_mount_settings(settings)
         self._current_remote_names = []
+        self._configuration_changed()
         self.tray_app.rebuild_menus()
 
     def _reverse_remote_order(self) -> None:
@@ -3851,22 +5127,38 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        open_tooltip = f"Open {remote.display_name} in {self.desktop.file_manager_label()}"
-        title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
+        open_tooltip = f"Browse {remote.display_name}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
         frame.setProperty("mounted", mounted)
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+        frame.setFocusPolicy(self.qt.Qt.FocusPolicy.StrongFocus)
+        frame.setFixedHeight(REMOTE_ROW_HEIGHT)
         frame.setToolTip(open_tooltip)
+        frame.setAcceptDrops(True)
         frame.mouseReleaseEvent = lambda event, row=frame, selected=remote: self._handle_remote_row_click(event, row, selected)
         frame.enterEvent = lambda event, row=frame, tooltip=open_tooltip: self._highlight_remote_row(
             row,
             highlighted=True,
             tooltip=tooltip,
+            remote=remote,
         )
         frame.leaveEvent = lambda event, row=frame: self._highlight_remote_row(row, highlighted=False)
+        frame.focusInEvent = lambda event, row=frame, selected=remote: self._remote_row_focus(
+            event, row, selected, focused=True
+        )
+        frame.focusOutEvent = lambda event, row=frame, selected=remote: self._remote_row_focus(
+            event, row, selected, focused=False
+        )
+        frame.keyPressEvent = lambda event, selected=remote, row=frame: self._handle_remote_row_key(
+            event, selected, row
+        )
+        frame.dragEnterEvent = lambda event, row=frame, selected=remote: self._remote_drag_enter(event, row, selected)
+        frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+        frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
         frame.setStyleSheet(self._remote_row_style(frame, highlighted=False))
         layout = self.qt.QGridLayout(frame)
         layout.setContentsMargins(8, 5, 8, 5)
@@ -3897,7 +5189,9 @@ class MountletWindow:
         toggle.setProperty("rowControl", True)
         toggle.setChecked(mounted)
         toggle.setEnabled(not action_pending)
-        toggle_tooltip = f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        toggle_tooltip = (
+            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        ) + _shortcut_hint("remote_toggle_mount")
         toggle.setToolTip(toggle_tooltip)
         toggle.enterEvent = lambda event, widget=toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(widget, tooltip)
         toggle.stateChanged.connect(
@@ -3908,7 +5202,7 @@ class MountletWindow:
         self._set_status_text(status, usage, action_pending=action_pending)
         config_button = self._icon_button("⚙", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
         config_button.setProperty("rowControl", True)
-        config_tooltip = f"Configure {remote.display_name}"
+        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
         config_button.setToolTip(config_tooltip)
         config_button.enterEvent = lambda event, widget=config_button, tooltip=config_tooltip: self._show_immediate_tooltip(
             widget,
@@ -3943,6 +5237,7 @@ class MountletWindow:
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        frame.setFixedHeight(REMOTE_ROW_HEIGHT)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
         tooltip = "Add a new remote"
         frame.setToolTip(tooltip)
@@ -3970,11 +5265,12 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = mounted and remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        open_tooltip = f"Open {remote.display_name} in {self.desktop.file_manager_label()}"
-        title_tooltip = f"{open_tooltip}\n{remote.mount_path}" if mounted else remote.mount_path
+        open_tooltip = f"Browse {remote.display_name}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         row.frame.setProperty("mounted", mounted)
         row.frame.setToolTip(open_tooltip)
+        row.frame.setAcceptDrops(True)
         row.frame.mouseReleaseEvent = lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
             event,
             frame,
@@ -3984,6 +5280,21 @@ class MountletWindow:
             frame,
             highlighted=True,
             tooltip=tooltip,
+            remote=remote,
+        )
+        row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
+            event, frame, selected
+        )
+        row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+        row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
+        row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
+            event, frame, selected, focused=True
+        )
+        row.frame.focusOutEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
+            event, frame, selected, focused=False
+        )
+        row.frame.keyPressEvent = lambda event, selected=remote, frame=row.frame: self._handle_remote_row_key(
+            event, selected, frame
         )
         row.frame.setStyleSheet(self._remote_row_style(row.frame, highlighted=False))
 
@@ -4003,7 +5314,9 @@ class MountletWindow:
         row.toggle.setChecked(mounted)
         row.toggle.blockSignals(False)
         row.toggle.setEnabled(not action_pending)
-        toggle_tooltip = f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        toggle_tooltip = (
+            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
+        ) + _shortcut_hint("remote_toggle_mount")
         row.toggle.setToolTip(toggle_tooltip)
         row.toggle.enterEvent = lambda event, widget=row.toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(
             widget,
@@ -4012,7 +5325,7 @@ class MountletWindow:
 
         self._set_status_text(row.status, usage, action_pending=action_pending)
         row.config_button.setEnabled(not action_pending)
-        config_tooltip = f"Configure {remote.display_name}"
+        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
         row.config_button.setToolTip(config_tooltip)
         row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
             self._show_immediate_tooltip(widget, tooltip)
@@ -4024,11 +5337,11 @@ class MountletWindow:
     def _update_browser_button(self, button: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
         if url:
-            tooltip = _remote_browser_tooltip(remote)
+            tooltip = _remote_browser_tooltip(remote) + _shortcut_hint("remote_open_browser")
             button.setEnabled(True)
             button.setStyleSheet(f"color: {_provider_color(remote)};")
         else:
-            tooltip = f"No browser view is configured for {remote.display_name}"
+            tooltip = f"No browser view is configured for {remote.display_name}" + _shortcut_hint("remote_open_browser")
             button.setEnabled(False)
             button.setStyleSheet("")
         button.setToolTip(tooltip)
@@ -4095,6 +5408,7 @@ class MountletWindow:
                 order=order,
             )
         save_mount_settings(settings)
+        self._configuration_changed()
 
     def _sort_uses_storage(self, sort_mode: str) -> bool:
         return sort_mode in STORAGE_SORT_MODES
@@ -4261,32 +5575,260 @@ class MountletWindow:
             if child.property("rowControl"):
                 return
             child = child.parentWidget()
-        if not row.property("mounted"):
-            return
-        self._open_folder(remote)
+        self._browse_remote(remote, row)
 
     def _remote_row_style(self, row: Any, *, highlighted: bool) -> str:
         mounted = bool(row.property("mounted"))
+        selected = bool(row.property("browserSelected"))
+        keyboard_focus = bool(row.property("keyboardFocus"))
+        hovered = highlighted or bool(row.property("hovered"))
+        border = "rgba(107, 114, 128, 90)"
+        background = "rgba(107, 114, 128, 24)" if not mounted else "transparent"
         if not mounted:
-            return (
-                "QFrame#remoteRow {"
-                "border: 1px solid rgba(107, 114, 128, 90);"
-                "background: rgba(107, 114, 128, 24);"
-                "}"
+            if selected:
+                border = "#3b82f6"
+                background = "rgba(59, 130, 246, 30)"
+            if keyboard_focus:
+                border = "#2563eb"
+                background = "rgba(37, 99, 235, 45)"
+        elif hovered or selected or keyboard_focus:
+            border = "#2563eb" if keyboard_focus else "#3b82f6" if selected else "rgba(22, 163, 74, 190)"
+            background = (
+                "rgba(37, 99, 235, 45)"
+                if keyboard_focus
+                else "rgba(59, 130, 246, 30)"
+                if selected
+                else "rgba(22, 163, 74, 36)"
             )
-        if highlighted:
-            return (
-                "QFrame#remoteRow {"
-                "border: 1px solid rgba(22, 163, 74, 190);"
-                "background: rgba(22, 163, 74, 36);"
-                "}"
-            )
-        return ""
+        return (
+            "QFrame#remoteRow {"
+            f"border: 2px solid {border};"
+            "border-radius: 4px;"
+            f"background: {background};"
+            "}"
+        )
 
-    def _highlight_remote_row(self, row: Any, *, highlighted: bool, tooltip: str | None = None) -> None:
-        row.setStyleSheet(self._remote_row_style(row, highlighted=highlighted))
-        if highlighted and row.property("mounted") and tooltip:
+    def _highlight_remote_row(
+        self,
+        row: Any,
+        *,
+        highlighted: bool,
+        tooltip: str | None = None,
+        remote: core.RemoteInfo | None = None,
+    ) -> None:
+        row.setProperty("hovered", highlighted)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+        if highlighted and tooltip:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
+        if highlighted and remote is not None:
+            try:
+                row.setFocus(self.qt.Qt.FocusReason.MouseFocusReason)
+            except Exception:
+                pass
+            self._select_browser_remote(remote, row)
+
+    def _browse_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        self._set_browser_selected(remote.name)
+        self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=True)
+
+    def _select_browser_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        self._set_browser_selected(remote.name)
+        self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=False)
+
+    def _set_browser_selected(self, remote_name: str | None) -> None:
+        self._selected_remote_name = remote_name or ""
+        for name, widgets in self._row_widgets.items():
+            widgets.frame.setProperty("browserSelected", name == remote_name)
+            widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+
+    def _reposition_file_browser(self) -> None:
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is None or not file_browser.is_visible() or file_browser.remote is None:
+            return
+        row = self._row_widgets.get(file_browser.remote.name)
+        if row is not None:
+            file_browser.show_remote(file_browser.remote, row.frame, show_browser=False)
+
+    def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
+        if focused:
+            for widgets in self._row_widgets.values():
+                if widgets.frame is not row:
+                    widgets.frame.setProperty("keyboardFocus", False)
+                    widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+        row.setProperty("keyboardFocus", focused)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+        if focused:
+            self._select_browser_remote(remote, row)
+        try:
+            event.accept()
+        except Exception:
+            pass
+
+    def _handle_remote_row_key(self, event: Any, remote: core.RemoteInfo, row: Any) -> None:
+        key = event.key()
+        if matches_shortcut(self.qt, event, "remote_move_up"):
+            self._move_focused_remote(remote.name, -1)
+        elif matches_shortcut(self.qt, event, "remote_move_down"):
+            self._move_focused_remote(remote.name, 1)
+        elif matches_shortcut(self.qt, event, "common_previous"):
+            self._focus_relative_remote(remote.name, -1)
+        elif matches_shortcut(self.qt, event, "common_next"):
+            self._focus_relative_remote(remote.name, 1)
+        elif matches_shortcut(self.qt, event, "remote_toggle_mount"):
+            self._toggle_remote_mount(remote)
+        elif matches_shortcut(self.qt, event, "remote_config"):
+            self._show_mount_config_editor(remote)
+        elif matches_shortcut(self.qt, event, "remote_open_browser"):
+            self._open_remote_in_browser(remote)
+        elif key == self.qt.Qt.Key.Key_Up:
+            self._focus_relative_remote(remote.name, -1)
+        elif key == self.qt.Qt.Key.Key_Down:
+            self._focus_relative_remote(remote.name, 1)
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+            self._browse_remote(remote, row)
+        elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            if self._direction_points_to_browser(key):
+                self._browse_remote(remote, row)
+            else:
+                event.accept()
+                return
+        elif matches_shortcut(self.qt, event, "remote_enter_browser"):
+            self._browse_remote(remote, row)
+        else:
+            event.ignore()
+            return
+        event.accept()
+
+    def _handle_main_key(self, event: Any) -> bool:
+        key = event.key()
+        focused_remote_name = self._focused_remote_name()
+        if matches_shortcut(self.qt, event, "remote_move_up"):
+            self._move_focused_remote(focused_remote_name, -1)
+        elif matches_shortcut(self.qt, event, "remote_move_down"):
+            self._move_focused_remote(focused_remote_name, 1)
+        elif matches_shortcut(self.qt, event, "common_previous"):
+            self._focus_relative_remote(focused_remote_name, -1)
+        elif matches_shortcut(self.qt, event, "common_next"):
+            self._focus_relative_remote(focused_remote_name, 1)
+        elif matches_shortcut(self.qt, event, "remote_toggle_mount"):
+            focused_remote = self._remote_by_name(focused_remote_name)
+            if focused_remote is None:
+                return False
+            self._toggle_remote_mount(focused_remote)
+        elif matches_shortcut(self.qt, event, "remote_config"):
+            focused_remote = self._remote_by_name(focused_remote_name)
+            if focused_remote is None:
+                return False
+            self._show_mount_config_editor(focused_remote)
+        elif matches_shortcut(self.qt, event, "remote_open_browser"):
+            focused_remote = self._remote_by_name(focused_remote_name)
+            if focused_remote is None:
+                return False
+            self._open_remote_in_browser(focused_remote)
+        elif key == self.qt.Qt.Key.Key_Up:
+            self._focus_relative_remote(focused_remote_name, -1)
+        elif key == self.qt.Qt.Key.Key_Down:
+            self._focus_relative_remote(focused_remote_name, 1)
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter}:
+            self._focus_current_browser()
+        elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            if self._direction_points_to_browser(key):
+                self._focus_current_browser()
+            else:
+                event.accept()
+                return True
+        elif matches_shortcut(self.qt, event, "remote_enter_browser"):
+            self._focus_current_browser()
+        else:
+            return False
+        event.accept()
+        return True
+
+    def _move_focused_remote(self, remote_name: str, delta: int) -> None:
+        if not remote_name or not self._can_move_remote(remote_name, delta):
+            return
+        self._move_remote(remote_name, delta)
+        self._focus_remote_row(remote_name)
+
+    def _direction_points_to_browser(self, key: Any) -> bool:
+        side = getattr(self.file_browser, "side", lambda: "right")()
+        if side == "left":
+            return key == self.qt.Qt.Key.Key_Left
+        return key == self.qt.Qt.Key.Key_Right
+
+    def _focused_remote_name(self) -> str:
+        selected = getattr(self, "_selected_remote_name", "")
+        if selected in getattr(self, "_current_remote_names", []):
+            return selected
+        for name, widgets in getattr(self, "_row_widgets", {}).items():
+            if widgets.frame.hasFocus():
+                return name
+        remote = getattr(self.file_browser, "remote", None)
+        return remote.name if remote is not None else ""
+
+    def _focus_relative_remote(self, remote_name: str, delta: int) -> None:
+        names = list(self._current_remote_names)
+        if not names:
+            return
+        try:
+            index = names.index(remote_name)
+        except ValueError:
+            index = 0 if delta >= 0 else len(names) - 1
+        else:
+            index = min(max(index + delta, 0), len(names) - 1)
+        self._focus_remote_row(names[index])
+
+    def _focus_remote_row(self, remote_name: str) -> None:
+        self._selected_remote_name = remote_name if remote_name in self._row_widgets else ""
+        for widgets in self._row_widgets.values():
+            widgets.frame.setProperty("keyboardFocus", False)
+            widgets.frame.setProperty("hovered", False)
+            widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+        row = self._row_widgets.get(remote_name)
+        if row is not None:
+            row.frame.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+
+    def _focus_current_remote_row(self) -> None:
+        name = self._focused_remote_name()
+        if not name and self._current_remote_names:
+            name = self._current_remote_names[0]
+        self._focus_remote_row(name)
+
+    def _focus_current_browser(self) -> None:
+        name = self._focused_remote_name()
+        row = self._row_widgets.get(name)
+        remote = self._remote_by_name(name)
+        if row is not None and remote is not None:
+            self._browse_remote(remote, row.frame)
+
+    def _remote_by_name(self, name: str) -> core.RemoteInfo | None:
+        return next((item for item in _load_visible_remotes() if item.name == name), None)
+
+    def _toggle_remote_mount(self, remote: core.RemoteInfo) -> None:
+        action = core.unmount_remote if core.is_mounted(remote) else core.mount_remote
+        self._run_remote_action(remote, action)
+
+    def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        if not event.mimeData().hasFormat(MIME_TYPE):
+            event.ignore()
+            return
+        self._select_browser_remote(remote, row)
+        event.acceptProposedAction()
+
+    def _remote_drag_move(self, event: Any) -> None:
+        if event.mimeData().hasFormat(MIME_TYPE):
+            event.acceptProposedAction()
+
+    def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
+        if not event.mimeData().hasFormat(MIME_TYPE):
+            event.ignore()
+            return
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+        move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
+        self.file_browser.remote = remote
+        self.file_browser.path = self.file_browser.backend.current_path(remote.name)
+        self.file_browser.accept_drop(bytes(event.mimeData().data(MIME_TYPE)), move=move)
+        event.acceptProposedAction()
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
         name = html.escape(self._truncated_remote_alias(remote, include_provider=bool(remote.provider)))
@@ -4328,23 +5870,43 @@ class MountletWindow:
         horizontal_padding = margins.left() + margins.right()
         vertical_padding = margins.top() + margins.bottom()
         content_width = max(toolbar_size.width(), add_row_size.width(), container_size.width())
-        width = horizontal_padding + content_width + scroll_frame + 2
+        remote_panel_width = (
+            horizontal_padding + content_width + scroll_frame + scroll.verticalScrollBar().sizeHint().width() + 2
+        )
+        width = remote_panel_width
         height = (
             menu_height
             + vertical_padding
             + toolbar_size.height()
             + add_row_size.height()
-            + container_size.height()
+            + max(container_size.height(), REMOTE_LIST_MIN_HEIGHT)
             + scroll_frame
             + (spacing * 2)
             + 2
         )
+        file_browser = getattr(self, "file_browser", None)
+        if getattr(getattr(self, "tray_app", None), "_is_wayland", False):
+            try:
+                root.setMinimumWidth(remote_panel_width)
+                root.setMaximumWidth(remote_panel_width)
+            except Exception:
+                pass
+        if (
+            getattr(getattr(self, "tray_app", None), "_is_wayland", False)
+            and file_browser is not None
+            and file_browser.is_visible()
+        ):
+            browser_size = file_browser.root.sizeHint()
+            browser_width = max(browser_size.width(), EMBEDDED_BROWSER_MIN_WIDTH)
+            browser_height = max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT)
+            width += browser_width + 6
+            height = max(height, menu_height + browser_height + 16)
 
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
-            max_width = max(360, available.width() - 96)
-            max_height = max(220, available.height() - 96)
+            max_width = max(360, available.width() - 16)
+            max_height = max(220, available.height() - 16)
         else:
             max_width = 960
             max_height = 720
@@ -4353,7 +5915,29 @@ class MountletWindow:
             width += scroll.verticalScrollBar().sizeHint().width()
             height = max_height
 
-        self.window.resize(min(max(width, 360), max_width), min(max(height, 132), max_height))
+        target_width = min(max(width, 360), max_width)
+        target_height = min(max(height, 220), max_height)
+        self._resize_anchored(target_width, target_height, screen)
+
+    def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
+        """Resize while preserving the window's nearest screen-edge offsets."""
+        if not self.is_visible() or screen is None:
+            self.window.resize(width, height)
+            self._clamp_to_screen(screen)
+            return
+        try:
+            available = screen.availableGeometry()
+            frame = self.window.frameGeometry()
+            left_gap = max(frame.left() - available.left(), 0)
+            right_gap = max(available.right() - frame.right(), 0)
+            top_gap = max(frame.top() - available.top(), 0)
+            bottom_gap = max(available.bottom() - frame.bottom(), 0)
+            self.window.resize(width, height)
+            x = available.left() + left_gap if left_gap <= right_gap else available.right() - right_gap - width + 1
+            y = available.top() + top_gap if top_gap <= bottom_gap else available.bottom() - bottom_gap - height + 1
+            self.window.move(x, y)
+        except Exception:
+            self.window.resize(width, height)
         self._clamp_to_screen(screen)
 
     def _layout_item_size(self, layout: Any, index: int) -> Any:
@@ -4412,9 +5996,47 @@ class MountletWindow:
             return
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
+        self.file_browser.invalidate(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
+        if not success:
+            self._offer_reauthentication_if_relevant(remote_name, message)
         self.tray_app.rebuild_menus()
         self._request_refresh()
+
+    def _offer_reauthentication_if_relevant(self, remote_name: str, message: str) -> None:
+        if not _message_might_be_auth_failure(message):
+            return
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
+        if remote is None:
+            return
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Reauthenticate remote?",
+            f"{remote.display_name} may need to sign in again.\n\n"
+            "Reauthenticate it now and retry mounting?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        self._run_remote_reauthentication(remote, remount=True)
+
+    def _run_remote_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
+        if remote.name in self._action_pending:
+            return
+        self._action_pending.add(remote.name)
+        self._request_refresh()
+
+        def worker() -> None:
+            success, reconnect_message = core.reconnect_remote(remote)
+            if success and remount:
+                mount_success, mount_message = core.mount_remote(remote)
+                message = f"{reconnect_message}\n{mount_message}"
+                self._bridge.action_finished.emit(remote.name, mount_success, message)
+                return
+            self._bridge.action_finished.emit(remote.name, success, reconnect_message)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _mount_all(self) -> None:
         self._run_bulk_action("Mount all", core.mount_all)
@@ -4442,8 +6064,11 @@ class MountletWindow:
     def _handle_bulk_action_finished(self, title: str, completed: object, failures: object) -> None:
         if self._tray_is_quitting():
             return
+        pending_names = set(self._action_pending)
         self._action_pending.clear()
         self._usage_cache.clear()
+        for remote_name in pending_names:
+            self.file_browser.invalidate(remote_name)
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
@@ -4456,12 +6081,23 @@ class MountletWindow:
         self._request_refresh()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
-        if not os.path.isdir(remote.mount_path):
+        self._open_remote_path(remote, "")
+
+    def _open_remote_path(self, remote: core.RemoteInfo, relative_path: str) -> None:
+        if not core.is_mounted(remote):
             self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
+            return
+        path = Path(remote.mount_path).joinpath(*[part for part in relative_path.split("/") if part])
+        if platform.system() != "Windows" and not path.is_dir():
+            self.tray_app._notify(
+                "Open folder",
+                "The mount folder is not reachable. Remount this remote and try again.",
+                success=False,
+            )
             return
 
         def worker() -> None:
-            self._bridge.folder_opened.emit(self.desktop.open_folder(remote.mount_path))
+            self._bridge.folder_opened.emit(self.desktop.open_folder(str(path)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -4487,9 +6123,22 @@ class MountletWindow:
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
         self._open_child_dialog(dialog, on_accepted)
+
+    def _show_shortcut_config_editor(self) -> None:
+        self._open_child_dialog(ShortcutConfigDialog(self.qt, self.window), self._configuration_changed)
+
+    def _show_config_sync_editor(self) -> None:
+        def on_accepted() -> None:
+            self._remote_sync_metadata = None
+            self.tray_app.rebuild_menus()
+            self._configuration_changed()
+            self._request_config_sync_metadata_check(_load_visible_remotes())
+
+        self._open_child_dialog(ConfigSyncDialog(self.qt, self.window), on_accepted)
 
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
         old_remotes = _load_visible_remotes()
@@ -4502,12 +6151,14 @@ class MountletWindow:
                 self._current_remote_names = []
                 self.tray_app.rebuild_menus()
                 self.refresh()
+                self._configuration_changed()
                 return
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._configuration_changed()
             self._ask_remount_for_config_changes(changes)
 
         self._open_child_dialog(dialog, on_accepted)
@@ -4520,6 +6171,7 @@ class MountletWindow:
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
             self.refresh()
+            self._configuration_changed()
 
         self._open_child_dialog(dialog, on_accepted)
 
@@ -4651,6 +6303,370 @@ class MountletWindow:
     def _open_rclone_config_file(self) -> None:
         self._open_text_config(Path(core.CONFIG_PATH))
 
+    def _export_config_bundle(self) -> None:
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        if file_dialog is None:
+            self.tray_app._notify("Export config", "File dialogs are not available.", success=False)
+            return
+        kwargs = self._file_dialog_kwargs()
+        try:
+            destination, _filter = file_dialog.getSaveFileName(
+                self.window,
+                "Export Mountlet config bundle",
+                str(bundle_file.default_export_path()),
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
+                **kwargs,
+            )
+        except TypeError:
+            destination, _filter = file_dialog.getSaveFileName(
+                self.window,
+                "Export Mountlet config bundle",
+                str(bundle_file.default_export_path()),
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
+            )
+        if not destination:
+            return
+        destination_path = Path(destination).expanduser()
+        if destination_path.suffix.casefold() != bundle_file.BUNDLE_EXTENSION:
+            destination_path = destination_path.with_suffix(bundle_file.BUNDLE_EXTENSION)
+        if destination_path.exists() and not self._confirm_replace_file(destination_path):
+            return
+        password = self._ask_bundle_password(
+            "Export bundle password",
+            "Password for this bundle.\n\nLeave blank to export without encryption.",
+            confirm=True,
+        )
+        if password is None:
+            return
+        remote_destination = self._mounted_remote_file(destination_path)
+        if remote_destination is not None and not password and not self._confirm_unencrypted_remote_export():
+            return
+        try:
+            if remote_destination is None:
+                exported = bundle_file.export_bundle_file(destination_path, overwrite=True, password=password)
+            else:
+                remote, relative_path = remote_destination
+                with tempfile.TemporaryDirectory(prefix="mountlet-export-") as tempdir:
+                    temporary = Path(tempdir) / destination_path.name
+                    bundle_file.export_bundle_file(temporary, overwrite=True, password=password)
+                    self._copy_local_file_to_remote(temporary, remote, relative_path)
+                exported = destination_path
+        except Exception as exc:
+            self.tray_app._notify("Export config", str(exc), success=False)
+            return
+        self._bundle_export_completed(destination_path, remote_destination is not None)
+        self.tray_app._notify("Export config", f"Exported to {exported}.", success=True)
+
+    def _import_config_bundle(self) -> None:
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        if file_dialog is None:
+            self.tray_app._notify("Import config", "File dialogs are not available.", success=False)
+            return
+        kwargs = self._file_dialog_kwargs()
+        try:
+            selected, _filter = file_dialog.getOpenFileName(
+                self.window,
+                "Import Mountlet config bundle",
+                str(Path.home()),
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
+                **kwargs,
+            )
+        except TypeError:
+            selected, _filter = file_dialog.getOpenFileName(
+                self.window,
+                "Import Mountlet config bundle",
+                str(Path.home()),
+                f"Mountlet config bundle (*{bundle_file.BUNDLE_EXTENSION});;All files (*)",
+            )
+        if not selected:
+            return
+        selected_path = Path(selected).expanduser()
+        try:
+            import_metadata = bundle_file.bundle_metadata(selected_path)
+        except Exception:
+            import_metadata = None
+        detail = f"\n\n{_sync_metadata_summary(import_metadata)}" if isinstance(import_metadata, dict) else ""
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Import Mountlet config?",
+            "Replace this device's Mountlet and rclone settings with this bundle?\n\n"
+            f"Mountlet will first save a restorable backup bundle.{detail}",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        password = self._ask_bundle_password(
+            "Import bundle password",
+            "Bundle password.\n\nLeave blank if this bundle is not encrypted.",
+        )
+        if password is None:
+            return
+        try:
+            remote_source = self._mounted_remote_file(selected_path)
+            if remote_source is None:
+                backup_path = bundle_file.import_bundle_file(selected_path, backup=True, password=password)
+            else:
+                remote, relative_path = remote_source
+                with tempfile.TemporaryDirectory(prefix="mountlet-import-") as tempdir:
+                    temporary = Path(tempdir) / selected_path.name
+                    self._copy_remote_file_to_local(remote, relative_path, temporary)
+                    backup_path = bundle_file.import_bundle_file(temporary, backup=True, password=password)
+        except Exception as exc:
+            self.tray_app._notify("Import config", str(exc), success=False)
+            return
+        if isinstance(import_metadata, dict):
+            self._record_config_sync_state(import_metadata)
+            self._remote_sync_metadata = import_metadata
+        self._rclone_config_replaced()
+        message = "Imported bundle and refreshed remotes."
+        if backup_path is not None:
+            message += f"\nBackup: {backup_path}"
+        self.tray_app._notify("Import config", message, success=True)
+
+    def _confirm_replace_file(self, path: Path) -> bool:
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Replace existing bundle?",
+            f"{path} already exists.\n\nReplace it?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
+
+    def _confirm_unencrypted_remote_export(self) -> bool:
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Export without password?",
+            "This bundle contains cloud credentials and will be written to a mounted remote without encryption.\n\n"
+            "Continue?",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
+
+    def _ask_bundle_password(self, title: str, prompt: str, *, confirm: bool = False) -> str | None:
+        password = self._read_password(title, prompt)
+        if password is None:
+            return None
+        if not confirm or not password:
+            return password
+        repeated = self._read_password("Confirm bundle password", "Enter the same password again.")
+        if repeated is None:
+            return None
+        if password != repeated:
+            self.tray_app._notify("Config bundle", "The passwords did not match.", success=False)
+            return None
+        return password
+
+    def _read_password(self, title: str, prompt: str) -> str | None:
+        try:
+            value, accepted = self.qt.QInputDialog.getText(
+                self.window,
+                title,
+                prompt,
+                self.qt.QLineEdit.EchoMode.Password,
+            )
+        except TypeError:
+            value, accepted = self.qt.QInputDialog.getText(self.window, title, prompt)
+        if not accepted:
+            return None
+        return str(value)
+
+    def _open_config_backup_folder(self) -> None:
+        backup_path = bundle_file.backup_dir()
+        backup_path.mkdir(parents=True, exist_ok=True)
+        if not self.desktop.open_folder(str(backup_path)):
+            self.tray_app._notify("Open backups", f"Could not open {backup_path}.", success=False)
+
+    def _push_config_sync_bundle(self) -> None:
+        target = self._config_sync_target()
+        if target is None:
+            return
+        remote, relative_path = target
+        password = self._ask_bundle_password(
+            "Sync bundle password",
+            "Password for the sync bundle.\n\nLeave blank to sync without encryption.",
+            confirm=True,
+        )
+        if password is None:
+            return
+        if not password and not self._confirm_unencrypted_remote_export():
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="mountlet-sync-push-") as tempdir:
+                temporary = Path(tempdir) / Path(relative_path).name
+                bundle_file.export_bundle_file(temporary, overwrite=True, password=password)
+                metadata = bundle_file.bundle_metadata(temporary) if temporary.exists() else {}
+                self._copy_local_file_to_remote(temporary, remote, relative_path)
+        except Exception as exc:
+            self.tray_app._notify("Push config", str(exc), success=False)
+            return
+        if metadata:
+            self._record_config_sync_state(metadata)
+            self._remote_sync_metadata = metadata
+        self._update_config_sync_buttons()
+        self.tray_app._notify("Push config", f"Pushed config to {remote.display_name}/{relative_path}.", success=True)
+
+    def _pull_config_sync_bundle(self) -> None:
+        target = self._config_sync_target()
+        if target is None:
+            return
+        remote, relative_path = target
+        metadata = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="mountlet-sync-info-") as tempdir:
+                temporary = Path(tempdir) / Path(relative_path).name
+                self._copy_remote_file_to_local(remote, relative_path, temporary)
+                metadata = bundle_file.bundle_metadata(temporary)
+        except Exception:
+            metadata = None
+        detail = f"\n\n{_sync_metadata_summary(metadata)}" if isinstance(metadata, dict) else ""
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            "Pull synced config?",
+            "Replace this device's Mountlet and rclone settings with the synced bundle?\n\n"
+            f"Mountlet will first save a restorable backup bundle.{detail}",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        password = self._ask_bundle_password(
+            "Sync bundle password",
+            "Password for the sync bundle.\n\nLeave blank if this bundle is not encrypted.",
+        )
+        if password is None:
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="mountlet-sync-pull-") as tempdir:
+                temporary = Path(tempdir) / Path(relative_path).name
+                self._copy_remote_file_to_local(remote, relative_path, temporary)
+                metadata = bundle_file.bundle_metadata(temporary)
+                backup_path = bundle_file.import_bundle_file(temporary, backup=True, password=password)
+        except Exception as exc:
+            self.tray_app._notify("Pull config", str(exc), success=False)
+            return
+        if isinstance(metadata, dict):
+            self._record_config_sync_state(metadata)
+            self._remote_sync_metadata = metadata
+        self._rclone_config_replaced()
+        message = f"Pulled config from {remote.display_name}/{relative_path}."
+        if backup_path is not None:
+            message += f"\nBackup: {backup_path}"
+        self.tray_app._notify("Pull config", message, success=True)
+
+    def _record_config_sync_state(self, metadata: dict[str, object]) -> None:
+        state = _load_config_sync_state()
+        try:
+            local_hash = bundle_file.current_config_fingerprint()
+        except Exception:
+            local_hash = str(metadata.get("config_hash", ""))
+        if local_hash:
+            state["last_synced_hash"] = local_hash
+            state["last_synced_hash_kind"] = "operation"
+            state["last_pushed_hash"] = local_hash
+            state["last_pulled_hash"] = local_hash
+        for key in ("config_hash", "created_at", "device", "system", "system_release", "platform"):
+            value = metadata.get(key)
+            if value:
+                state[f"remote_{key}"] = value
+        _save_config_sync_state(state)
+
+    def _config_sync_target(self) -> tuple[core.RemoteInfo, str] | None:
+        settings = load_app_settings()
+        if not settings.config_sync_remote:
+            self.tray_app._notify("Config sync", "Set a config sync location first.", success=False)
+            self._show_config_sync_editor()
+            return None
+        remotes = {remote.name: remote for remote in _load_visible_remotes()}
+        remote = remotes.get(settings.config_sync_remote)
+        if remote is None:
+            self.tray_app._notify("Config sync", "The configured sync remote is not available.", success=False)
+            return None
+        relative_path = normalize_browser_path(settings.config_sync_path)
+        if not relative_path:
+            relative_path = "Mountlet/config.mountlet"
+        if Path(relative_path).suffix.casefold() != bundle_file.BUNDLE_EXTENSION:
+            relative_path = f"{relative_path}{bundle_file.BUNDLE_EXTENSION}"
+        return remote, relative_path
+
+    def _mounted_remote_file(self, path: Path) -> tuple[core.RemoteInfo, str] | None:
+        absolute_original = os.path.abspath(os.path.expanduser(str(path)))
+        absolute = os.path.normcase(absolute_original)
+        for remote in _load_visible_remotes():
+            root_original = os.path.abspath(os.path.expanduser(remote.mount_path))
+            root = os.path.normcase(root_original)
+            if absolute == root or not absolute.startswith(root + os.sep):
+                continue
+            relative = os.path.relpath(absolute_original, root_original).replace(os.sep, "/")
+            if relative:
+                return remote, relative
+        return None
+
+    def _copy_remote_file_to_local(self, remote: core.RemoteInfo, relative_path: str, destination: Path) -> None:
+        binary = core.find_rclone()
+        if not binary:
+            raise RuntimeError("rclone was not found.")
+        result = subprocess.run(
+            [binary, "--config", core.CONFIG_PATH, "copyto", remote_target(remote, relative_path), str(destination)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            **core.PLATFORM.command_process_options(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}.")
+
+    def _copy_local_file_to_remote(self, source: Path, remote: core.RemoteInfo, relative_path: str) -> None:
+        binary = core.find_rclone()
+        if not binary:
+            raise RuntimeError("rclone was not found.")
+        result = subprocess.run(
+            [binary, "--config", core.CONFIG_PATH, "copyto", str(source), remote_target(remote, relative_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            **core.PLATFORM.command_process_options(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}.")
+
+    def _bundle_export_completed(self, destination: Path, exported_to_mounted_remote: bool) -> None:
+        self.file_browser.invalidate()
+        if not exported_to_mounted_remote:
+            return
+        parent = str(destination.parent)
+        if platform.system() == "Linux" and _open_folder_in_dolphin_tab(parent, focus=False):
+            return
+        try:
+            with os.scandir(parent):
+                pass
+        except OSError:
+            pass
+
+    def _rclone_config_replaced(self) -> None:
+        self._usage_cache.clear()
+        self._usage_pending.clear()
+        self._action_pending.clear()
+        self._current_remote_names = []
+        self._selected_remote_name = ""
+        self._position_after_fit = self.is_visible()
+        self.file_browser.invalidate()
+        self.tray_app.rebuild_menus()
+        self.refresh()
+        self._configuration_changed()
+
+    def _file_dialog_kwargs(self) -> dict[str, Any]:
+        if platform.system() != "Windows":
+            return {}
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        option_type = getattr(file_dialog, "Option", None)
+        dont_use_native = getattr(option_type, "DontUseNativeDialog", None)
+        return {"options": dont_use_native} if dont_use_native is not None else {}
+
     def _open_fuse_config_file(self) -> None:
         paths = get_platform().mount_driver_config_paths()
         if not paths:
@@ -4704,13 +6720,23 @@ class MountletWindow:
 
 
 class MountletTray:
-    def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10) -> None:
+    def __init__(self, qt: SimpleNamespace, refresh_interval: int = 10, instance_lock: Any | None = None) -> None:
         self.qt = qt
+        self._instance_lock = instance_lock
         self.refresh_interval = max(refresh_interval, 2)
         self._is_macos = get_platform().system_name == "Darwin"
+        self._is_wayland = get_platform().system_name == "Linux" and bool(os.environ.get("WAYLAND_DISPLAY"))
+        self._is_gnome_wayland = _is_gnome_wayland()
+        self._manual_context_menu = self._is_macos or (self._is_wayland and not self._is_gnome_wayland)
         if self._is_macos:
             _set_macos_accessory_mode()
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
+        self.app.setApplicationName("Mountlet")
+        self.app.setApplicationDisplayName("Mountlet")
+        try:
+            self.app.setDesktopFileName("com.ericholt.mountlet")
+        except AttributeError:
+            pass
         if self._is_macos:
             # QApplication may restore the regular activation policy while it
             # initializes AppKit. Reapply accessory mode before creating windows.
@@ -4725,7 +6751,7 @@ class MountletTray:
         self.app.setWindowIcon(self.icon)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("Mountlet")
-        if not self._is_macos:
+        if not self._manual_context_menu:
             self.tray.setContextMenu(self.app_menu)
         self.tray.show()
         try:
@@ -4769,11 +6795,13 @@ class MountletTray:
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
             return
-        if reason == self.qt.QSystemTrayIcon.ActivationReason.Trigger:
+        activation_reason = self.qt.QSystemTrayIcon.ActivationReason
+        if reason in (activation_reason.Trigger, getattr(activation_reason, "DoubleClick", None)):
             self.main_window.toggle_from_tray()
             self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return
-        if getattr(self, "_is_macos", False) and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
+        manual_context = getattr(self, "_manual_context_menu", getattr(self, "_is_macos", False))
+        if manual_context and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
             self.app_menu.popup(self.qt.QCursor.pos())
 
     def _show_app_settings_from_tray(self) -> None:
@@ -4781,6 +6809,36 @@ class MountletTray:
             return
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_app_config_editor)
+
+    def _show_shortcuts_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_shortcut_config_editor)
+
+    def _show_config_sync_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_config_sync_editor)
+
+    def _push_config_sync_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._push_config_sync_bundle)
+
+    def _pull_config_sync_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._pull_config_sync_bundle)
+
+    def _show_about_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_about)
 
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
@@ -4801,17 +6859,23 @@ class MountletTray:
         status = self.app_menu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
         status.setEnabled(False)
         self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
+        self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
-        self._add_action(self.app_menu, "Open app config file", self.main_window._open_app_config_file)
-        self._add_action(self.app_menu, "Open mount config file", self.main_window._open_mount_config_file)
-        self._add_action(self.app_menu, "Open rclone config file", self.main_window._open_rclone_config_file)
-        if _has_mount_driver_config():
-            self._add_action(self.app_menu, "Open FUSE config file", self.main_window._open_fuse_config_file)
+        self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
+        self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
+        self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
+        self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
+        self._add_action(self.app_menu, "Set config sync location", self._show_config_sync_from_tray)
+        self._add_action(self.app_menu, "Push config to sync location", self._push_config_sync_from_tray)
+        self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
+        self.main_window._add_open_config_files_menu(self.app_menu)
         self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
         if self.main_window.is_visible():
@@ -4965,9 +7029,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if not args.skip_readiness_check and not setup_wizard.ensure_ready_for_menu():
-        return 1
-
     desktop_ready, message = _desktop_session_available()
     if not desktop_ready:
         print(f"[!] {message}", file=sys.stderr)
@@ -4980,10 +7041,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[!] {exc}", file=sys.stderr)
         return 1
 
+    instance_lock = _acquire_instance_lock(qt)
+    if instance_lock is None:
+        print("[*] Mountlet is already running.", file=sys.stderr)
+        return 0
+
+    if not args.skip_readiness_check:
+        readiness = setup_wizard.check_readiness()
+        if not readiness.ready:
+            if not _run_prerequisite_wizard(qt):
+                return 1
+            # Re-run the complete check so a newly installed rclone gets its
+            # config directory before the tray starts.
+            if not setup_wizard.check_readiness().ready:
+                return 1
+
     ensure_app_directories()
     ensure_default_config_files()
     core.ensure_base_mount_dir()
-    return MountletTray(qt, refresh_interval=args.refresh_interval).run()
+    return MountletTray(qt, refresh_interval=args.refresh_interval, instance_lock=instance_lock).run()
 
 
 if __name__ == "__main__":

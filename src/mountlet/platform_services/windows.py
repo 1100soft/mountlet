@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import ctypes
+import ntpath
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,24 +14,41 @@ from .base import OperationResult, PlatformServices, UserDirectories
 class WindowsPlatformServices(PlatformServices):
     system_name = "Windows"
 
+    @staticmethod
+    def _home() -> Path:
+        if profile := os.environ.get("USERPROFILE"):
+            return Path(profile)
+        if drive := os.environ.get("HOMEDRIVE"):
+            if home_path := os.environ.get("HOMEPATH"):
+                return Path(f"{drive}{home_path}")
+        try:
+            return Path.home()
+        except RuntimeError:
+            return Path.cwd()
+
     def user_directories(self, app_name: str) -> UserDirectories:
-        roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        home = self._home()
+        roaming = Path(os.environ["APPDATA"]) if "APPDATA" in os.environ else home / "AppData" / "Roaming"
+        local = Path(os.environ["LOCALAPPDATA"]) if "LOCALAPPDATA" in os.environ else home / "AppData" / "Local"
         return UserDirectories(roaming / app_name, local / app_name / "State", local / app_name / "Cache")
 
     def default_rclone_config(self) -> Path:
-        roaming = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        roaming = (
+            Path(os.environ["APPDATA"])
+            if "APPDATA" in os.environ
+            else self._home() / "AppData" / "Roaming"
+        )
         return roaming / "rclone" / "rclone.conf"
 
     def default_mount_base(self) -> Path:
-        return Path.home() / "Mountlet"
+        return self._home() / "Mountlet"
 
     def rclone_executable_names(self) -> tuple[str, ...]:
         return ("rclone.exe", "rclone")
 
     def rclone_candidates(self) -> tuple[Path, ...]:
-        home = Path(os.environ.get("USERPROFILE", Path.home()))
-        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        home = self._home()
+        local = Path(os.environ["LOCALAPPDATA"]) if "LOCALAPPDATA" in os.environ else home / "AppData" / "Local"
         program_files = Path(os.environ.get("ProgramFiles", "C:/Program Files"))
         chocolatey = Path(os.environ.get("ChocolateyInstall", "C:/ProgramData/chocolatey"))
         scoop = Path(os.environ.get("SCOOP", home / "scoop"))
@@ -48,21 +67,46 @@ class WindowsPlatformServices(PlatformServices):
         return
 
     def mount_process_options(self) -> dict[str, int]:
-        return {"creationflags": 0x08000000 | 0x00000008 | 0x00000200}
+        # Keep rclone as a directly tracked foreground child without creating a
+        # console window. DETACHED_PROCESS prevents reliable lifetime tracking.
+        return {"creationflags": 0x08000000}
+
+    def command_process_options(self) -> dict[str, int]:
+        # Mount checks and rclone status commands run frequently. Without this
+        # flag each console executable briefly creates a visible window.
+        return {"creationflags": 0x08000000} if os.name == "nt" else {}
 
     def is_mounted(self, path: str) -> bool:
-        if not os.path.exists(path):
-            return False
+        # A WinFsp directory mount is an NTFS junction. Python can report a
+        # newly attached junction as nonexistent while Windows already
+        # recognizes the volume. GetVolumeNameForVolumeMountPointW is both
+        # authoritative and non-blocking; invoking fsutil here stalled the UI
+        # once per remote during every refresh.
+        return self._is_volume_mountpoint(path) or self._is_mount_reparse_point(path)
+
+    @staticmethod
+    def _is_volume_mountpoint(path: str) -> bool:
         try:
-            result = subprocess.run(
-                ("fsutil", "reparsepoint", "query", path),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-        except (OSError, subprocess.TimeoutExpired):
+            buffer = ctypes.create_unicode_buffer(32768)
+            mountpoint = ntpath.normpath(path).rstrip("\\/") + "\\"
+            get_volume_name = ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW
+            return bool(get_volume_name(mountpoint, buffer, len(buffer)))
+        except (AttributeError, OSError):
             return False
-        return result.returncode == 0
+
+    @staticmethod
+    def _is_mount_reparse_point(path: str) -> bool:
+        """Check the junction itself without traversing into the remote."""
+        try:
+            get_attributes = ctypes.windll.kernel32.GetFileAttributesW
+            get_attributes.argtypes = [ctypes.c_wchar_p]
+            get_attributes.restype = ctypes.c_uint32
+            attributes = get_attributes(ntpath.normpath(path))
+        except (AttributeError, OSError):
+            return False
+        invalid_attributes = 0xFFFFFFFF
+        file_attribute_reparse_point = 0x00000400
+        return attributes != invalid_attributes and bool(attributes & file_attribute_reparse_point)
 
     def prepare_mount_path(self, path: str) -> OperationResult:
         mountpoint = Path(path)
@@ -87,6 +131,7 @@ class WindowsPlatformServices(PlatformServices):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=10,
+                    **self.command_process_options(),
                 )
             except (OSError, subprocess.TimeoutExpired):
                 pass

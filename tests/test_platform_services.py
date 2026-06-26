@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,8 @@ from mountlet.platform_services.file_managers import (
 )
 from mountlet.platform_services.linux import LinuxPlatformServices
 from mountlet.platform_services.macos import MacOSPlatformServices
+from mountlet.platform_services.processes import terminate_process
+from mountlet.platform_services.processes import external_process_environment
 from mountlet.platform_services.windows import WindowsPlatformServices
 
 
@@ -105,6 +108,35 @@ class PlatformServicesTests(unittest.TestCase):
 
         self.assertEqual(found, str(executable))
 
+    def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("rclone", 1), 0]
+
+        terminate_process(process, WindowsPlatformServices(), timeout=1)
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+
+    def test_frozen_external_process_restores_original_library_path(self):
+        with mock.patch("mountlet.platform_services.processes.sys.frozen", True, create=True):
+            with mock.patch.dict(
+                "os.environ",
+                {"LD_LIBRARY_PATH": "/bundle", "LD_LIBRARY_PATH_ORIG": "/system"},
+                clear=True,
+            ):
+                environment = external_process_environment()
+
+        self.assertEqual(environment["LD_LIBRARY_PATH"], "/system")
+        self.assertNotIn("LD_LIBRARY_PATH_ORIG", environment)
+
+    def test_source_external_process_preserves_library_path(self):
+        with mock.patch("mountlet.platform_services.processes.sys.frozen", False, create=True):
+            with mock.patch.dict("os.environ", {"LD_LIBRARY_PATH": "/custom"}, clear=True):
+                environment = external_process_environment()
+
+        self.assertEqual(environment["LD_LIBRARY_PATH"], "/custom")
+
     def test_macos_defaults_to_finder(self):
         platform = MacOSPlatformServices()
 
@@ -113,6 +145,15 @@ class PlatformServicesTests(unittest.TestCase):
         self.assertEqual(default_file_manager_id(platform), "finder")
         self.assertEqual(managers[0].identifier, "finder")
         self.assertEqual(managers[0].label, "Finder")
+
+    def test_macos_checks_homebrew_rclone_locations(self):
+        self.assertEqual(
+            MacOSPlatformServices().rclone_candidates(),
+            (
+                Path("/opt/homebrew/bin/rclone"),
+                Path("/usr/local/bin/rclone"),
+            ),
+        )
 
     def test_missing_saved_manager_falls_back_to_platform_default(self):
         manager = resolve_file_manager(WindowsPlatformServices(), "removed-manager")
@@ -163,6 +204,31 @@ Categories=Utility;FileManager;
 
         self.assertEqual(popen.call_args.args[0], ["example-files", "/tmp/docs"])
 
+    def test_windows_explorer_opens_location_directly(self):
+        manager = FileManager("explorer", "File Explorer", ("explorer.exe",), True, True)
+
+        with mock.patch("mountlet.platform_services.file_managers.subprocess.Popen") as popen:
+            self.assertTrue(open_with_file_manager(manager, r"C:\Users\test\Mountlet\Docs"))
+
+        self.assertEqual(
+            popen.call_args.args[0],
+            ["explorer.exe", r"C:\Users\test\Mountlet\Docs"],
+        )
+
+    def test_windows_desktop_service_opens_files_with_shell(self):
+        qt = SimpleNamespace(
+            QDesktopServices=SimpleNamespace(openUrl=mock.Mock(return_value=False)),
+            QUrl=SimpleNamespace(fromLocalFile=lambda path: f"file:{path}"),
+        )
+        desktop = DesktopServices(qt)
+
+        with mock.patch("mountlet.platform_services.desktop.platform.system", return_value="Windows"):
+            with mock.patch("mountlet.platform_services.desktop.os.startfile", create=True) as startfile:
+                self.assertTrue(desktop.open_file(Path(r"C:\Users\test\Mountlet\Docs\a.txt")))
+
+        startfile.assert_called_once_with(r"C:\Users\test\Mountlet\Docs\a.txt")
+        qt.QDesktopServices.openUrl.assert_not_called()
+
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
         with mock.patch("pathlib.Path.home", return_value=Path("/Users/tester")):
@@ -192,7 +258,69 @@ Categories=Utility;FileManager;
             result = WindowsPlatformServices().prepare_mount_path(str(mountpoint))
 
             self.assertFalse(result.success)
-            self.assertIn("not empty", result.detail)
+        self.assertIn("not empty", result.detail)
+
+    def test_windows_mount_detection_uses_nonblocking_volume_api(self):
+        platform = WindowsPlatformServices()
+        with mock.patch("mountlet.platform_services.windows.subprocess.run") as run:
+            with mock.patch.object(platform, "_is_volume_mountpoint", return_value=True) as fallback:
+                self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
+
+        fallback.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
+        run.assert_not_called()
+
+    def test_windows_mount_detection_uses_reparse_point_when_volume_api_lags(self):
+        platform = WindowsPlatformServices()
+        with mock.patch.object(platform, "_is_volume_mountpoint", return_value=False):
+            with mock.patch.object(platform, "_is_mount_reparse_point", return_value=True) as reparse:
+                self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
+
+        reparse.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
+
+    def test_windows_mount_detection_does_not_depend_on_python_path_exists(self):
+        platform = WindowsPlatformServices()
+        with mock.patch("mountlet.platform_services.windows.os.path.exists", return_value=False):
+            with mock.patch.object(platform, "_is_volume_mountpoint", return_value=True):
+                self.assertTrue(platform.is_mounted(r"C:\Users\test\Mountlet\Docs"))
+
+    def test_windows_volume_mountpoint_api_checks_requested_directory(self):
+        requested = []
+
+        def get_volume_name(path, buffer, _length):
+            requested.append(path)
+            buffer.value = "\\\\?\\Volume{mountlet}\\"
+            return 1
+
+        kernel32 = SimpleNamespace(GetVolumeNameForVolumeMountPointW=get_volume_name)
+        with mock.patch(
+            "mountlet.platform_services.windows.ctypes.windll",
+            SimpleNamespace(kernel32=kernel32),
+            create=True,
+        ):
+            mounted = WindowsPlatformServices._is_volume_mountpoint(r"C:\Users\test\Mountlet\Docs")
+
+        self.assertTrue(mounted)
+        self.assertEqual(requested, ["C:\\Users\\test\\Mountlet\\Docs\\"])
+
+    def test_windows_reparse_point_check_uses_file_attributes(self):
+        get_attributes = mock.Mock(return_value=0x00000410)
+        kernel32 = SimpleNamespace(GetFileAttributesW=get_attributes)
+        with mock.patch(
+            "mountlet.platform_services.windows.ctypes.windll",
+            SimpleNamespace(kernel32=kernel32),
+            create=True,
+        ):
+            mounted = WindowsPlatformServices._is_mount_reparse_point(r"C:\Users\test\Mountlet\Docs")
+
+        self.assertTrue(mounted)
+        get_attributes.assert_called_once_with(r"C:\Users\test\Mountlet\Docs")
+
+    def test_windows_mount_process_stays_attached_without_console(self):
+        self.assertEqual(WindowsPlatformServices().mount_process_options(), {"creationflags": 0x08000000})
+
+    def test_windows_short_lived_commands_hide_console_windows(self):
+        with mock.patch("mountlet.platform_services.windows.os.name", "nt"):
+            self.assertEqual(WindowsPlatformServices().command_process_options(), {"creationflags": 0x08000000})
 
     def test_windows_finds_winfsp_in_32_bit_program_files(self):
         with tempfile.TemporaryDirectory() as tempdir:

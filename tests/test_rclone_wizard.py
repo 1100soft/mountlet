@@ -51,6 +51,9 @@ class FakeProcess:
 
 
 class RcloneWizardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        rclone_wizard._BACKEND_CACHE = None
+
     def test_extract_json_object_ignores_rclone_notices(self):
         output = """
 <5>NOTICE: Config file not found - using defaults
@@ -66,6 +69,15 @@ class RcloneWizardTests(unittest.TestCase):
 
         self.assertEqual(parsed["State"], "*oauth-islocal")
         self.assertEqual(parsed["Option"]["Name"], "config_is_local")
+
+    def test_backend_is_available_parses_rclone_backend_list(self):
+        result = mock.Mock(returncode=0, stdout='  / Proton Drive\n    \\ "protondrive"\n  / Dropbox\n    \\ "dropbox"\n')
+        with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+            with mock.patch.object(subprocess, "run", return_value=result) as run:
+                self.assertTrue(rclone_wizard.backend_is_available("protondrive"))
+                self.assertFalse(rclone_wizard.backend_is_available("missing"))
+
+        run.assert_called_once()
 
     def test_start_drive_remote_runs_non_interactive_create_with_oauth_credentials(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -106,7 +118,11 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertEqual(step.state, "next")
         self.assertEqual(step.option["Name"], "config_is_local")
         self.assertEqual(process.communicate_timeout, rclone_wizard.RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
-        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        process_options = rclone_wizard.PLATFORM.mount_process_options()
+        self.assertEqual(
+            {name: popen.call_args.kwargs[name] for name in process_options},
+            process_options,
+        )
 
     def test_continue_drive_remote_passes_state_and_result(self):
         with tempfile.TemporaryDirectory() as tempdir:

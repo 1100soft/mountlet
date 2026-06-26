@@ -4,10 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mountlet"
-version = "0.3.0"
+version = "0.4.1"
 description = "CLI and tray tools for mounting rclone remotes"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "cryptography>=42",
+]
 license = "MIT"
 authors = [
   {name = "Eric Holt"},
@@ -38,6 +41,10 @@ dev = [
   "pytest>=8",
   "ruff>=0.4",
   "twine>=6",
+]
+packaging = [
+  "Pillow>=10",
+  "PyInstaller>=6.20,<7",
 ]
 
 [project.urls]
