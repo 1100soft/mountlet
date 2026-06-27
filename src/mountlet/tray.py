@@ -473,6 +473,7 @@ def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import (
             QEvent,
+            QItemSelectionModel,
             QKeyCombination,
             QLockFile,
             QMimeData,
@@ -501,7 +502,6 @@ def _load_qt_bindings() -> SimpleNamespace:
             QGroupBox,
             QHBoxLayout,
             QInputDialog,
-            QItemSelectionModel,
             QKeySequenceEdit,
             QLabel,
             QLineEdit,
@@ -527,7 +527,8 @@ def _load_qt_bindings() -> SimpleNamespace:
             "Tray support requires PySide6. Install it with:\n"
             '  pipx install "mountlet[tray]"\n'
             "or, for an existing pipx install:\n"
-            "  pipx inject mountlet PySide6"
+            "  pipx inject mountlet PySide6\n\n"
+            f"Import error: {exc}"
         ) from exc
 
     return SimpleNamespace(
