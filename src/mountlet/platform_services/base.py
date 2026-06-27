@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 import shutil
 import stat
@@ -99,10 +100,8 @@ class PlatformServices:
         return ([command, path], [command, "-l", path])
 
     def terminate_pid(self, pid: int) -> None:
-        try:
+        with suppress(OSError, ProcessLookupError):
             os.kill(pid, 15)
-        except (OSError, ProcessLookupError):
-            pass
 
     def unmount(self, path: str, pid: int | None = None) -> OperationResult:
         commands = self.unmount_commands(path)

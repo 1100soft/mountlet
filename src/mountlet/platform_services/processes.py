@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 import signal
 import subprocess
@@ -51,10 +52,8 @@ def signal_process_tree(
     try:
         os.killpg(process.pid, sig)
     except OSError:
-        try:
+        with suppress(OSError):
             process.send_signal(sig)
-        except OSError:
-            pass
 
 
 def terminate_process(

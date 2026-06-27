@@ -498,11 +498,11 @@ def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = 
 
 __all__ = [
     "APP_FOLDER_NAME",
-    "AppSettings",
     "DEFAULT_SHORTCUTS",
     "MOUNTED_FOLDER_NAME",
-    "MountSettings",
     "OFFLINE_FOLDER_NAME",
+    "AppSettings",
+    "MountSettings",
     "app_folder",
     "default_app_folder",
     "default_mounted_root",

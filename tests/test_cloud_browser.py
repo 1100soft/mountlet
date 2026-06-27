@@ -850,6 +850,23 @@ class CloudBrowserTests(unittest.TestCase):
         browser.offline_button.setEnabled.assert_called_with(False)
         browser.offline_button.setStyleSheet.assert_called_with("")
 
+    def test_offline_button_explains_pending_operation_when_disabled(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._operation_pending = True
+        browser.tree = mock.Mock()
+        browser.offline_button = mock.Mock()
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser._selected_entries = mock.Mock(return_value=[BrowserEntry("a.txt", "a.txt", False)])
+        browser.backend = mock.Mock()
+        browser.backend.is_offline.return_value = False
+        browser.backend.offline_changed.return_value = False
+
+        browser._update_actions()
+
+        browser.offline_button.setEnabled.assert_called_with(False)
+        self.assertIn("Wait", browser.offline_button.setToolTip.call_args.args[0])
+
     def test_refresh_mount_state_repaints_visible_remote_entries(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

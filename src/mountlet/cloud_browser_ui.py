@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import json
 import threading
 from pathlib import Path
@@ -72,7 +73,6 @@ class CompactCloudBrowser:
         self._operation_cache_keys: set[tuple[str, str]] = set()
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
-        self._offline_change_signature: tuple[tuple[str, bool], ...] = ()
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -230,10 +230,8 @@ class CompactCloudBrowser:
         if square:
             button.setFixedSize(30, 28)
             self._enlarge_button_text(button)
-            try:
+            with suppress(Exception):
                 button.setIconSize(self.qt.QSize(22, 22))
-            except Exception:
-                pass
         button.setToolTip(tooltip)
         button.clicked.connect(lambda _checked=False: callback())
         return button
@@ -312,10 +310,8 @@ class CompactCloudBrowser:
                 if not was_visible:
                     self._layout_changed()
             else:
-                try:
+                with suppress(Exception):
                     self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
-                except Exception:
-                    pass
                 self.window.show()
                 self.window.raise_()
             if focus_browser:
@@ -334,10 +330,8 @@ class CompactCloudBrowser:
             self._update_main_focus_style()
             self._layout_changed()
             return
-        try:
+        with suppress(Exception):
             self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
-        except Exception:
-            pass
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
@@ -547,18 +541,7 @@ class CompactCloudBrowser:
             self._ensure_tree_selection()
         self._update_actions()
         self._update_open_folder_button()
-        self._offline_change_signature = self._current_offline_change_signature()
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
-
-    def _current_offline_change_signature(self) -> tuple[tuple[str, bool], ...]:
-        remote = getattr(self, "remote", None)
-        if remote is None:
-            return ()
-        return tuple(
-            (entry.path, self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
-            for entry in getattr(self, "entries", [])
-            if self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
-        )
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
         qt_color = self.qt.QColor(color)
@@ -593,8 +576,7 @@ class CompactCloudBrowser:
             return
         current = self.tree.currentItem() or self.tree.topLevelItem(0)
         index = self.tree.indexOfTopLevelItem(current) if current is not None else 0
-        if index < 0:
-            index = 0
+        index = max(index, 0)
         index = min(max(index + delta, 0), count - 1)
         self.tree.setCurrentItem(self.tree.topLevelItem(index))
         self._ensure_tree_selection()
@@ -894,6 +876,11 @@ class CompactCloudBrowser:
         operation_pending = bool(getattr(self, "_operation_pending", False))
         self.tree.setDragEnabled(edits_enabled and selected)
         edit_action_enabled = selected and edits_enabled and not operation_pending
+        edit_disabled_reason = self._edit_action_disabled_reason(
+            selected=selected,
+            edits_enabled=edits_enabled,
+            operation_pending=operation_pending,
+        )
         for button, enabled, tooltip in (
             (getattr(self, "copy_button", None), edit_action_enabled, "Copy selected items"),
             (getattr(self, "cut_button", None), edit_action_enabled, "Cut selected items"),
@@ -901,25 +888,19 @@ class CompactCloudBrowser:
         ):
             if button is None:
                 continue
-            if not selected:
-                self._set_action_button_state(button, False, "Select files or folders first")
-            elif not edits_enabled:
-                self._set_action_button_state(button, False, "Enable integrated file edits in App settings first")
-            elif operation_pending:
-                self._set_action_button_state(button, False, "Wait for the current file operation to finish")
-            else:
-                self._set_action_button_state(button, enabled, tooltip)
+            self._set_action_button_state(button, enabled, tooltip if edit_disabled_reason is None else edit_disabled_reason)
         paste_button = getattr(self, "paste_button", None)
         if paste_button is not None:
             paste_enabled = edits_enabled and self.clipboard is not None and not operation_pending
-            if not edits_enabled:
-                self._set_action_button_state(paste_button, False, "Enable integrated file edits in App settings first")
-            elif self.clipboard is None:
-                self._set_action_button_state(paste_button, False, "Copy or cut files first")
-            elif operation_pending:
-                self._set_action_button_state(paste_button, False, "Wait for the current file operation to finish")
-            else:
-                self._set_action_button_state(paste_button, paste_enabled, "Paste into this folder")
+            paste_disabled_reason = self._paste_action_disabled_reason(
+                edits_enabled=edits_enabled,
+                operation_pending=operation_pending,
+            )
+            self._set_action_button_state(
+                paste_button,
+                paste_enabled,
+                "Paste into this folder" if paste_disabled_reason is None else paste_disabled_reason,
+            )
         offline_enabled = selected and not operation_pending
         self._set_action_button_state(
             self.offline_button,
@@ -930,7 +911,9 @@ class CompactCloudBrowser:
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
         selected_changed = self._selected_offline_changed()
         self.offline_button.setText("●" if selected_changed else ("✓" if remove_offline else ""))
-        if selected:
+        if operation_pending:
+            self.offline_button.setToolTip("Wait for the current file operation to finish")
+        elif selected:
             self.offline_button.setToolTip(
                 "Offline snapshot has local changes; click to remove the local snapshot"
                 if selected_changed
@@ -945,10 +928,37 @@ class CompactCloudBrowser:
     def _set_action_button_state(self, button: Any, enabled: bool, tooltip: str) -> None:
         button.setEnabled(enabled)
         button.setToolTip(tooltip)
-        try:
+        with suppress(Exception):
             button.setStyleSheet("")
-        except Exception:
-            pass
+
+    def _edit_action_disabled_reason(
+        self,
+        *,
+        selected: bool,
+        edits_enabled: bool,
+        operation_pending: bool,
+    ) -> str | None:
+        if not selected:
+            return "Select files or folders first"
+        if not edits_enabled:
+            return "Enable integrated file edits in App settings first"
+        if operation_pending:
+            return "Wait for the current file operation to finish"
+        return None
+
+    def _paste_action_disabled_reason(
+        self,
+        *,
+        edits_enabled: bool,
+        operation_pending: bool,
+    ) -> str | None:
+        if not edits_enabled:
+            return "Enable integrated file edits in App settings first"
+        if self.clipboard is None:
+            return "Copy or cut files first"
+        if operation_pending:
+            return "Wait for the current file operation to finish"
+        return None
 
     def _update_snapshot_button_icon(self, enabled: bool) -> None:
         icon = getattr(self, "_offline_base_icon", None)
@@ -1112,4 +1122,4 @@ class CompactCloudBrowser:
         return self._side
 
 
-__all__ = ["CompactCloudBrowser", "MIME_TYPE", "cascade_position"]
+__all__ = ["MIME_TYPE", "CompactCloudBrowser", "cascade_position"]

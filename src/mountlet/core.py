@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from contextlib import suppress
 import json
 import os
 import shlex
@@ -483,18 +484,14 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
 
         exit_code = proc.poll()
         if exit_code is None:
-            try:
+            with suppress(Exception):
                 proc.terminate()
-            except Exception:
-                pass
             try:
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                try:
+                with suppress(Exception):
                     proc.kill()
                     proc.wait(timeout=3)
-                except Exception:
-                    pass
             exit_code = proc.poll()
 
         PIDS.pop(remote.name, None)
@@ -697,25 +694,25 @@ def verify_all(remotes: Iterable[RemoteInfo]) -> List[str]:
 
 
 __all__ = [
-    "RemoteInfo",
-    "BASE_MOUNT_DIR",
     "BASE_DIR_NOTE",
+    "BASE_MOUNT_DIR",
     "CONFIG_PATH",
-    "ensure_base_mount_dir",
-    "load_remotes",
-    "editable_rclone_fields",
-    "save_rclone_fields",
-    "mount_remote",
-    "reconnect_remote",
+    "RemoteInfo",
     "check_remote_connection",
-    "unmount_remote",
-    "refresh_remote",
-    "mount_all",
-    "unmount_all",
-    "is_mounted",
+    "editable_rclone_fields",
+    "ensure_base_mount_dir",
     "get_storage_usage",
     "get_storage_usage_details",
-    "verify_remote",
+    "is_mounted",
+    "load_remotes",
+    "mount_all",
+    "mount_remote",
+    "reconnect_remote",
+    "refresh_remote",
+    "save_rclone_fields",
+    "unmount_all",
+    "unmount_remote",
     "verify_all",
+    "verify_remote",
     "wait_for",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 import ctypes
 import ntpath
@@ -125,7 +126,7 @@ class WindowsPlatformServices(PlatformServices):
 
     def unmount(self, path: str, pid: int | None = None) -> OperationResult:
         if pid:
-            try:
+            with suppress(OSError, subprocess.TimeoutExpired):
                 subprocess.run(
                     ("taskkill", "/PID", str(pid), "/T", "/F"),
                     stdout=subprocess.DEVNULL,
@@ -133,12 +134,8 @@ class WindowsPlatformServices(PlatformServices):
                     timeout=10,
                     **self.command_process_options(),
                 )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
-        try:
+        with suppress(FileNotFoundError, OSError):
             Path(path).rmdir()
-        except (FileNotFoundError, OSError):
-            pass
         return OperationResult(not self.is_mounted(path), "The mount process could not be stopped.")
 
     def autostart_path(self, app_name: str) -> Path:
@@ -182,10 +179,8 @@ class WindowsPlatformServices(PlatformServices):
             if enabled:
                 winreg.SetValueEx(key, "Mountlet", 0, winreg.REG_SZ, subprocess.list2cmdline(command))
             else:
-                try:
+                with suppress(FileNotFoundError):
                     winreg.DeleteValue(key, "Mountlet")
-                except FileNotFoundError:
-                    pass
 
     def prerequisite_guidance(self) -> tuple[str, ...]:
         return ("Install rclone.", "Install WinFsp to enable filesystem mounts.")
