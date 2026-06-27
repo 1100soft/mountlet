@@ -3089,6 +3089,65 @@ class TrayTests(unittest.TestCase):
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
 
+    def test_remote_action_hides_visible_browser_for_working_remote(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._action_pending = set()
+        window._request_refresh = mock.Mock()
+        window._bridge = SimpleNamespace(action_finished=SimpleNamespace(emit=mock.Mock()))
+        window.file_browser = mock.Mock(
+            remote=remote,
+            is_visible=mock.Mock(return_value=True),
+            has_focus=mock.Mock(return_value=True),
+        )
+
+        with mock.patch.object(tray.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon: mock.Mock(start=lambda: target())
+            window._run_remote_action(remote, lambda _remote: (True, "done"))
+
+        window.file_browser.hide.assert_called_once_with()
+        self.assertEqual(window._browser_hidden_for_action, "Docs")
+        self.assertTrue(window._browser_hidden_for_action_focus)
+        window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
+
+    def test_remote_action_finish_restores_hidden_browser_for_selected_remote(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        tray_app = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = tray_app
+        window._action_pending = {"Docs"}
+        window._usage_cache = {}
+        window._selected_remote_name = "Docs"
+        row = mock.Mock()
+        window._row_widgets = {"Docs": SimpleNamespace(frame=row)}
+        window._browser_hidden_for_action = "Docs"
+        window._browser_hidden_for_action_focus = True
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            window._handle_action_finished("Docs", True, "[*] mounted Docs")
+
+        window.file_browser.show_remote.assert_called_once_with(
+            remote,
+            row,
+            show_browser=True,
+            focus_browser=True,
+        )
+
+    def test_file_browser_hides_when_app_loses_focus(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._app_window_is_active = mock.Mock(return_value=False)
+        window.file_browser = mock.Mock(remote=remote, is_visible=mock.Mock(return_value=True))
+
+        window._hide_file_browser_if_app_inactive()
+
+        window.file_browser.hide.assert_called_once_with()
+        self.assertEqual(window._browser_hidden_for_focus, "Docs")
+
     def test_remote_action_failure_can_prompt_reauthentication(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         tray_app = mock.Mock()
