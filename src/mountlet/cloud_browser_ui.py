@@ -29,7 +29,8 @@ def cascade_position(
 ) -> tuple[int, int]:
     main_x, _main_y, main_width, _main_height = main_rect
     left, top, available_width, available_height = available
-    width, height = browser_size
+    width = browser_size[0] if browser_size[0] > 0 else EMBEDDED_BROWSER_MIN_WIDTH
+    height = browser_size[1] if browser_size[1] > 0 else EMBEDDED_BROWSER_MIN_HEIGHT
     right_edge = left + available_width
     main_right = main_x + main_width
     right_space = right_edge - main_right

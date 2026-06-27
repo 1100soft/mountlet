@@ -224,6 +224,20 @@ def _parse_remote_name(name: str, backend_type: str) -> Tuple[str, str]:
     return alias, provider
 
 
+def valid_remote_alias(alias: str) -> bool:
+    return bool(alias.strip()) and not any(token in alias for token in (":", "@", "/", "\\", "\n", "\r"))
+
+
+def remote_name_with_alias(remote_name: str, alias: str) -> str:
+    new_alias = alias.strip()
+    if not valid_remote_alias(new_alias):
+        raise ValueError("Use a name without ':', '@', line breaks, or path separators.")
+    if "__" in remote_name:
+        _old_alias, provider = remote_name.rsplit("__", 1)
+        return f"{new_alias}__{provider}"
+    return new_alias
+
+
 def _build_mount_path(provider: str, alias: str) -> str:
     provider_component = _slugify(provider.lower())
     alias_component = _slugify(alias)
@@ -263,6 +277,26 @@ def _save_config(config: configparser.ConfigParser) -> None:
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         config.write(handle)
+
+
+def rename_rclone_remote_alias(remote_name: str, alias: str) -> str:
+    new_name = remote_name_with_alias(remote_name, alias)
+    if new_name == remote_name:
+        return remote_name
+    config = _load_config()
+    if not config.has_section(remote_name):
+        raise ValueError(f"{remote_name} was not found in rclone.conf.")
+    if config.has_section(new_name):
+        raise ValueError(f"{new_name} already exists in rclone.conf.")
+
+    renamed = configparser.ConfigParser(interpolation=None)
+    for section_name in config.sections():
+        target_name = new_name if section_name == remote_name else section_name
+        renamed.add_section(target_name)
+        for key, value in config[section_name].items():
+            renamed[target_name][key] = value
+    _save_config(renamed)
+    return new_name
 
 
 def _safe_rclone_keys(backend_type: str) -> Tuple[str, ...]:
@@ -707,6 +741,8 @@ __all__ = [
     "load_remotes",
     "mount_all",
     "mount_remote",
+    "remote_name_with_alias",
+    "rename_rclone_remote_alias",
     "reconnect_remote",
     "refresh_remote",
     "save_rclone_fields",
@@ -714,5 +750,6 @@ __all__ = [
     "unmount_remote",
     "verify_all",
     "verify_remote",
+    "valid_remote_alias",
     "wait_for",
 ]

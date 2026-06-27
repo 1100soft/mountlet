@@ -117,6 +117,24 @@ class CloudBrowserBackend:
 
     def remember_path(self, remote_name: str, path: str) -> None:
         self._paths[remote_name] = normalize_browser_path(path)
+        self._save_paths()
+
+    def rename_remote(self, old_name: str, new_name: str) -> None:
+        if old_name == new_name:
+            return
+        if old_name in self._paths:
+            self._paths[new_name] = self._paths.pop(old_name)
+            self._save_paths()
+        if old_name in self._offline_records:
+            self._offline_records[new_name] = self._offline_records.pop(old_name)
+            self._save_offline_manifest()
+        old_root = self.cache_root / _safe_component(old_name)
+        new_root = self.cache_root / _safe_component(new_name)
+        if old_root.exists() and old_root != new_root and not new_root.exists():
+            new_root.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_root), str(new_root))
+
+    def _save_paths(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(".tmp")
         temporary.write_text(json.dumps({"paths": self._paths}, indent=2, sort_keys=True), encoding="utf-8")

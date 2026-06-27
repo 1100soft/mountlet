@@ -396,6 +396,44 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(right, (408, 180))
         self.assertEqual(left, (292, 410))
 
+    def test_browser_cascade_uses_minimum_size_before_window_is_laid_out(self):
+        position = cascade_position((800, 100, 300, 400), 700, (0, 0, 1200, 800), (0, 0))
+
+        self.assertEqual(position, (252, 460))
+
+    def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "browser.json",
+                cache_root=root / "offline",
+                manifest_path=root / "offline.json",
+            )
+            backend.remember_path("Old__Drive", "Reports")
+            old_cache = backend.offline_path("Old__Drive", "a.txt")
+            old_cache.parent.mkdir(parents=True)
+            old_cache.write_text("snapshot", encoding="utf-8")
+            backend._offline_records = {
+                "Old__Drive": {
+                    "a.txt": {
+                        "is_dir": False,
+                        "size": 8,
+                        "modified": "",
+                        "cached_at": "",
+                        "local_size": 8,
+                        "local_mtime_ns": 1,
+                        "local_sha256": "hash",
+                    }
+                }
+            }
+
+            backend.rename_remote("Old__Drive", "New__Drive")
+
+            self.assertEqual(backend.current_path("New__Drive"), "Reports")
+            self.assertFalse((root / "offline" / "Old__Drive").exists())
+            self.assertEqual(backend.offline_path("New__Drive", "a.txt").read_text(encoding="utf-8"), "snapshot")
+            self.assertIn("New__Drive", json.loads((root / "offline.json").read_text(encoding="utf-8"))["remotes"])
+
     def test_browser_entry_is_immutable_transfer_metadata(self):
         entry = BrowserEntry("a.txt", "Folder/a.txt", False, 42)
 

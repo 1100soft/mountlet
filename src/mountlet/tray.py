@@ -2516,6 +2516,8 @@ class MountConfigDialog(_ConfigDialogBase):
         self.fields: dict[str, Any] = {}
         self.rclone_fields: dict[str, tuple[str, Any]] = {}
         self.deleted = False
+        self.renamed_from = ""
+        self.renamed_to = remote.name
         self._build()
 
     def _build(self) -> None:
@@ -2547,6 +2549,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self._mount_base = core.BASE_MOUNT_DIR
         default_relative_path = _path_relative_to_base(self.remote.mount_path, self._mount_base)
         self.fields = {
+            "remote_alias": self._line(self.remote.alias),
             "auto_mount": self._check(bool(auto_mount)),
             "mount_path": self._line(
                 _path_relative_to_base(mount_settings.mount_path if mount_settings else None, self._mount_base),
@@ -2557,6 +2560,11 @@ class MountConfigDialog(_ConfigDialogBase):
                 default="bucket or bucket/folder",
             ),
         }
+
+        self.fields["remote_alias"].setToolTip(
+            "Display name for this remote. Mountlet keeps the provider suffix in rclone.conf."
+        )
+        form.addRow("Remote name", self.fields["remote_alias"])
 
         path_row = self.qt.QWidget()
         path_layout = self.qt.QHBoxLayout(path_row)
@@ -2611,8 +2619,40 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.adjustSize()
 
     def _save(self) -> None:
+        remote_name = self.remote.name
+        alias = self.fields["remote_alias"].text().strip()
+        if not core.valid_remote_alias(alias):
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Remote name",
+                "Use a name without ':', '@', line breaks, or path separators.",
+            )
+            return
+        try:
+            new_remote_name = core.remote_name_with_alias(remote_name, alias)
+        except ValueError as exc:
+            self.qt.QMessageBox.warning(self.dialog, "Remote name", str(exc))
+            return
+        if new_remote_name != remote_name:
+            if core.is_mounted(self.remote):
+                self.qt.QMessageBox.warning(
+                    self.dialog,
+                    "Remote name",
+                    "Unmount this remote before renaming it.",
+                )
+                return
+            try:
+                new_remote_name = core.rename_rclone_remote_alias(remote_name, alias)
+            except ValueError as exc:
+                self.qt.QMessageBox.warning(self.dialog, "Remote name", str(exc))
+                return
+
         settings = load_mount_settings()
-        settings[self.remote.name] = MountSettings(
+        if new_remote_name != remote_name:
+            settings.pop(remote_name, None)
+            self.renamed_from = remote_name
+            self.renamed_to = new_remote_name
+        settings[new_remote_name] = MountSettings(
             mount_path=self.fields["mount_path"].text().strip() or None,
             remote_path=self.fields["remote_path"].text().strip().strip("/") or None,
             mount_flags=[
@@ -2629,7 +2669,7 @@ class MountConfigDialog(_ConfigDialogBase):
         save_mount_settings(settings)
         if self.rclone_fields:
             core.save_rclone_fields(
-                self.remote.name,
+                new_remote_name,
                 {key: self._rclone_config_value(kind, field) for key, (kind, field) in self.rclone_fields.items()},
             )
         self.dialog.accept()
@@ -3875,7 +3915,7 @@ class NewRemoteWizard:
         return self._answer_field.text().strip()
 
     def _valid_remote_name(self, name: str) -> bool:
-        return bool(name) and all(token not in name for token in (":", "@", "/", "\\"))
+        return core.valid_remote_alias(name)
 
     def _display_name_exists(
         self,
@@ -6427,6 +6467,13 @@ class MountletWindow:
                 self.refresh()
                 self._configuration_changed()
                 return
+            if dialog.renamed_from and dialog.renamed_to != dialog.renamed_from:
+                self._usage_cache.pop(dialog.renamed_from, None)
+                self.file_browser.backend.rename_remote(dialog.renamed_from, dialog.renamed_to)
+                if getattr(getattr(self.file_browser, "remote", None), "name", "") == dialog.renamed_from:
+                    self.file_browser.close()
+                    self.file_browser.remote = None
+                self.file_browser.invalidate(dialog.renamed_from)
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()

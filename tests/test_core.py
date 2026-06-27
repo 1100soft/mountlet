@@ -461,6 +461,47 @@ type = dropbox
 
         self.assertEqual([remote.name for remote in remotes], ["Photos"])
 
+    def test_rename_rclone_remote_alias_preserves_provider_suffix_and_section_order(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Alpha__Drive]
+type = drive
+root_folder_id = abc
+
+[Photos__Dropbox]
+type = dropbox
+""".strip(),
+            )
+
+            renamed = core.rename_rclone_remote_alias("Alpha__Drive", "Docs")
+            remotes = core.load_remotes()
+
+        self.assertEqual(renamed, "Docs__Drive")
+        self.assertEqual([remote.name for remote in remotes], ["Docs__Drive", "Photos__Dropbox"])
+        self.assertEqual(remotes[0].alias, "Docs")
+        self.assertEqual(remotes[0].provider, "Drive")
+        self.assertEqual(remotes[0].extra_info["root_folder_id"], "abc")
+
+    def test_rename_rclone_remote_alias_rejects_existing_or_invalid_names(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs__Drive]
+type = drive
+
+[Photos__Drive]
+type = drive
+""".strip(),
+            )
+
+            with self.assertRaises(ValueError):
+                core.rename_rclone_remote_alias("Docs__Drive", "Photos")
+            with self.assertRaises(ValueError):
+                core.rename_rclone_remote_alias("Docs__Drive", "Bad/Name")
+
     def test_drive_oauth_credentials_reads_existing_drive_client_values(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(
