@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -266,6 +267,71 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep", is_dir=True))
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
             self.assertFalse(backend.has_offline_content("Docs", "Other", is_dir=True))
+
+    def test_changed_offline_file_is_reported_against_mounted_file(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            mount = root / "mounted" / "Docs"
+            mount.mkdir(parents=True)
+            remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", str(mount))
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("snapshot", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    backend.make_offline(remote, entry)
+
+            backend.offline_path("Docs", "Reports/a.txt").write_text("offline edit", encoding="utf-8")
+            mounted = mount / "Reports" / "a.txt"
+            mounted.parent.mkdir(parents=True)
+            mounted.write_text("cloud edit", encoding="utf-8")
+
+            conflicts = backend.changed_offline_files(remote)
+
+        self.assertEqual([conflict.path for conflict in conflicts], ["Reports/a.txt"])
+
+    def test_resolving_offline_conflict_with_newer_version_updates_both_paths(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            mount = root / "mounted" / "Docs"
+            mount.mkdir(parents=True)
+            remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", str(mount))
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("snapshot", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    backend.make_offline(remote, entry)
+
+            offline = backend.offline_path("Docs", "Reports/a.txt")
+            offline.write_text("offline edit", encoding="utf-8")
+            mounted = mount / "Reports" / "a.txt"
+            mounted.parent.mkdir(parents=True)
+            mounted.write_text("cloud edit", encoding="utf-8")
+            future = mounted.stat().st_mtime + 10
+            os.utime(offline, (future, future))
+            conflicts = backend.changed_offline_files(remote)
+
+            backend.resolve_offline_conflict(conflicts[0], "newer")
+
+            self.assertEqual(mounted.read_text(encoding="utf-8"), offline.read_text(encoding="utf-8"))
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
 
     def test_browser_cascades_to_side_with_room_and_clamps_height(self):
         right = cascade_position((100, 100, 300, 400), 180, (0, 0, 1200, 800), (500, 390))
@@ -655,6 +721,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._selected_entries = mock.Mock(return_value=[BrowserEntry("a.txt", "a.txt", False)])
         browser.backend = mock.Mock()
         browser.backend.is_offline.return_value = False
+        browser.backend.offline_changed.return_value = False
 
         browser._update_actions()
 

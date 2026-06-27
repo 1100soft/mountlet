@@ -6032,6 +6032,8 @@ class MountletWindow:
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
             self._offer_reauthentication_if_relevant(remote_name, message)
+        else:
+            self._reconcile_offline_changes_after_mount(remote_name)
         self.tray_app.rebuild_menus()
         self._request_refresh()
 
@@ -6102,6 +6104,7 @@ class MountletWindow:
         for remote_name in pending_names:
             self.file_browser.invalidate(remote_name)
             self.file_browser.refresh_mount_state(remote_name)
+            self._reconcile_offline_changes_after_mount(remote_name)
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
@@ -6112,6 +6115,67 @@ class MountletWindow:
                 self.tray_app._notify(title, "Nothing to do.", success=True)
         self.tray_app.rebuild_menus()
         self._request_refresh()
+
+    def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
+        if remote is None or not core.is_mounted(remote):
+            return
+        try:
+            conflicts = self.file_browser.backend.changed_offline_files(remote)
+        except Exception as exc:
+            self.tray_app._notify("Offline snapshots", f"Could not check offline changes: {exc}", success=False)
+            return
+        if not conflicts:
+            return
+        resolved = 0
+        for conflict in conflicts:
+            choice = self._ask_offline_conflict_choice(remote, conflict)
+            if choice is None:
+                continue
+            try:
+                self.file_browser.backend.resolve_offline_conflict(conflict, choice)
+            except Exception as exc:
+                self.tray_app._notify("Offline snapshots", f"Could not resolve {conflict.name}: {exc}", success=False)
+                continue
+            resolved += 1
+        if resolved:
+            self.file_browser.invalidate(remote.name)
+            self.tray_app._notify("Offline snapshots", f"Resolved {resolved} changed offline file{'s' if resolved != 1 else ''}.", success=True)
+
+    def _ask_offline_conflict_choice(self, remote: core.RemoteInfo, conflict: Any) -> str | None:
+        newer_source = "offline copy" if conflict.offline_is_newer else "cloud file"
+        older_source = "cloud file" if conflict.offline_is_newer else "offline copy"
+        box = self.qt.QMessageBox(self.window)
+        try:
+            box.setIcon(self.qt.QMessageBox.Icon.Warning)
+        except Exception:
+            pass
+        box.setWindowTitle("Offline file changed")
+        box.setText(f"{conflict.name} has changed while {remote.display_name} was offline.")
+        box.setInformativeText(
+            "Choose which version to keep.\n\n"
+            f"Newer version: {newer_source}\n"
+            f"Older version: {older_source}"
+        )
+        newer_button = box.addButton("Use newer", self.qt.QMessageBox.ButtonRole.AcceptRole)
+        older_button = box.addButton("Use older", self.qt.QMessageBox.ButtonRole.DestructiveRole)
+        keep_button = box.addButton("Keep both", self.qt.QMessageBox.ButtonRole.ActionRole)
+        cancel_button = box.addButton("Decide later", self.qt.QMessageBox.ButtonRole.RejectRole)
+        try:
+            box.setDefaultButton(newer_button)
+        except Exception:
+            pass
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is newer_button:
+            return "newer"
+        if clicked is older_button:
+            return "older"
+        if clicked is keep_button:
+            return "keep_both"
+        if clicked is cancel_button:
+            return None
+        return None
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         self._open_remote_path(remote, "")

@@ -168,6 +168,8 @@ class CompactCloudBrowser:
         self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True)
         self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True)
         self.delete_button = self._button("⌫", self.delete_selected, "Delete selected items", square=True)
+        for action_button in (self.copy_button, self.cut_button):
+            self._enlarge_button_text(action_button)
         self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
         save_icon = self._offline_icon()
         if save_icon is not None:
@@ -235,6 +237,14 @@ class CompactCloudBrowser:
             return self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
         except Exception:
             return None
+
+    def _enlarge_button_text(self, button: Any) -> None:
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 3, 12))
+            button.setFont(font)
+        except Exception:
+            return
 
     def is_visible(self) -> bool:
         return bool(self.root.isVisible()) if self._embedded else bool(self.window.isVisible())
@@ -513,7 +523,11 @@ class CompactCloudBrowser:
             if offline:
                 if offline_icon is not None:
                     item.setIcon(0, offline_icon)
-                item.setToolTip(0, "Available offline as a local snapshot")
+                if remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir):
+                    item.setText(0, "●")
+                    item.setToolTip(0, "Offline snapshot has local changes")
+                else:
+                    item.setToolTip(0, "Available offline as a local snapshot")
             if remote and not mounted:
                 if offline_content:
                     self._set_item_foreground(item, OFFLINE_HIGHLIGHT_COLOR)
@@ -854,15 +868,30 @@ class CompactCloudBrowser:
                 button.setToolTip(tooltip)
         self.offline_button.setEnabled(selected and not operation_pending)
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
-        self.offline_button.setText("✓" if remove_offline else "")
+        selected_changed = self._selected_offline_changed()
+        self.offline_button.setText("●" if selected_changed else ("✓" if remove_offline else ""))
         if selected:
             self.offline_button.setToolTip(
-                "Remove the local offline snapshot" if remove_offline else "Save a local snapshot for offline access"
+                "Offline snapshot has local changes; click to remove the local snapshot"
+                if selected_changed
+                else "Remove the local offline snapshot"
+                if remove_offline
+                else "Save a local snapshot for offline access"
             )
         else:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
         self.offline_button.setProperty("hasSelection", selected)
+        self.offline_button.setStyleSheet("" if selected and not operation_pending else "QPushButton { color: #8b8f98; }")
         self._update_open_folder_button()
+
+    def _selected_offline_changed(self) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        return any(
+            self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir)
+            for entry in self._selected_entries()
+        )
 
     def refresh_mount_state(self, remote_name: str) -> None:
         remote = getattr(self, "remote", None)
