@@ -260,6 +260,13 @@ class CompactCloudBrowser:
         else:
             self.window.hide()
 
+    def close(self) -> None:
+        if self._embedded:
+            self.root.hide()
+            self._layout_changed()
+        else:
+            self.window.close()
+
     def embed_into(self, layout: Any) -> None:
         if not self._embedded:
             return

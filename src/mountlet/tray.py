@@ -4109,7 +4109,6 @@ class MountletWindow:
         self._deferred_offline_conflicts: set[tuple[str, str, float, float]] = set()
         self._browser_hidden_for_action = ""
         self._browser_hidden_for_action_focus = False
-        self._browser_hidden_for_focus = ""
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_popup_position: tuple[int, int] | None = None
@@ -4259,23 +4258,7 @@ class MountletWindow:
 
     def _handle_main_window_activation(self, *, active: bool) -> None:
         if active:
-            self._restore_file_browser_after_focus_return()
-            return
-        timer = getattr(getattr(self, "qt", None), "QTimer", None)
-        if timer is None:
-            self._hide_file_browser_if_app_inactive()
-            return
-        timer.singleShot(0, self._hide_file_browser_if_app_inactive)
-
-    def _hide_file_browser_if_app_inactive(self) -> None:
-        if self._tray_is_quitting() or self._app_window_is_active():
-            return
-        file_browser = getattr(self, "file_browser", None)
-        remote = getattr(file_browser, "remote", None)
-        if file_browser is None or remote is None or not file_browser.is_visible():
-            return
-        self._browser_hidden_for_focus = remote.name
-        file_browser.hide()
+            self._refresh_file_browser_after_focus_return()
 
     def _app_window_is_active(self) -> bool:
         qt = getattr(self, "qt", None)
@@ -4290,17 +4273,14 @@ class MountletWindow:
             return True
         return active_window in getattr(self, "_child_dialogs", [])
 
-    def _restore_file_browser_after_focus_return(self) -> None:
-        remote_name = getattr(self, "_browser_hidden_for_focus", "")
-        if not remote_name:
+    def _refresh_file_browser_after_focus_return(self) -> None:
+        file_browser = getattr(self, "file_browser", None)
+        remote = getattr(file_browser, "remote", None)
+        if file_browser is None or remote is None or not file_browser.is_visible():
             return
-        self._browser_hidden_for_focus = ""
-        if remote_name in self._action_pending:
-            self._browser_hidden_for_action = remote_name
-            self._browser_hidden_for_action_focus = False
+        if remote.name in getattr(self, "_action_pending", set()):
             return
-        self.file_browser.invalidate(remote_name)
-        self._show_file_browser_for_remote_name(remote_name, focus_browser=False)
+        file_browser.invalidate(remote.name)
 
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
@@ -5734,7 +5714,7 @@ class MountletWindow:
         if remote.name in self._action_pending:
             self._browser_hidden_for_action = remote.name
             self._browser_hidden_for_action_focus = focus_browser
-            self.file_browser.hide()
+            self.file_browser.close()
             return
         self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=focus_browser)
 
@@ -6088,7 +6068,7 @@ class MountletWindow:
             return
         self._browser_hidden_for_action = remote_name
         self._browser_hidden_for_action_focus = bool(getattr(file_browser, "has_focus", lambda: False)())
-        file_browser.hide()
+        file_browser.close()
 
     def _hide_current_file_browser_if_pending(self) -> None:
         file_browser = getattr(self, "file_browser", None)

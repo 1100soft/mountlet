@@ -3089,7 +3089,7 @@ class TrayTests(unittest.TestCase):
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
 
-    def test_remote_action_hides_visible_browser_for_working_remote(self):
+    def test_remote_action_closes_visible_browser_for_working_remote(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
         window._action_pending = set()
@@ -3105,7 +3105,7 @@ class TrayTests(unittest.TestCase):
             thread.side_effect = lambda target, daemon: mock.Mock(start=lambda: target())
             window._run_remote_action(remote, lambda _remote: (True, "done"))
 
-        window.file_browser.hide.assert_called_once_with()
+        window.file_browser.close.assert_called_once_with()
         self.assertEqual(window._browser_hidden_for_action, "Docs")
         self.assertTrue(window._browser_hidden_for_action_focus)
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
@@ -3136,17 +3136,24 @@ class TrayTests(unittest.TestCase):
             focus_browser=True,
         )
 
-    def test_file_browser_hides_when_app_loses_focus(self):
+    def test_file_browser_refreshes_when_app_regains_focus(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
-        window._tray_is_quitting = mock.Mock(return_value=False)
-        window._app_window_is_active = mock.Mock(return_value=False)
         window.file_browser = mock.Mock(remote=remote, is_visible=mock.Mock(return_value=True))
 
-        window._hide_file_browser_if_app_inactive()
+        window._handle_main_window_activation(active=True)
 
-        window.file_browser.hide.assert_called_once_with()
-        self.assertEqual(window._browser_hidden_for_focus, "Docs")
+        window.file_browser.invalidate.assert_called_once_with("Docs")
+        window.file_browser.close.assert_not_called()
+
+    def test_file_browser_is_left_open_when_app_loses_focus(self):
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = mock.Mock()
+
+        window._handle_main_window_activation(active=False)
+
+        window.file_browser.close.assert_not_called()
+        window.file_browser.hide.assert_not_called()
 
     def test_remote_action_failure_can_prompt_reauthentication(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
