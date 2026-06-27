@@ -4,7 +4,7 @@ import plistlib
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest import mock
 
@@ -239,7 +239,7 @@ Categories=Utility;FileManager;
         with mock.patch("mountlet.platform_services.desktop.platform.system", return_value="Linux"):
             with mock.patch("mountlet.platform_services.desktop.shutil.which", return_value="/usr/bin/xdg-open"):
                 with mock.patch("mountlet.platform_services.desktop.subprocess.Popen") as popen:
-                    self.assertTrue(desktop.open_file(Path("/tmp/report.ods")))
+                    self.assertTrue(desktop.open_file(PurePosixPath("/tmp/report.ods")))
 
         self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", "/tmp/report.ods"])
         qt.QDesktopServices.openUrl.assert_not_called()

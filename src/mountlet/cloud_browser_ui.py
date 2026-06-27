@@ -161,9 +161,23 @@ class CompactCloudBrowser:
             square=True,
         )
         navigation.addWidget(self.open_folder_button)
-        self.offline_button = self._button("↓", self.toggle_offline, "Make selected items available offline", square=True)
-        navigation.addWidget(self.offline_button)
         layout.addLayout(navigation)
+
+        item_actions = qt.QHBoxLayout()
+        item_actions.addWidget(qt.QLabel("Selection"))
+        self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True)
+        self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True)
+        self.delete_button = self._button("⌫", self.delete_selected, "Delete selected items", square=True)
+        self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
+        save_icon = self._offline_icon()
+        if save_icon is not None:
+            self.offline_button.setIcon(save_icon)
+        item_actions.addWidget(self.copy_button)
+        item_actions.addWidget(self.cut_button)
+        item_actions.addWidget(self.delete_button)
+        item_actions.addWidget(self.offline_button)
+        item_actions.addStretch(1)
+        layout.addLayout(item_actions)
 
         outer = self
 
@@ -215,6 +229,12 @@ class CompactCloudBrowser:
         button.setToolTip(tooltip)
         button.clicked.connect(lambda _checked=False: callback())
         return button
+
+    def _offline_icon(self) -> Any | None:
+        try:
+            return self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
+        except Exception:
+            return None
 
     def is_visible(self) -> bool:
         return bool(self.root.isVisible()) if self._embedded else bool(self.window.isVisible())
@@ -479,7 +499,7 @@ class CompactCloudBrowser:
         self.entries = entries
         self.tree.clear()
         style = self.window.style()
-        offline_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
+        offline_icon = self._offline_icon()
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         remote = self.remote
@@ -491,7 +511,8 @@ class CompactCloudBrowser:
             offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
             offline_content = bool(remote and self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir))
             if offline:
-                item.setIcon(0, offline_icon)
+                if offline_icon is not None:
+                    item.setIcon(0, offline_icon)
                 item.setToolTip(0, "Available offline as a local snapshot")
             if remote and not mounted:
                 if offline_content:
@@ -814,17 +835,40 @@ class CompactCloudBrowser:
         edits_enabled = self._edits_enabled()
         operation_pending = bool(getattr(self, "_operation_pending", False))
         self.tree.setDragEnabled(edits_enabled and selected)
+        edit_action_enabled = selected and edits_enabled and not operation_pending
+        for button, enabled, tooltip in (
+            (getattr(self, "copy_button", None), edit_action_enabled, "Copy selected items"),
+            (getattr(self, "cut_button", None), edit_action_enabled, "Cut selected items"),
+            (getattr(self, "delete_button", None), edit_action_enabled, "Delete selected items"),
+        ):
+            if button is None:
+                continue
+            button.setEnabled(enabled)
+            if not selected:
+                button.setToolTip("Select files or folders first")
+            elif not edits_enabled:
+                button.setToolTip("Enable integrated file edits in App settings first")
+            elif operation_pending:
+                button.setToolTip("Wait for the current file operation to finish")
+            else:
+                button.setToolTip(tooltip)
         self.offline_button.setEnabled(selected and not operation_pending)
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
-        self.offline_button.setText("✓" if remove_offline else "↓")
+        self.offline_button.setText("✓" if remove_offline else "")
         if selected:
             self.offline_button.setToolTip(
-                "Remove the local offline snapshot" if remove_offline else "Download a local snapshot for offline access"
+                "Remove the local offline snapshot" if remove_offline else "Save a local snapshot for offline access"
             )
         else:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
         self.offline_button.setProperty("hasSelection", selected)
         self._update_open_folder_button()
+
+    def refresh_mount_state(self, remote_name: str) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or remote.name != remote_name:
+            return
+        self._display_entries(list(getattr(self, "entries", [])))
 
     def _update_open_folder_button(self) -> None:
         button = getattr(self, "open_folder_button", None)

@@ -659,14 +659,24 @@ class CloudBrowserTests(unittest.TestCase):
         browser._update_actions()
 
         browser.offline_button.setEnabled.assert_called_with(True)
-        browser.offline_button.setText.assert_called_with("↓")
-        self.assertIn("Download", browser.offline_button.setToolTip.call_args.args[0])
+        browser.offline_button.setText.assert_called_with("")
+        self.assertIn("Save", browser.offline_button.setToolTip.call_args.args[0])
 
         browser.backend.is_offline.return_value = True
         browser._update_actions()
 
         browser.offline_button.setText.assert_called_with("✓")
         self.assertIn("Remove", browser.offline_button.setToolTip.call_args.args[0])
+
+    def test_refresh_mount_state_repaints_visible_remote_entries(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.entries = [BrowserEntry("a.txt", "a.txt", False)]
+        browser._display_entries = mock.Mock()
+
+        browser.refresh_mount_state("Docs")
+
+        browser._display_entries.assert_called_once_with([BrowserEntry("a.txt", "a.txt", False)])
 
     def test_open_file_prefers_mounted_path_over_offline_copy(self):
         browser = object.__new__(CompactCloudBrowser)

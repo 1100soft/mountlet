@@ -67,7 +67,15 @@ browser_root = "Ctrl+Home"
 
     def test_app_folder_derives_mounted_and_offline_roots(self):
         with mock.patch("pathlib.Path.home", return_value=Path("/home/tester")):
-            with mock.patch.dict("os.environ", {"HOME": "/home/tester"}):
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": "/home/tester",
+                    "USERPROFILE": "/home/tester",
+                    "HOMEDRIVE": "",
+                    "HOMEPATH": "/home/tester",
+                },
+            ):
                 default_settings = settings.AppSettings()
                 custom_settings = settings.AppSettings(mount_base="~/CustomMountlet")
 

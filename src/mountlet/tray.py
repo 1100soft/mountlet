@@ -6028,6 +6028,7 @@ class MountletWindow:
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
         self.file_browser.invalidate(remote_name)
+        self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
             self._offer_reauthentication_if_relevant(remote_name, message)
@@ -6100,6 +6101,7 @@ class MountletWindow:
         self._usage_cache.clear()
         for remote_name in pending_names:
             self.file_browser.invalidate(remote_name)
+            self.file_browser.refresh_mount_state(remote_name)
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
