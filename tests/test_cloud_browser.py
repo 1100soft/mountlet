@@ -835,7 +835,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.offline_button.setText.assert_called_with("✓")
         self.assertIn("Remove", browser.offline_button.setToolTip.call_args.args[0])
 
-    def test_offline_button_is_visibly_dimmed_without_selection(self):
+    def test_offline_button_uses_standard_disabled_state_without_selection(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
         browser._operation_pending = False
@@ -848,7 +848,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._update_actions()
 
         browser.offline_button.setEnabled.assert_called_with(False)
-        self.assertIn("rgba", browser.offline_button.setStyleSheet.call_args.args[0])
+        browser.offline_button.setStyleSheet.assert_called_with("")
 
     def test_refresh_mount_state_repaints_visible_remote_entries(self):
         browser = object.__new__(CompactCloudBrowser)
