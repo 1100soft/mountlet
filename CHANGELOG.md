@@ -8,6 +8,10 @@
 - Added a `desktop` package extra, kept the existing `tray` extra as a
   compatibility name, refreshed install documentation around the desktop-first
   beta path, and included the macOS icon asset in package data.
+- Allowed per-remote settings to rename the alias part of a remote, preserving
+  the provider suffix while migrating Mountlet settings, remembered browser
+  paths, and offline snapshots. Mounted remotes can now be renamed or deleted
+  after confirmation; Mountlet unmounts first and remounts renamed remotes.
 - Enabled offline snapshots in Mountlet Files, including manifest metadata for
   deep cached paths so parent folders remain browseable without a live remote
   connection.

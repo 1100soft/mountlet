@@ -382,6 +382,86 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(saved["Docs"].auto_mount)
         self.assertFalse(saved["Photos"].enabled)
 
+    def test_mount_config_rename_unmounts_mounted_remote_and_marks_for_remount(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Old__Drive", "Old", "Drive", "drive", "/mnt/old")
+        dialog.dialog = mock.Mock()
+        dialog.fields = {
+            "remote_alias": mock.Mock(text=mock.Mock(return_value="New")),
+            "mount_path": mock.Mock(text=mock.Mock(return_value="")),
+            "remote_path": mock.Mock(text=mock.Mock(return_value="")),
+            "auto_mount": mock.Mock(isChecked=mock.Mock(return_value=True)),
+        }
+        dialog.flag_fields = []
+        dialog._preserved_mount_flags = []
+        dialog._saved_enabled = True
+        dialog._saved_order = 4
+        dialog.rclone_fields = {}
+        dialog.renamed_from = ""
+        dialog.renamed_to = "Old__Drive"
+        dialog.remount_after_rename = False
+        dialog.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=1, No=2),
+                question=mock.Mock(return_value=1),
+                warning=mock.Mock(),
+            )
+        )
+
+        with mock.patch.object(tray.core, "is_mounted", return_value=True) as is_mounted:
+            with mock.patch.object(tray.core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
+                with mock.patch.object(tray.core, "rename_rclone_remote_alias", return_value="New__Drive") as rename:
+                    with mock.patch.object(
+                        tray,
+                        "load_mount_settings",
+                        return_value={"Old__Drive": settings.MountSettings(order=4)},
+                    ):
+                        with mock.patch.object(tray, "save_mount_settings") as save:
+                            dialog._save()
+
+        is_mounted.assert_called_once_with(dialog.remote)
+        unmount.assert_called_once_with(dialog.remote)
+        rename.assert_called_once_with("Old__Drive", "New")
+        saved = save.call_args.args[0]
+        self.assertNotIn("Old__Drive", saved)
+        self.assertIn("New__Drive", saved)
+        self.assertEqual(saved["New__Drive"].order, 4)
+        self.assertEqual(dialog.renamed_from, "Old__Drive")
+        self.assertEqual(dialog.renamed_to, "New__Drive")
+        self.assertTrue(dialog.remount_after_rename)
+        dialog.dialog.accept.assert_called_once_with()
+
+    def test_mount_config_delete_unmounts_mounted_remote_after_single_confirmation(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/mnt/docs")
+        dialog.dialog = mock.Mock()
+        dialog.deleted = False
+        dialog.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=1, No=2),
+                question=mock.Mock(return_value=1),
+                warning=mock.Mock(),
+            )
+        )
+
+        with mock.patch.object(tray.core, "is_mounted", return_value=True):
+            with mock.patch.object(tray.core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
+                with mock.patch.object(tray.core, "delete_rclone_remote", return_value=True) as delete:
+                    with mock.patch.object(
+                        tray,
+                        "load_mount_settings",
+                        return_value={"Docs__Drive": settings.MountSettings()},
+                    ):
+                        with mock.patch.object(tray, "save_mount_settings") as save:
+                            dialog._delete_remote()
+
+        unmount.assert_called_once_with(dialog.remote)
+        delete.assert_called_once_with("Docs__Drive")
+        dialog.qt.QMessageBox.question.assert_called_once()
+        self.assertNotIn("Docs__Drive", save.call_args.args[0])
+        self.assertTrue(dialog.deleted)
+        dialog.dialog.accept.assert_called_once_with()
+
     def test_new_remote_wizard_requires_drive_credentials_after_completion(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_name = "Docs"

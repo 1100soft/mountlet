@@ -2518,6 +2518,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self.deleted = False
         self.renamed_from = ""
         self.renamed_to = remote.name
+        self.remount_after_rename = False
         self._build()
 
     def _build(self) -> None:
@@ -2635,12 +2636,18 @@ class MountConfigDialog(_ConfigDialogBase):
             return
         if new_remote_name != remote_name:
             if core.is_mounted(self.remote):
-                self.qt.QMessageBox.warning(
-                    self.dialog,
-                    "Remote name",
-                    "Unmount this remote before renaming it.",
-                )
-                return
+                new_display_name = f"{alias} ({self.remote.provider})" if self.remote.provider else alias
+                if not self._confirm_unmount_for_change(
+                    "Rename remote?",
+                    f"Rename {self.remote.display_name} to {new_display_name}?\n\n"
+                    "Mountlet will unmount it, rename it, and mount it again.",
+                ):
+                    return
+                ok, message = core.unmount_remote(self.remote)
+                if not ok:
+                    self.qt.QMessageBox.warning(self.dialog, "Rename remote", _clean_message(message))
+                    return
+                self.remount_after_rename = True
             try:
                 new_remote_name = core.rename_rclone_remote_alias(remote_name, alias)
             except ValueError as exc:
@@ -2686,22 +2693,29 @@ class MountConfigDialog(_ConfigDialogBase):
         return buttons
 
     def _delete_remote(self) -> None:
+        already_confirmed = False
         if core.is_mounted(self.remote):
-            self.qt.QMessageBox.warning(
+            if not self._confirm_unmount_for_change(
+                "Delete remote?",
+                f"Delete {self.remote.display_name} from rclone.conf?\n\n"
+                "Mountlet will unmount it first. This does not delete files in cloud storage.",
+            ):
+                return
+            ok, message = core.unmount_remote(self.remote)
+            if not ok:
+                self.qt.QMessageBox.warning(self.dialog, "Delete remote", _clean_message(message))
+                return
+            already_confirmed = True
+        if not already_confirmed:
+            reply = self.qt.QMessageBox.question(
                 self.dialog,
-                "Delete remote",
-                "Unmount this remote before deleting it.",
+                "Delete remote?",
+                f"Delete {self.remote.display_name} from rclone.conf?\n\nThis does not delete files in cloud storage.",
+                self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+                self.qt.QMessageBox.StandardButton.No,
             )
-            return
-        reply = self.qt.QMessageBox.question(
-            self.dialog,
-            "Delete remote?",
-            f"Delete {self.remote.display_name} from rclone.conf?\n\nThis does not delete files in cloud storage.",
-            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
-            self.qt.QMessageBox.StandardButton.No,
-        )
-        if reply != self.qt.QMessageBox.StandardButton.Yes:
-            return
+            if reply != self.qt.QMessageBox.StandardButton.Yes:
+                return
         if not core.delete_rclone_remote(self.remote.name):
             self.qt.QMessageBox.warning(self.dialog, "Delete remote", f"{self.remote.name} was not found in rclone.conf.")
             return
@@ -2711,6 +2725,16 @@ class MountConfigDialog(_ConfigDialogBase):
             save_mount_settings(settings)
         self.deleted = True
         self.dialog.accept()
+
+    def _confirm_unmount_for_change(self, title: str, message: str) -> bool:
+        reply = self.qt.QMessageBox.question(
+            self.dialog,
+            title,
+            message,
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
 
     def _rclone_config_field(self, key: str, value: str) -> tuple[str, Any]:
         if key in RCLONE_BOOLEAN_FIELDS:
@@ -6463,6 +6487,10 @@ class MountletWindow:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
                 self._current_remote_names = []
+                if getattr(getattr(self.file_browser, "remote", None), "name", "") == remote.name:
+                    self.file_browser.close()
+                    self.file_browser.remote = None
+                self.file_browser.invalidate(remote.name)
                 self.tray_app.rebuild_menus()
                 self.refresh()
                 self._configuration_changed()
@@ -6480,6 +6508,13 @@ class MountletWindow:
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
+            if dialog.remount_after_rename:
+                new_remote = next(
+                    (candidate for candidate in _load_visible_remotes() if candidate.name == dialog.renamed_to),
+                    None,
+                )
+                if new_remote is not None:
+                    self._run_remote_action(new_remote, core.mount_remote)
             self._ask_remount_for_config_changes(changes)
 
         self._open_child_dialog(dialog, on_accepted)
