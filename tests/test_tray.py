@@ -2934,6 +2934,8 @@ class TrayTests(unittest.TestCase):
 
         push.setText.assert_called_once_with("↑")
         pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(False)
+        pull.setBadgeVisible.assert_called_once_with(False)
 
     def test_sync_button_dots_compare_against_last_synced_hash(self):
         window = object.__new__(tray.MountletWindow)
@@ -2948,8 +2950,10 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="local-hash"):
                     window._update_config_sync_buttons()
 
-        push.setText.assert_called_once_with("↑•")
-        pull.setText.assert_called_once_with("↓•")
+        push.setText.assert_called_once_with("↑")
+        pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(True)
+        pull.setBadgeVisible.assert_called_once_with(True)
 
     def test_sync_button_push_dot_appears_after_semantic_local_change(self):
         window = object.__new__(tray.MountletWindow)
@@ -2969,8 +2973,10 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="changed-hash"):
                     window._update_config_sync_buttons()
 
-        push.setText.assert_called_once_with("↑•")
+        push.setText.assert_called_once_with("↑")
+        push.setBadgeVisible.assert_called_once_with(True)
         pull.setText.assert_called_once_with("↓")
+        pull.setBadgeVisible.assert_called_once_with(False)
 
     def test_sync_button_dots_ignore_known_pre_update_remote_hash(self):
         window = object.__new__(tray.MountletWindow)
@@ -2988,6 +2994,8 @@ class TrayTests(unittest.TestCase):
 
         push.setText.assert_called_once_with("↑")
         pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(False)
+        pull.setBadgeVisible.assert_called_once_with(False)
         self.assertEqual(save.call_args.args[0]["last_synced_hash"], "semantic-hash")
         self.assertEqual(save.call_args.args[0]["last_synced_hash_kind"], "operation")
 

@@ -827,13 +827,16 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser.offline_button.setEnabled.assert_called_with(True)
         browser.offline_button.setText.assert_called_with("")
+        browser.offline_button.setBadgeVisible.assert_called_with(False)
         self.assertIn("Save", browser.offline_button.setToolTip.call_args.args[0])
 
         browser.backend.is_offline.return_value = True
+        browser.backend.offline_changed.return_value = True
         browser._update_actions()
 
         browser.offline_button.setText.assert_called_with("✓")
-        self.assertIn("Remove", browser.offline_button.setToolTip.call_args.args[0])
+        browser.offline_button.setBadgeVisible.assert_called_with(True)
+        self.assertIn("local changes", browser.offline_button.setToolTip.call_args.args[0])
 
     def test_offline_button_uses_standard_disabled_state_without_selection(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -909,7 +912,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._open_local_folder.assert_called_once_with(Path("/cache/Docs/Reports"))
         browser._notify.assert_not_called()
 
-    def test_open_folder_button_highlights_offline_snapshot_when_unmounted(self):
+    def test_open_folder_button_keeps_standard_color_for_offline_snapshot(self):
         with tempfile.TemporaryDirectory() as tempdir:
             offline = Path(tempdir) / "Docs" / "Reports"
             offline.mkdir(parents=True)
@@ -924,7 +927,7 @@ class CloudBrowserTests(unittest.TestCase):
             with mock.patch.object(core, "is_mounted", return_value=False):
                 browser._update_open_folder_button()
 
-        self.assertIn("#facc15", browser.open_folder_button.setStyleSheet.call_args.args[0])
+        browser.open_folder_button.setStyleSheet.assert_called_once_with("")
         self.assertIn("offline snapshot", browser.open_folder_button.setToolTip.call_args.args[0])
 
     def test_item_foreground_does_not_require_qbrush_on_qt_namespace(self):

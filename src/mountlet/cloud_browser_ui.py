@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import core
+from .badged_button import create_badged_button, set_badge
 from .cloud_browser import BrowserEntry, CloudBrowserBackend, TransferItem, format_file_size, parent_browser_path
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
@@ -226,7 +227,7 @@ class CompactCloudBrowser:
         self._update_focus_style()
 
     def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
-        button = self.qt.QPushButton(text)
+        button = create_badged_button(self.qt, text)
         if square:
             button.setFixedSize(30, 28)
             self._enlarge_button_text(button)
@@ -917,7 +918,8 @@ class CompactCloudBrowser:
         self._update_snapshot_button_icon(offline_enabled)
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
         selected_changed = self._selected_offline_changed()
-        self.offline_button.setText("●" if selected_changed else ("✓" if remove_offline else ""))
+        self.offline_button.setText("✓" if remove_offline else "")
+        set_badge(self.offline_button, selected_changed, OFFLINE_HIGHLIGHT_COLOR)
         if operation_pending:
             self.offline_button.setToolTip("Wait for the current file operation to finish")
         elif selected:
@@ -1019,7 +1021,7 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         offline_available = self._current_offline_folder_available()
         if remote is not None and not core.is_mounted(remote) and offline_available:
-            button.setStyleSheet(f"QPushButton {{ color: {OFFLINE_HIGHLIGHT_COLOR}; }}")
+            button.setStyleSheet("")
             button.setToolTip(f"Open the offline snapshot folder in {self._file_manager_label()}")
         else:
             button.setStyleSheet("")

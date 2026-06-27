@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import __version__, core, rclone_wizard
+from .badged_button import create_badged_button, set_badge
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
@@ -4840,7 +4841,7 @@ class MountletWindow:
         root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
     def _toolbar_button(self, text: str, tooltip: str, callback: Any) -> Any:
-        button = self.qt.QPushButton(text)
+        button = create_badged_button(self.qt, text)
         button.setFixedSize(34, 30)
         button.setToolTip(tooltip)
         try:
@@ -4909,13 +4910,15 @@ class MountletWindow:
         local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
         remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
-            push_button.setText("↑•" if local_changed else "↑")
+            push_button.setText("↑")
+            set_badge(push_button, local_changed, "#ef4444")
             push_button.setEnabled(sync_configured)
             push_button.setToolTip(
                 "Local config changed since the last push." if local_changed else "Push config to sync location"
             )
         if pull_button is not None:
-            pull_button.setText("↓•" if remote_changed else "↓")
+            pull_button.setText("↓")
+            set_badge(pull_button, remote_changed, "#ef4444")
             pull_button.setEnabled(sync_configured)
             if remote_changed:
                 detail = _sync_metadata_summary(remote_metadata)
