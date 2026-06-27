@@ -993,11 +993,9 @@ class CompactCloudBrowser:
             global_color = getattr(getattr(self.qt, "Qt", object), "GlobalColor", object)
             transparent = getattr(global_color, "transparent", None)
             if transparent is None:
-                self.offline_button.setIcon(self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled)))
-                return
+                return self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled))
             if pixmap_type is None or painter_type is None:
-                self.offline_button.setIcon(self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled)))
-                return
+                return self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled))
             dimmed = pixmap_type(size)
             dimmed.fill(transparent)
             painter = painter_type(dimmed)

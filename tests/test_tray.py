@@ -107,6 +107,13 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
 
+    def test_drive_usage_note_is_limited_to_google_drive_backend(self):
+        drive = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        s3 = core.RemoteInfo("Docs__S3", "Docs", "Google Drive", "s3", "/tmp/docs")
+
+        self.assertTrue(tray._is_google_drive_remote(drive))
+        self.assertFalse(tray._is_google_drive_remote(s3))
+
     def test_popup_position_clamps_full_window_to_available_screen(self):
         position = tray._popup_position(
             890,

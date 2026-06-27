@@ -834,7 +834,8 @@ class CloudBrowserTests(unittest.TestCase):
         browser.backend.offline_changed.return_value = True
         browser._update_actions()
 
-        browser.offline_button.setText.assert_called_with("✓")
+        browser.offline_button.setText.assert_called_with("")
+        browser.offline_button.setBadgeColor.assert_called_with("#22c55e")
         browser.offline_button.setBadgeVisible.assert_called_with(True)
         self.assertIn("local changes", browser.offline_button.setToolTip.call_args.args[0])
 

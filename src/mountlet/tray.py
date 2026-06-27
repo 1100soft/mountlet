@@ -178,6 +178,7 @@ RCLONE_SELECT_FIELDS = {
 }
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
+DRIVE_USAGE_NOTE = "Google Drive usage may not include Google Photos and other Google account data."
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -623,6 +624,10 @@ def _remote_service_label(remote: core.RemoteInfo) -> str:
 
 def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
     return f"Open {_remote_service_label(remote)} in browser"
+
+
+def _is_google_drive_remote(remote: core.RemoteInfo) -> bool:
+    return remote.backend_type.casefold() == "drive"
 
 
 def _shortcut_hint(action: str) -> str:
@@ -5238,7 +5243,7 @@ class MountletWindow:
         layout.setVerticalSpacing(0)
         layout.setColumnMinimumWidth(0, 50)
         layout.setColumnMinimumWidth(2, 126)
-        layout.setColumnMinimumWidth(3, 96)
+        layout.setColumnMinimumWidth(3, 116)
         layout.setColumnMinimumWidth(4, 36)
         layout.setColumnMinimumWidth(5, 36)
         layout.setColumnMinimumWidth(6, 24)
@@ -5272,6 +5277,13 @@ class MountletWindow:
         status = self.qt.QLabel()
         status.setFixedWidth(120)
         self._set_status_text(status, usage, action_pending=action_pending)
+        usage_note = self._drive_usage_note_label(remote)
+        status_group = self.qt.QWidget()
+        status_layout = self.qt.QHBoxLayout(status_group)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(2)
+        status_layout.addWidget(status)
+        status_layout.addWidget(usage_note)
         config_button = self._icon_button("⚙", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
         config_button.setProperty("rowControl", True)
         config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
@@ -5288,7 +5300,7 @@ class MountletWindow:
         layout.addWidget(toggle, 0, 0)
         layout.addWidget(title, 0, 1)
         layout.addWidget(usage_indicator, 0, 2)
-        layout.addWidget(status, 0, 3)
+        layout.addWidget(status_group, 0, 3)
         layout.addWidget(config_button, 0, 4)
         layout.addWidget(browser_button, 0, 5)
         layout.addWidget(move_controls, 0, 6)
@@ -5298,6 +5310,7 @@ class MountletWindow:
             usage_indicator=usage_indicator,
             toggle=toggle,
             status=status,
+            usage_note=usage_note,
             config_button=config_button,
             browser_button=browser_button,
             up_button=up_button,
@@ -5562,6 +5575,21 @@ class MountletWindow:
         indicator.setTextVisible(False)
         self._apply_usage_indicator(indicator, usage, checking_usage=checking_usage)
         return indicator
+
+    def _drive_usage_note_label(self, remote: core.RemoteInfo) -> Any:
+        label = self.qt.QLabel("ⓘ" if _is_google_drive_remote(remote) else "")
+        label.setFixedWidth(16)
+        label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        if _is_google_drive_remote(remote):
+            label.setToolTip(DRIVE_USAGE_NOTE)
+            label.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+            label.setStyleSheet(f"color: {_provider_color(remote)}; font-weight: 700;")
+            label.enterEvent = lambda event, widget=label: self._show_immediate_tooltip(widget, DRIVE_USAGE_NOTE)
+            label.mousePressEvent = lambda event, widget=label: self._show_usage_note(widget)
+        return label
+
+    def _show_usage_note(self, widget: Any) -> None:
+        self.qt.QToolTip.showText(self.qt.QCursor.pos(), DRIVE_USAGE_NOTE, widget)
 
     def _apply_usage_indicator(self, indicator: Any, usage: core.StorageUsage, *, checking_usage: bool) -> None:
         pct = max(0, min(usage.percent or 0, 100))
