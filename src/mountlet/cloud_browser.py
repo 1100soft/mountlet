@@ -293,7 +293,7 @@ class CloudBrowserBackend:
     def changed_offline_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
         conflicts: list[OfflineConflict] = []
         for path, record in self._offline_records.get(remote.name, {}).items():
-            if bool(record.get("is_dir")) or not self.offline_changed(remote.name, path):
+            if bool(record.get("is_dir")):
                 continue
             offline = self.offline_path(remote.name, path)
             mounted = Path(remote.mount_path).joinpath(*PurePosixPath(path).parts)
@@ -305,6 +305,10 @@ class CloudBrowserBackend:
             except OSError:
                 continue
             if _file_digest(offline) == _file_digest(mounted):
+                self._update_offline_record_state(remote.name, path, offline)
+                continue
+            if not self.offline_changed(remote.name, path):
+                shutil.copy2(mounted, offline)
                 self._update_offline_record_state(remote.name, path, offline)
                 continue
             conflicts.append(
@@ -359,6 +363,7 @@ class CloudBrowserBackend:
             raise RuntimeError("The kept copy is not available in the mounted folder")
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+        source.unlink(missing_ok=True)
         return original
 
     def remove_offline(self, remote_name: str, path: str) -> None:

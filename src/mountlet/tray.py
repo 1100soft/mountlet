@@ -4105,6 +4105,8 @@ class MountletWindow:
         self._pull_sync_button: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
+        self._offline_reconcile_active = False
+        self._deferred_offline_conflicts: set[tuple[str, str, float, float]] = set()
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_popup_position: tuple[int, int] | None = None
@@ -4135,6 +4137,7 @@ class MountletWindow:
         self.window.update_focus_style = self._update_main_focus_style
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self.file_browser.preload(_load_visible_remotes())
+        self._start_offline_reconcile_timer()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -4146,6 +4149,25 @@ class MountletWindow:
             desktop = _desktop_services(getattr(self, "qt", None))
             self.desktop = desktop
         return desktop
+
+    def _start_offline_reconcile_timer(self) -> None:
+        try:
+            timer = self.qt.QTimer(self.window)
+            timer.setInterval(5000)
+            timer.timeout.connect(self._reconcile_visible_offline_changes)
+            timer.start()
+            self._offline_reconcile_timer = timer
+        except Exception:
+            return
+
+    def _reconcile_visible_offline_changes(self) -> None:
+        if self._tray_is_quitting() or getattr(self, "_offline_reconcile_active", False):
+            return
+        file_browser = getattr(self, "file_browser", None)
+        remote = getattr(file_browser, "remote", None)
+        if remote is None or not file_browser.is_visible() or remote.name in self._action_pending:
+            return
+        self._reconcile_offline_changes_after_mount(remote.name)
 
     def _make_bridge(self) -> Any:
         qt = self.qt
@@ -5991,17 +6013,17 @@ class MountletWindow:
 
     def _icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self._button(label, callback, enabled=enabled)
-        button.setFixedSize(30, 26)
+        button.setFixedSize(34, 30)
         font = button.font()
-        font.setPointSize(max(font.pointSize() + 4, 14))
+        font.setPointSize(max(font.pointSize() + 7, 18))
         button.setFont(font)
         return button
 
     def _small_icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self._button(label, callback, enabled=enabled)
-        button.setFixedSize(22, 13)
+        button.setFixedSize(24, 14)
         font = button.font()
-        font.setPointSize(max(font.pointSize() - 2, 7))
+        font.setPointSize(max(font.pointSize(), 9))
         button.setFont(font)
         return button
 
@@ -6120,31 +6142,51 @@ class MountletWindow:
         self._request_refresh()
 
     def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
+        if getattr(self, "_offline_reconcile_active", False):
+            return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None or not core.is_mounted(remote):
             return
+        self._offline_reconcile_active = True
         try:
-            conflicts = self.file_browser.backend.changed_offline_files(remote)
-        except Exception as exc:
-            self.tray_app._notify("Offline snapshots", f"Could not check offline changes: {exc}", success=False)
-            return
-        if not conflicts:
-            return
-        resolved = 0
-        for conflict in conflicts:
-            self._show_conflict_file_in_browser(remote, conflict.path)
-            choice = self._ask_offline_conflict_choice(remote, conflict)
-            if choice is None:
-                continue
             try:
-                self.file_browser.backend.resolve_offline_conflict(conflict, choice)
+                conflicts = self.file_browser.backend.changed_offline_files(remote)
             except Exception as exc:
-                self.tray_app._notify("Offline snapshots", f"Could not resolve {conflict.name}: {exc}", success=False)
-                continue
-            resolved += 1
-        if resolved:
-            self.file_browser.invalidate(remote.name)
-            self.tray_app._notify("Offline snapshots", f"Resolved {resolved} changed offline file{'s' if resolved != 1 else ''}.", success=True)
+                self.tray_app._notify("Offline snapshots", f"Could not check offline changes: {exc}", success=False)
+                return
+            if not conflicts:
+                self.file_browser.refresh_mount_state(remote.name)
+                return
+            resolved = 0
+            for conflict in conflicts:
+                key = self._offline_conflict_key(conflict)
+                if key in self._deferred_offline_conflicts:
+                    continue
+                self._show_conflict_file_in_browser(remote, conflict.path)
+                choice = self._ask_offline_conflict_choice(remote, conflict)
+                if choice is None:
+                    self._deferred_offline_conflicts.add(key)
+                    continue
+                try:
+                    self.file_browser.backend.resolve_offline_conflict(conflict, choice)
+                except Exception as exc:
+                    self.tray_app._notify("Offline snapshots", f"Could not resolve {conflict.name}: {exc}", success=False)
+                    continue
+                self._deferred_offline_conflicts.discard(key)
+                resolved += 1
+            if resolved:
+                self.file_browser.invalidate(remote.name)
+                self.tray_app._notify("Offline snapshots", f"Resolved {resolved} changed offline file{'s' if resolved != 1 else ''}.", success=True)
+        finally:
+            self._offline_reconcile_active = False
+
+    def _offline_conflict_key(self, conflict: Any) -> tuple[str, str, float, float]:
+        return (
+            str(conflict.remote_name),
+            str(conflict.path),
+            float(conflict.offline_mtime),
+            float(conflict.mounted_mtime),
+        )
 
     def _show_conflict_file_in_browser(self, remote: core.RemoteInfo, path: str) -> None:
         folder = parent_browser_path(path)

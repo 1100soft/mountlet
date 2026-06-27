@@ -165,11 +165,11 @@ class CompactCloudBrowser:
         layout.addLayout(navigation)
 
         item_actions = qt.QHBoxLayout()
-        item_actions.addWidget(qt.QLabel("Selection"))
         self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True)
         self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True)
+        self.paste_button = self._button("▣", self.paste, "Paste into this folder", square=True)
         self.delete_button = self._button("⌫", self.delete_selected, "Delete selected items", square=True)
-        for action_button in (self.copy_button, self.cut_button):
+        for action_button in (self.copy_button, self.cut_button, self.paste_button, self.delete_button):
             self._enlarge_button_text(action_button)
         self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
         save_icon = self._offline_icon()
@@ -178,6 +178,7 @@ class CompactCloudBrowser:
             self.offline_button.setIcon(save_icon)
         item_actions.addWidget(self.copy_button)
         item_actions.addWidget(self.cut_button)
+        item_actions.addWidget(self.paste_button)
         item_actions.addWidget(self.delete_button)
         item_actions.addWidget(self.offline_button)
         item_actions.addStretch(1)
@@ -933,6 +934,18 @@ class CompactCloudBrowser:
                 button.setToolTip("Wait for the current file operation to finish")
             else:
                 button.setToolTip(tooltip)
+        paste_button = getattr(self, "paste_button", None)
+        if paste_button is not None:
+            paste_enabled = edits_enabled and self.clipboard is not None and not operation_pending
+            paste_button.setEnabled(paste_enabled)
+            if not edits_enabled:
+                paste_button.setToolTip("Enable integrated file edits in App settings first")
+            elif self.clipboard is None:
+                paste_button.setToolTip("Copy or cut files first")
+            elif operation_pending:
+                paste_button.setToolTip("Wait for the current file operation to finish")
+            else:
+                paste_button.setToolTip("Paste into this folder")
         self.offline_button.setEnabled(selected and not operation_pending)
         self._update_snapshot_button_icon(selected and not operation_pending)
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
@@ -950,7 +963,12 @@ class CompactCloudBrowser:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
         self.offline_button.setProperty("hasSelection", selected)
         self.offline_button.setStyleSheet(
-            "" if selected and not operation_pending else "QPushButton { color: #8b8f98; background: rgba(107, 114, 128, 35); }"
+            ""
+            if selected and not operation_pending
+            else (
+                "QPushButton, QPushButton:disabled { color: #8b8f98; "
+                "background: rgba(107, 114, 128, 45); border-color: rgba(107, 114, 128, 110); }"
+            )
         )
         self._update_open_folder_button()
 
