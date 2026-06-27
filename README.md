@@ -31,30 +31,32 @@ sudo apt install rclone fuse3
 
 ## Install
 
-For isolated CLI use:
-
-```bash
-pipx install mountlet
-```
-
 For the desktop app:
 
 ```bash
-pipx install "mountlet[tray]"
+pipx install "mountlet[desktop]"
+```
+
+For terminal-only use:
+
+```bash
+pipx install mountlet
+mountlet menu
 ```
 
 For a local checkout:
 
 ```bash
-python -m pip install .
+python -m pip install ".[desktop]"
 ```
 
 ## Install a GitHub Preview
 
 GitHub previews are source snapshots from the `wip` branch, not signed native
 installers. They may be unstable and can change without notice. Linux is the
-primary supported platform. Source-installed Windows and macOS tray and mount
-flows are available as experimental support while native packaging is developed.
+primary supported platform. Source-installed Windows and macOS desktop and
+mount flows are available as experimental support while native packaging is
+developed.
 
 The `Native package CI` workflow produces short-lived, unsigned portable bundles
 and test installers for Linux x64, Windows x64, macOS Apple Silicon, and macOS
@@ -101,7 +103,7 @@ PREVIEW="$HOME/.local/share/mountlet-preview"
 python3 -m venv "$PREVIEW"
 "$PREVIEW/bin/python" -m pip install --upgrade pip
 "$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
-  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+  "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
 "$PREVIEW/bin/mountlet"
 ```
 
@@ -151,7 +153,7 @@ start Mountlet. `pipx` keeps the preview isolated while making the `mountlet`
 command available to your user account:
 
 ```powershell
-pipx install --force "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+pipx install --force "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
 mountlet
 ```
 
@@ -230,7 +232,7 @@ Finally, install Mountlet with the Homebrew Python:
 PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
 "$PYTHON" --version
 pipx install --force --python "$PYTHON" \
-  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+  "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
 ```
 
 The version check must report Python 3.10 or newer. Close and reopen the
@@ -295,7 +297,8 @@ The desktop app uses PySide6. Start it with:
 mountlet
 ```
 
-If you installed the CLI without tray support, add PySide6 with:
+If you installed the terminal-only package and later want the desktop app, add
+PySide6 with:
 
 ```bash
 pipx inject mountlet PySide6
@@ -542,8 +545,10 @@ using a key derived from the password.
 
 ## Status
 
-The current public target is Linux CLI and desktop tray use. The tray is still
-early, but it is the main direction for the app.
+The current public target is a desktop-first beta for Linux, with Windows and
+macOS available as experimental platforms until signing, notarization, and
+broader end-to-end testing are complete. The terminal menu remains available
+for systems without tray support.
 
 See the [changelog](https://github.com/eric-holt/mountlet/blob/main/CHANGELOG.md)
 for version history.

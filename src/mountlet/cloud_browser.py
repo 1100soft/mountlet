@@ -380,10 +380,11 @@ class CloudBrowserBackend:
     def prepare_offline_open(self, remote_name: str, path: str) -> Path:
         """Return the local cache path and repair permissions for external apps.
 
-        Offline files are read-only from Mountlet's perspective because edits
-        are not synced back. Some desktop apps still need write permission to
-        create locks or temporary state beside the document, so the local cache
-        must stay user-readable and user-writable.
+        Offline files are local snapshots, not live two-way sync. Some desktop
+        apps need write permission to create locks or temporary state beside the
+        document, so the local cache must stay user-readable and user-writable.
+        Mountlet records snapshot metadata and prompts for conflict handling
+        when a locally changed snapshot differs from the mounted cloud file.
         """
         destination = self.offline_path(remote_name, path)
         if destination.is_dir():

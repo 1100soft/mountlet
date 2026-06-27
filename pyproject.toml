@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mountlet"
 version = "0.4.1"
-description = "CLI and tray tools for mounting rclone remotes"
+description = "Desktop app and terminal tools for mounting rclone remotes"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,10 +15,11 @@ license = "MIT"
 authors = [
   {name = "Eric Holt"},
 ]
-keywords = ["rclone", "mount", "cloud-storage", "tui", "fuse"]
+keywords = ["rclone", "mount", "cloud-storage", "desktop", "fuse"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
+  "Environment :: X11 Applications :: Qt",
   "Intended Audience :: End Users/Desktop",
   "Operating System :: MacOS",
   "Operating System :: Microsoft :: Windows",
@@ -32,6 +33,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+desktop = [
+  "PySide6>=6.7",
+  "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
+]
 tray = [
   "PySide6>=6.7",
   "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
@@ -58,7 +63,7 @@ mountlet = "mountlet.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mountlet = ["assets/*.png"]
+mountlet = ["assets/*.png", "assets/*.icns"]
 
 [tool.ruff]
 line-length = 120

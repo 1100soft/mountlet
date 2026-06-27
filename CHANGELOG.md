@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Made `mountlet` open the desktop app by default, kept `mountlet tray` as a
+  compatibility alias, and moved the terminal menu to the explicit
+  `mountlet menu` path.
+- Added a `desktop` package extra, kept the existing `tray` extra as a
+  compatibility name, refreshed install documentation around the desktop-first
+  beta path, and included the macOS icon asset in package data.
 - Enabled offline snapshots in Mountlet Files, including manifest metadata for
   deep cached paths so parent folders remain browseable without a live remote
   connection.

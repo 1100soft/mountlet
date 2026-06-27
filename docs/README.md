@@ -37,9 +37,9 @@ Finder and Linux file managers likewise retain final control over window and
 tab reuse.
 
 The adapters establish implementation boundaries and testable conventions.
-Source-installed tray and mount flows have been exercised on Linux, Windows,
-and macOS. Windows and macOS remain experimental until native packaging and
-broader end-to-end testing are complete.
+Source-installed desktop and mount flows have been exercised on Linux, Windows,
+and macOS. Windows and macOS remain experimental until signing, notarization,
+and broader end-to-end testing are complete.
 
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
 paths, and offline snapshots. `cloud_browser_ui.py` owns the compact Qt view
@@ -100,7 +100,7 @@ python -m build
 Native packaging uses PyInstaller separately on each target operating system:
 
 ```bash
-python -m pip install -e ".[tray,packaging]"
+python -m pip install -e ".[desktop,packaging]"
 python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 python packaging/verify_bundle.py
 python packaging/archive_bundle.py --name mountlet-local
@@ -115,7 +115,7 @@ Apple-notarized and expire from GitHub Actions after 14 days.
 Install the desktop dependencies when working on the local app:
 
 ```bash
-python -m pip install -e ".[dev,tray]"
+python -m pip install -e ".[dev,desktop]"
 mountlet
 ```
 
@@ -126,8 +126,8 @@ ignored by git and must not be part of the installed-user workflow.
 
 - Confirm support contact.
 - Add screenshots or terminal recordings for the package page.
-- Publish PyPI/pipx CLI installation instructions.
-- Publish `.deb` installation instructions for the later desktop package.
+- Publish PyPI/pipx desktop and terminal-menu installation instructions.
+- Publish `.deb` installation instructions for the desktop package.
 - Run CI on every pull request.
 - Build a wheel and install it in a clean virtual environment.
 - Test on a fresh Ubuntu installation with `rclone` and `fuse3`.
@@ -139,7 +139,7 @@ ignored by git and must not be part of the installed-user workflow.
 
 ## Provider Test Status
 
-The 0.4.0 release documents provider status based on local remotes in
+The root README documents provider status based on local remotes in
 `~/.config/rclone/rclone.conf` and recent GUI setup work.
 
 Locally tested:
@@ -166,23 +166,25 @@ syncing the complete Mountlet config bundle.
 ## Release Strategy
 
 - Keep the CLI/TUI core MIT licensed.
-- Publish CLI builds to PyPI for lightweight `pipx` installation.
+- Publish the desktop-capable PyPI package for `pipx` installation, with
+  terminal-only use available through `mountlet menu`.
 - Build unsigned standalone Linux, Windows, and macOS development artifacts in
   GitHub Actions before introducing installers and code signing.
 - Publish signed native desktop packages through GitHub Releases once startup,
   updates, and prerequisite handling are ready for nontechnical users.
-- Build the desktop tray app as the first commercial product layer.
+- Build the desktop app as the first commercial product layer.
 - Evaluate `.deb`, AppImage, Windows installer, and macOS DMG distribution after
   the standalone bundles are stable.
 
 ## Monetization Direction
 
-The free package should remain useful as a local CLI/TUI. Paid value should be
-centered on reliability, convenience, support, and managed configuration.
+The free package should remain useful as a local desktop and terminal tool.
+Paid value should be centered on reliability, convenience, support, and managed
+configuration.
 
-The first paid product direction is a desktop tray app.
+The first paid product direction is the desktop app.
 
-Initial desktop tray scope:
+Initial desktop scope:
 
 - Basic mount, unmount, restart-mount, and open-folder actions.
 - Auto-mount at login.

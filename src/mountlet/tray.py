@@ -526,8 +526,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         )
     except ImportError as exc:
         raise TrayDependencyError(
-            "Tray support requires PySide6. Install it with:\n"
-            '  pipx install "mountlet[tray]"\n'
+            "The Mountlet desktop app requires PySide6. Install it with:\n"
+            '  pipx install "mountlet[desktop]"\n'
             "or, for an existing pipx install:\n"
             "  pipx inject mountlet PySide6\n\n"
             f"Import error: {exc}"
@@ -7058,7 +7058,7 @@ class MountletTray:
     def run(self) -> int:
         if not self.qt.QSystemTrayIcon.isSystemTrayAvailable():
             print("[!] No system tray is available in this desktop session.", file=sys.stderr)
-            print("    Use the terminal menu instead: mountlet", file=sys.stderr)
+            print("    Use the terminal menu instead: mountlet menu", file=sys.stderr)
             return 1
 
         self.rebuild_menus()
@@ -7306,7 +7306,7 @@ def main(argv: list[str] | None = None) -> int:
     desktop_ready, message = _desktop_session_available()
     if not desktop_ready:
         print(f"[!] {message}", file=sys.stderr)
-        print("    Use the terminal menu instead: mountlet", file=sys.stderr)
+        print("    Use the terminal menu instead: mountlet menu", file=sys.stderr)
         return 1
 
     try:
