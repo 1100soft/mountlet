@@ -245,6 +245,28 @@ class CloudBrowserTests(unittest.TestCase):
             with mock.patch.object(loaded, "_rclone", side_effect=RuntimeError("rclone was not found")):
                 self.assertIsNone(loaded._list_offline_entries("Docs", ""))
 
+    def test_folder_with_saved_descendant_is_available_offline(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("a.pdf", "Reports/Deep/a.pdf", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("offline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    backend.make_offline(_remote(), entry)
+
+            self.assertTrue(backend.has_offline_content("Docs", "Reports", is_dir=True))
+            self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep", is_dir=True))
+            self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
+            self.assertFalse(backend.has_offline_content("Docs", "Other", is_dir=True))
+
     def test_browser_cascades_to_side_with_room_and_clamps_height(self):
         right = cascade_position((100, 100, 300, 400), 180, (0, 0, 1200, 800), (500, 390))
         left = cascade_position((800, 100, 300, 400), 700, (0, 0, 1200, 800), (500, 390))
@@ -662,6 +684,24 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._open_local_folder.assert_called_once_with(Path("/cache/Docs/Reports"))
         browser._notify.assert_not_called()
+
+    def test_open_folder_button_highlights_offline_snapshot_when_unmounted(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            offline = Path(tempdir) / "Docs" / "Reports"
+            offline.mkdir(parents=True)
+            browser = object.__new__(CompactCloudBrowser)
+            browser.remote = _remote()
+            browser.path = "Reports"
+            browser.backend = mock.Mock()
+            browser.backend.offline_path.return_value = offline
+            browser.open_folder_button = mock.Mock()
+            browser._file_manager_name = mock.Mock(return_value="Explorer")
+
+            with mock.patch.object(core, "is_mounted", return_value=False):
+                browser._update_open_folder_button()
+
+        self.assertIn("#facc15", browser.open_folder_button.setStyleSheet.call_args.args[0])
+        self.assertIn("offline snapshot", browser.open_folder_button.setToolTip.call_args.args[0])
 
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)

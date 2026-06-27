@@ -283,6 +283,41 @@ class CloudBrowserBackend:
             parent = parent.parent
         return False
 
+    def has_offline_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        """Return whether an entry can lead to a usable offline snapshot.
+
+        A folder can be useful offline even when that folder itself was not
+        downloaded as a whole. For example, saving Reports/2026/a.pdf should
+        keep Reports and Reports/2026 visibly available while the remote is
+        unmounted.
+        """
+        if self.is_offline(remote_name, path, is_dir=is_dir):
+            return True
+        if not is_dir:
+            return False
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        records = self._offline_records.get(remote_name, {})
+        for record_path, record in records.items():
+            if normalized and not record_path.startswith(prefix):
+                continue
+            if not normalized and not record_path:
+                continue
+            if not bool(record.get("is_dir")):
+                return True
+        directory = self.offline_path(remote_name, path)
+        if not directory.is_dir():
+            return False
+        try:
+            for child in directory.rglob("*"):
+                if child.name.startswith(".mountlet-offline"):
+                    continue
+                if child.is_file():
+                    return True
+        except OSError:
+            return False
+        return False
+
     def offline_path(self, remote_name: str, path: str) -> Path:
         root = self.cache_root / _safe_component(remote_name)
         relative = normalize_browser_path(path)

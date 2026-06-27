@@ -14,6 +14,8 @@ MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 CHILD_FOLDER_PREFETCH_LIMIT = 24
+OFFLINE_HIGHLIGHT_COLOR = "#facc15"
+OFFLINE_MUTED_COLOR = "#8b8f98"
 
 
 def cascade_position(
@@ -152,9 +154,13 @@ class CompactCloudBrowser:
         navigation.addWidget(self.root_button)
         navigation.addWidget(self.path_field, 1)
         navigation.addWidget(self._button("↻", lambda: self.refresh(force=True), "Refresh folder", square=True))
-        navigation.addWidget(
-            self._button("↗", self._open_current_mount, "Open this folder in the system file manager", square=True)
+        self.open_folder_button = self._button(
+            "↗",
+            self._open_current_mount,
+            "Open this folder in the system file manager",
+            square=True,
         )
+        navigation.addWidget(self.open_folder_button)
         self.offline_button = self._button("↓", self.toggle_offline, "Make selected items available offline", square=True)
         navigation.addWidget(self.offline_button)
         layout.addLayout(navigation)
@@ -471,19 +477,36 @@ class CompactCloudBrowser:
         offline_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+        remote = self.remote
+        mounted = bool(remote and core.is_mounted(remote))
         for entry in entries:
             item = self.qt.QTreeWidgetItem(["", entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
             item.setIcon(1, directory_icon if entry.is_dir else file_icon)
-            if self.remote and self.backend.is_offline(self.remote.name, entry.path, is_dir=entry.is_dir):
+            offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
+            offline_content = bool(remote and self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir))
+            if offline:
                 item.setIcon(0, offline_icon)
                 item.setToolTip(0, "Available offline as a local snapshot")
+            if remote and not mounted:
+                if offline_content:
+                    self._set_item_foreground(item, OFFLINE_HIGHLIGHT_COLOR)
+                    item.setToolTip(1, "Available offline as a local snapshot")
+                else:
+                    self._set_item_foreground(item, OFFLINE_MUTED_COLOR)
+                    item.setToolTip(1, "Mount this remote or save this item offline before opening it.")
             self.tree.addTopLevelItem(item)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
             self._ensure_tree_selection()
         self._update_actions()
+        self._update_open_folder_button()
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
+
+    def _set_item_foreground(self, item: Any, color: str) -> None:
+        brush = self.qt.QBrush(self.qt.QColor(color))
+        for column in range(self.tree.columnCount()):
+            item.setForeground(column, brush)
 
     def _ensure_tree_selection(self) -> None:
         if self.tree.topLevelItemCount() <= 0:
@@ -624,11 +647,15 @@ class CompactCloudBrowser:
         menu = self.qt.QMenu(self.window)
         self._menu_action(menu, "Open", lambda selected=item: self._open_item(selected))
         if entry.is_dir:
+            can_open_folder = bool(
+                self.remote
+                and (core.is_mounted(self.remote) or self.backend.has_offline_content(self.remote.name, entry.path, is_dir=True))
+            )
             self._menu_action(
                 menu,
                 f"Open in {self._file_manager_label()}",
                 lambda path=entry.path: self._open_external_folder(path),
-                enabled=bool(self.remote and core.is_mounted(self.remote)),
+                enabled=can_open_folder,
             )
         menu.addSeparator()
         edits_enabled = self._edits_enabled()
@@ -649,7 +676,7 @@ class CompactCloudBrowser:
             menu,
             f"Open in {self._file_manager_label()}",
             lambda: self._open_external_folder(self.path),
-            enabled=bool(self.remote and core.is_mounted(self.remote)),
+            enabled=bool(self.remote and (core.is_mounted(self.remote) or self._current_offline_folder_available())),
         )
         edits_enabled = self._edits_enabled()
         self._menu_action(
@@ -790,6 +817,27 @@ class CompactCloudBrowser:
         else:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
         self.offline_button.setProperty("hasSelection", selected)
+        self._update_open_folder_button()
+
+    def _update_open_folder_button(self) -> None:
+        button = getattr(self, "open_folder_button", None)
+        if button is None:
+            return
+        remote = getattr(self, "remote", None)
+        offline_available = self._current_offline_folder_available()
+        if remote is not None and not core.is_mounted(remote) and offline_available:
+            button.setStyleSheet(f"QPushButton {{ color: {OFFLINE_HIGHLIGHT_COLOR}; }}")
+            button.setToolTip(f"Open the offline snapshot folder in {self._file_manager_label()}")
+        else:
+            button.setStyleSheet("")
+            button.setToolTip(f"Open this folder in {self._file_manager_label()}")
+
+    def _current_offline_folder_available(self) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        offline = self.backend.offline_path(remote.name, self.path)
+        return offline.is_dir() or self.backend.has_offline_content(remote.name, self.path, is_dir=True)
 
     def _edits_enabled(self) -> bool:
         try:
