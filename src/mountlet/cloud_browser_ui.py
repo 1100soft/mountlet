@@ -18,6 +18,7 @@ EMBEDDED_BROWSER_MIN_HEIGHT = 340
 CHILD_FOLDER_PREFETCH_LIMIT = 24
 OFFLINE_HIGHLIGHT_COLOR = "#facc15"
 OFFLINE_MUTED_COLOR = "#8b8f98"
+OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 
 
 def cascade_position(
@@ -518,6 +519,7 @@ class CompactCloudBrowser:
         self.tree.clear()
         style = self.window.style()
         offline_icon = self._offline_icon()
+        partial_offline_icon = self._dimmed_icon(offline_icon) if offline_icon is not None else None
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         remote = self.remote
@@ -536,6 +538,10 @@ class CompactCloudBrowser:
                     item.setToolTip(0, "Offline snapshot has local changes")
                 else:
                     item.setToolTip(0, "Available offline as a local snapshot")
+            elif entry.is_dir and offline_content:
+                if partial_offline_icon is not None:
+                    item.setIcon(0, partial_offline_icon)
+                item.setToolTip(0, "Contains offline snapshots")
             if remote and not mounted:
                 if offline_content:
                     self._set_item_foreground(item, OFFLINE_HIGHLIGHT_COLOR)
@@ -918,15 +924,15 @@ class CompactCloudBrowser:
         self._update_snapshot_button_icon(offline_enabled)
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
         selected_changed = self._selected_offline_changed()
-        self.offline_button.setText("✓" if remove_offline else "")
-        set_badge(self.offline_button, selected_changed, OFFLINE_HIGHLIGHT_COLOR)
+        self.offline_button.setText("")
+        set_badge(self.offline_button, remove_offline, OFFLINE_SAVED_BADGE_COLOR)
         if operation_pending:
             self.offline_button.setToolTip("Wait for the current file operation to finish")
         elif selected:
             self.offline_button.setToolTip(
-                "Offline snapshot has local changes; click to remove the local snapshot"
+                "Saved offline with local changes; click to remove the local snapshot"
                 if selected_changed
-                else "Remove the local offline snapshot"
+                else "Saved offline; click to remove the local snapshot"
                 if remove_offline
                 else "Save a local snapshot for offline access"
             )
@@ -976,6 +982,9 @@ class CompactCloudBrowser:
         if enabled:
             self.offline_button.setIcon(icon)
             return
+        self.offline_button.setIcon(self._dimmed_icon(icon))
+
+    def _dimmed_icon(self, icon: Any) -> Any:
         try:
             size = self.qt.QSize(22, 22)
             source = icon.pixmap(size)
@@ -995,9 +1004,9 @@ class CompactCloudBrowser:
             painter.setOpacity(0.28)
             painter.drawPixmap(0, 0, source)
             painter.end()
-            self.offline_button.setIcon(self.qt.QIcon(dimmed))
+            return self.qt.QIcon(dimmed)
         except Exception:
-            self.offline_button.setIcon(icon)
+            return icon
 
     def _selected_offline_changed(self) -> bool:
         remote = getattr(self, "remote", None)
