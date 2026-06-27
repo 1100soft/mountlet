@@ -37,7 +37,7 @@ For isolated CLI use:
 pipx install mountlet
 ```
 
-For the desktop tray preview:
+For the desktop app:
 
 ```bash
 pipx install "mountlet[tray]"
@@ -102,7 +102,7 @@ python3 -m venv "$PREVIEW"
 "$PREVIEW/bin/python" -m pip install --upgrade pip
 "$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
   "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
-"$PREVIEW/bin/mountlet" tray
+"$PREVIEW/bin/mountlet"
 ```
 
 ### Windows (Experimental)
@@ -152,7 +152,7 @@ command available to your user account:
 
 ```powershell
 pipx install --force "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
-mountlet tray
+mountlet
 ```
 
 ### macOS (Experimental)
@@ -237,7 +237,7 @@ The version check must report Python 3.10 or newer. Close and reopen the
 terminal after `pipx ensurepath`, then start the preview:
 
 ```bash
-mountlet tray
+mountlet
 ```
 
 Run the same install command again to update an existing preview. To test a
@@ -278,15 +278,21 @@ Normal use is:
 mountlet
 ```
 
-Quitting the menu leaves mounted remotes connected. Use `u` in the menu to
-unmount everything.
-
-## Desktop Tray Preview
-
-The tray app is optional and uses PySide6. Start it with:
+For the terminal menu instead, run:
 
 ```bash
-mountlet tray
+mountlet menu
+```
+
+Quitting the terminal menu leaves mounted remotes connected. Use `u` in the
+menu to unmount everything.
+
+## Desktop App
+
+The desktop app uses PySide6. Start it with:
+
+```bash
+mountlet
 ```
 
 If you installed the CLI without tray support, add PySide6 with:

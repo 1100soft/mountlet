@@ -234,7 +234,7 @@ remote_next = "S, PageDown"
             path = Path(tempdir) / "mountlet.desktop"
             settings.set_start_at_login(True, path)
 
-            self.assertIn("Exec=mountlet tray", path.read_text(encoding="utf-8"))
+            self.assertIn("Exec=mountlet", path.read_text(encoding="utf-8"))
 
             settings.set_start_at_login(False, path)
 

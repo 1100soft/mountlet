@@ -456,7 +456,7 @@ def set_start_at_login(enabled: bool, path: Path | None = None) -> None:
     get_platform().set_start_at_login(
         APP_NAME,
         enabled,
-        command=("mountlet", "tray"),
+        command=("mountlet",),
         destination=path,
     )
 

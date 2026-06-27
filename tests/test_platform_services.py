@@ -363,15 +363,15 @@ Categories=Utility;FileManager;
             LinuxPlatformServices().set_start_at_login(
                 "mountlet",
                 True,
-                command=("mountlet", "tray"),
+                command=("mountlet",),
                 destination=destination,
             )
             text = destination.read_text(encoding="utf-8")
-            self.assertIn("Exec=mountlet tray", text)
+            self.assertIn("Exec=mountlet", text)
             LinuxPlatformServices().set_start_at_login(
                 "mountlet",
                 False,
-                command=("mountlet", "tray"),
+                command=("mountlet",),
                 destination=destination,
             )
             self.assertFalse(destination.exists())
@@ -382,13 +382,13 @@ Categories=Utility;FileManager;
             MacOSPlatformServices().set_start_at_login(
                 "mountlet",
                 True,
-                command=("mountlet", "tray"),
+                command=("mountlet",),
                 destination=destination,
             )
             with destination.open("rb") as handle:
                 data = plistlib.load(handle)
 
-        self.assertEqual(data["ProgramArguments"], ["mountlet", "tray"])
+        self.assertEqual(data["ProgramArguments"], ["mountlet"])
         self.assertTrue(data["RunAtLoad"])
 
     def test_desktop_service_uses_qt_fallbacks(self):

@@ -10,6 +10,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mountlet import __version__, cli
+from mountlet import tui
+from mountlet.config_tools import path_config, setup_wizard, verify_config
 
 
 class CliTests(unittest.TestCase):
@@ -19,42 +21,36 @@ class CliTests(unittest.TestCase):
 
         self.assertIn(f"mountlet {__version__}", output.getvalue())
 
-    def test_no_args_opens_menu(self):
-        with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=True):
-            with mock.patch.object(cli.tui, "main", return_value=None) as menu:
-                self.assertEqual(cli.main([]), 0)
+    def test_no_args_opens_tray(self):
+        from mountlet import tray
 
-        menu.assert_called_once_with()
+        with mock.patch.object(tray, "main", return_value=0) as tray_main:
+            self.assertEqual(cli.main([]), 0)
 
-    def test_no_args_stops_when_environment_is_not_ready(self):
-        with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=False):
-            with mock.patch.object(cli.tui, "main", return_value=None) as menu:
-                self.assertEqual(cli.main([]), 1)
-
-        menu.assert_not_called()
+        tray_main.assert_called_once_with([])
 
     def test_menu_subcommand_opens_menu(self):
-        with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=True):
-            with mock.patch.object(cli.tui, "main", return_value=None) as menu:
+        with mock.patch.object(setup_wizard, "ensure_ready_for_menu", return_value=True):
+            with mock.patch.object(tui, "main", return_value=None) as menu:
                 self.assertEqual(cli.main(["menu"]), 0)
 
         menu.assert_called_once_with()
 
     def test_menu_subcommand_stops_when_environment_is_not_ready(self):
-        with mock.patch.object(cli.setup_wizard, "ensure_ready_for_menu", return_value=False):
-            with mock.patch.object(cli.tui, "main", return_value=None) as menu:
+        with mock.patch.object(setup_wizard, "ensure_ready_for_menu", return_value=False):
+            with mock.patch.object(tui, "main", return_value=None) as menu:
                 self.assertEqual(cli.main(["menu"]), 1)
 
         menu.assert_not_called()
 
     def test_verify_subcommand_dispatches_to_verify_tool(self):
-        with mock.patch.object(cli.verify_config, "main", return_value=0) as verify:
+        with mock.patch.object(verify_config, "main", return_value=0) as verify:
             self.assertEqual(cli.main(["verify", "--remote", "Docs"]), 0)
 
         verify.assert_called_once_with(["--remote", "Docs"])
 
     def test_setup_subcommand_dispatches_to_setup_tool(self):
-        with mock.patch.object(cli.setup_wizard, "main", return_value=0) as setup:
+        with mock.patch.object(setup_wizard, "main", return_value=0) as setup:
             self.assertEqual(cli.main(["setup", "--skip-verify"]), 0)
 
         setup.assert_called_once_with(["--skip-verify"])
@@ -68,7 +64,7 @@ class CliTests(unittest.TestCase):
         tray_main.assert_called_once_with(["--skip-readiness-check"])
 
     def test_paths_alias_dispatches_to_path_tool(self):
-        with mock.patch.object(cli.path_config, "main", return_value=0) as path:
+        with mock.patch.object(path_config, "main", return_value=0) as path:
             self.assertEqual(cli.main(["paths", "--ensure"]), 0)
 
         path.assert_called_once_with(["--ensure"])

@@ -112,11 +112,11 @@ installer registers an uninstaller; Linux and macOS use their normal package or
 application removal flow. These development artifacts are not Windows-signed or
 Apple-notarized and expire from GitHub Actions after 14 days.
 
-Install the optional tray dependencies when working on the desktop preview:
+Install the desktop dependencies when working on the local app:
 
 ```bash
 python -m pip install -e ".[dev,tray]"
-mountlet tray
+mountlet
 ```
 
 The repository-level `secrets/` directory is for local development only. It is

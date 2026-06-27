@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from typing import Any
 
 from . import __version__
-from . import tui
-from .config_tools import export_config, import_config, path_config, reconnect_config, setup_wizard, verify_config
 
 Command = Callable[[list[str] | None], int | None]
 
 
+def _run_module_main(module: Any, argv: list[str] | None = None) -> int:
+    return int(module.main(argv) or 0)
+
+
 def run_menu(argv: list[str] | None = None) -> int:
+    from . import tui
+    from .config_tools import setup_wizard
+
     if argv:
         print("The menu command does not accept options.", file=sys.stderr)
         return 2
@@ -23,38 +29,50 @@ def run_menu(argv: list[str] | None = None) -> int:
 
 
 def run_path(argv: list[str] | None = None) -> int:
-    return int(path_config.main(argv) or 0)
+    from .config_tools import path_config
+
+    return _run_module_main(path_config, argv)
 
 
 def run_setup(argv: list[str] | None = None) -> int:
-    return int(setup_wizard.main(argv) or 0)
+    from .config_tools import setup_wizard
+
+    return _run_module_main(setup_wizard, argv)
 
 
 def run_verify(argv: list[str] | None = None) -> int:
-    return int(verify_config.main(argv) or 0)
+    from .config_tools import verify_config
+
+    return _run_module_main(verify_config, argv)
 
 
 def run_reconnect(argv: list[str] | None = None) -> int:
-    return int(reconnect_config.main(argv) or 0)
+    from .config_tools import reconnect_config
+
+    return _run_module_main(reconnect_config, argv)
 
 
 def run_export(argv: list[str] | None = None) -> int:
-    return int(export_config.main(argv) or 0)
+    from .config_tools import export_config
+
+    return _run_module_main(export_config, argv)
 
 
 def run_import(argv: list[str] | None = None) -> int:
-    return int(import_config.main(argv) or 0)
+    from .config_tools import import_config
+
+    return _run_module_main(import_config, argv)
 
 
 def run_tray(argv: list[str] | None = None) -> int:
     from . import tray
 
-    return int(tray.main(argv) or 0)
+    return _run_module_main(tray, argv)
 
 
 COMMANDS: dict[str, tuple[str, Command]] = {
     "menu": ("Open the interactive mount menu.", run_menu),
-    "tray": ("Open the desktop tray app.", run_tray),
+    "tray": ("Open the desktop tray app. This is also the default.", run_tray),
     "setup": ("Prepare the app for first use.", run_setup),
     "path": ("Show config, state, cache, and rclone paths.", run_path),
     "verify": ("Check whether configured remotes are reachable.", run_verify),
@@ -73,7 +91,7 @@ def print_help() -> None:
     print("mountlet")
     print()
     print("Usage:")
-    print("  mountlet")
+    print("  mountlet                 Open the desktop tray app")
     print("  mountlet <command> [options]")
     print()
     print("Commands:")
@@ -89,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mountlet {__version__}")
         return 0
     if not args:
-        return run_menu()
+        return run_tray([])
 
     command_name = args.pop(0)
     if command_name in {"-h", "--help", "help"}:
