@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import __version__, core, rclone_wizard
-from .cloud_browser import normalize_browser_path, remote_target
+from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
@@ -501,6 +501,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QGroupBox,
             QHBoxLayout,
             QInputDialog,
+            QItemSelectionModel,
             QKeySequenceEdit,
             QLabel,
             QLineEdit,
@@ -550,6 +551,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QGroupBox=QGroupBox,
         QHBoxLayout=QHBoxLayout,
         QInputDialog=QInputDialog,
+        QItemSelectionModel=QItemSelectionModel,
         QIcon=QIcon,
         QKeyCombination=QKeyCombination,
         QKeySequence=QKeySequence,
@@ -6129,6 +6131,7 @@ class MountletWindow:
             return
         resolved = 0
         for conflict in conflicts:
+            self._show_conflict_file_in_browser(remote, conflict.path)
             choice = self._ask_offline_conflict_choice(remote, conflict)
             if choice is None:
                 continue
@@ -6142,40 +6145,72 @@ class MountletWindow:
             self.file_browser.invalidate(remote.name)
             self.tray_app._notify("Offline snapshots", f"Resolved {resolved} changed offline file{'s' if resolved != 1 else ''}.", success=True)
 
+    def _show_conflict_file_in_browser(self, remote: core.RemoteInfo, path: str) -> None:
+        folder = parent_browser_path(path)
+        row = self._row_widgets.get(remote.name)
+        try:
+            if row is not None:
+                self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=False)
+            else:
+                self.file_browser.remote = remote
+            self.file_browser.path = folder
+            self.file_browser.backend.remember_path(remote.name, folder)
+            self.file_browser.refresh(force=False)
+        except Exception:
+            return
+
     def _ask_offline_conflict_choice(self, remote: core.RemoteInfo, conflict: Any) -> str | None:
         newer_source = "offline copy" if conflict.offline_is_newer else "cloud file"
         older_source = "cloud file" if conflict.offline_is_newer else "offline copy"
-        box = self.qt.QMessageBox(self.window)
-        try:
-            box.setIcon(self.qt.QMessageBox.Icon.Warning)
-        except Exception:
-            pass
-        box.setWindowTitle("Offline file changed")
-        box.setText(f"{conflict.name} has changed while {remote.display_name} was offline.")
-        box.setInformativeText(
-            "Choose which version to keep.\n\n"
-            f"Newer version: {newer_source}\n"
-            f"Older version: {older_source}"
+        newer_link = "offline" if conflict.offline_is_newer else "cloud"
+        older_link = "cloud" if conflict.offline_is_newer else "offline"
+        dialog = self.qt.QDialog(self.window)
+        dialog.setWindowTitle("Offline file changed")
+        layout = self.qt.QVBoxLayout(dialog)
+        title = self.qt.QLabel(f"{html.escape(conflict.name)} changed while {html.escape(remote.display_name)} was offline.")
+        layout.addWidget(title)
+        detail = self.qt.QLabel(
+            "Choose which version to keep.<br><br>"
+            f"Newer version: <a href=\"{newer_link}\">{html.escape(newer_source)}</a><br>"
+            f"Older version: <a href=\"{older_link}\">{html.escape(older_source)}</a>"
         )
-        newer_button = box.addButton("Use newer", self.qt.QMessageBox.ButtonRole.AcceptRole)
-        older_button = box.addButton("Use older", self.qt.QMessageBox.ButtonRole.DestructiveRole)
-        keep_button = box.addButton("Keep both", self.qt.QMessageBox.ButtonRole.ActionRole)
-        cancel_button = box.addButton("Decide later", self.qt.QMessageBox.ButtonRole.RejectRole)
         try:
-            box.setDefaultButton(newer_button)
+            detail.setTextFormat(self.qt.Qt.TextFormat.RichText)
+            detail.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+            detail.setOpenExternalLinks(False)
         except Exception:
             pass
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is newer_button:
-            return "newer"
-        if clicked is older_button:
-            return "older"
-        if clicked is keep_button:
-            return "keep_both"
-        if clicked is cancel_button:
-            return None
-        return None
+        detail.linkActivated.connect(lambda target, item=conflict: self._open_conflict_version(item, target))
+        layout.addWidget(detail)
+        buttons = self.qt.QDialogButtonBox()
+        newer_button = buttons.addButton("Use newer", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
+        older_button = buttons.addButton("Use older", self.qt.QDialogButtonBox.ButtonRole.DestructiveRole)
+        keep_button = buttons.addButton("Keep both", self.qt.QDialogButtonBox.ButtonRole.ActionRole)
+        result: dict[str, str | None] = {"choice": None}
+
+        def choose(button: Any) -> None:
+            if button is newer_button:
+                result["choice"] = "newer"
+            elif button is older_button:
+                result["choice"] = "older"
+            elif button is keep_button:
+                result["choice"] = "keep_both"
+            dialog.accept()
+
+        buttons.clicked.connect(choose)
+        layout.addWidget(buttons)
+        try:
+            newer_button.setDefault(True)
+        except Exception:
+            pass
+        dialog.exec()
+        return result["choice"]
+
+    def _open_conflict_version(self, conflict: Any, target: str) -> None:
+        path = conflict.offline_path if target == "offline" else conflict.mounted_path
+        if self.desktop.open_file(path):
+            return
+        self.tray_app._notify("Open file", f"Could not open {path.name}.", success=False)
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         self._open_remote_path(remote, "")

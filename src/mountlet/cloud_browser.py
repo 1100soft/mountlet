@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import hashlib
@@ -17,6 +18,7 @@ from .settings import offline_root
 BROWSER_STATE_FILE = "browser.json"
 OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
+CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
 @dataclass(frozen=True)
@@ -336,6 +338,28 @@ class CloudBrowserBackend:
         shutil.copy2(conflict.mounted_path, conflict.offline_path)
         self._update_offline_record_state(conflict.remote_name, conflict.path, conflict.offline_path)
         return conflict.offline_path
+
+    def original_path_for_conflict_copy(self, path: str) -> str | None:
+        normalized = normalize_browser_path(path)
+        name = PurePosixPath(normalized).name
+        match = CONFLICT_COPY_RE.match(name)
+        if not match:
+            return None
+        original_name = f"{match.group('stem')}{match.group('suffix') or ''}"
+        parent = parent_browser_path(normalized)
+        return join_browser_path(parent, original_name)
+
+    def replace_original_with_conflict_copy(self, remote: core.RemoteInfo, copy_path: str) -> str:
+        original = self.original_path_for_conflict_copy(copy_path)
+        if original is None:
+            raise RuntimeError("This file is not a Mountlet conflict copy")
+        source = Path(remote.mount_path).joinpath(*PurePosixPath(normalize_browser_path(copy_path)).parts)
+        destination = Path(remote.mount_path).joinpath(*PurePosixPath(original).parts)
+        if not source.is_file():
+            raise RuntimeError("The kept copy is not available in the mounted folder")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return original
 
     def remove_offline(self, remote_name: str, path: str) -> None:
         destination = self.offline_path(remote_name, path)

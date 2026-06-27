@@ -72,6 +72,7 @@ class CompactCloudBrowser:
         self._operation_cache_keys: set[tuple[str, str]] = set()
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
+        self._offline_change_signature: tuple[tuple[str, bool], ...] = ()
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -172,6 +173,7 @@ class CompactCloudBrowser:
             self._enlarge_button_text(action_button)
         self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
         save_icon = self._offline_icon()
+        self._offline_base_icon = save_icon
         if save_icon is not None:
             self.offline_button.setIcon(save_icon)
         item_actions.addWidget(self.copy_button)
@@ -221,6 +223,7 @@ class CompactCloudBrowser:
         self.status = qt.QLabel("")
         layout.addWidget(self.status)
         self.window.setCentralWidget(root)
+        self._start_offline_change_poll()
         self._update_actions()
         self._update_focus_style()
 
@@ -228,6 +231,11 @@ class CompactCloudBrowser:
         button = self.qt.QPushButton(text)
         if square:
             button.setFixedSize(28, 26)
+            self._enlarge_button_text(button)
+            try:
+                button.setIconSize(self.qt.QSize(22, 22))
+            except Exception:
+                pass
         button.setToolTip(tooltip)
         button.clicked.connect(lambda _checked=False: callback())
         return button
@@ -241,8 +249,21 @@ class CompactCloudBrowser:
     def _enlarge_button_text(self, button: Any) -> None:
         try:
             font = button.font()
-            font.setPointSize(max(font.pointSize() + 3, 12))
+            font.setPointSize(max(font.pointSize() + 5, 15))
             button.setFont(font)
+        except Exception:
+            return
+
+    def _start_offline_change_poll(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.root)
+            timer.setInterval(1000)
+            timer.timeout.connect(self._refresh_if_offline_change_state_changed)
+            timer.start()
+            self._offline_change_timer = timer
         except Exception:
             return
 
@@ -541,7 +562,26 @@ class CompactCloudBrowser:
             self._ensure_tree_selection()
         self._update_actions()
         self._update_open_folder_button()
+        self._offline_change_signature = self._current_offline_change_signature()
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
+
+    def _current_offline_change_signature(self) -> tuple[tuple[str, bool], ...]:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return ()
+        return tuple(
+            (entry.path, self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
+            for entry in getattr(self, "entries", [])
+            if self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        )
+
+    def _refresh_if_offline_change_state_changed(self) -> None:
+        if not self.is_visible() or getattr(self, "_operation_pending", False):
+            return
+        signature = self._current_offline_change_signature()
+        if signature == getattr(self, "_offline_change_signature", ()):
+            return
+        self._display_entries(list(getattr(self, "entries", [])))
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
         qt_color = self.qt.QColor(color)
@@ -560,11 +600,13 @@ class CompactCloudBrowser:
         selection_model = getattr(self.tree, "selectionModel", None)
         selection = selection_model() if callable(selection_model) else None
         if selection is not None:
-            flags = (
-                self.qt.QItemSelectionModel.SelectionFlag.ClearAndSelect
-                | self.qt.QItemSelectionModel.SelectionFlag.Rows
-            )
-            selection.select(self.tree.currentIndex(), flags)
+            selection_model = getattr(self.qt, "QItemSelectionModel", None)
+            selection_flags = getattr(selection_model, "SelectionFlag", None)
+            if selection_flags is not None:
+                flags = selection_flags.ClearAndSelect | selection_flags.Rows
+                selection.select(self.tree.currentIndex(), flags)
+            elif not self.tree.selectedItems():
+                current.setSelected(True)
         elif not self.tree.selectedItems():
             current.setSelected(True)
 
@@ -688,6 +730,12 @@ class CompactCloudBrowser:
             return
         menu = self.qt.QMenu(self.window)
         self._menu_action(menu, "Open", lambda selected=item: self._open_item(selected))
+        if self._can_replace_original_with_copy(entry):
+            self._menu_action(
+                menu,
+                "Replace original with this copy",
+                lambda selected=entry: self._replace_original_with_copy(selected),
+            )
         if entry.is_dir:
             can_open_folder = bool(
                 self.remote
@@ -736,6 +784,25 @@ class CompactCloudBrowser:
         action.setEnabled(enabled)
         action.triggered.connect(lambda _checked=False: callback())
         return action
+
+    def _can_replace_original_with_copy(self, entry: BrowserEntry) -> bool:
+        return bool(
+            self.remote
+            and not entry.is_dir
+            and core.is_mounted(self.remote)
+            and self.backend.original_path_for_conflict_copy(entry.path)
+        )
+
+    def _replace_original_with_copy(self, entry: BrowserEntry) -> None:
+        if self.remote is None or self._operation_pending:
+            return
+        remote = self.remote
+        parent = parent_browser_path(entry.path)
+        self._run_operation(
+            "Replacing original…",
+            lambda: self.backend.replace_original_with_conflict_copy(remote, entry.path),
+            invalidate_keys={(remote.name, parent)},
+        )
 
     def _file_manager_label(self) -> str:
         try:
@@ -867,6 +934,7 @@ class CompactCloudBrowser:
             else:
                 button.setToolTip(tooltip)
         self.offline_button.setEnabled(selected and not operation_pending)
+        self._update_snapshot_button_icon(selected and not operation_pending)
         remove_offline = selected and self._offline_action_label() == "Remove offline copy"
         selected_changed = self._selected_offline_changed()
         self.offline_button.setText("●" if selected_changed else ("✓" if remove_offline else ""))
@@ -881,8 +949,23 @@ class CompactCloudBrowser:
         else:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
         self.offline_button.setProperty("hasSelection", selected)
-        self.offline_button.setStyleSheet("" if selected and not operation_pending else "QPushButton { color: #8b8f98; }")
+        self.offline_button.setStyleSheet(
+            "" if selected and not operation_pending else "QPushButton { color: #8b8f98; background: rgba(107, 114, 128, 35); }"
+        )
         self._update_open_folder_button()
+
+    def _update_snapshot_button_icon(self, enabled: bool) -> None:
+        icon = getattr(self, "_offline_base_icon", None)
+        if icon is None:
+            return
+        if enabled:
+            self.offline_button.setIcon(icon)
+            return
+        try:
+            pixmap = icon.pixmap(self.qt.QSize(22, 22), self.qt.QIcon.Mode.Disabled)
+            self.offline_button.setIcon(self.qt.QIcon(pixmap))
+        except Exception:
+            self.offline_button.setIcon(icon)
 
     def _selected_offline_changed(self) -> bool:
         remote = getattr(self, "remote", None)

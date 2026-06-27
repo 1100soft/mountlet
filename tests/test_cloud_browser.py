@@ -333,6 +333,29 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertEqual(mounted.read_text(encoding="utf-8"), offline.read_text(encoding="utf-8"))
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
 
+    def test_mountlet_conflict_copy_can_replace_original(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            mount = root / "mounted" / "Docs"
+            copy = mount / "Reports" / "a (Mountlet offline 20260627-120000).txt"
+            original = mount / "Reports" / "a.txt"
+            copy.parent.mkdir(parents=True)
+            copy.write_text("kept copy", encoding="utf-8")
+            original.write_text("original", encoding="utf-8")
+            remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", str(mount))
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+
+            replaced = backend.replace_original_with_conflict_copy(
+                remote,
+                "Reports/a (Mountlet offline 20260627-120000).txt",
+            )
+
+            self.assertEqual(replaced, "Reports/a.txt")
+            self.assertEqual(original.read_text(encoding="utf-8"), "kept copy")
+
     def test_browser_cascades_to_side_with_room_and_clamps_height(self):
         right = cascade_position((100, 100, 300, 400), 180, (0, 0, 1200, 800), (500, 390))
         left = cascade_position((800, 100, 300, 400), 700, (0, 0, 1200, 800), (500, 390))
@@ -545,6 +568,50 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertIs(browser.tree.current, browser.tree.item)
         self.assertEqual(browser.tree.selection.calls, [(browser.tree.index, 3)])
 
+    def test_focus_selects_current_browser_row_when_qt_selection_flags_are_missing(self):
+        class Item:
+            def __init__(self) -> None:
+                self.selected = False
+
+            def setSelected(self, selected: bool) -> None:
+                self.selected = selected
+
+        class Selection:
+            def select(self, _index: object, _flags: object) -> None:
+                raise AssertionError("Selection flags should be unavailable")
+
+        class Tree:
+            def __init__(self) -> None:
+                self.item = Item()
+                self.selection = Selection()
+                self.current = None
+
+            def topLevelItemCount(self) -> int:
+                return 1
+
+            def currentItem(self) -> object | None:
+                return self.current
+
+            def topLevelItem(self, _index: int) -> Item:
+                return self.item
+
+            def setCurrentItem(self, item: object) -> None:
+                self.current = item
+
+            def selectedItems(self) -> list[object]:
+                return []
+
+            def selectionModel(self) -> Selection:
+                return self.selection
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser.qt = SimpleNamespace()
+
+        browser._ensure_tree_selection()
+
+        self.assertTrue(browser.tree.item.selected)
+
     def test_common_browser_navigation_shortcut_moves_current_item(self):
         class Tree:
             def __init__(self) -> None:
@@ -734,6 +801,37 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser.offline_button.setText.assert_called_with("✓")
         self.assertIn("Remove", browser.offline_button.setToolTip.call_args.args[0])
+
+    def test_offline_button_is_visibly_dimmed_without_selection(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._operation_pending = False
+        browser.tree = mock.Mock()
+        browser.offline_button = mock.Mock()
+        browser._edits_enabled = mock.Mock(return_value=False)
+        browser._selected_entries = mock.Mock(return_value=[])
+        browser.backend = mock.Mock()
+
+        browser._update_actions()
+
+        browser.offline_button.setEnabled.assert_called_with(False)
+        self.assertIn("rgba", browser.offline_button.setStyleSheet.call_args.args[0])
+
+    def test_offline_change_poll_repaints_visible_entries(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.entries = [BrowserEntry("a.txt", "a.txt", False)]
+        browser._operation_pending = False
+        browser._offline_change_signature = (("a.txt", False),)
+        browser.is_visible = mock.Mock(return_value=True)
+        browser._display_entries = mock.Mock()
+        browser.backend = mock.Mock()
+        browser.backend.is_offline.return_value = True
+        browser.backend.offline_changed.return_value = True
+
+        browser._refresh_if_offline_change_state_changed()
+
+        browser._display_entries.assert_called_once_with([BrowserEntry("a.txt", "a.txt", False)])
 
     def test_refresh_mount_state_repaints_visible_remote_entries(self):
         browser = object.__new__(CompactCloudBrowser)
