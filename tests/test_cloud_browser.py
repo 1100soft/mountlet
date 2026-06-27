@@ -328,6 +328,21 @@ class CloudBrowserTests(unittest.TestCase):
         browser.status.setText.assert_called_once_with("token expired")
         browser._update_actions.assert_called_once_with()
 
+    def test_listing_error_keeps_cached_visible_entries(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports"
+        entries = [BrowserEntry("old.txt", "Reports/old.txt", False)]
+        browser._folder_cache = {("Docs", "Reports"): entries}
+        browser._loads_pending = {("Docs", "Reports")}
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+
+        browser._listing_ready("Docs", "Reports", None, "token expired")
+
+        browser._display_entries.assert_called_once_with(entries)
+        browser.status.setText.assert_called_once_with("Showing cached folder contents")
+
     def test_invalidate_clears_selected_remote_cache_and_refreshes(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
@@ -702,6 +717,18 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertIn("#facc15", browser.open_folder_button.setStyleSheet.call_args.args[0])
         self.assertIn("offline snapshot", browser.open_folder_button.setToolTip.call_args.args[0])
+
+    def test_item_foreground_does_not_require_qbrush_on_qt_namespace(self):
+        item = mock.Mock()
+        tree = mock.Mock()
+        tree.columnCount.return_value = 2
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = tree
+        browser.qt = SimpleNamespace(QColor=lambda color: f"color:{color}")
+
+        browser._set_item_foreground(item, "#facc15")
+
+        self.assertEqual(item.setForeground.call_args_list, [mock.call(0, "color:#facc15"), mock.call(1, "color:#facc15")])
 
     def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
         browser = object.__new__(CompactCloudBrowser)

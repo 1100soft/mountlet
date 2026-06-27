@@ -485,7 +485,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             Signal,
             qVersion,
         )
-        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
+        from PySide6.QtGui import QAction, QBrush, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
@@ -533,6 +533,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QAction=QAction,
         QAbstractItemView=QAbstractItemView,
         QApplication=QApplication,
+        QBrush=QBrush,
         QButtonGroup=QButtonGroup,
         QColor=QColor,
         QCheckBox=QCheckBox,
@@ -5943,7 +5944,7 @@ class MountletWindow:
         self._resize_anchored(target_width, target_height, screen)
 
     def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
-        """Resize while preserving the window's nearest screen-edge offsets."""
+        """Resize while preserving the tray-side screen-edge offsets."""
         if not self.is_visible() or screen is None:
             self.window.resize(width, height)
             self._clamp_to_screen(screen)
@@ -5955,9 +5956,16 @@ class MountletWindow:
             right_gap = max(available.right() - frame.right(), 0)
             top_gap = max(frame.top() - available.top(), 0)
             bottom_gap = max(available.bottom() - frame.bottom(), 0)
+            anchor = getattr(self, "_last_tray_anchor", None)
+            if anchor is not None:
+                preserve_right = anchor.x() > available.left() + (available.width() / 2)
+                preserve_bottom = anchor.y() > available.top() + (available.height() / 2)
+            else:
+                preserve_right = right_gap < left_gap
+                preserve_bottom = bottom_gap < top_gap
             self.window.resize(width, height)
-            x = available.left() + left_gap if left_gap <= right_gap else available.right() - right_gap - width + 1
-            y = available.top() + top_gap if top_gap <= bottom_gap else available.bottom() - bottom_gap - height + 1
+            x = available.right() - right_gap - width + 1 if preserve_right else available.left() + left_gap
+            y = available.bottom() - bottom_gap - height + 1 if preserve_bottom else available.top() + top_gap
             self.window.move(x, y)
         except Exception:
             self.window.resize(width, height)

@@ -459,11 +459,16 @@ class CompactCloudBrowser:
         key = (remote_name, path)
         self._loads_pending.discard(key)
         if not isinstance(entries, list):
+            cached = getattr(self, "_folder_cache", {}).get(key)
             if self.remote and (self.remote.name, self.path) == key:
-                self.entries = []
-                self.tree.clear()
-                self.status.setText(error or "Could not load this folder")
-                self._update_actions()
+                if cached is not None:
+                    self._display_entries(cached)
+                    self.status.setText("Showing cached folder contents")
+                else:
+                    self.entries = []
+                    self.tree.clear()
+                    self.status.setText(error or "Could not load this folder")
+                    self._update_actions()
             return
         self._folder_cache[key] = entries
         if self.remote is None or (self.remote.name, self.path) != key:
@@ -504,7 +509,9 @@ class CompactCloudBrowser:
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
-        brush = self.qt.QBrush(self.qt.QColor(color))
+        qt_color = self.qt.QColor(color)
+        brush_factory = getattr(self.qt, "QBrush", None)
+        brush = brush_factory(qt_color) if brush_factory is not None else qt_color
         for column in range(self.tree.columnCount()):
             item.setForeground(column, brush)
 
