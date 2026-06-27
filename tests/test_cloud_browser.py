@@ -850,22 +850,6 @@ class CloudBrowserTests(unittest.TestCase):
         browser.offline_button.setEnabled.assert_called_with(False)
         self.assertIn("rgba", browser.offline_button.setStyleSheet.call_args.args[0])
 
-    def test_offline_change_poll_repaints_visible_entries(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote()
-        browser.entries = [BrowserEntry("a.txt", "a.txt", False)]
-        browser._operation_pending = False
-        browser._offline_change_signature = (("a.txt", False),)
-        browser.is_visible = mock.Mock(return_value=True)
-        browser._display_entries = mock.Mock()
-        browser.backend = mock.Mock()
-        browser.backend.is_offline.return_value = True
-        browser.backend.offline_changed.return_value = True
-
-        browser._refresh_if_offline_change_state_changed()
-
-        browser._display_entries.assert_called_once_with([BrowserEntry("a.txt", "a.txt", False)])
-
     def test_refresh_mount_state_repaints_visible_remote_entries(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

@@ -169,8 +169,6 @@ class CompactCloudBrowser:
         self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True)
         self.paste_button = self._button("▣", self.paste, "Paste into this folder", square=True)
         self.delete_button = self._button("⌫", self.delete_selected, "Delete selected items", square=True)
-        for action_button in (self.copy_button, self.cut_button, self.paste_button, self.delete_button):
-            self._enlarge_button_text(action_button)
         self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
         save_icon = self._offline_icon()
         self._offline_base_icon = save_icon
@@ -224,14 +222,13 @@ class CompactCloudBrowser:
         self.status = qt.QLabel("")
         layout.addWidget(self.status)
         self.window.setCentralWidget(root)
-        self._start_offline_change_poll()
         self._update_actions()
         self._update_focus_style()
 
     def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
         button = self.qt.QPushButton(text)
         if square:
-            button.setFixedSize(28, 26)
+            button.setFixedSize(30, 28)
             self._enlarge_button_text(button)
             try:
                 button.setIconSize(self.qt.QSize(22, 22))
@@ -250,21 +247,8 @@ class CompactCloudBrowser:
     def _enlarge_button_text(self, button: Any) -> None:
         try:
             font = button.font()
-            font.setPointSize(max(font.pointSize() + 5, 15))
+            font.setPointSize(max(font.pointSize() + 3, 13))
             button.setFont(font)
-        except Exception:
-            return
-
-    def _start_offline_change_poll(self) -> None:
-        timer_type = getattr(self.qt, "QTimer", None)
-        if timer_type is None:
-            return
-        try:
-            timer = timer_type(self.root)
-            timer.setInterval(1000)
-            timer.timeout.connect(self._refresh_if_offline_change_state_changed)
-            timer.start()
-            self._offline_change_timer = timer
         except Exception:
             return
 
@@ -575,14 +559,6 @@ class CompactCloudBrowser:
             for entry in getattr(self, "entries", [])
             if self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
         )
-
-    def _refresh_if_offline_change_state_changed(self) -> None:
-        if not self.is_visible() or getattr(self, "_operation_pending", False):
-            return
-        signature = self._current_offline_change_signature()
-        if signature == getattr(self, "_offline_change_signature", ()):
-            return
-        self._display_entries(list(getattr(self, "entries", [])))
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
         qt_color = self.qt.QColor(color)
@@ -980,8 +956,25 @@ class CompactCloudBrowser:
             self.offline_button.setIcon(icon)
             return
         try:
-            pixmap = icon.pixmap(self.qt.QSize(22, 22), self.qt.QIcon.Mode.Disabled)
-            self.offline_button.setIcon(self.qt.QIcon(pixmap))
+            size = self.qt.QSize(22, 22)
+            source = icon.pixmap(size)
+            pixmap_type = getattr(self.qt, "QPixmap", None)
+            painter_type = getattr(self.qt, "QPainter", None)
+            global_color = getattr(getattr(self.qt, "Qt", object), "GlobalColor", object)
+            transparent = getattr(global_color, "transparent", None)
+            if transparent is None:
+                self.offline_button.setIcon(self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled)))
+                return
+            if pixmap_type is None or painter_type is None:
+                self.offline_button.setIcon(self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled)))
+                return
+            dimmed = pixmap_type(size)
+            dimmed.fill(transparent)
+            painter = painter_type(dimmed)
+            painter.setOpacity(0.28)
+            painter.drawPixmap(0, 0, source)
+            painter.end()
+            self.offline_button.setIcon(self.qt.QIcon(dimmed))
         except Exception:
             self.offline_button.setIcon(icon)
 
