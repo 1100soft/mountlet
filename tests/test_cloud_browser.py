@@ -298,6 +298,38 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual([conflict.path for conflict in conflicts], ["Reports/a.txt"])
 
+    def test_cloud_only_change_updates_offline_copy_without_conflict(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            mount = root / "mounted" / "Docs"
+            mount.mkdir(parents=True)
+            remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", str(mount))
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("snapshot", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    backend.make_offline(remote, entry)
+
+            mounted = mount / "Reports" / "a.txt"
+            mounted.parent.mkdir(parents=True)
+            mounted.write_text("cloud edit", encoding="utf-8")
+
+            conflicts = backend.changed_offline_files(remote)
+
+            self.assertEqual(conflicts, [])
+            offline = backend.offline_path("Docs", "Reports/a.txt")
+            self.assertEqual(offline.read_text(encoding="utf-8"), "cloud edit")
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+
     def test_resolving_offline_conflict_with_newer_version_updates_both_paths(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -355,6 +387,7 @@ class CloudBrowserTests(unittest.TestCase):
 
             self.assertEqual(replaced, "Reports/a.txt")
             self.assertEqual(original.read_text(encoding="utf-8"), "kept copy")
+            self.assertFalse(copy.exists())
 
     def test_browser_cascades_to_side_with_room_and_clamps_height(self):
         right = cascade_position((100, 100, 300, 400), 180, (0, 0, 1200, 800), (500, 390))
