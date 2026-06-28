@@ -120,16 +120,16 @@ jobs:
         if: runner.os == 'macOS' && matrix.bundle_rclone
         run: brew install rclone
 
-      - name: Stage bundled rclone
-        if: matrix.bundle_rclone
-        run: python packaging/stage_rclone.py
-
       - name: Run unit tests
         run: python packaging/run_tests.py
 
       - name: Verify Windows directory mounting
         if: runner.os == 'Windows'
         run: python packaging/windows_mount_smoke.py
+
+      - name: Stage bundled rclone
+        if: matrix.bundle_rclone
+        run: python packaging/stage_rclone.py
 
       - name: Build native bundle
         run: python -m PyInstaller --clean --noconfirm packaging/mountlet.spec

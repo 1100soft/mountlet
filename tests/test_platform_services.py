@@ -89,8 +89,10 @@ class PlatformServicesTests(unittest.TestCase):
                 {"LOCALAPPDATA": str(local)},
                 clear=True,
             ):
-                with mock.patch("mountlet.platform_services.base.shutil.which", return_value=None):
-                    found = WindowsPlatformServices().find_rclone()
+                platform = WindowsPlatformServices()
+                with mock.patch.object(platform, "bundled_rclone_candidates", return_value=()):
+                    with mock.patch("mountlet.platform_services.base.shutil.which", return_value=None):
+                        found = platform.find_rclone()
 
         self.assertEqual(found, str(executable))
 
