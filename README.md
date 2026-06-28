@@ -357,10 +357,11 @@ different detected file manager in App settings may provide different behavior.
 
 The Mountlet window provides:
 
-- Compact remote strips with storage usage and mount-state toggles.
+- Compact remote strips with storage usage, provider shortcuts, and quick
+  access to per-remote settings.
 - Remote strips that open a compact file browser and switch its active remote
   on hover while the browser is open.
-- Provider website shortcuts and per-remote settings.
+- Mount and unmount controls in the file browser for the active remote.
 - A guided `+` flow for adding supported cloud remotes through rclone.
 - Sorting by registration time, name, provider, total size, used space, or
   remaining space, with manual move controls for final adjustments.

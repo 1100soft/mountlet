@@ -29,6 +29,8 @@ DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "browser_parent": ("Backspace",),
     "browser_root": ("Alt+Home",),
     "browser_refresh": ("F5",),
+    "browser_zoom_in": ("Ctrl++",),
+    "browser_zoom_out": ("Ctrl+-",),
     "browser_open_folder": ("Ctrl+Return",),
     "browser_copy": (),
     "browser_cut": (),
@@ -103,6 +105,8 @@ browser_open = ""
 browser_parent = "Backspace"
 browser_root = "Alt+Home"
 browser_refresh = "F5"
+browser_zoom_in = "Ctrl++"
+browser_zoom_out = "Ctrl+-"
 browser_open_folder = "Ctrl+Return"
 browser_copy = ""
 browser_cut = ""

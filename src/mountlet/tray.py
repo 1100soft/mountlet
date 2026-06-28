@@ -119,6 +119,8 @@ BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("browser_parent", "Parent folder"),
     ("browser_root", "Remote root"),
     ("browser_refresh", "Refresh folder"),
+    ("browser_zoom_in", "Zoom in"),
+    ("browser_zoom_out", "Zoom out"),
     ("browser_open_folder", "Open folder in file manager"),
     ("browser_copy", "Copy selected items"),
     ("browser_cut", "Cut selected items"),
@@ -490,7 +492,19 @@ def _load_qt_bindings() -> SimpleNamespace:
             Signal,
             qVersion,
         )
-        from PySide6.QtGui import QAction, QBrush, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
+        from PySide6.QtGui import (
+            QAction,
+            QBrush,
+            QColor,
+            QCursor,
+            QDesktopServices,
+            QDrag,
+            QIcon,
+            QKeySequence,
+            QPainter,
+            QPen,
+            QPixmap,
+        )
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
@@ -576,6 +590,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         QObject=QObject,
         QPoint=QPoint,
         QPainter=QPainter,
+        QPen=QPen,
+        QPixmap=QPixmap,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
         QRadioButton=QRadioButton,
@@ -4211,6 +4227,7 @@ class MountletWindow:
             open_mount=self._open_remote_path,
             open_file=self.desktop.open_file,
             open_local_folder=lambda path: self.desktop.open_folder(str(path)),
+            toggle_mount=self._run_switch_action,
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
@@ -5393,13 +5410,12 @@ class MountletWindow:
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(0)
-        layout.setColumnMinimumWidth(0, 50)
-        layout.setColumnMinimumWidth(2, 126)
-        layout.setColumnMinimumWidth(3, 116)
+        layout.setColumnMinimumWidth(1, 126)
+        layout.setColumnMinimumWidth(2, 116)
+        layout.setColumnMinimumWidth(3, 36)
         layout.setColumnMinimumWidth(4, 36)
-        layout.setColumnMinimumWidth(5, 36)
-        layout.setColumnMinimumWidth(6, 24)
-        layout.setColumnStretch(1, 1)
+        layout.setColumnMinimumWidth(5, 24)
+        layout.setColumnStretch(0, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
         title.setTextFormat(self.qt.Qt.TextFormat.RichText)
@@ -5412,18 +5428,6 @@ class MountletWindow:
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
 
-        toggle = self._switch()
-        toggle.setProperty("rowControl", True)
-        toggle.setChecked(mounted)
-        toggle.setEnabled(not action_pending)
-        toggle_tooltip = (
-            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
-        ) + _shortcut_hint("remote_toggle_mount")
-        toggle.setToolTip(toggle_tooltip)
-        toggle.enterEvent = lambda event, widget=toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(widget, tooltip)
-        toggle.stateChanged.connect(
-            lambda state, remote_name=remote.name: self._run_switch_action(remote_name, bool(state))
-        )
         status = self.qt.QLabel()
         status.setFixedWidth(120)
         self._set_status_text(status, usage, action_pending=action_pending)
@@ -5447,18 +5451,16 @@ class MountletWindow:
         self._update_browser_button(browser_button, remote)
         move_controls, up_button, down_button = self._move_button_stack(remote)
 
-        layout.addWidget(toggle, 0, 0)
-        layout.addWidget(title, 0, 1)
-        layout.addWidget(usage_indicator, 0, 2)
-        layout.addWidget(status_group, 0, 3)
-        layout.addWidget(config_button, 0, 4)
-        layout.addWidget(browser_button, 0, 5)
-        layout.addWidget(move_controls, 0, 6)
+        layout.addWidget(title, 0, 0)
+        layout.addWidget(usage_indicator, 0, 1)
+        layout.addWidget(status_group, 0, 2)
+        layout.addWidget(config_button, 0, 3)
+        layout.addWidget(browser_button, 0, 4)
+        layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             title=title,
             usage_indicator=usage_indicator,
-            toggle=toggle,
             status=status,
             usage_note=usage_note,
             config_button=config_button,
@@ -5544,19 +5546,6 @@ class MountletWindow:
 
         row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
-
-        row.toggle.blockSignals(True)
-        row.toggle.setChecked(mounted)
-        row.toggle.blockSignals(False)
-        row.toggle.setEnabled(not action_pending)
-        toggle_tooltip = (
-            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
-        ) + _shortcut_hint("remote_toggle_mount")
-        row.toggle.setToolTip(toggle_tooltip)
-        row.toggle.enterEvent = lambda event, widget=row.toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(
-            widget,
-            tooltip,
-        )
 
         self._set_status_text(row.status, usage, action_pending=action_pending)
         row.config_button.setEnabled(not action_pending)
@@ -5785,34 +5774,6 @@ class MountletWindow:
             return
         label.setStyleSheet("")
         label.setText(self._usage_status_html(usage, checking_usage=usage.percent is None))
-
-    def _switch(self) -> Any:
-        qt = self.qt
-
-        class Switch(qt.QCheckBox):
-            def __init__(self) -> None:
-                super().__init__()
-                self.setText("")
-                self.setFixedSize(42, 22)
-                self.setCursor(qt.QCursor(qt.Qt.CursorShape.PointingHandCursor))
-
-            def paintEvent(self, event: Any) -> None:
-                painter = qt.QPainter(self)
-                painter.setRenderHint(qt.QPainter.RenderHint.Antialiasing)
-                painter.setPen(qt.Qt.PenStyle.NoPen)
-                track = qt.QColor("#16a34a" if self.isChecked() else "#9ca3af")
-                if not self.isEnabled():
-                    track = qt.QColor("#6b7280")
-                painter.setBrush(track)
-                painter.drawRoundedRect(1, 2, 40, 18, 9, 9)
-                painter.setBrush(qt.QColor("#ffffff"))
-                knob_x = 22 if self.isChecked() else 4
-                painter.drawEllipse(knob_x, 4, 14, 14)
-
-            def hitButton(self, position: Any) -> bool:
-                return bool(self.rect().contains(position))
-
-        return Switch()
 
     def _show_immediate_tooltip(self, widget: Any, tooltip: str) -> None:
         if tooltip:
@@ -6120,14 +6081,14 @@ class MountletWindow:
     def _truncated_remote_alias(self, remote: core.RemoteInfo, *, include_provider: bool) -> str:
         name = remote.alias
         suffix_length = len(f" ({remote.provider})") if include_provider else 0
-        limit = max(4, 20 - suffix_length)
+        limit = max(4, 28 - suffix_length)
         return name if len(name) <= limit else name[: limit - 3] + "..."
 
     def _remote_name_width(self, remotes: list[core.RemoteInfo]) -> int:
         displayed = [self._plain_remote_name(remote) for remote in remotes]
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
-        return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
+        return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 28) + 10)
 
     def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
         layout = root.layout()

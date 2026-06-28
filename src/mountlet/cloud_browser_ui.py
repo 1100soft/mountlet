@@ -51,6 +51,7 @@ class CompactCloudBrowser:
         file_manager_label: Callable[[], str],
         open_file: Callable[[Path], bool] | None = None,
         open_local_folder: Callable[[Path], bool] | None = None,
+        toggle_mount: Callable[[str, bool], None] | None = None,
         embedded: bool = False,
         layout_changed: Callable[[], None] | None = None,
         local_files_changed: Callable[[], None] | None = None,
@@ -62,6 +63,7 @@ class CompactCloudBrowser:
         self._open_mount = open_mount
         self._open_file = open_file
         self._open_local_folder = open_local_folder
+        self._toggle_mount = toggle_mount
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -73,6 +75,7 @@ class CompactCloudBrowser:
         self.entries: list[BrowserEntry] = []
         self.clipboard: tuple[list[TransferItem], bool] | None = None
         self._operation_pending = False
+        self._zoom_steps = 0
         self._operation_cache_keys: set[tuple[str, str]] = set()
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
@@ -146,6 +149,8 @@ class CompactCloudBrowser:
         self.title.setFont(font)
         header.addWidget(self.title)
         header.addStretch(1)
+        self.mount_switch = self._mount_switch()
+        header.addWidget(self.mount_switch)
         header.addWidget(self._button("×", self.hide, "Close file browser", square=True))
         layout.addLayout(header)
 
@@ -208,6 +213,21 @@ class CompactCloudBrowser:
                     return
                 super().keyPressEvent(event)
 
+            def wheelEvent(self, event: Any) -> None:
+                try:
+                    modifiers = event.modifiers()
+                except Exception:
+                    modifiers = qt.Qt.KeyboardModifier.NoModifier
+                if modifiers & qt.Qt.KeyboardModifier.ControlModifier:
+                    delta = event.angleDelta().y()
+                    if delta > 0:
+                        outer.zoom_in()
+                    elif delta < 0:
+                        outer.zoom_out()
+                    event.accept()
+                    return
+                super().wheelEvent(event)
+
         self.tree = FileTree()
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["", "Name", "Size", "Modified"])
@@ -242,6 +262,90 @@ class CompactCloudBrowser:
         button.clicked.connect(lambda _checked=False: callback())
         return button
 
+    def _mount_switch(self) -> Any:
+        qt = self.qt
+        outer = self
+
+        class Switch(qt.QCheckBox):
+            def __init__(self) -> None:
+                super().__init__()
+                self.setText("")
+                self.setFixedSize(42, 22)
+                self.setCursor(qt.QCursor(qt.Qt.CursorShape.PointingHandCursor))
+
+            def paintEvent(self, event: Any) -> None:
+                painter = qt.QPainter(self)
+                painter.setRenderHint(qt.QPainter.RenderHint.Antialiasing)
+                painter.setPen(qt.Qt.PenStyle.NoPen)
+                track = qt.QColor("#16a34a" if self.isChecked() else "#9ca3af")
+                if not self.isEnabled():
+                    track = qt.QColor("#6b7280")
+                painter.setBrush(track)
+                painter.drawRoundedRect(1, 2, 40, 18, 9, 9)
+                painter.setBrush(qt.QColor("#ffffff"))
+                painter.drawEllipse(22 if self.isChecked() else 4, 4, 14, 14)
+
+            def hitButton(self, position: Any) -> bool:
+                return bool(self.rect().contains(position))
+
+        switch = Switch()
+        switch.stateChanged.connect(lambda state: outer._mount_switch_changed(bool(state)))
+        return switch
+
+    def _mount_switch_changed(self, want_mounted: bool) -> None:
+        if self.remote is None or self._toggle_mount is None:
+            return
+        self._toggle_mount(self.remote.name, want_mounted)
+
+    def _update_mount_switch(self) -> None:
+        switch = getattr(self, "mount_switch", None)
+        if switch is None:
+            return
+        remote = getattr(self, "remote", None)
+        mounted = bool(remote and core.is_mounted(remote))
+        try:
+            switch.blockSignals(True)
+            switch.setChecked(mounted)
+            switch.blockSignals(False)
+        except Exception:
+            pass
+        switch.setEnabled(remote is not None)
+        if remote is None:
+            switch.setToolTip("Select a remote")
+            return
+        switch.setToolTip(f"{'Unmount' if mounted else 'Mount'} {remote.display_name}")
+
+    def zoom_in(self) -> None:
+        self._set_zoom(self._zoom_steps + 1)
+
+    def zoom_out(self) -> None:
+        self._set_zoom(self._zoom_steps - 1)
+
+    def _set_zoom(self, steps: int) -> None:
+        steps = min(max(steps, -4), 6)
+        if steps == self._zoom_steps:
+            return
+        self._zoom_steps = steps
+        for widget in (getattr(self, "tree", None), getattr(self, "path_field", None), getattr(self, "status", None)):
+            if widget is None:
+                continue
+            try:
+                font = widget.font()
+                base = getattr(widget, "_mountlet_base_point_size", None)
+                if base is None:
+                    base = font.pointSizeF()
+                    if base <= 0:
+                        base = max(font.pointSize(), 10)
+                    setattr(widget, "_mountlet_base_point_size", base)
+                font.setPointSizeF(max(7.0, float(base) + steps))
+                widget.setFont(font)
+            except Exception:
+                continue
+        with suppress(Exception):
+            self.tree.resizeColumnToContents(0)
+            self.tree.resizeColumnToContents(1)
+        self._layout_changed()
+
     def _offline_icon(self) -> Any | None:
         try:
             return self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
@@ -270,6 +374,53 @@ class CompactCloudBrowser:
             return provider.icon(file_info_type(entry.name))
         except Exception:
             return directory_icon if entry.is_dir else file_icon
+
+    def _status_icon(
+        self,
+        *,
+        downloaded: bool,
+        protected: bool,
+        downloaded_partial: bool = False,
+        protected_partial: bool = False,
+        changed: bool = False,
+    ) -> Any | None:
+        pixmap_type = getattr(self.qt, "QPixmap", None)
+        painter_type = getattr(self.qt, "QPainter", None)
+        icon_type = getattr(self.qt, "QIcon", None)
+        if pixmap_type is None or painter_type is None or icon_type is None:
+            return None
+        try:
+            size = self.qt.QSize(22, 22)
+            pixmap = pixmap_type(size)
+            pixmap.fill(self.qt.Qt.GlobalColor.transparent)
+            painter = painter_type(pixmap)
+            painter.setRenderHint(painter_type.RenderHint.Antialiasing, True)
+            if protected:
+                painter.setOpacity(0.35 if protected_partial else 1.0)
+                pen = self.qt.QPen(self.qt.QColor("#facc15"))
+                pen.setWidth(2)
+                painter.setPen(pen)
+                painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(3, 3, 16, 16)
+            if downloaded:
+                painter.setOpacity(0.35 if downloaded_partial else 1.0)
+                pen = self.qt.QPen(self.qt.QColor("#38bdf8"))
+                pen.setWidth(2)
+                painter.setPen(pen)
+                painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
+                painter.drawLine(11, 5, 11, 14)
+                painter.drawLine(7, 10, 11, 14)
+                painter.drawLine(15, 10, 11, 14)
+                painter.drawLine(6, 17, 16, 17)
+            if changed:
+                painter.setOpacity(1.0)
+                painter.setPen(self.qt.Qt.PenStyle.NoPen)
+                painter.setBrush(self.qt.QColor("#ef4444"))
+                painter.drawEllipse(14, 2, 6, 6)
+            painter.end()
+            return icon_type(pixmap)
+        except Exception:
+            return None
 
     def _enlarge_button_text(self, button: Any) -> None:
         try:
@@ -458,6 +609,10 @@ class CompactCloudBrowser:
             self.go_root()
         elif matches_shortcut(self.qt, event, "browser_refresh"):
             self.refresh(force=True)
+        elif self._is_fixed_zoom_in(key, control) or matches_shortcut(self.qt, event, "browser_zoom_in"):
+            self.zoom_in()
+        elif self._is_fixed_zoom_out(key, control) or matches_shortcut(self.qt, event, "browser_zoom_out"):
+            self.zoom_out()
         elif matches_shortcut(self.qt, event, "browser_open_folder"):
             self._open_current_mount()
         elif matches_shortcut(self.qt, event, "browser_new_folder"):
@@ -476,6 +631,19 @@ class CompactCloudBrowser:
         event.accept()
         return True
 
+    def _is_fixed_zoom_in(self, key: Any, control: bool) -> bool:
+        return bool(
+            control
+            and key
+            in {
+                getattr(self.qt.Qt.Key, "Key_Plus", None),
+                getattr(self.qt.Qt.Key, "Key_Equal", None),
+            }
+        )
+
+    def _is_fixed_zoom_out(self, key: Any, control: bool) -> bool:
+        return bool(control and key == getattr(self.qt.Qt.Key, "Key_Minus", None))
+
     def _direction_points_to_main(self, key: Any) -> bool:
         if self._side == "left":
             return key == self.qt.Qt.Key.Key_Right
@@ -486,6 +654,7 @@ class CompactCloudBrowser:
             return
         remote, path = self.remote, self.path
         self.title.setText(remote.display_name)
+        self._update_mount_switch()
         self.path_field.setText(path)
         self.path_field.setToolTip(path or "Remote root")
         self.up_button.setEnabled(bool(path))
@@ -559,8 +728,6 @@ class CompactCloudBrowser:
         self.entries = entries
         self.tree.clear()
         style = self.window.style()
-        offline_icon = self._offline_icon()
-        partial_offline_icon = self._dimmed_icon(offline_icon) if offline_icon is not None else None
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         remote = self.remote
@@ -580,30 +747,26 @@ class CompactCloudBrowser:
             )
             cached = bool(remote and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir))
             cached_content = bool(remote and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir))
-            if offline:
-                if offline_icon is not None:
-                    item.setIcon(0, offline_icon)
-                if remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir):
-                    item.setText(0, "●")
-                    item.setToolTip(0, "Offline snapshot has local changes")
-                else:
-                    item.setToolTip(0, "Available offline as a local snapshot")
-            elif partial_offline:
-                if partial_offline_icon is not None:
-                    item.setIcon(0, partial_offline_icon)
-                item.setText(0, "◐")
+            changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
+            local_content = cached or cached_content
+            status_icon = self._status_icon(
+                downloaded=local_content,
+                protected=offline or partial_offline,
+                downloaded_partial=entry.is_dir and cached_content and not cached,
+                protected_partial=partial_offline,
+                changed=changed,
+            )
+            if status_icon is not None:
+                item.setIcon(0, status_icon)
+            if changed:
+                item.setToolTip(0, "Local copy has unresolved changes")
+            elif remote and offline:
+                item.setToolTip(0, "Available offline as a local snapshot")
+            elif remote and partial_offline:
                 item.setToolTip(0, "Partially available offline")
-            elif cached:
-                if partial_offline_icon is not None:
-                    item.setIcon(0, partial_offline_icon)
-                if remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir):
-                    item.setText(0, "●")
-                    item.setToolTip(0, "Cached local copy has local changes")
-                else:
-                    item.setToolTip(0, "Cached local copy")
-            elif entry.is_dir and cached_content:
-                if partial_offline_icon is not None:
-                    item.setIcon(0, partial_offline_icon)
+            elif remote and cached:
+                item.setToolTip(0, "Cached local copy")
+            elif remote and entry.is_dir and cached_content:
                 item.setToolTip(0, "Contains cached files")
             if remote and offline:
                 item.setToolTip(1, "Available offline as a local snapshot")
@@ -1141,6 +1304,7 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         if remote is None or remote.name != remote_name:
             return
+        self._update_mount_switch()
         self._display_entries(list(getattr(self, "entries", [])))
 
     def _update_open_folder_button(self) -> None:
