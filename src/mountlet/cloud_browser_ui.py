@@ -371,7 +371,7 @@ class CompactCloudBrowser:
                 local = self.backend.offline_path(self.remote.name, entry.path)
                 if local.exists():
                     return provider.icon(file_info_type(str(local)))
-            return provider.icon(file_info_type(entry.name))
+            return directory_icon if entry.is_dir else file_icon
         except Exception:
             return directory_icon if entry.is_dir else file_icon
 

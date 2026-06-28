@@ -6213,19 +6213,10 @@ class MountletWindow:
         return button
 
     def _hide_file_browser_for_remote_action(self, remote_name: str) -> None:
-        file_browser = getattr(self, "file_browser", None)
-        remote = getattr(file_browser, "remote", None)
-        if file_browser is None or remote is None or remote.name != remote_name or not file_browser.is_visible():
-            return
-        self._browser_hidden_for_action = remote_name
-        self._browser_hidden_for_action_focus = bool(getattr(file_browser, "has_focus", lambda: False)())
-        file_browser.close()
+        del remote_name
 
     def _hide_current_file_browser_if_pending(self) -> None:
-        file_browser = getattr(self, "file_browser", None)
-        remote = getattr(file_browser, "remote", None)
-        if remote is not None and remote.name in self._action_pending:
-            self._hide_file_browser_for_remote_action(remote.name)
+        return
 
     def _restore_file_browser_after_remote_action(self, remote_name: str) -> None:
         if getattr(self, "_browser_hidden_for_action", "") != remote_name:
@@ -6390,6 +6381,7 @@ class MountletWindow:
         if remote is None:
             return
         running.add(remote_name)
+        self._set_file_browser_status(remote.name, "Uploading or downloading local changes…")
 
         def worker() -> None:
             try:
@@ -6410,6 +6402,7 @@ class MountletWindow:
         if remote is None:
             return
         if error is not None:
+            self._set_file_browser_status(remote.name, "Could not check local changes")
             self.tray_app._notify("Local cache", f"Could not check local file changes: {error}", success=False)
             return
         if not isinstance(conflicts, list):
@@ -6418,6 +6411,17 @@ class MountletWindow:
             self.file_browser.refresh_mount_state(remote.name)
             return
         self._handle_offline_conflicts(remote, conflicts)
+
+    def _set_file_browser_status(self, remote_name: str, message: str) -> None:
+        file_browser = getattr(self, "file_browser", None)
+        remote = getattr(file_browser, "remote", None)
+        status = getattr(file_browser, "status", None)
+        if remote is None or remote.name != remote_name or status is None:
+            return
+        try:
+            status.setText(message)
+        except Exception:
+            return
 
     def _handle_offline_conflicts(self, remote: core.RemoteInfo, conflicts: list[Any]) -> None:
         resolved = 0
@@ -6431,6 +6435,7 @@ class MountletWindow:
                 self._deferred_offline_conflicts.add(key)
                 continue
             try:
+                self._set_file_browser_status(remote.name, f"Resolving {conflict.name}…")
                 self.file_browser.backend.resolve_managed_conflict(remote, conflict, choice)
             except Exception as exc:
                 self.tray_app._notify("Local cache", f"Could not resolve {conflict.name}: {exc}", success=False)
