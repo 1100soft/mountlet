@@ -4202,8 +4202,6 @@ class MountletWindow:
         self._offline_watched_paths: set[str] = set()
         self._offline_file_watcher: Any | None = None
         self._offline_change_poll_timer: Any | None = None
-        self._browser_hidden_for_action = ""
-        self._browser_hidden_for_action_focus = False
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_popup_position: tuple[int, int] | None = None
@@ -5852,11 +5850,6 @@ class MountletWindow:
 
     def _show_file_browser_for_remote(self, remote: core.RemoteInfo, row: Any, *, focus_browser: bool) -> None:
         self._set_browser_selected(remote.name)
-        if remote.name in self._action_pending:
-            self._browser_hidden_for_action = remote.name
-            self._browser_hidden_for_action_focus = focus_browser
-            self.file_browser.close()
-            return
         self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=focus_browser)
 
     def _set_browser_selected(self, remote_name: str | None) -> None:
@@ -6212,26 +6205,6 @@ class MountletWindow:
         button.setFont(font)
         return button
 
-    def _hide_file_browser_for_remote_action(self, remote_name: str) -> None:
-        del remote_name
-
-    def _hide_current_file_browser_if_pending(self) -> None:
-        return
-
-    def _restore_file_browser_after_remote_action(self, remote_name: str) -> None:
-        if getattr(self, "_browser_hidden_for_action", "") != remote_name:
-            return
-        focus_browser = bool(getattr(self, "_browser_hidden_for_action_focus", False))
-        self._browser_hidden_for_action = ""
-        self._browser_hidden_for_action_focus = False
-        if getattr(self, "_selected_remote_name", "") == remote_name:
-            self._show_file_browser_for_remote_name(remote_name, focus_browser=focus_browser)
-
-    def _restore_file_browser_after_bulk_action(self, remote_names: set[str]) -> None:
-        remote_name = getattr(self, "_browser_hidden_for_action", "")
-        if remote_name and remote_name in remote_names:
-            self._restore_file_browser_after_remote_action(remote_name)
-
     def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
@@ -6244,7 +6217,6 @@ class MountletWindow:
         if remote.name in self._action_pending:
             return
         self._action_pending.add(remote.name)
-        self._hide_file_browser_for_remote_action(remote.name)
         self._request_refresh()
 
         def worker() -> None:
@@ -6260,7 +6232,6 @@ class MountletWindow:
         self._usage_cache.pop(remote_name, None)
         self.file_browser.invalidate(remote_name)
         self.file_browser.refresh_mount_state(remote_name)
-        self._restore_file_browser_after_remote_action(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
             self._offer_reauthentication_if_relevant(remote_name, message)
@@ -6291,7 +6262,6 @@ class MountletWindow:
         if remote.name in self._action_pending:
             return
         self._action_pending.add(remote.name)
-        self._hide_file_browser_for_remote_action(remote.name)
         self._request_refresh()
 
         def worker() -> None:
@@ -6320,7 +6290,6 @@ class MountletWindow:
             return
         for remote in remotes:
             self._action_pending.add(remote.name)
-        self._hide_current_file_browser_if_pending()
         self._request_refresh()
 
         def worker() -> None:
@@ -6339,7 +6308,6 @@ class MountletWindow:
             self.file_browser.invalidate(remote_name)
             self.file_browser.refresh_mount_state(remote_name)
             self._reconcile_offline_changes_after_mount(remote_name)
-        self._restore_file_browser_after_bulk_action(pending_names)
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)

@@ -3306,7 +3306,7 @@ class TrayTests(unittest.TestCase):
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
 
-    def test_remote_action_closes_visible_browser_for_working_remote(self):
+    def test_remote_action_keeps_visible_browser_open_for_working_remote(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
         window._action_pending = set()
@@ -3322,12 +3322,10 @@ class TrayTests(unittest.TestCase):
             thread.side_effect = lambda target, daemon: mock.Mock(start=lambda: target())
             window._run_remote_action(remote, lambda _remote: (True, "done"))
 
-        window.file_browser.close.assert_called_once_with()
-        self.assertEqual(window._browser_hidden_for_action, "Docs")
-        self.assertTrue(window._browser_hidden_for_action_focus)
+        window.file_browser.close.assert_not_called()
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
 
-    def test_remote_action_finish_restores_hidden_browser_for_selected_remote(self):
+    def test_remote_action_finish_does_not_force_reopen_browser(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         tray_app = mock.Mock()
         window = object.__new__(tray.MountletWindow)
@@ -3337,8 +3335,6 @@ class TrayTests(unittest.TestCase):
         window._selected_remote_name = "Docs"
         row = mock.Mock()
         window._row_widgets = {"Docs": SimpleNamespace(frame=row)}
-        window._browser_hidden_for_action = "Docs"
-        window._browser_hidden_for_action_focus = True
         window.file_browser = mock.Mock()
         window._tray_is_quitting = mock.Mock(return_value=False)
         window._request_refresh = mock.Mock()
@@ -3346,12 +3342,7 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
             window._handle_action_finished("Docs", True, "[*] mounted Docs")
 
-        window.file_browser.show_remote.assert_called_once_with(
-            remote,
-            row,
-            show_browser=True,
-            focus_browser=True,
-        )
+        window.file_browser.show_remote.assert_not_called()
 
     def test_file_browser_refreshes_when_app_regains_focus(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")

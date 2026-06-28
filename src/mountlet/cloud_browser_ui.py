@@ -396,16 +396,20 @@ class CompactCloudBrowser:
             painter = painter_type(pixmap)
             painter.setRenderHint(painter_type.RenderHint.Antialiasing, True)
             if protected:
-                painter.setOpacity(0.35 if protected_partial else 1.0)
+                painter.setOpacity(1.0)
                 pen = self.qt.QPen(self.qt.QColor("#facc15"))
                 pen.setWidth(2)
+                if protected_partial:
+                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(3, 3, 16, 16)
             if downloaded:
-                painter.setOpacity(0.35 if downloaded_partial else 1.0)
+                painter.setOpacity(1.0)
                 pen = self.qt.QPen(self.qt.QColor("#38bdf8"))
                 pen.setWidth(2)
+                if downloaded_partial:
+                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
                 painter.drawLine(11, 5, 11, 14)
