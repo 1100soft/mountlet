@@ -178,7 +178,10 @@ RCLONE_SELECT_FIELDS = {
 }
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
-DRIVE_USAGE_NOTE = "Google Drive usage may not include Google Photos and other Google account data."
+DRIVE_USAGE_NOTE = (
+    "Google Drive usage excludes Google Photos and other Google account data. "
+    "If those also use your Google storage quota, the actual remaining account space can be lower than shown."
+)
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -4405,7 +4408,7 @@ class MountletWindow:
         visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
             if (
-                self._window_is_active()
+                self._app_window_is_active()
                 or getattr(self, "_deactivated_for_tray", False)
                 or self._has_visible_child_dialog()
             ):
@@ -4459,6 +4462,7 @@ class MountletWindow:
             self._schedule_child_window_raises()
             return
         self._activate_main_window()
+        self._schedule_main_window_activation()
         self._raise_child_windows()
         self._schedule_child_window_raises()
 
@@ -4479,6 +4483,8 @@ class MountletWindow:
         timer.singleShot(150, self._position_near_tray)
 
     def _activate_main_window_if_current_desktop(self) -> None:
+        if not self.is_visible():
+            return
         desktop = self._desktop_api()
         desktop.move_window_to_current_workspace(self.window)
         if desktop.window_is_on_current_workspace(self.window) is False:
@@ -4825,8 +4831,7 @@ class MountletWindow:
             self._update_config_sync_buttons()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
-                if mounted_by_name[remote.name]:
-                    self._schedule_storage_load(remote)
+                self._schedule_storage_load(remote)
             self._browser_layout_changed()
             return
 
@@ -4853,8 +4858,7 @@ class MountletWindow:
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                if mounted_by_name[remote.name]:
-                    self._schedule_storage_load(remote)
+                self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
         scroll.setWidget(container)
@@ -5268,7 +5272,7 @@ class MountletWindow:
 
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._row_usage(remote, mounted)
-        checking_usage = mounted and remote.name not in self._usage_cache
+        checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
         open_tooltip = f"Browse {remote.display_name}"
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
@@ -5325,8 +5329,6 @@ class MountletWindow:
             title.setEnabled(False)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
-        if not mounted:
-            usage_indicator.setEnabled(False)
 
         toggle = self._switch()
         toggle.setProperty("rowControl", True)
@@ -5414,7 +5416,7 @@ class MountletWindow:
         if not row:
             return
         usage = self._row_usage(remote, mounted)
-        checking_usage = mounted and remote.name not in self._usage_cache
+        checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
         open_tooltip = f"Browse {remote.display_name}"
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
@@ -5458,7 +5460,7 @@ class MountletWindow:
             tooltip,
         )
 
-        row.usage_indicator.setEnabled(mounted)
+        row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
 
         row.toggle.blockSignals(True)
@@ -5630,8 +5632,7 @@ class MountletWindow:
         return None
 
     def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
-        if not mounted:
-            return core.StorageUsage("")
+        del mounted
         return self._usage_cache.get(remote.name) or core.StorageUsage("Checking...")
 
     def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:

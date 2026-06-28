@@ -1194,6 +1194,23 @@ class TrayTests(unittest.TestCase):
         self.assertIn("A &lt; B", title)
         self.assertNotIn("A < B", title)
 
+    def test_mountlet_window_row_usage_loads_for_unmounted_remote(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        usage = window._row_usage(remote, mounted=False)
+
+        self.assertEqual(usage.text, "Checking...")
+
+    def test_mountlet_window_row_usage_returns_cached_usage_when_unmounted(self):
+        window = object.__new__(tray.MountletWindow)
+        usage = core.StorageUsage("7.0/15.0 GB", used=7, total=15)
+        window._usage_cache = {"Docs__Drive": usage}
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        self.assertIs(window._row_usage(remote, mounted=False), usage)
+
     def test_mountlet_window_sort_action_saves_order(self):
         window = object.__new__(tray.MountletWindow)
         window._usage_cache = {}
@@ -1270,6 +1287,26 @@ class TrayTests(unittest.TestCase):
                 mountlet_window.toggle_from_tray()
 
         mountlet_window.window.hide.assert_called_once_with()
+        show.assert_not_called()
+
+    def test_mountlet_window_toggle_hides_when_file_browser_has_focus(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        browser_window = mock.Mock()
+        mountlet_window.file_browser = SimpleNamespace(window=browser_window)
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        mountlet_window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(activeWindow=lambda: browser_window)
+        )
+        mountlet_window.desktop = SimpleNamespace(window_is_on_current_workspace=lambda _window: True)
+
+        with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        hide_stack.assert_called_once_with()
         show.assert_not_called()
 
     def test_mountlet_window_toggle_hides_window_stack_when_child_is_open(self):
