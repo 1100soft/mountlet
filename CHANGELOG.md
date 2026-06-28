@@ -8,6 +8,10 @@
 - Added a `desktop` package extra, kept the existing `tray` extra as a
   compatibility name, refreshed install documentation around the desktop-first
   beta path, and included the macOS icon asset in package data.
+- Split rclone and native-folder prerequisites: rclone remains required for
+  cloud access, while FUSE, WinFsp, and macFUSE are optional and only gate
+  native folder mounting. Packaging can now build a lean installer that uses a
+  system rclone or a bundled-rclone installer with an app-local rclone binary.
 - Allowed per-remote settings to rename the alias part of a remote, preserving
   the provider suffix while migrating Mountlet settings, remembered browser
   paths, and offline snapshots. Mounted remotes can now be renamed or deleted

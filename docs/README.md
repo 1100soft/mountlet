@@ -106,6 +106,20 @@ python packaging/verify_bundle.py
 python packaging/archive_bundle.py --name mountlet-local
 ```
 
+By default this produces the lean variant: Mountlet includes its Python runtime
+but uses a system `rclone`. To produce a bundled-rclone variant, stage a
+platform-matching rclone binary first:
+
+```bash
+python packaging/stage_rclone.py /path/to/rclone
+python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
+```
+
+The staged binary is copied into `vendor/rclone/`, included in the PyInstaller
+bundle, and ignored by git. The app still honors `RCLONE_PATH` first for users
+who explicitly choose another rclone. FUSE, WinFsp, and macFUSE are not bundled;
+they remain optional native-folder support.
+
 The `Native package CI` workflow builds portable bundles plus a Linux `.deb`,
 Windows setup `.exe`, and macOS `.dmg` for both Apple architectures. The Windows
 installer registers an uninstaller; Linux and macOS use their normal package or

@@ -16,6 +16,7 @@ from mountlet.platform_services.linux import LinuxPlatformServices
 class CoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.platform = LinuxPlatformServices()
+        self.platform.mount_driver_available = lambda: True
         patcher = mock.patch("mountlet.config_tools.shared.get_platform", return_value=self.platform)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -138,6 +139,25 @@ type = dropbox
             self.assertFalse(success)
             self.assertIn("not connected", message)
             launch.assert_not_called()
+
+    def test_mount_remote_reports_missing_optional_mount_driver(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            core.PLATFORM.mount_driver_available = lambda: False
+            core.PLATFORM.prerequisite_guidance = lambda: (
+                "Install rclone.",
+                "Install FUSE: sudo apt install fuse3",
+            )
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "check_remote_connection") as check_connection:
+                    success, message = core.mount_remote(remote)
+
+            self.assertFalse(success)
+            self.assertIn("Native folder mounting is not available", message)
+            self.assertIn("Mountlet Files can browse", message)
+            check_connection.assert_not_called()
 
     def test_check_remote_connection_uses_remote_source(self):
         with tempfile.TemporaryDirectory() as tempdir:

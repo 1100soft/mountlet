@@ -108,6 +108,26 @@ class PlatformServicesTests(unittest.TestCase):
 
         self.assertEqual(found, str(executable))
 
+    def test_bundled_rclone_is_preferred_before_system_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            bundle_root = Path(tempdir) / "bundle"
+            executable_dir = Path(tempdir) / "app"
+            bundled = bundle_root / "vendor" / "rclone" / "rclone"
+            bundled.parent.mkdir(parents=True)
+            bundled.touch()
+            executable = executable_dir / "Mountlet"
+            executable_dir.mkdir()
+            executable.touch()
+
+            with mock.patch("mountlet.platform_services.base.sys.frozen", True, create=True):
+                with mock.patch("mountlet.platform_services.base.sys._MEIPASS", str(bundle_root), create=True):
+                    with mock.patch("mountlet.platform_services.base.sys.executable", str(executable)):
+                        with mock.patch.dict("os.environ", {}, clear=True):
+                            with mock.patch("mountlet.platform_services.base.shutil.which", return_value="/usr/bin/rclone"):
+                                found = LinuxPlatformServices().find_rclone()
+
+        self.assertEqual(found, str(bundled))
+
     def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):
         process = mock.Mock()
         process.poll.return_value = None

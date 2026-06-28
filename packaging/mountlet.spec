@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
+import os
 import tomllib
 from pathlib import Path
 
@@ -11,11 +12,15 @@ version = project["project"]["version"]
 icon_png = root / "src" / "mountlet" / "assets" / "icon.png"
 icon = root / "src" / "mountlet" / "assets" / ("icon.icns" if sys.platform == "darwin" else "icon.png")
 hidden_imports = ["AppKit", "Foundation", "objc"] if sys.platform == "darwin" else []
+rclone_name = "rclone.exe" if sys.platform == "win32" else "rclone"
+rclone_path = os.environ.get("MOUNTLET_BUNDLED_RCLONE_PATH")
+bundled_rclone = Path(rclone_path) if rclone_path else root / "vendor" / "rclone" / rclone_name
+binaries = [(str(bundled_rclone), "vendor/rclone")] if bundled_rclone.is_file() else []
 
 a = Analysis(
     [str(root / "packaging" / "mountlet_desktop.py")],
     pathex=[str(root / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=[(str(icon_png), "mountlet/assets")],
     hiddenimports=hidden_imports,
     hookspath=[],

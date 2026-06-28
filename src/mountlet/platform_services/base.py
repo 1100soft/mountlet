@@ -5,6 +5,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -46,10 +47,37 @@ class PlatformServices:
     def rclone_candidates(self) -> tuple[Path, ...]:
         return ()
 
+    def bundled_rclone_candidates(self) -> tuple[Path, ...]:
+        names = self.rclone_executable_names()
+        roots: list[Path] = []
+        if getattr(sys, "frozen", False):
+            executable_dir = Path(sys.executable).resolve().parent
+            roots.extend(
+                (
+                    Path(getattr(sys, "_MEIPASS", executable_dir)),
+                    executable_dir,
+                    executable_dir / "_internal",
+                    executable_dir.parent / "Resources",
+                    executable_dir.parent / "Frameworks",
+                )
+            )
+        else:
+            project_root = Path(__file__).resolve().parents[3]
+            roots.append(project_root)
+
+        candidates: list[Path] = []
+        for root in roots:
+            candidates.extend(root / "vendor" / "rclone" / name for name in names)
+            candidates.extend(root / name for name in names)
+        return tuple(dict.fromkeys(candidates))
+
     def find_rclone(self) -> str | None:
         env_path = os.environ.get("RCLONE_PATH")
         if env_path:
             candidate = Path(env_path).expanduser()
+            if candidate.exists():
+                return str(candidate)
+        for candidate in self.bundled_rclone_candidates():
             if candidate.exists():
                 return str(candidate)
         for name in self.rclone_executable_names():

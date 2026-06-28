@@ -1,33 +1,40 @@
 # Mountlet
 
-Mountlet is a desktop tray and terminal tool for mounting and unmounting
-`rclone` remotes. It uses your existing `rclone` configuration and does not
-store cloud credentials inside the application install directory.
+Mountlet is a desktop app for browsing, opening, syncing, and optionally
+mounting `rclone` cloud remotes. It uses your existing `rclone` configuration
+and does not store cloud credentials inside the application install directory.
 
 ## How It Works
 
-Mountlet is a friendly control panel for two standard tools:
+Mountlet is a friendly control panel for cloud storage through `rclone`:
 
 - `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
   S3-compatible storage, and WebDAV.
-- A filesystem driver lets the operating system show a cloud remote as if it
-  were a normal folder: FUSE on Linux, WinFsp on Windows, or macFUSE on macOS.
+- Mountlet Files is the integrated browser. It lists remotes directly through
+  `rclone`, opens files through the operating system, and keeps explicit
+  offline copies under the app folder.
+- Native folder mounting is optional. If you want Finder, Explorer, Dolphin, or
+  another file manager to see a cloud remote as a normal folder, install the
+  platform filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE on
+  macOS.
 
-This app reads your `rclone` remotes, creates local mount folders, and starts or
-stops `rclone mount` for you.
+This app reads your `rclone` remotes and can work without filesystem mounting.
+Mount toggles are enabled only when the optional filesystem driver is present.
 
 ## Requirements
 
 - Python 3.10 or newer.
 - `rclone`, which connects to your cloud storage.
-- A compatible filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE
-  on macOS.
+- Optional for native folder mounting: FUSE on Linux, WinFsp on Windows, or
+  macFUSE on macOS.
 
 On Ubuntu, install the system tools with:
 
 ```bash
-sudo apt install rclone fuse3
+sudo apt install rclone
 ```
+
+Install `fuse3` as well if you want native folder mounting.
 
 ## Install
 
@@ -72,13 +79,20 @@ the artifact for your platform. It contains both the portable archive and:
 - macOS: a `.dmg`; drag Mountlet to Applications and move the app to Trash to
   uninstall it.
 
-The Linux package recommends rclone and FUSE through package metadata. The
-Windows installer checks for rclone and WinFsp before copying Mountlet. The
-macOS DMG has no executable installation phase, so its prerequisite check runs
-when Mountlet first starts.
+Mountlet release artifacts are expected in two variants:
 
-Uninstalling Mountlet does not remove rclone, FUSE/WinFsp/macFUSE, `rclone.conf`,
-or Mountlet's per-user settings.
+- **Lean**: Mountlet plus its Python runtime. It checks for a system `rclone`
+  and shows setup guidance if none is found.
+- **Bundled rclone**: Mountlet plus its Python runtime and an app-local
+  `rclone` binary. This does not install rclone globally or replace a user's
+  existing rclone.
+
+Both variants keep native folder mounting optional. The Linux package suggests
+FUSE, the Windows installer does not require WinFsp, and the macOS DMG does not
+bundle macFUSE.
+
+Uninstalling Mountlet does not remove a system rclone, FUSE/WinFsp/macFUSE,
+`rclone.conf`, or Mountlet's per-user settings.
 
 Each section starts with the system prerequisites and installs Mountlet in an
 isolated environment, so a GitHub preview does not replace a stable PyPI
@@ -89,12 +103,15 @@ commands; Windows uses PowerShell. Their syntax is not interchangeable.
 
 ### Linux
 
-Install FUSE 3 through your distribution. On Ubuntu or Debian:
+Install Python, rclone, and optionally FUSE 3 through your distribution. On
+Ubuntu or Debian:
 
 ```bash
 sudo apt update
-sudo apt install rclone fuse3 python3-venv
+sudo apt install rclone python3-venv
 ```
+
+Add `fuse3` to that command if you want native folder mounting.
 
 Install and start the preview:
 
@@ -177,12 +194,17 @@ printf 'eval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
 eval "$("$BREW" shellenv)"
 ```
 
-Install Python, `pipx`, and macFUSE:
+Install Python and `pipx`:
 
 ```bash
 brew install python@3.12 pipx
-brew install --cask macfuse
 pipx ensurepath
+```
+
+Install macFUSE only if you want native folder mounting:
+
+```bash
+brew install --cask macfuse
 ```
 
 Before macFUSE can mount anything, macOS may block its kernel extension. Follow
@@ -254,12 +276,10 @@ Open Mountlet:
 mountlet
 ```
 
-The desktop app checks for rclone and the platform filesystem driver at startup.
-If either is missing, a setup window shows the relevant official installation
-instructions and checks again while it remains open. Mountlet starts
-automatically when both are available. If an installer requires a restart,
-reopen Mountlet and the same checks resume; existing rclone remotes are used
-without being copied.
+The desktop app checks for rclone at startup. If rclone is missing, a setup
+window shows the relevant official installation instructions and checks again
+while it remains open. If the optional filesystem driver is missing, Mountlet
+still starts; only native folder mounting is disabled.
 
 For a guided setup check:
 

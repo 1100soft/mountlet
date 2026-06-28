@@ -1025,9 +1025,8 @@ class PrerequisiteWizard:
         layout.addWidget(heading)
 
         description = qt.QLabel(
-            "Mountlet uses your existing rclone configuration and your operating "
-            "system's filesystem driver. Install anything marked as missing, then "
-            "return here."
+            "Mountlet needs rclone to connect cloud storage. Filesystem mount "
+            "support is optional and only needed for native folders."
         )
         description.setWordWrap(True)
         layout.addWidget(description)
@@ -1071,11 +1070,12 @@ class PrerequisiteWizard:
                 self._row_widgets[item.key] = widgets
             name, status, help_button = widgets
             name.setText(item.label)
-            status.setText("Ready" if item.ready else item.detail)
+            required = item.key == "rclone"
+            status.setText("Ready" if item.ready else item.detail if required else f"Optional: {item.detail}")
             status.setToolTip(item.detail)
             help_button.setVisible(not item.ready)
 
-        ready = all(item.ready for item in prerequisites)
+        ready = all(item.ready for item in prerequisites if item.key == "rclone")
         self.recheck_button.setEnabled(not ready)
         if ready and not self._accept_pending:
             self._accept_pending = True
@@ -7372,7 +7372,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-readiness-check",
         action="store_true",
-        help="Start the tray without checking rclone, FUSE, and configured remotes first.",
+        help="Start the tray without checking rclone first.",
     )
     parser.add_argument(
         "--refresh-interval",

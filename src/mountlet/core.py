@@ -549,6 +549,15 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     rclone_bin = find_rclone()
     if not rclone_bin:
         return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+    if not PLATFORM.mount_driver_available():
+        guidance = PLATFORM.prerequisite_guidance()
+        detail = guidance[1] if len(guidance) > 1 else "Install filesystem mount support."
+        return (
+            False,
+            "[!] Native folder mounting is not available on this device.\n"
+            f"{detail}\n"
+            "Mountlet Files can browse this remote without mounting it.",
+        )
 
     connected, connection_message = check_remote_connection(remote, rclone_bin)
     if not connected:
