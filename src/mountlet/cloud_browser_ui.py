@@ -82,6 +82,7 @@ class CompactCloudBrowser:
         self._bridge.operation_finished.connect(self._operation_finished)
         self._bridge.cached_file_ready.connect(self._cached_file_ready)
         self.window = self._make_window()
+        self._file_icon_provider = self._make_file_icon_provider()
         self._build()
 
     def _make_bridge(self) -> Any:
@@ -246,6 +247,29 @@ class CompactCloudBrowser:
             return self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
         except Exception:
             return None
+
+    def _make_file_icon_provider(self) -> Any | None:
+        provider_type = getattr(self.qt, "QFileIconProvider", None)
+        if provider_type is None:
+            return None
+        try:
+            return provider_type()
+        except Exception:
+            return None
+
+    def _entry_icon(self, entry: BrowserEntry, *, directory_icon: Any, file_icon: Any) -> Any:
+        provider = getattr(self, "_file_icon_provider", None)
+        file_info_type = getattr(self.qt, "QFileInfo", None)
+        if provider is None or file_info_type is None:
+            return directory_icon if entry.is_dir else file_icon
+        try:
+            if self.remote is not None:
+                local = self.backend.offline_path(self.remote.name, entry.path)
+                if local.exists():
+                    return provider.icon(file_info_type(str(local)))
+            return provider.icon(file_info_type(entry.name))
+        except Exception:
+            return directory_icon if entry.is_dir else file_icon
 
     def _enlarge_button_text(self, button: Any) -> None:
         try:
@@ -545,14 +569,16 @@ class CompactCloudBrowser:
         for entry in entries:
             item = self.qt.QTreeWidgetItem(["", entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
-            item.setIcon(1, directory_icon if entry.is_dir else file_icon)
+            item.setIcon(1, self._entry_icon(entry, directory_icon=directory_icon, file_icon=file_icon))
             if entry.path in selected_paths:
                 item.setSelected(True)
             if previous_path and entry.path == previous_path:
                 current_target = item
             offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
+            partial_offline = bool(
+                remote and self.backend.is_partially_offline(remote.name, entry.path, is_dir=entry.is_dir)
+            )
             cached = bool(remote and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir))
-            offline_content = bool(remote and self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir))
             cached_content = bool(remote and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir))
             if offline:
                 if offline_icon is not None:
@@ -562,10 +588,11 @@ class CompactCloudBrowser:
                     item.setToolTip(0, "Offline snapshot has local changes")
                 else:
                     item.setToolTip(0, "Available offline as a local snapshot")
-            elif entry.is_dir and offline_content:
+            elif partial_offline:
                 if partial_offline_icon is not None:
                     item.setIcon(0, partial_offline_icon)
-                item.setToolTip(0, "Contains offline snapshots")
+                item.setText(0, "◐")
+                item.setToolTip(0, "Partially available offline")
             elif cached:
                 if partial_offline_icon is not None:
                     item.setIcon(0, partial_offline_icon)
@@ -578,8 +605,10 @@ class CompactCloudBrowser:
                 if partial_offline_icon is not None:
                     item.setIcon(0, partial_offline_icon)
                 item.setToolTip(0, "Contains cached files")
-            if remote and offline_content:
+            if remote and offline:
                 item.setToolTip(1, "Available offline as a local snapshot")
+            elif remote and partial_offline:
+                item.setToolTip(1, "Partially available offline")
             elif remote and cached_content:
                 item.setToolTip(1, "Cached local copy")
             self.tree.addTopLevelItem(item)
@@ -764,12 +793,7 @@ class CompactCloudBrowser:
         edits_enabled = self._edits_enabled()
         self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
         self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
-        self._menu_action(
-            menu,
-            self._offline_action_label(),
-            self.toggle_offline,
-            enabled=not self._operation_pending,
-        )
+        self._add_offline_menu_actions(menu, entry)
         if self._can_free_cache(entry):
             self._menu_action(menu, "Free cached copy", lambda selected=entry: self._free_cache(selected.path))
         self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
@@ -817,8 +841,42 @@ class CompactCloudBrowser:
             remote
             and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir)
             and not self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+            and not self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir)
             and not self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir)
         )
+
+    def _add_offline_menu_actions(self, menu: Any, entry: BrowserEntry) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return
+        partial = self.backend.is_partially_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        offline = self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        if partial:
+            self._menu_action(
+                menu,
+                "Make available offline",
+                self.toggle_offline,
+                enabled=not self._operation_pending,
+            )
+            self._menu_action(
+                menu,
+                "Remove offline copies",
+                lambda selected=entry: self._remove_offline_copy(selected.path),
+                enabled=not self._operation_pending,
+            )
+            return
+        self._menu_action(
+            menu,
+            "Remove offline copy" if offline else "Make available offline",
+            self.toggle_offline,
+            enabled=not self._operation_pending,
+        )
+
+    def _remove_offline_copy(self, path: str) -> None:
+        if self.remote is None:
+            return
+        remote_name = self.remote.name
+        self._run_operation("Removing local copies…", lambda: self.backend.remove_offline(remote_name, path))
 
     def _free_cache(self, path: str) -> None:
         if self.remote is None:

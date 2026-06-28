@@ -561,6 +561,8 @@ class CloudBrowserBackend:
         normalized = normalize_browser_path(path)
         record = self._offline_records.get(remote_name, {}).get(normalized)
         if record is not None:
+            if is_dir and not bool(record.get("complete", True)):
+                return False
             return bool(record.get("protected"))
         destination = self.offline_path(remote_name, path)
         if is_dir and self._offline_marker(destination).exists():
@@ -574,6 +576,15 @@ class CloudBrowserBackend:
                 return True
             parent = parent.parent
         return False
+
+    def is_partially_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        if not is_dir:
+            return False
+        return self.has_offline_content(remote_name, path, is_dir=True) and not self.is_offline(
+            remote_name,
+            path,
+            is_dir=True,
+        )
 
     def is_cached(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         normalized = normalize_browser_path(path)
@@ -667,8 +678,17 @@ class CloudBrowserBackend:
                     continue
                 path = normalize_browser_path(str(raw_path))
                 if path:
+                    is_dir = bool(record.get("is_dir"))
+                    if "complete" in record:
+                        complete = bool(record.get("complete"))
+                    elif is_dir:
+                        complete = self._offline_marker(self.offline_path(str(remote_name), path)).exists() or bool(
+                            record.get("modified")
+                        )
+                    else:
+                        complete = True
                     remote_records[path] = {
-                        "is_dir": bool(record.get("is_dir")),
+                        "is_dir": is_dir,
                         "size": max(int(record.get("size") or 0), 0),
                         "modified": str(record.get("modified") or ""),
                         "cached_at": str(record.get("cached_at") or ""),
@@ -676,6 +696,7 @@ class CloudBrowserBackend:
                         "local_mtime_ns": _optional_int(record.get("local_mtime_ns")),
                         "local_sha256": str(record.get("local_sha256") or ""),
                         "protected": bool(record.get("protected", True)),
+                        "complete": complete,
                     }
             if remote_records:
                 normalized[str(remote_name)] = remote_records
@@ -696,7 +717,14 @@ class CloudBrowserBackend:
         for ancestor in _ancestor_paths(entry.path):
             current = records.setdefault(
                 ancestor,
-                {"is_dir": True, "size": 0, "modified": "", "cached_at": cached_at, "protected": protected},
+                {
+                    "is_dir": True,
+                    "size": 0,
+                    "modified": "",
+                    "cached_at": cached_at,
+                    "protected": protected,
+                    "complete": False,
+                },
             )
             if protected:
                 current["protected"] = True
@@ -706,6 +734,7 @@ class CloudBrowserBackend:
             "modified": entry.modified,
             "cached_at": cached_at,
             "protected": protected,
+            "complete": True,
             **self._offline_file_state(remote_name, entry.path),
         }
         self._save_offline_manifest()
@@ -734,6 +763,7 @@ class CloudBrowserBackend:
                 "modified": datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
                 "cached_at": cached_at,
                 "protected": protected,
+                "complete": True,
                 **({} if child.is_dir() else self._offline_file_state(remote_name, child_path)),
             }
         self._save_offline_manifest()

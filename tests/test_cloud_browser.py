@@ -311,9 +311,53 @@ class CloudBrowserTests(unittest.TestCase):
                     backend.make_offline(_remote(), entry)
 
             self.assertTrue(backend.has_offline_content("Docs", "Reports", is_dir=True))
+            self.assertTrue(backend.is_partially_offline("Docs", "Reports", is_dir=True))
+            self.assertFalse(backend.is_offline("Docs", "Reports", is_dir=True))
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep", is_dir=True))
+            self.assertTrue(backend.is_partially_offline("Docs", "Reports/Deep", is_dir=True))
+            self.assertFalse(backend.is_offline("Docs", "Reports/Deep", is_dir=True))
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
             self.assertFalse(backend.has_offline_content("Docs", "Other", is_dir=True))
+
+    def test_legacy_ancestor_folder_records_are_loaded_as_partial(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            manifest = root / "offline.json"
+            cache = root / "cache"
+            local = cache / "Docs" / "Reports" / "Deep" / "a.pdf"
+            local.parent.mkdir(parents=True)
+            local.write_text("offline", encoding="utf-8")
+            stat_result = local.stat()
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "remotes": {
+                            "Docs": {
+                                "Reports": {"is_dir": True, "protected": True, "modified": ""},
+                                "Reports/Deep": {"is_dir": True, "protected": True, "modified": ""},
+                                "Reports/Deep/a.pdf": {
+                                    "is_dir": False,
+                                    "protected": True,
+                                    "local_size": stat_result.st_size,
+                                    "local_mtime_ns": stat_result.st_mtime_ns,
+                                    "local_sha256": "",
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=cache,
+                manifest_path=manifest,
+            )
+
+            self.assertTrue(backend.is_partially_offline("Docs", "Reports", is_dir=True))
+            self.assertFalse(backend.is_offline("Docs", "Reports", is_dir=True))
 
     def test_cached_file_is_not_available_offline_and_can_be_freed(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -770,6 +814,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.window = SimpleNamespace(style=lambda: SimpleNamespace(standardIcon=lambda _icon: object()))
         browser.backend = mock.Mock()
         browser.backend.is_offline.return_value = False
+        browser.backend.is_partially_offline.return_value = False
         browser.backend.is_cached.return_value = False
         browser.backend.has_offline_content.return_value = False
         browser.backend.has_cached_content.return_value = False

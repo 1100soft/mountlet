@@ -476,6 +476,7 @@ def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import (
             QEvent,
+            QFileInfo,
             QItemSelectionModel,
             QKeyCombination,
             QLockFile,
@@ -499,6 +500,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QDialog,
             QDialogButtonBox,
             QFileDialog,
+            QFileIconProvider,
             QFrame,
             QFormLayout,
             QGridLayout,
@@ -565,6 +567,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         QLockFile=QLockFile,
         QMimeData=QMimeData,
         QEvent=QEvent,
+        QFileIconProvider=QFileIconProvider,
+        QFileInfo=QFileInfo,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
