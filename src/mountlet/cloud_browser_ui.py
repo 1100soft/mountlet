@@ -16,8 +16,6 @@ MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 CHILD_FOLDER_PREFETCH_LIMIT = 24
-OFFLINE_HIGHLIGHT_COLOR = "#facc15"
-OFFLINE_MUTED_COLOR = "#8b8f98"
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 
 
@@ -80,6 +78,7 @@ class CompactCloudBrowser:
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
         self._bridge.operation_finished.connect(self._operation_finished)
+        self._bridge.cached_file_ready.connect(self._cached_file_ready)
         self.window = self._make_window()
         self._build()
 
@@ -89,6 +88,7 @@ class CompactCloudBrowser:
         class Bridge(qt.QObject):
             listing_ready = qt.Signal(str, str, object, str)
             operation_finished = qt.Signal(bool, str)
+            cached_file_ready = qt.Signal(str, str, object, str)
 
         return Bridge()
 
@@ -524,13 +524,14 @@ class CompactCloudBrowser:
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         remote = self.remote
-        mounted = bool(remote and core.is_mounted(remote))
         for entry in entries:
             item = self.qt.QTreeWidgetItem(["", entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
             item.setIcon(1, directory_icon if entry.is_dir else file_icon)
             offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
+            cached = bool(remote and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir))
             offline_content = bool(remote and self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir))
+            cached_content = bool(remote and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir))
             if offline:
                 if offline_icon is not None:
                     item.setIcon(0, offline_icon)
@@ -543,13 +544,22 @@ class CompactCloudBrowser:
                 if partial_offline_icon is not None:
                     item.setIcon(0, partial_offline_icon)
                 item.setToolTip(0, "Contains offline snapshots")
-            if remote and not mounted:
-                if offline_content:
-                    self._set_item_foreground(item, OFFLINE_HIGHLIGHT_COLOR)
-                    item.setToolTip(1, "Available offline as a local snapshot")
+            elif cached:
+                if partial_offline_icon is not None:
+                    item.setIcon(0, partial_offline_icon)
+                if remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir):
+                    item.setText(0, "●")
+                    item.setToolTip(0, "Cached local copy has local changes")
                 else:
-                    self._set_item_foreground(item, OFFLINE_MUTED_COLOR)
-                    item.setToolTip(1, "Mount this remote or save this item offline before opening it.")
+                    item.setToolTip(0, "Cached local copy")
+            elif entry.is_dir and cached_content:
+                if partial_offline_icon is not None:
+                    item.setIcon(0, partial_offline_icon)
+                item.setToolTip(0, "Contains cached files")
+            if remote and offline_content:
+                item.setToolTip(1, "Available offline as a local snapshot")
+            elif remote and cached_content:
+                item.setToolTip(1, "Cached local copy")
             self.tree.addTopLevelItem(item)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
@@ -713,7 +723,7 @@ class CompactCloudBrowser:
         if entry.is_dir:
             can_open_folder = bool(
                 self.remote
-                and (core.is_mounted(self.remote) or self.backend.has_offline_content(self.remote.name, entry.path, is_dir=True))
+                and (core.is_mounted(self.remote) or self.backend.has_cached_content(self.remote.name, entry.path, is_dir=True))
             )
             self._menu_action(
                 menu,
@@ -731,6 +741,8 @@ class CompactCloudBrowser:
             self.toggle_offline,
             enabled=not self._operation_pending,
         )
+        if self._can_free_cache(entry):
+            self._menu_action(menu, "Free cached copy", lambda selected=entry: self._free_cache(selected.path))
         self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
@@ -740,7 +752,7 @@ class CompactCloudBrowser:
             menu,
             f"Open in {self._file_manager_label()}",
             lambda: self._open_external_folder(self.path),
-            enabled=bool(self.remote and (core.is_mounted(self.remote) or self._current_offline_folder_available())),
+            enabled=bool(self.remote and (core.is_mounted(self.remote) or self._current_cached_folder_available())),
         )
         edits_enabled = self._edits_enabled()
         self._menu_action(
@@ -750,6 +762,9 @@ class CompactCloudBrowser:
             enabled=edits_enabled and self.clipboard is not None and not self._operation_pending,
         )
         self._menu_action(menu, "New folder", self.create_folder, enabled=edits_enabled and not self._operation_pending)
+        menu.addSeparator()
+        self._menu_action(menu, "Free resolved cache in this folder", lambda: self._free_cache(self.path), enabled=bool(self.remote))
+        self._menu_action(menu, "Free all resolved cache", self._free_all_resolved_cache)
         origin = source or self.path_field
         menu.exec(origin.mapToGlobal(point))
 
@@ -766,6 +781,24 @@ class CompactCloudBrowser:
             and core.is_mounted(self.remote)
             and self.backend.original_path_for_conflict_copy(entry.path)
         )
+
+    def _can_free_cache(self, entry: BrowserEntry) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(
+            remote
+            and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir)
+            and not self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+            and not self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir)
+        )
+
+    def _free_cache(self, path: str) -> None:
+        if self.remote is None:
+            return
+        remote_name = self.remote.name
+        self._run_operation("Freeing cache…", lambda: self.backend.free_cache(remote_name, path))
+
+    def _free_all_resolved_cache(self) -> None:
+        self._run_operation("Freeing resolved cache…", self.backend.free_all_resolved_cache)
 
     def _replace_original_with_copy(self, entry: BrowserEntry) -> None:
         if self.remote is None or self._operation_pending:
@@ -1027,20 +1060,23 @@ class CompactCloudBrowser:
         if button is None:
             return
         remote = getattr(self, "remote", None)
-        offline_available = self._current_offline_folder_available()
-        if remote is not None and not core.is_mounted(remote) and offline_available:
+        cached_available = self._current_cached_folder_available()
+        if remote is not None and not core.is_mounted(remote) and cached_available:
             button.setStyleSheet("")
-            button.setToolTip(f"Open the offline snapshot folder in {self._file_manager_label()}")
+            if self.backend.has_offline_content(remote.name, self.path, is_dir=True):
+                button.setToolTip(f"Open the offline snapshot folder in {self._file_manager_label()}")
+            else:
+                button.setToolTip(f"Open the local cache folder in {self._file_manager_label()}")
         else:
             button.setStyleSheet("")
             button.setToolTip(f"Open this folder in {self._file_manager_label()}")
 
-    def _current_offline_folder_available(self) -> bool:
+    def _current_cached_folder_available(self) -> bool:
         remote = getattr(self, "remote", None)
         if remote is None:
             return False
         offline = self.backend.offline_path(remote.name, self.path)
-        return offline.is_dir() or self.backend.has_offline_content(remote.name, self.path, is_dir=True)
+        return offline.is_dir() or self.backend.has_cached_content(remote.name, self.path, is_dir=True)
 
     def _edits_enabled(self) -> bool:
         try:
@@ -1069,11 +1105,41 @@ class CompactCloudBrowser:
             local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
             self._open_local_file(local)
             return
-        offline = self.backend.offline_path(self.remote.name, entry.path)
-        if offline.is_file():
-            self._open_local_file(self.backend.prepare_offline_open(self.remote.name, entry.path))
-        else:
-            self._notify("Open file", "Mount the remote or make this file available offline first.", False)
+        self._open_cached_file(entry)
+
+    def _open_cached_file(self, entry: BrowserEntry) -> None:
+        remote = self.remote
+        if remote is None:
+            return
+        cached = self.backend.offline_path(remote.name, entry.path)
+        if cached.is_file():
+            self._open_local_file(self.backend.prepare_offline_open(remote.name, entry.path))
+            return
+        self.status.setText("Downloading cached copy…")
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                local = self.backend.cache_file(remote, entry)
+            except Exception as exc:
+                self._bridge.cached_file_ready.emit(remote.name, entry.path, None, str(exc))
+                return
+            self._bridge.cached_file_ready.emit(remote.name, entry.path, local, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _cached_file_ready(self, remote_name: str, path: str, local: object, error: str) -> None:
+        if error:
+            self._notify("Open file", error, False)
+            self.status.setText(error)
+            self._update_actions()
+            return
+        if self.remote is None or self.remote.name != remote_name:
+            return
+        self._folder_cache.pop((remote_name, parent_browser_path(path)), None)
+        if isinstance(local, Path):
+            self._open_local_file(local)
+        self.refresh(force=True)
 
     def _open_local_file(self, path: Path) -> None:
         if self._open_file and self._open_file(path):
@@ -1112,7 +1178,7 @@ class CompactCloudBrowser:
                     return
             self._notify(
                 "Open folder",
-                "Mount this remote or make this folder available offline before opening it in the system file manager.",
+                "Open or cache a file in this folder before opening it in the system file manager.",
                 False,
             )
             return

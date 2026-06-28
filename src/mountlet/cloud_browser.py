@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import hashlib
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,7 @@ from .settings import offline_root
 BROWSER_STATE_FILE = "browser.json"
 OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
+REMOTE_CURRENT_DIR = ".mountlet-remote-current"
 CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
@@ -275,11 +277,22 @@ class CloudBrowserBackend:
                 "--create-empty-src-dirs",
             )
             self._offline_marker(destination).touch()
-            self._record_offline_tree(remote.name, entry, destination)
+            self._record_offline_tree(remote.name, entry, destination, protected=True)
         else:
-            self._run_operation(binary, "copyto", remote_target(remote, entry.path), str(destination))
+            self._download_remote_file(binary, remote, entry.path, destination)
             self.prepare_offline_open(remote.name, entry.path)
-            self._record_offline_entry(remote.name, entry)
+            self._record_offline_entry(remote.name, entry, protected=True)
+        return destination
+
+    def cache_file(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path:
+        if entry.is_dir:
+            raise RuntimeError("Folders are not opened through the file cache.")
+        binary = self._rclone()
+        destination = self.offline_path(remote.name, entry.path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._download_remote_file(binary, remote, entry.path, destination)
+        self.prepare_offline_open(remote.name, entry.path)
+        self._record_offline_entry(remote.name, entry, protected=False)
         return destination
 
     def offline_changed(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
@@ -341,6 +354,64 @@ class CloudBrowserBackend:
             )
         return conflicts
 
+    def changed_managed_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
+        try:
+            binary = self._rclone()
+        except RuntimeError:
+            return []
+        conflicts: list[OfflineConflict] = []
+        for path, record in self._offline_records.get(remote.name, {}).items():
+            if bool(record.get("is_dir")):
+                continue
+            local = self.offline_path(remote.name, path)
+            if not local.is_file():
+                continue
+            previous_hash = str(record.get("local_sha256") or "")
+            if not previous_hash:
+                self._update_offline_record_state(remote.name, path, local)
+                continue
+            current = self.remote_current_path(remote.name, path)
+            try:
+                self._download_remote_file(binary, remote, path, current)
+            except RuntimeError:
+                continue
+            try:
+                local_hash = _file_digest(local)
+                current_hash = _file_digest(current)
+            except OSError:
+                continue
+            local_changed = local_hash != previous_hash
+            cloud_changed = current_hash != previous_hash
+            if not local_changed and not cloud_changed:
+                continue
+            if not local_changed and cloud_changed:
+                shutil.copy2(current, local)
+                self._update_offline_record_state(remote.name, path, local)
+                continue
+            if local_changed and not cloud_changed:
+                try:
+                    self._upload_remote_file(binary, remote, path, local)
+                except RuntimeError:
+                    continue
+                self._update_offline_record_state(remote.name, path, local)
+                with suppress(OSError):
+                    current.unlink()
+                continue
+            if local_hash == current_hash:
+                self._update_offline_record_state(remote.name, path, local)
+                continue
+            conflicts.append(
+                OfflineConflict(
+                    remote_name=remote.name,
+                    path=path,
+                    offline_path=local,
+                    mounted_path=current,
+                    offline_mtime=local.stat().st_mtime,
+                    mounted_mtime=current.stat().st_mtime,
+                )
+            )
+        return conflicts
+
     def resolve_offline_conflict(self, conflict: OfflineConflict, choice: str) -> Path:
         if choice not in {"newer", "older", "keep_both"}:
             raise ValueError(f"Unknown offline conflict choice: {choice}")
@@ -359,6 +430,32 @@ class CloudBrowserBackend:
             return conflict.mounted_path
         shutil.copy2(conflict.mounted_path, conflict.offline_path)
         self._update_offline_record_state(conflict.remote_name, conflict.path, conflict.offline_path)
+        return conflict.offline_path
+
+    def resolve_managed_conflict(self, remote: core.RemoteInfo, conflict: OfflineConflict, choice: str) -> Path:
+        if choice not in {"newer", "older", "keep_both"}:
+            raise ValueError(f"Unknown managed conflict choice: {choice}")
+        binary = self._rclone()
+        local_newer = conflict.offline_is_newer
+        if choice == "keep_both":
+            kept_remote_path = _conflict_copy_remote_path(conflict.path)
+            self._upload_remote_file(binary, remote, kept_remote_path, conflict.offline_path)
+            shutil.copy2(conflict.mounted_path, conflict.offline_path)
+            self._update_offline_record_state(conflict.remote_name, conflict.path, conflict.offline_path)
+            with suppress(OSError):
+                conflict.mounted_path.unlink()
+            return conflict.offline_path
+        use_local = local_newer if choice == "newer" else not local_newer
+        if use_local:
+            self._upload_remote_file(binary, remote, conflict.path, conflict.offline_path)
+            self._update_offline_record_state(conflict.remote_name, conflict.path, conflict.offline_path)
+            with suppress(OSError):
+                conflict.mounted_path.unlink()
+            return conflict.offline_path
+        shutil.copy2(conflict.mounted_path, conflict.offline_path)
+        self._update_offline_record_state(conflict.remote_name, conflict.path, conflict.offline_path)
+        with suppress(OSError):
+            conflict.mounted_path.unlink()
         return conflict.offline_path
 
     def original_path_for_conflict_copy(self, path: str) -> str | None:
@@ -395,6 +492,15 @@ class CloudBrowserBackend:
         self._remove_empty_parents(destination.parent, self.cache_root / _safe_component(remote_name))
         self._remove_offline_records(remote_name, path)
 
+    def free_cache(self, remote_name: str, path: str) -> int:
+        return self._free_cache_records(remote_name, path)
+
+    def free_all_resolved_cache(self) -> int:
+        removed = 0
+        for remote_name in list(self._offline_records):
+            removed += self._free_cache_records(remote_name, "")
+        return removed
+
     def prepare_offline_open(self, remote_name: str, path: str) -> Path:
         """Return the local cache path and repair permissions for external apps.
 
@@ -412,6 +518,10 @@ class CloudBrowserBackend:
         return destination
 
     def is_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        normalized = normalize_browser_path(path)
+        record = self._offline_records.get(remote_name, {}).get(normalized)
+        if record is not None:
+            return bool(record.get("protected"))
         destination = self.offline_path(remote_name, path)
         if is_dir and self._offline_marker(destination).exists():
             return True
@@ -424,6 +534,15 @@ class CloudBrowserBackend:
                 return True
             parent = parent.parent
         return False
+
+    def is_cached(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        normalized = normalize_browser_path(path)
+        if normalized in self._offline_records.get(remote_name, {}):
+            return True
+        destination = self.offline_path(remote_name, path)
+        if destination.is_dir():
+            return is_dir
+        return destination.is_file()
 
     def has_offline_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         """Return whether an entry can lead to a usable offline snapshot.
@@ -460,8 +579,23 @@ class CloudBrowserBackend:
             return False
         return False
 
+    def has_cached_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        if self.is_cached(remote_name, path, is_dir=is_dir):
+            return True
+        if not is_dir:
+            return False
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        records = self._offline_records.get(remote_name, {})
+        return any((not normalized or record_path.startswith(prefix)) for record_path in records)
+
     def offline_path(self, remote_name: str, path: str) -> Path:
         root = self.cache_root / _safe_component(remote_name)
+        relative = normalize_browser_path(path)
+        return root.joinpath(*PurePosixPath(relative).parts) if relative else root
+
+    def remote_current_path(self, remote_name: str, path: str) -> Path:
+        root = self.cache_root / _safe_component(remote_name) / REMOTE_CURRENT_DIR
         relative = normalize_browser_path(path)
         return root.joinpath(*PurePosixPath(relative).parts) if relative else root
 
@@ -501,6 +635,7 @@ class CloudBrowserBackend:
                         "local_size": _optional_int(record.get("local_size")),
                         "local_mtime_ns": _optional_int(record.get("local_mtime_ns")),
                         "local_sha256": str(record.get("local_sha256") or ""),
+                        "protected": bool(record.get("protected", True)),
                     }
             if remote_records:
                 normalized[str(remote_name)] = remote_records
@@ -515,25 +650,28 @@ class CloudBrowserBackend:
         )
         temporary.replace(self.manifest_path)
 
-    def _record_offline_entry(self, remote_name: str, entry: BrowserEntry) -> None:
+    def _record_offline_entry(self, remote_name: str, entry: BrowserEntry, *, protected: bool = True) -> None:
         records = self._offline_records.setdefault(remote_name, {})
         cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
         for ancestor in _ancestor_paths(entry.path):
-            records.setdefault(
+            current = records.setdefault(
                 ancestor,
-                {"is_dir": True, "size": 0, "modified": "", "cached_at": cached_at},
+                {"is_dir": True, "size": 0, "modified": "", "cached_at": cached_at, "protected": protected},
             )
+            if protected:
+                current["protected"] = True
         records[normalize_browser_path(entry.path)] = {
             "is_dir": entry.is_dir,
             "size": max(entry.size, 0),
             "modified": entry.modified,
             "cached_at": cached_at,
+            "protected": protected,
             **self._offline_file_state(remote_name, entry.path),
         }
         self._save_offline_manifest()
 
-    def _record_offline_tree(self, remote_name: str, entry: BrowserEntry, directory: Path) -> None:
-        self._record_offline_entry(remote_name, entry)
+    def _record_offline_tree(self, remote_name: str, entry: BrowserEntry, directory: Path, *, protected: bool = True) -> None:
+        self._record_offline_entry(remote_name, entry, protected=protected)
         root_path = normalize_browser_path(entry.path)
         records = self._offline_records.setdefault(remote_name, {})
         cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -555,6 +693,7 @@ class CloudBrowserBackend:
                 "size": 0 if child.is_dir() else stat_result.st_size,
                 "modified": datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
                 "cached_at": cached_at,
+                "protected": protected,
                 **({} if child.is_dir() else self._offline_file_state(remote_name, child_path)),
             }
         self._save_offline_manifest()
@@ -630,6 +769,56 @@ class CloudBrowserBackend:
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
 
+    def _download_remote_file(self, binary: str, remote: core.RemoteInfo, path: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._run_operation(binary, "copyto", remote_target(remote, path), str(destination))
+        self._make_file_writable(destination)
+
+    def _upload_remote_file(self, binary: str, remote: core.RemoteInfo, path: str, source: Path) -> None:
+        self._run_operation(binary, "copyto", str(source), remote_target(remote, path))
+
+    def _free_cache_records(self, remote_name: str, path: str) -> int:
+        records = self._offline_records.get(remote_name)
+        if not records:
+            return 0
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        candidates = [
+            record_path
+            for record_path, record in records.items()
+            if not bool(record.get("protected"))
+            and not bool(record.get("is_dir"))
+            and (record_path == normalized or not normalized or record_path.startswith(prefix))
+            and not self.offline_changed(remote_name, record_path)
+        ]
+        removed = 0
+        for record_path in candidates:
+            destination = self.offline_path(remote_name, record_path)
+            self._make_file_writable(destination)
+            with suppress(OSError):
+                destination.unlink()
+                removed += 1
+            records.pop(record_path, None)
+        self._prune_unprotected_empty_directories(remote_name)
+        self._save_offline_manifest()
+        return removed
+
+    def _prune_unprotected_empty_directories(self, remote_name: str) -> None:
+        records = self._offline_records.get(remote_name)
+        if not records:
+            return
+        for record_path, record in sorted(list(records.items()), key=lambda item: item[0].count("/"), reverse=True):
+            if not bool(record.get("is_dir")) or bool(record.get("protected")):
+                continue
+            if any(parent_browser_path(candidate) == record_path for candidate in records if candidate != record_path):
+                continue
+            directory = self.offline_path(remote_name, record_path)
+            with suppress(OSError):
+                directory.rmdir()
+            records.pop(record_path, None)
+        if not records:
+            self._offline_records.pop(remote_name, None)
+
     def _offline_marker(self, path: Path) -> Path:
         return path / ".mountlet-offline"
 
@@ -698,6 +887,18 @@ def _conflict_copy_path(path: Path) -> Path:
         candidate = path.with_name(f"{stem} (Mountlet offline {timestamp} {counter}){suffix}")
         counter += 1
     return candidate
+
+
+def _conflict_copy_remote_path(path: str) -> str:
+    normalized = normalize_browser_path(path)
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    parsed = PurePosixPath(normalized)
+    name = parsed.name
+    suffix = "".join(parsed.suffixes[-1:])
+    stem = name[: -len(suffix)] if suffix else name
+    copy_name = f"{stem} (Mountlet offline {timestamp}){suffix}"
+    parent = parent_browser_path(normalized)
+    return join_browser_path(parent, copy_name)
 
 
 def _default_offline_cache_root() -> Path:

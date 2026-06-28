@@ -268,6 +268,124 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
             self.assertFalse(backend.has_offline_content("Docs", "Other", is_dir=True))
 
+    def test_cached_file_is_not_available_offline_and_can_be_freed(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("cached", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    cached = backend.cache_file(_remote(), entry)
+
+            self.assertTrue(cached.is_file())
+            self.assertTrue(backend.is_cached("Docs", "Reports/a.txt"))
+            self.assertFalse(backend.is_offline("Docs", "Reports/a.txt"))
+
+            removed = backend.free_all_resolved_cache()
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(cached.exists())
+
+    def test_free_cache_preserves_available_offline_files(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("offline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    offline = backend.make_offline(_remote(), entry)
+
+            removed = backend.free_all_resolved_cache()
+
+            self.assertEqual(removed, 0)
+            self.assertTrue(offline.exists())
+            self.assertTrue(backend.is_offline("Docs", "Reports/a.txt"))
+
+    def test_changed_cached_file_uploads_when_cloud_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    cached = backend.cache_file(remote, entry)
+
+            cached.write_text("local edit", encoding="utf-8")
+            calls: list[tuple[str, ...]] = []
+
+            def reconcile_copy(_binary: str, *arguments: str) -> None:
+                calls.append(arguments)
+                if arguments[0] == "copyto" and str(arguments[1]).startswith("Docs:"):
+                    destination = Path(arguments[2])
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=reconcile_copy):
+                    conflicts = backend.changed_managed_files(remote)
+
+            self.assertEqual(conflicts, [])
+            self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+
+    def test_cloud_change_updates_unchanged_cached_file(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    cached = backend.cache_file(remote, entry)
+
+            def remote_changed(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("cloud edit", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=remote_changed):
+                    conflicts = backend.changed_managed_files(remote)
+
+            self.assertEqual(conflicts, [])
+            self.assertEqual(cached.read_text(encoding="utf-8"), "cloud edit")
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+
     def test_changed_offline_file_is_reported_against_mounted_file(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

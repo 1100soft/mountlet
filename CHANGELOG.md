@@ -24,9 +24,12 @@
 - Enabled offline snapshots in Mountlet Files, including manifest metadata for
   deep cached paths so parent folders remain browseable without a live remote
   connection.
-- Made file opening prefer mounted paths when available, fall back to offline
-  snapshots only when needed, and use operating-system file associations for
-  local file opens.
+- Made unmounted file opening download a managed local cache copy and open it
+  through operating-system file associations. Mountlet now tracks local cache
+  edits, uploads them automatically when the cloud file is unchanged, and prompts
+  for conflict resolution when both sides changed.
+- Added cache cleanup for resolved ordinary cached files while preserving files
+  marked as available offline.
 - Kept offline cache files user-writable so external apps such as PDF readers
   and spreadsheet editors can open cached files normally.
 - Moved offline snapshots out of hidden or separate cache locations and into

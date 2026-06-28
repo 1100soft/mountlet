@@ -404,15 +404,19 @@ remote does not need to be mounted.
   or create a folder.
 - Drag files onto another remote strip to copy them to that remote's remembered
   folder. Hold Shift while dropping to move them.
-- Use **Make available offline** to download selected files or folders as local
-  snapshots under the app folder's `offline` directory. Mountlet remembers the
-  folder path leading to each offline file, so cached items remain browseable
-  when the remote is not reachable. Offline snapshots are not two-way sync;
-  edits to the cached copy are not uploaded. Remove and recreate the snapshot
-  to refresh it.
 - When a remote is mounted, opening a file uses the mounted file path. When it
-  is unmounted, opening uses the offline snapshot if one exists. Offline
-  folders can also be opened in the configured system file manager.
+  is not mounted, Mountlet downloads a managed cached copy and opens that local
+  file with the operating system's file association.
+- Mountlet tracks managed cached files. If a cached file changes locally and
+  the cloud file has not changed since the cache was created, Mountlet uploads
+  the local change automatically when the remote is reachable. If both changed,
+  Mountlet asks which version to keep or whether to keep both.
+- Use **Make available offline** to protect selected cached files or folders
+  from normal cache cleanup. These protected files use the same conflict flow as
+  ordinary cached files, but **Free resolved cache** leaves them in place.
+- Folder context menus can free resolved ordinary cache for the current folder
+  or all remotes. Files with unresolved local changes are kept until the remote
+  can be checked and the change is uploaded or resolved.
 
 Integrated edits are direct rclone operations. Mountlet does not keep an
 undo/redo history, and deleted cloud items are not moved to the system trash.

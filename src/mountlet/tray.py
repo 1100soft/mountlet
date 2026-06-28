@@ -4350,6 +4350,7 @@ class MountletWindow:
             return
         if remote.name in getattr(self, "_action_pending", set()):
             return
+        self._reconcile_offline_changes_after_mount(remote.name)
         file_browser.invalidate(remote.name)
 
     def _build_app_menu(self) -> None:
@@ -6319,14 +6320,16 @@ class MountletWindow:
         if getattr(self, "_offline_reconcile_active", False):
             return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
-        if remote is None or not core.is_mounted(remote):
+        if remote is None:
             return
         self._offline_reconcile_active = True
         try:
             try:
-                conflicts = self.file_browser.backend.changed_offline_files(remote)
+                conflicts = self.file_browser.backend.changed_managed_files(remote)
             except Exception as exc:
-                self.tray_app._notify("Offline snapshots", f"Could not check offline changes: {exc}", success=False)
+                self.tray_app._notify("Local cache", f"Could not check local file changes: {exc}", success=False)
+                return
+            if not isinstance(conflicts, list):
                 return
             if not conflicts:
                 self.file_browser.refresh_mount_state(remote.name)
@@ -6342,15 +6345,15 @@ class MountletWindow:
                     self._deferred_offline_conflicts.add(key)
                     continue
                 try:
-                    self.file_browser.backend.resolve_offline_conflict(conflict, choice)
+                    self.file_browser.backend.resolve_managed_conflict(remote, conflict, choice)
                 except Exception as exc:
-                    self.tray_app._notify("Offline snapshots", f"Could not resolve {conflict.name}: {exc}", success=False)
+                    self.tray_app._notify("Local cache", f"Could not resolve {conflict.name}: {exc}", success=False)
                     continue
                 self._deferred_offline_conflicts.discard(key)
                 resolved += 1
             if resolved:
                 self.file_browser.invalidate(remote.name)
-                self.tray_app._notify("Offline snapshots", f"Resolved {resolved} changed offline file{'s' if resolved != 1 else ''}.", success=True)
+                self.tray_app._notify("Local cache", f"Resolved {resolved} changed local file{'s' if resolved != 1 else ''}.", success=True)
         finally:
             self._offline_reconcile_active = False
 
@@ -6377,14 +6380,14 @@ class MountletWindow:
             return
 
     def _ask_offline_conflict_choice(self, remote: core.RemoteInfo, conflict: Any) -> str | None:
-        newer_source = "offline copy" if conflict.offline_is_newer else "cloud file"
-        older_source = "cloud file" if conflict.offline_is_newer else "offline copy"
+        newer_source = "local copy" if conflict.offline_is_newer else "cloud file"
+        older_source = "cloud file" if conflict.offline_is_newer else "local copy"
         newer_link = "offline" if conflict.offline_is_newer else "cloud"
         older_link = "cloud" if conflict.offline_is_newer else "offline"
         dialog = self.qt.QDialog(self.window)
-        dialog.setWindowTitle("Offline file changed")
+        dialog.setWindowTitle("Local file changed")
         layout = self.qt.QVBoxLayout(dialog)
-        title = self.qt.QLabel(f"{html.escape(conflict.name)} changed while {html.escape(remote.display_name)} was offline.")
+        title = self.qt.QLabel(f"{html.escape(conflict.name)} changed locally and in {html.escape(remote.display_name)}.")
         layout.addWidget(title)
         detail = self.qt.QLabel(
             "Choose which version to keep.<br><br>"
