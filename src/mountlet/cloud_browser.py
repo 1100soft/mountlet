@@ -351,6 +351,16 @@ class CloudBrowserBackend:
             return remote_name
         return None
 
+    def changed_managed_remote_names(self) -> list[str]:
+        changed: list[str] = []
+        for remote_name, records in self._offline_records.items():
+            if any(
+                not bool(record.get("is_dir")) and self.offline_changed(remote_name, path)
+                for path, record in records.items()
+            ):
+                changed.append(remote_name)
+        return changed
+
     def changed_offline_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
         conflicts: list[OfflineConflict] = []
         for path, record in self._offline_records.get(remote.name, {}).items():

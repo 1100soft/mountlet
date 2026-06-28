@@ -1338,6 +1338,32 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_offline_file_watches.assert_called_once_with()
         mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
 
+    def test_mountlet_window_local_cache_scan_schedules_changed_unmounted_remotes(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._action_pending = set()
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._scan_local_cache_changes()
+
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs")
+
+    def test_mountlet_window_focus_return_scans_all_local_cache_changes(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(remote=remote, is_visible=lambda: True, invalidate=mock.Mock())
+        mountlet_window._scan_local_cache_changes = mock.Mock()
+
+        mountlet_window._refresh_file_browser_after_focus_return()
+
+        mountlet_window._scan_local_cache_changes.assert_called_once_with()
+        mountlet_window.file_browser.invalidate.assert_called_once_with("Docs")
+
     def test_mountlet_window_toggle_hides_window_stack_when_child_is_open(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()

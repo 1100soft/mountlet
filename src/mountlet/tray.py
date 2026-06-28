@@ -179,10 +179,7 @@ RCLONE_SELECT_FIELDS = {
 }
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
-DRIVE_USAGE_NOTE = (
-    "Google Drive usage excludes Google Photos and other Google account data. "
-    "If those also use your Google storage quota, the actual remaining account space can be lower than shown."
-)
+DRIVE_USAGE_NOTE = "Google Drive usage excludes Photos and other Google account data."
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -4184,6 +4181,7 @@ class MountletWindow:
         self._deferred_offline_conflicts: set[tuple[str, str, float, float]] = set()
         self._offline_watched_paths: set[str] = set()
         self._offline_file_watcher: Any | None = None
+        self._offline_change_poll_timer: Any | None = None
         self._browser_hidden_for_action = ""
         self._browser_hidden_for_action_focus = False
         self._position_after_fit = False
@@ -4218,7 +4216,7 @@ class MountletWindow:
         self.window.update_focus_style = self._update_main_focus_style
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self.file_browser.preload(_load_visible_remotes())
-        self._setup_offline_file_watcher()
+        self._setup_offline_change_tracking()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -4357,12 +4355,17 @@ class MountletWindow:
     def _refresh_file_browser_after_focus_return(self) -> None:
         file_browser = getattr(self, "file_browser", None)
         remote = getattr(file_browser, "remote", None)
-        if file_browser is None or remote is None or not file_browser.is_visible():
+        if file_browser is None:
             return
-        if remote.name in getattr(self, "_action_pending", set()):
+        self._scan_local_cache_changes()
+        if remote is None or not file_browser.is_visible():
             return
-        self._reconcile_offline_changes_after_mount(remote.name)
         file_browser.invalidate(remote.name)
+
+    def _setup_offline_change_tracking(self) -> None:
+        self._setup_offline_file_watcher()
+        self._setup_offline_change_polling()
+        self._scan_local_cache_changes()
 
     def _setup_offline_file_watcher(self) -> None:
         watcher_type = getattr(self.qt, "QFileSystemWatcher", None)
@@ -4402,6 +4405,34 @@ class MountletWindow:
         remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
         if remote_name:
             self._schedule_offline_reconcile(remote_name, delay_ms=500)
+
+    def _setup_offline_change_polling(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.window)
+            timer.setInterval(2000)
+            timer.timeout.connect(self._scan_local_cache_changes)
+            timer.start()
+        except Exception:
+            return
+        self._offline_change_poll_timer = timer
+
+    def _scan_local_cache_changes(self) -> None:
+        if self._tray_is_quitting():
+            return
+        self._refresh_offline_file_watches()
+        try:
+            changed_remote_names = self.file_browser.backend.changed_managed_remote_names()
+        except Exception:
+            return
+        if not isinstance(changed_remote_names, (list, tuple, set)):
+            return
+        pending = set(getattr(self, "_action_pending", set()))
+        for remote_name in changed_remote_names:
+            if remote_name not in pending:
+                self._schedule_offline_reconcile(remote_name)
 
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()

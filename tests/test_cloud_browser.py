@@ -227,6 +227,33 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertEqual(backend.managed_file_paths("Docs"), {"Docs": [local]})
             self.assertEqual(backend.remote_name_for_offline_path(local), "Docs")
 
+    def test_changed_managed_remote_names_uses_local_metadata(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            local = backend.offline_path("Docs", "Reports/a.txt")
+            local.parent.mkdir(parents=True)
+            local.write_text("cached", encoding="utf-8")
+            stat_result = local.stat()
+            backend._offline_records = {
+                "Docs": {
+                    "Reports/a.txt": {
+                        "is_dir": False,
+                        "local_size": stat_result.st_size,
+                        "local_mtime_ns": stat_result.st_mtime_ns,
+                    },
+                },
+                "Photos": {
+                    "image.jpg": {"is_dir": False, "local_size": 1, "local_mtime_ns": 1},
+                },
+            }
+
+            local.write_text("edited", encoding="utf-8")
+
+            self.assertEqual(backend.changed_managed_remote_names(), ["Docs"])
+
     def test_offline_manifest_preserves_deep_file_ancestors(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
