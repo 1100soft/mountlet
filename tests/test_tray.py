@@ -2428,6 +2428,36 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(window._selected_remote_name, "Gamma")
         self.assertTrue(rows["Gamma"].focused)
 
+    def test_keyboard_navigation_scrolls_selected_remote_into_view(self):
+        class Row:
+            def __init__(self) -> None:
+                self.properties: dict[str, object] = {}
+
+            def property(self, name: str) -> object:
+                return self.properties.get(name)
+
+            def setProperty(self, name: str, value: object) -> None:
+                self.properties[name] = value
+
+            def setStyleSheet(self, _style: str) -> None:
+                return
+
+            def setFocus(self, _reason: object) -> None:
+                return
+
+        rows = {name: Row() for name in ("Alpha", "Beta", "Gamma")}
+        scroll = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(FocusReason=SimpleNamespace(ShortcutFocusReason="shortcut")))
+        window._current_remote_names = ["Alpha", "Beta", "Gamma"]
+        window._selected_remote_name = "Beta"
+        window._row_widgets = {name: SimpleNamespace(frame=row) for name, row in rows.items()}
+        window._remote_scroll = scroll
+
+        window._focus_relative_remote(window._focused_remote_name(), 1)
+
+        scroll.ensureWidgetVisible.assert_called_once_with(rows["Gamma"], 0, 6)
+
     def test_remote_list_direction_key_enters_browser_only_toward_browser_side(self):
         class Event:
             def __init__(self, key: object) -> None:

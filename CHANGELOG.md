@@ -12,6 +12,11 @@
   cloud access, while FUSE, WinFsp, and macFUSE are optional and only gate
   native folder mounting. Packaging can now build a lean installer that uses a
   system rclone or a bundled-rclone installer with an app-local rclone binary.
+- Split native package CI artifacts into visible `system-rclone` and
+  `bundled-rclone` variants, while keeping PyPI, pipx, and source installs as
+  the system-Python path for technical users.
+- Made keyboard navigation scroll the remote list so the selected remote remains
+  visible when the list exceeds the main window's allocated height.
 - Allowed per-remote settings to rename the alias part of a remote, preserving
   the provider suffix while migrating Mountlet settings, remembered browser
   paths, and offline snapshots. Mounted remotes can now be renamed or deleted

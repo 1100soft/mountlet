@@ -97,7 +97,10 @@ python -m pytest
 python -m build
 ```
 
-Native packaging uses PyInstaller separately on each target operating system:
+Native packaging uses PyInstaller separately on each target operating system.
+These bundles intentionally include a Python runtime. Technical users who want
+to use their system Python should install from PyPI, pipx, or a source checkout
+instead.
 
 ```bash
 python -m pip install -e ".[desktop,packaging]"
@@ -120,8 +123,9 @@ bundle, and ignored by git. The app still honors `RCLONE_PATH` first for users
 who explicitly choose another rclone. FUSE, WinFsp, and macFUSE are not bundled;
 they remain optional native-folder support.
 
-The `Native package CI` workflow builds portable bundles plus a Linux `.deb`,
-Windows setup `.exe`, and macOS `.dmg` for both Apple architectures. The Windows
+The `Native package CI` workflow builds visible `system-rclone` and
+`bundled-rclone` artifacts. Each artifact contains a portable bundle plus a
+Linux `.deb`, Windows setup `.exe`, or macOS `.dmg` for that target. The Windows
 installer registers an uninstaller; Linux and macOS use their normal package or
 application removal flow. These development artifacts are not Windows-signed or
 Apple-notarized and expire from GitHub Actions after 14 days.

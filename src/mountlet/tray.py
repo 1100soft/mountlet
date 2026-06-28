@@ -4845,6 +4845,7 @@ class MountletWindow:
         rows.setSpacing(6)
         self._row_widgets = {}
         self._current_remote_names = remote_names
+        self._remote_scroll = scroll
         if self._selected_remote_name not in remote_names:
             self._selected_remote_name = remote_names[0] if remote_names else ""
         self._name_column_width = name_width
@@ -5965,6 +5966,16 @@ class MountletWindow:
         row = self._row_widgets.get(remote_name)
         if row is not None:
             row.frame.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            self._ensure_remote_row_visible(row.frame)
+
+    def _ensure_remote_row_visible(self, row: Any) -> None:
+        scroll = getattr(self, "_remote_scroll", None)
+        if scroll is None:
+            return
+        try:
+            scroll.ensureWidgetVisible(row, 0, 6)
+        except Exception:
+            return
 
     def _focus_current_remote_row(self) -> None:
         name = self._focused_remote_name()

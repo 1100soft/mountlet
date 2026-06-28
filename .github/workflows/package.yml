@@ -29,32 +29,68 @@ concurrency:
 
 jobs:
   package:
-    name: ${{ matrix.label }}
+    name: ${{ matrix.label }} / ${{ matrix.variant_label }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: Linux x64
+            variant_label: system rclone
             runner: ubuntu-24.04
-            artifact: mountlet-linux-x64
-            archive: mountlet-linux-x64.tar.gz
-            installer: mountlet-linux-x64.deb
+            artifact: mountlet-linux-x64-system-rclone
+            archive: mountlet-linux-x64-system-rclone.tar.gz
+            installer: mountlet-linux-x64-system-rclone.deb
+            bundle_rclone: false
+          - label: Linux x64
+            variant_label: bundled rclone
+            runner: ubuntu-24.04
+            artifact: mountlet-linux-x64-bundled-rclone
+            archive: mountlet-linux-x64-bundled-rclone.tar.gz
+            installer: mountlet-linux-x64-bundled-rclone.deb
+            bundle_rclone: true
           - label: Windows x64
+            variant_label: system rclone
             runner: windows-2025
-            artifact: mountlet-windows-x64
-            archive: mountlet-windows-x64.zip
-            installer: mountlet-windows-x64-setup.exe
+            artifact: mountlet-windows-x64-system-rclone
+            archive: mountlet-windows-x64-system-rclone.zip
+            installer: mountlet-windows-x64-system-rclone-setup.exe
+            bundle_rclone: false
+          - label: Windows x64
+            variant_label: bundled rclone
+            runner: windows-2025
+            artifact: mountlet-windows-x64-bundled-rclone
+            archive: mountlet-windows-x64-bundled-rclone.zip
+            installer: mountlet-windows-x64-bundled-rclone-setup.exe
+            bundle_rclone: true
           - label: macOS arm64
+            variant_label: system rclone
             runner: macos-15
-            artifact: mountlet-macos-arm64
-            archive: mountlet-macos-arm64.zip
-            installer: mountlet-macos-arm64.dmg
+            artifact: mountlet-macos-arm64-system-rclone
+            archive: mountlet-macos-arm64-system-rclone.zip
+            installer: mountlet-macos-arm64-system-rclone.dmg
+            bundle_rclone: false
+          - label: macOS arm64
+            variant_label: bundled rclone
+            runner: macos-15
+            artifact: mountlet-macos-arm64-bundled-rclone
+            archive: mountlet-macos-arm64-bundled-rclone.zip
+            installer: mountlet-macos-arm64-bundled-rclone.dmg
+            bundle_rclone: true
           - label: macOS x64
+            variant_label: system rclone
             runner: macos-15-intel
-            artifact: mountlet-macos-x64
-            archive: mountlet-macos-x64.zip
-            installer: mountlet-macos-x64.dmg
+            artifact: mountlet-macos-x64-system-rclone
+            archive: mountlet-macos-x64-system-rclone.zip
+            installer: mountlet-macos-x64-system-rclone.dmg
+            bundle_rclone: false
+          - label: macOS x64
+            variant_label: bundled rclone
+            runner: macos-15-intel
+            artifact: mountlet-macos-x64-bundled-rclone
+            archive: mountlet-macos-x64-bundled-rclone.zip
+            installer: mountlet-macos-x64-bundled-rclone.dmg
+            bundle_rclone: true
 
     steps:
       - name: Check out source
@@ -73,6 +109,20 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: choco install rclone winfsp --no-progress --yes
+
+      - name: Install Linux rclone for bundled variant
+        if: runner.os == 'Linux' && matrix.bundle_rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes rclone
+
+      - name: Install macOS rclone for bundled variant
+        if: runner.os == 'macOS' && matrix.bundle_rclone
+        run: brew install rclone
+
+      - name: Stage bundled rclone
+        if: matrix.bundle_rclone
+        run: python packaging/stage_rclone.py
 
       - name: Run unit tests
         run: python packaging/run_tests.py

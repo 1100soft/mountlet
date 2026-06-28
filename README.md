@@ -71,7 +71,11 @@ Intel. Operating-system security warnings are expected until signing and Apple
 notarization are configured.
 
 Open a successful workflow run under **Actions > Native package CI** and download
-the artifact for your platform. It contains both the portable archive and:
+the artifact for your platform and preferred dependency model. Artifacts whose
+name ends in `system-rclone` expect rclone to be installed separately. Artifacts
+whose name ends in `bundled-rclone` include an app-local rclone binary.
+
+Each native artifact contains both the portable archive and:
 
 - Linux: a `.deb` package, removable with your package manager.
 - Windows: a setup `.exe`, including an entry in **Installed apps** and an
@@ -79,13 +83,15 @@ the artifact for your platform. It contains both the portable archive and:
 - macOS: a `.dmg`; drag Mountlet to Applications and move the app to Trash to
   uninstall it.
 
-Mountlet release artifacts are expected in two variants:
+Mountlet has three practical install tracks:
 
-- **Lean**: Mountlet plus its Python runtime. It checks for a system `rclone`
-  and shows setup guidance if none is found.
-- **Bundled rclone**: Mountlet plus its Python runtime and an app-local
-  `rclone` binary. This does not install rclone globally or replace a user's
-  existing rclone.
+- **Python package**: uses your Python environment through PyPI, pipx, or a
+  source checkout. This is the lightest path for technical users.
+- **Native system-rclone build**: includes Mountlet and its Python runtime, but
+  uses a separately installed rclone.
+- **Native bundled-rclone build**: includes Mountlet, its Python runtime, and an
+  app-local rclone binary. This does not install rclone globally or replace a
+  user's existing rclone.
 
 Both variants keep native folder mounting optional. The Linux package suggests
 FUSE, the Windows installer does not require WinFsp, and the macOS DMG does not
