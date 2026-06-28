@@ -321,6 +321,36 @@ class CloudBrowserBackend:
             return False
         return int(recorded_size) != stat_result.st_size or int(recorded_mtime) != stat_result.st_mtime_ns
 
+    def managed_file_paths(self, remote_name: str | None = None) -> dict[str, list[Path]]:
+        result: dict[str, list[Path]] = {}
+        for candidate_name, records in self._offline_records.items():
+            if remote_name is not None and candidate_name != remote_name:
+                continue
+            files: list[Path] = []
+            for path, record in records.items():
+                if bool(record.get("is_dir")):
+                    continue
+                local = self.offline_path(candidate_name, path)
+                if local.is_file():
+                    files.append(local)
+            if files:
+                result[candidate_name] = files
+        return result
+
+    def remote_name_for_offline_path(self, path: Path) -> str | None:
+        try:
+            candidate = path.expanduser().resolve(strict=False)
+        except OSError:
+            candidate = path.expanduser()
+        for remote_name in self._offline_records:
+            root = self.cache_root / _safe_component(remote_name)
+            try:
+                candidate.relative_to(root.resolve(strict=False))
+            except (OSError, ValueError):
+                continue
+            return remote_name
+        return None
+
     def changed_offline_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
         conflicts: list[OfflineConflict] = []
         for path, record in self._offline_records.get(remote.name, {}).items():

@@ -53,6 +53,7 @@ class CompactCloudBrowser:
         open_local_folder: Callable[[Path], bool] | None = None,
         embedded: bool = False,
         layout_changed: Callable[[], None] | None = None,
+        local_files_changed: Callable[[], None] | None = None,
     ) -> None:
         self.qt = qt
         self.main_window = main_window
@@ -64,6 +65,7 @@ class CompactCloudBrowser:
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
+        self._local_files_changed = local_files_changed or (lambda: None)
         self.backend = CloudBrowserBackend()
         self.remote: core.RemoteInfo | None = None
         self.path = ""
@@ -516,6 +518,20 @@ class CompactCloudBrowser:
         self._display_entries(entries)
 
     def _display_entries(self, entries: list[BrowserEntry]) -> None:
+        previous_path = ""
+        previous_index = 0
+        selected_paths: set[str] = set()
+        current_item = self.tree.currentItem()
+        if current_item is not None:
+            previous = current_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(previous, BrowserEntry):
+                previous_path = previous.path
+            with suppress(Exception):
+                previous_index = max(self.tree.indexOfTopLevelItem(current_item), 0)
+        for selected_item in self.tree.selectedItems():
+            selected = selected_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(selected, BrowserEntry):
+                selected_paths.add(selected.path)
         self.entries = entries
         self.tree.clear()
         style = self.window.style()
@@ -524,10 +540,16 @@ class CompactCloudBrowser:
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         remote = self.remote
+        current_target = None
+        fallback_target = None
         for entry in entries:
             item = self.qt.QTreeWidgetItem(["", entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
             item.setIcon(1, directory_icon if entry.is_dir else file_icon)
+            if entry.path in selected_paths:
+                item.setSelected(True)
+            if previous_path and entry.path == previous_path:
+                current_target = item
             offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
             cached = bool(remote and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir))
             offline_content = bool(remote and self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir))
@@ -561,6 +583,13 @@ class CompactCloudBrowser:
             elif remote and cached_content:
                 item.setToolTip(1, "Cached local copy")
             self.tree.addTopLevelItem(item)
+            if fallback_target is None and self.tree.topLevelItemCount() - 1 >= previous_index:
+                fallback_target = item
+        target = current_target or fallback_target
+        if target is not None:
+            self.tree.setCurrentItem(target)
+            if target not in self.tree.selectedItems():
+                target.setSelected(True)
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
             self._ensure_tree_selection()
@@ -912,6 +941,7 @@ class CompactCloudBrowser:
             self._folder_cache.pop(changed_key, None)
         if not success:
             self._notify("File operation", message or "The operation failed.", False)
+        self._local_files_changed()
         current_key = (self.remote.name, self.path) if self.remote is not None else None
         self.refresh(force=current_key in changed_keys)
 
@@ -1139,6 +1169,7 @@ class CompactCloudBrowser:
         self._folder_cache.pop((remote_name, parent_browser_path(path)), None)
         if isinstance(local, Path):
             self._open_local_file(local)
+        self._local_files_changed()
         self.refresh(force=True)
 
     def _open_local_file(self, path: Path) -> None:

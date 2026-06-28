@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -4178,8 +4179,11 @@ class MountletWindow:
         self._pull_sync_button: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
-        self._offline_reconcile_active = False
+        self._offline_reconcile_running: set[str] = set()
+        self._offline_reconcile_scheduled: set[str] = set()
         self._deferred_offline_conflicts: set[tuple[str, str, float, float]] = set()
+        self._offline_watched_paths: set[str] = set()
+        self._offline_file_watcher: Any | None = None
         self._browser_hidden_for_action = ""
         self._browser_hidden_for_action_focus = False
         self._position_after_fit = False
@@ -4193,6 +4197,7 @@ class MountletWindow:
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self._bridge.folder_opened.connect(self._handle_folder_opened)
         self._bridge.sync_metadata_ready.connect(self._handle_sync_metadata_ready)
+        self._bridge.offline_reconcile_ready.connect(self._handle_offline_reconcile_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -4207,11 +4212,13 @@ class MountletWindow:
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
+            local_files_changed=self._refresh_offline_file_watches,
         )
         self.window.focus_remote_row = self._focus_current_remote_row
         self.window.update_focus_style = self._update_main_focus_style
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self.file_browser.preload(_load_visible_remotes())
+        self._setup_offline_file_watcher()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -4233,6 +4240,7 @@ class MountletWindow:
             bulk_action_finished = qt.Signal(str, object, object)
             folder_opened = qt.Signal(bool)
             sync_metadata_ready = qt.Signal(object, object)
+            offline_reconcile_ready = qt.Signal(str, object, object)
 
         return Bridge()
 
@@ -4355,6 +4363,45 @@ class MountletWindow:
             return
         self._reconcile_offline_changes_after_mount(remote.name)
         file_browser.invalidate(remote.name)
+
+    def _setup_offline_file_watcher(self) -> None:
+        watcher_type = getattr(self.qt, "QFileSystemWatcher", None)
+        if watcher_type is None:
+            return
+        try:
+            watcher = watcher_type(self.window)
+        except Exception:
+            return
+        watcher.fileChanged.connect(self._handle_local_cache_file_changed)
+        self._offline_file_watcher = watcher
+        self._refresh_offline_file_watches()
+
+    def _refresh_offline_file_watches(self) -> None:
+        watcher = getattr(self, "_offline_file_watcher", None)
+        if watcher is None:
+            return
+        paths = {
+            str(path)
+            for files in self.file_browser.backend.managed_file_paths().values()
+            for path in files
+            if path.is_file()
+        }
+        current = set(getattr(self, "_offline_watched_paths", set()))
+        removed = sorted(current - paths)
+        added = sorted(paths - current)
+        if removed:
+            with suppress(Exception):
+                watcher.removePaths(removed)
+        if added:
+            with suppress(Exception):
+                watcher.addPaths(added)
+        self._offline_watched_paths = paths
+
+    def _handle_local_cache_file_changed(self, changed_path: str) -> None:
+        self._refresh_offline_file_watches()
+        remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
+        if remote_name:
+            self._schedule_offline_reconcile(remote_name, delay_ms=500)
 
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
@@ -6318,45 +6365,90 @@ class MountletWindow:
         self._request_refresh()
 
     def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
-        if getattr(self, "_offline_reconcile_active", False):
+        self._schedule_offline_reconcile(remote_name)
+
+    def _schedule_offline_reconcile(self, remote_name: str, *, delay_ms: int = 0) -> None:
+        if self._tray_is_quitting() or not remote_name:
+            return
+        scheduled = getattr(self, "_offline_reconcile_scheduled", None)
+        if scheduled is None:
+            scheduled = set()
+            self._offline_reconcile_scheduled = scheduled
+        if remote_name in scheduled:
+            return
+        scheduled.add(remote_name)
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            return
+        timer.singleShot(delay_ms, lambda name=remote_name: self._start_offline_reconcile(name))
+
+    def _start_offline_reconcile(self, remote_name: str) -> None:
+        getattr(self, "_offline_reconcile_scheduled", set()).discard(remote_name)
+        running = getattr(self, "_offline_reconcile_running", None)
+        if running is None:
+            running = set()
+            self._offline_reconcile_running = running
+        if self._tray_is_quitting() or remote_name in running:
             return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
             return
-        self._offline_reconcile_active = True
-        try:
+        running.add(remote_name)
+
+        def worker() -> None:
             try:
                 conflicts = self.file_browser.backend.changed_managed_files(remote)
             except Exception as exc:
-                self.tray_app._notify("Local cache", f"Could not check local file changes: {exc}", success=False)
+                self._bridge.offline_reconcile_ready.emit(remote.name, None, exc)
                 return
-            if not isinstance(conflicts, list):
-                return
-            if not conflicts:
-                self.file_browser.refresh_mount_state(remote.name)
-                return
-            resolved = 0
-            for conflict in conflicts:
-                key = self._offline_conflict_key(conflict)
-                if key in self._deferred_offline_conflicts:
-                    continue
-                self._show_conflict_file_in_browser(remote, conflict.path)
-                choice = self._ask_offline_conflict_choice(remote, conflict)
-                if choice is None:
-                    self._deferred_offline_conflicts.add(key)
-                    continue
-                try:
-                    self.file_browser.backend.resolve_managed_conflict(remote, conflict, choice)
-                except Exception as exc:
-                    self.tray_app._notify("Local cache", f"Could not resolve {conflict.name}: {exc}", success=False)
-                    continue
-                self._deferred_offline_conflicts.discard(key)
-                resolved += 1
-            if resolved:
-                self.file_browser.invalidate(remote.name)
-                self.tray_app._notify("Local cache", f"Resolved {resolved} changed local file{'s' if resolved != 1 else ''}.", success=True)
-        finally:
-            self._offline_reconcile_active = False
+            self._bridge.offline_reconcile_ready.emit(remote.name, conflicts, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_offline_reconcile_ready(self, remote_name: str, conflicts: object, error: object) -> None:
+        if self._tray_is_quitting():
+            return
+        self._offline_reconcile_running.discard(remote_name)
+        self._refresh_offline_file_watches()
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
+        if remote is None:
+            return
+        if error is not None:
+            self.tray_app._notify("Local cache", f"Could not check local file changes: {error}", success=False)
+            return
+        if not isinstance(conflicts, list):
+            return
+        if not conflicts:
+            self.file_browser.refresh_mount_state(remote.name)
+            return
+        self._handle_offline_conflicts(remote, conflicts)
+
+    def _handle_offline_conflicts(self, remote: core.RemoteInfo, conflicts: list[Any]) -> None:
+        resolved = 0
+        for conflict in conflicts:
+            key = self._offline_conflict_key(conflict)
+            if key in self._deferred_offline_conflicts:
+                continue
+            self._show_conflict_file_in_browser(remote, conflict.path)
+            choice = self._ask_offline_conflict_choice(remote, conflict)
+            if choice is None:
+                self._deferred_offline_conflicts.add(key)
+                continue
+            try:
+                self.file_browser.backend.resolve_managed_conflict(remote, conflict, choice)
+            except Exception as exc:
+                self.tray_app._notify("Local cache", f"Could not resolve {conflict.name}: {exc}", success=False)
+                continue
+            self._deferred_offline_conflicts.discard(key)
+            resolved += 1
+        self._refresh_offline_file_watches()
+        if resolved:
+            self.file_browser.invalidate(remote.name)
+            self.tray_app._notify(
+                "Local cache",
+                f"Resolved {resolved} changed local file{'s' if resolved != 1 else ''}.",
+                success=True,
+            )
 
     def _offline_conflict_key(self, conflict: Any) -> tuple[str, str, float, float]:
         return (

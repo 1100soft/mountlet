@@ -207,6 +207,26 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertEqual(prepared, path)
             self.assertTrue(prepared.stat().st_mode & 0o600)
 
+    def test_managed_file_paths_lists_cached_files_by_remote(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            local = backend.offline_path("Docs", "Reports/a.txt")
+            local.parent.mkdir(parents=True)
+            local.write_text("cached", encoding="utf-8")
+            backend._offline_records = {
+                "Docs": {
+                    "Reports": {"is_dir": True},
+                    "Reports/a.txt": {"is_dir": False},
+                }
+            }
+
+            self.assertEqual(backend.managed_file_paths(), {"Docs": [local]})
+            self.assertEqual(backend.managed_file_paths("Docs"), {"Docs": [local]})
+            self.assertEqual(backend.remote_name_for_offline_path(local), "Docs")
+
     def test_offline_manifest_preserves_deep_file_ancestors(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -656,6 +676,92 @@ class CloudBrowserTests(unittest.TestCase):
         browser.status.setText.assert_called_once_with("Loading…")
         browser._display_entries.assert_not_called()
         browser._load_folder.assert_not_called()
+
+    def test_display_entries_preserves_current_item_by_path(self):
+        class Item:
+            def __init__(self, values: list[str]) -> None:
+                self.values = values
+                self.entry = None
+                self.selected = False
+
+            def setData(self, _column: int, _role: object, value: object) -> None:
+                self.entry = value
+
+            def data(self, _column: int, _role: object) -> object:
+                return self.entry
+
+            def setIcon(self, _column: int, _icon: object) -> None:
+                pass
+
+            def setToolTip(self, _column: int, _text: str) -> None:
+                pass
+
+            def setSelected(self, selected: bool) -> None:
+                self.selected = selected
+
+            def setText(self, _column: int, _text: str) -> None:
+                pass
+
+        class Tree:
+            def __init__(self, current: Item) -> None:
+                self.current = current
+                self.items: list[Item] = []
+
+            def currentItem(self) -> Item:
+                return self.current
+
+            def selectedItems(self) -> list[Item]:
+                return [item for item in self.items if item.selected] or [self.current]
+
+            def indexOfTopLevelItem(self, _item: Item) -> int:
+                return 1
+
+            def clear(self) -> None:
+                self.items = []
+
+            def addTopLevelItem(self, item: Item) -> None:
+                self.items.append(item)
+
+            def topLevelItemCount(self) -> int:
+                return len(self.items)
+
+            def setCurrentItem(self, item: Item) -> None:
+                self.current = item
+
+        previous = Item(["", "b.txt", "", ""])
+        previous.setData(0, 1, BrowserEntry("b.txt", "Reports/b.txt", False))
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(
+            QTreeWidgetItem=Item,
+            Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole=1)),
+            QStyle=SimpleNamespace(
+                StandardPixmap=SimpleNamespace(SP_DirIcon=1, SP_FileIcon=2, SP_DialogSaveButton=3)
+            ),
+            QTimer=SimpleNamespace(singleShot=lambda *_args: None),
+        )
+        browser.tree = Tree(previous)
+        browser.window = SimpleNamespace(style=lambda: SimpleNamespace(standardIcon=lambda _icon: object()))
+        browser.backend = mock.Mock()
+        browser.backend.is_offline.return_value = False
+        browser.backend.is_cached.return_value = False
+        browser.backend.has_offline_content.return_value = False
+        browser.backend.has_cached_content.return_value = False
+        browser.remote = _remote()
+        browser.status = mock.Mock()
+        browser.has_focus = mock.Mock(return_value=False)
+        browser._offline_icon = mock.Mock(return_value=None)
+        browser._update_actions = mock.Mock()
+        browser._update_open_folder_button = mock.Mock()
+
+        browser._display_entries(
+            [
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+                BrowserEntry("b.txt", "Reports/b.txt", False),
+            ]
+        )
+
+        self.assertEqual(browser.tree.current.data(0, 1).path, "Reports/b.txt")
+        self.assertTrue(browser.tree.current.selected)
 
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)

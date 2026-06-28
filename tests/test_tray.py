@@ -1309,6 +1309,35 @@ class TrayTests(unittest.TestCase):
         hide_stack.assert_called_once_with()
         show.assert_not_called()
 
+    def test_mountlet_window_offline_reconcile_is_debounced(self):
+        callbacks: list[tuple[int, object]] = []
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._offline_reconcile_scheduled = set()
+        mountlet_window.qt = SimpleNamespace(
+            QTimer=SimpleNamespace(singleShot=lambda delay, callback: callbacks.append((delay, callback)))
+        )
+
+        mountlet_window._schedule_offline_reconcile("Docs", delay_ms=500)
+        mountlet_window._schedule_offline_reconcile("Docs", delay_ms=500)
+
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, {"Docs"})
+        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(callbacks[0][0], 500)
+
+    def test_mountlet_window_local_cache_change_schedules_remote_reconcile(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
+
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
     def test_mountlet_window_toggle_hides_window_stack_when_child_is_open(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
