@@ -400,6 +400,7 @@ class CloudBrowserBackend:
         except RuntimeError:
             return []
         conflicts: list[OfflineConflict] = []
+        failures: list[str] = []
         for path, record in self._offline_records.get(remote.name, {}).items():
             if bool(record.get("is_dir")):
                 continue
@@ -413,7 +414,8 @@ class CloudBrowserBackend:
             current = self.remote_current_path(remote.name, path)
             try:
                 self._download_remote_file(binary, remote, path, current)
-            except RuntimeError:
+            except RuntimeError as exc:
+                failures.append(f"{path}: {exc}")
                 continue
             try:
                 local_hash = _file_digest(local)
@@ -431,7 +433,8 @@ class CloudBrowserBackend:
             if local_changed and not cloud_changed:
                 try:
                     self._upload_remote_file(binary, remote, path, local)
-                except RuntimeError:
+                except RuntimeError as exc:
+                    failures.append(f"{path}: {exc}")
                     continue
                 self._update_offline_record_state(remote.name, path, local)
                 with suppress(OSError):
@@ -450,6 +453,10 @@ class CloudBrowserBackend:
                     mounted_mtime=current.stat().st_mtime,
                 )
             )
+        if failures:
+            sample = failures[0]
+            suffix = f" ({len(failures) - 1} more)" if len(failures) > 1 else ""
+            raise RuntimeError(f"Some local changes could not be synced: {sample}{suffix}")
         return conflicts
 
     def resolve_offline_conflict(self, conflict: OfflineConflict, choice: str) -> Path:

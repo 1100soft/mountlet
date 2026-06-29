@@ -17,6 +17,7 @@ EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 CHILD_FOLDER_PREFETCH_LIMIT = 24
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
+ENTRY_ICON_SIZE = 30
 
 
 def cascade_position(
@@ -229,8 +230,8 @@ class CompactCloudBrowser:
                 super().wheelEvent(event)
 
         self.tree = FileTree()
-        self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["", "Name", "Size", "Modified"])
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Name", "Size", "Modified"])
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -241,9 +242,10 @@ class CompactCloudBrowser:
         self.tree.customContextMenuRequested.connect(self._show_tree_menu)
         self.tree.itemDoubleClicked.connect(self._open_item)
         self.tree.itemSelectionChanged.connect(self._selection_changed)
-        self.tree.setColumnWidth(0, 24)
-        self.tree.setColumnWidth(1, 250)
-        self.tree.setColumnWidth(2, 72)
+        with suppress(Exception):
+            self.tree.setIconSize(qt.QSize(ENTRY_ICON_SIZE, ENTRY_ICON_SIZE))
+        self.tree.setColumnWidth(0, 282)
+        self.tree.setColumnWidth(1, 72)
         layout.addWidget(self.tree, 1)
         self.status = qt.QLabel("")
         layout.addWidget(self.status)
@@ -361,70 +363,99 @@ class CompactCloudBrowser:
         except Exception:
             return None
 
-    def _entry_icon(self, entry: BrowserEntry, *, directory_icon: Any, file_icon: Any) -> Any:
+    def _base_entry_icon(self, entry: BrowserEntry, *, directory_icon: Any, file_icon: Any) -> Any:
         provider = getattr(self, "_file_icon_provider", None)
         file_info_type = getattr(self.qt, "QFileInfo", None)
         if provider is None or file_info_type is None:
             return directory_icon if entry.is_dir else file_icon
         try:
+            if entry.is_dir:
+                return directory_icon
             if self.remote is not None:
                 local = self.backend.offline_path(self.remote.name, entry.path)
                 if local.exists():
                     return provider.icon(file_info_type(str(local)))
-            return directory_icon if entry.is_dir else file_icon
+            return provider.icon(file_info_type(entry.name)) or file_icon
         except Exception:
             return directory_icon if entry.is_dir else file_icon
 
-    def _status_icon(
+    def _entry_icon(
         self,
+        entry: BrowserEntry,
+        *,
+        directory_icon: Any,
+        file_icon: Any,
+        downloaded: bool = False,
+        protected: bool = False,
+        downloaded_partial: bool = False,
+        protected_partial: bool = False,
+        changed: bool = False,
+    ) -> Any:
+        base_icon = self._base_entry_icon(entry, directory_icon=directory_icon, file_icon=file_icon)
+        if not any((downloaded, protected, changed)):
+            return base_icon
+        return self._composite_entry_icon(
+            base_icon,
+            downloaded=downloaded,
+            protected=protected,
+            downloaded_partial=downloaded_partial,
+            protected_partial=protected_partial,
+            changed=changed,
+        )
+
+    def _composite_entry_icon(
+        self,
+        base_icon: Any,
         *,
         downloaded: bool,
         protected: bool,
         downloaded_partial: bool = False,
         protected_partial: bool = False,
         changed: bool = False,
-    ) -> Any | None:
+    ) -> Any:
         pixmap_type = getattr(self.qt, "QPixmap", None)
         painter_type = getattr(self.qt, "QPainter", None)
         icon_type = getattr(self.qt, "QIcon", None)
         if pixmap_type is None or painter_type is None or icon_type is None:
-            return None
+            return base_icon
         try:
-            size = self.qt.QSize(22, 22)
+            size = self.qt.QSize(ENTRY_ICON_SIZE, ENTRY_ICON_SIZE)
             pixmap = pixmap_type(size)
             pixmap.fill(self.qt.Qt.GlobalColor.transparent)
             painter = painter_type(pixmap)
             painter.setRenderHint(painter_type.RenderHint.Antialiasing, True)
+            base_pixmap = base_icon.pixmap(size)
+            painter.drawPixmap(0, 0, base_pixmap)
             if protected:
                 painter.setOpacity(1.0)
                 pen = self.qt.QPen(self.qt.QColor("#facc15"))
-                pen.setWidth(2)
+                pen.setWidth(3)
                 if protected_partial:
                     pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(3, 3, 16, 16)
+                painter.drawEllipse(12, 12, 16, 16)
             if downloaded:
                 painter.setOpacity(1.0)
                 pen = self.qt.QPen(self.qt.QColor("#38bdf8"))
-                pen.setWidth(2)
+                pen.setWidth(3)
                 if downloaded_partial:
                     pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
-                painter.drawLine(11, 5, 11, 14)
-                painter.drawLine(7, 10, 11, 14)
-                painter.drawLine(15, 10, 11, 14)
-                painter.drawLine(6, 17, 16, 17)
+                painter.drawLine(20, 12, 20, 24)
+                painter.drawLine(15, 19, 20, 24)
+                painter.drawLine(25, 19, 20, 24)
+                painter.drawLine(14, 27, 26, 27)
             if changed:
                 painter.setOpacity(1.0)
                 painter.setPen(self.qt.Qt.PenStyle.NoPen)
                 painter.setBrush(self.qt.QColor("#ef4444"))
-                painter.drawEllipse(14, 2, 6, 6)
+                painter.drawEllipse(21, 1, 8, 8)
             painter.end()
             return icon_type(pixmap)
         except Exception:
-            return None
+            return base_icon
 
     def _enlarge_button_text(self, button: Any) -> None:
         try:
@@ -738,9 +769,8 @@ class CompactCloudBrowser:
         current_target = None
         fallback_target = None
         for entry in entries:
-            item = self.qt.QTreeWidgetItem(["", entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
+            item = self.qt.QTreeWidgetItem([entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
-            item.setIcon(1, self._entry_icon(entry, directory_icon=directory_icon, file_icon=file_icon))
             if entry.path in selected_paths:
                 item.setSelected(True)
             if previous_path and entry.path == previous_path:
@@ -753,15 +783,16 @@ class CompactCloudBrowser:
             cached_content = bool(remote and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir))
             changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
             local_content = cached or cached_content
-            status_icon = self._status_icon(
+            item.setIcon(0, self._entry_icon(
+                entry,
+                directory_icon=directory_icon,
+                file_icon=file_icon,
                 downloaded=local_content,
                 protected=offline or partial_offline,
                 downloaded_partial=entry.is_dir and cached_content and not cached,
                 protected_partial=partial_offline,
                 changed=changed,
-            )
-            if status_icon is not None:
-                item.setIcon(0, status_icon)
+            ))
             if changed:
                 item.setToolTip(0, "Local copy has unresolved changes")
             elif remote and offline:
@@ -772,12 +803,6 @@ class CompactCloudBrowser:
                 item.setToolTip(0, "Cached local copy")
             elif remote and entry.is_dir and cached_content:
                 item.setToolTip(0, "Contains cached files")
-            if remote and offline:
-                item.setToolTip(1, "Available offline as a local snapshot")
-            elif remote and partial_offline:
-                item.setToolTip(1, "Partially available offline")
-            elif remote and cached_content:
-                item.setToolTip(1, "Cached local copy")
             self.tree.addTopLevelItem(item)
             if fallback_target is None and self.tree.topLevelItemCount() - 1 >= previous_index:
                 fallback_target = item

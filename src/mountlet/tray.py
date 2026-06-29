@@ -4423,6 +4423,7 @@ class MountletWindow:
         self._refresh_offline_file_watches()
         remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
         if remote_name:
+            self._refresh_file_browser_mount_state(remote_name)
             self._schedule_offline_reconcile(remote_name, delay_ms=500)
 
     def _setup_offline_change_polling(self) -> None:
@@ -4451,6 +4452,7 @@ class MountletWindow:
         pending = set(getattr(self, "_action_pending", set()))
         for remote_name in changed_remote_names:
             if remote_name not in pending:
+                self._refresh_file_browser_mount_state(remote_name)
                 self._schedule_offline_reconcile(remote_name)
 
     def _build_app_menu(self) -> None:
@@ -6322,6 +6324,15 @@ class MountletWindow:
     def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
         self._schedule_offline_reconcile(remote_name)
 
+    def _refresh_file_browser_mount_state(self, remote_name: str) -> None:
+        refresh = getattr(getattr(self, "file_browser", None), "refresh_mount_state", None)
+        if refresh is None:
+            return
+        try:
+            refresh(remote_name)
+        except Exception:
+            return
+
     def _schedule_offline_reconcile(self, remote_name: str, *, delay_ms: int = 0) -> None:
         if self._tray_is_quitting() or not remote_name:
             return
@@ -6338,12 +6349,16 @@ class MountletWindow:
         timer.singleShot(delay_ms, lambda name=remote_name: self._start_offline_reconcile(name))
 
     def _start_offline_reconcile(self, remote_name: str) -> None:
-        getattr(self, "_offline_reconcile_scheduled", set()).discard(remote_name)
+        scheduled = getattr(self, "_offline_reconcile_scheduled", set())
+        scheduled.discard(remote_name)
         running = getattr(self, "_offline_reconcile_running", None)
         if running is None:
             running = set()
             self._offline_reconcile_running = running
-        if self._tray_is_quitting() or remote_name in running:
+        if self._tray_is_quitting():
+            return
+        if remote_name in running:
+            scheduled.add(remote_name)
             return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
@@ -6370,15 +6385,26 @@ class MountletWindow:
         if remote is None:
             return
         if error is not None:
-            self._set_file_browser_status(remote.name, "Could not check local changes")
-            self.tray_app._notify("Local cache", f"Could not check local file changes: {error}", success=False)
+            self._set_file_browser_status(remote.name, "Could not sync local changes")
+            self.tray_app._notify("Local cache", f"Could not sync local file changes: {error}", success=False)
+            self._reschedule_pending_offline_reconcile(remote_name)
             return
         if not isinstance(conflicts, list):
+            self._reschedule_pending_offline_reconcile(remote_name)
             return
         if not conflicts:
-            self.file_browser.refresh_mount_state(remote.name)
+            self._refresh_file_browser_mount_state(remote.name)
+            self._reschedule_pending_offline_reconcile(remote_name)
             return
         self._handle_offline_conflicts(remote, conflicts)
+        self._reschedule_pending_offline_reconcile(remote_name)
+
+    def _reschedule_pending_offline_reconcile(self, remote_name: str) -> None:
+        scheduled = getattr(self, "_offline_reconcile_scheduled", set())
+        if remote_name not in scheduled:
+            return
+        scheduled.discard(remote_name)
+        self._schedule_offline_reconcile(remote_name, delay_ms=500)
 
     def _set_file_browser_status(self, remote_name: str, message: str) -> None:
         file_browser = getattr(self, "file_browser", None)
