@@ -445,6 +445,46 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
 
+    def test_changed_managed_files_tolerates_manifest_changes_during_scan(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    cached = backend.cache_file(remote, entry)
+
+            cached.write_text("local edit", encoding="utf-8")
+
+            def mutate_manifest(_binary: str, *arguments: str) -> None:
+                backend._offline_records.setdefault("Docs", {})["Reports/b.txt"] = {
+                    "is_dir": False,
+                    "local_size": 1,
+                    "local_mtime_ns": 1,
+                    "local_sha256": "old",
+                }
+                if arguments[0] == "copyto" and str(arguments[1]).startswith("Docs:"):
+                    destination = Path(arguments[2])
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=mutate_manifest):
+                    conflicts = backend.changed_managed_files(remote)
+
+            self.assertEqual(conflicts, [])
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+
     def test_cloud_change_updates_unchanged_cached_file(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

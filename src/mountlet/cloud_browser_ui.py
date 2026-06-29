@@ -427,18 +427,22 @@ class CompactCloudBrowser:
             base_pixmap = base_icon.pixmap(size)
             painter.drawPixmap(0, 0, base_pixmap)
             if protected:
-                painter.setOpacity(1.0)
-                pen = self.qt.QPen(self.qt.QColor("#facc15"))
-                pen.setWidth(3)
+                pen = self.qt.QPen(self.qt.QColor(0, 0, 0, 170))
+                pen.setWidth(5)
                 if protected_partial:
                     pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(12, 12, 16, 16)
-            if downloaded:
-                painter.setOpacity(1.0)
-                pen = self.qt.QPen(self.qt.QColor("#38bdf8"))
+                pen = self.qt.QPen(self.qt.QColor("#facc15"))
                 pen.setWidth(3)
+                if protected_partial:
+                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.drawEllipse(12, 12, 16, 16)
+            if downloaded:
+                pen = self.qt.QPen(self.qt.QColor(0, 0, 0, 170))
+                pen.setWidth(5)
                 if downloaded_partial:
                     pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
@@ -447,9 +451,19 @@ class CompactCloudBrowser:
                 painter.drawLine(15, 19, 20, 24)
                 painter.drawLine(25, 19, 20, 24)
                 painter.drawLine(14, 27, 26, 27)
+                pen = self.qt.QPen(self.qt.QColor("#38bdf8"))
+                pen.setWidth(3)
+                if downloaded_partial:
+                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.drawLine(20, 12, 20, 24)
+                painter.drawLine(15, 19, 20, 24)
+                painter.drawLine(25, 19, 20, 24)
+                painter.drawLine(14, 27, 26, 27)
             if changed:
-                painter.setOpacity(1.0)
                 painter.setPen(self.qt.Qt.PenStyle.NoPen)
+                painter.setBrush(self.qt.QColor(0, 0, 0, 180))
+                painter.drawEllipse(19, -1, 12, 12)
                 painter.setBrush(self.qt.QColor("#ef4444"))
                 painter.drawEllipse(21, 1, 8, 8)
             painter.end()

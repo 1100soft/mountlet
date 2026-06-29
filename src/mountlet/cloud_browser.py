@@ -299,7 +299,7 @@ class CloudBrowserBackend:
         normalized = normalize_browser_path(path)
         if is_dir:
             prefix = f"{normalized}/" if normalized else ""
-            for record_path, record in self._offline_records.get(remote_name, {}).items():
+            for record_path, record in list(self._offline_records.get(remote_name, {}).items()):
                 if normalized and not record_path.startswith(prefix):
                     continue
                 if not bool(record.get("is_dir")) and self.offline_changed(remote_name, record_path):
@@ -323,11 +323,11 @@ class CloudBrowserBackend:
 
     def managed_file_paths(self, remote_name: str | None = None) -> dict[str, list[Path]]:
         result: dict[str, list[Path]] = {}
-        for candidate_name, records in self._offline_records.items():
+        for candidate_name, records in list(self._offline_records.items()):
             if remote_name is not None and candidate_name != remote_name:
                 continue
             files: list[Path] = []
-            for path, record in records.items():
+            for path, record in list(records.items()):
                 if bool(record.get("is_dir")):
                     continue
                 local = self.offline_path(candidate_name, path)
@@ -342,7 +342,7 @@ class CloudBrowserBackend:
             candidate = path.expanduser().resolve(strict=False)
         except OSError:
             candidate = path.expanduser()
-        for remote_name in self._offline_records:
+        for remote_name in list(self._offline_records):
             root = self.cache_root / _safe_component(remote_name)
             try:
                 candidate.relative_to(root.resolve(strict=False))
@@ -353,17 +353,17 @@ class CloudBrowserBackend:
 
     def changed_managed_remote_names(self) -> list[str]:
         changed: list[str] = []
-        for remote_name, records in self._offline_records.items():
+        for remote_name, records in list(self._offline_records.items()):
             if any(
                 not bool(record.get("is_dir")) and self.offline_changed(remote_name, path)
-                for path, record in records.items()
+                for path, record in list(records.items())
             ):
                 changed.append(remote_name)
         return changed
 
     def changed_offline_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
         conflicts: list[OfflineConflict] = []
-        for path, record in self._offline_records.get(remote.name, {}).items():
+        for path, record in list(self._offline_records.get(remote.name, {}).items()):
             if bool(record.get("is_dir")):
                 continue
             offline = self.offline_path(remote.name, path)
@@ -401,7 +401,7 @@ class CloudBrowserBackend:
             return []
         conflicts: list[OfflineConflict] = []
         failures: list[str] = []
-        for path, record in self._offline_records.get(remote.name, {}).items():
+        for path, record in list(self._offline_records.get(remote.name, {}).items()):
             if bool(record.get("is_dir")):
                 continue
             local = self.offline_path(remote.name, path)
