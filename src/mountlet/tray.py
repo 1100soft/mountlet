@@ -4395,6 +4395,7 @@ class MountletWindow:
         except Exception:
             return
         watcher.fileChanged.connect(self._handle_local_cache_file_changed)
+        watcher.directoryChanged.connect(self._handle_local_cache_directory_changed)
         self._offline_file_watcher = watcher
         self._refresh_offline_file_watches()
 
@@ -4402,12 +4403,26 @@ class MountletWindow:
         watcher = getattr(self, "_offline_file_watcher", None)
         if watcher is None:
             return
-        paths = {
-            str(path)
-            for files in self.file_browser.backend.managed_file_paths().values()
-            for path in files
-            if path.is_file()
-        }
+        backend = self.file_browser.backend
+        paths: set[str] = set()
+        for remote_name, files in backend.managed_file_paths().items():
+            root = backend.offline_path(remote_name, "")
+            if root.is_dir():
+                paths.add(str(root))
+            for path in files:
+                if path.is_file():
+                    paths.add(str(path))
+                parent = path.parent
+                while True:
+                    if parent.is_dir():
+                        paths.add(str(parent))
+                    if parent == root:
+                        break
+                    try:
+                        parent.relative_to(root)
+                    except ValueError:
+                        break
+                    parent = parent.parent
         current = set(getattr(self, "_offline_watched_paths", set()))
         removed = sorted(current - paths)
         added = sorted(paths - current)
@@ -4425,6 +4440,13 @@ class MountletWindow:
         if remote_name:
             self._refresh_file_browser_mount_state(remote_name)
             self._schedule_offline_reconcile(remote_name, delay_ms=500)
+
+    def _handle_local_cache_directory_changed(self, changed_path: str) -> None:
+        self._refresh_offline_file_watches()
+        remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
+        if remote_name:
+            self._refresh_file_browser_mount_state(remote_name)
+        self._scan_local_cache_changes()
 
     def _rearm_offline_file_watch(self, changed_path: str) -> None:
         watcher = getattr(self, "_offline_file_watcher", None)

@@ -350,6 +350,19 @@ class CloudBrowserBackend:
                 result[candidate_name] = files
         return result
 
+    def managed_file_paths_under(self, remote_name: str, path: str) -> list[Path]:
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        files: list[Path] = []
+        for record_path, record in list(self._offline_records.get(remote_name, {}).items()):
+            if bool(record.get("is_dir")):
+                continue
+            if record_path == normalized or not normalized or record_path.startswith(prefix):
+                local = self.offline_path(remote_name, record_path)
+                if local.exists():
+                    files.append(local)
+        return files
+
     def remote_name_for_offline_path(self, path: Path) -> str | None:
         try:
             candidate = path.expanduser().resolve(strict=False)

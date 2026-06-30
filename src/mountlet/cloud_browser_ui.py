@@ -80,6 +80,7 @@ class CompactCloudBrowser:
         self._operation_cache_keys: set[tuple[str, str]] = set()
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
+        self._opened_local_files: set[Path] = set()
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -1070,16 +1071,42 @@ class CompactCloudBrowser:
         if self.remote is None:
             return
         remote_name = self.remote.name
+        if not self._confirm_remove_open_local_files(self.backend.managed_file_paths_under(remote_name, path)):
+            return
         self._run_operation("Removing local copies…", lambda: self.backend.remove_offline(remote_name, path))
 
     def _free_cache(self, path: str) -> None:
         if self.remote is None:
             return
         remote_name = self.remote.name
+        if not self._confirm_remove_open_local_files(self.backend.managed_file_paths_under(remote_name, path)):
+            return
         self._run_operation("Freeing cache…", lambda: self.backend.free_cache(remote_name, path))
 
     def _free_all_resolved_cache(self) -> None:
+        paths = [path for files in self.backend.managed_file_paths().values() for path in files]
+        if not self._confirm_remove_open_local_files(paths):
+            return
         self._run_operation("Freeing resolved cache…", self.backend.free_all_resolved_cache)
+
+    def _confirm_remove_open_local_files(self, paths: list[Path]) -> bool:
+        open_paths = sorted({path for path in paths if path in self._opened_local_files})
+        if not open_paths:
+            return True
+        names = ", ".join(path.name for path in open_paths[:3])
+        if len(open_paths) > 3:
+            names = f"{names}, and {len(open_paths) - 3} more"
+        box = self.qt.QMessageBox(self.window)
+        box.setIcon(self.qt.QMessageBox.Icon.Warning)
+        box.setWindowTitle("Local copy may still be open")
+        box.setText(f"{names} may still be open in another app.")
+        box.setInformativeText(
+            "Close the file before removing the local copy. Mountlet cannot reliably close external apps for you."
+        )
+        box.setStandardButtons(self.qt.QMessageBox.StandardButton.Cancel | self.qt.QMessageBox.StandardButton.Yes)
+        box.setDefaultButton(self.qt.QMessageBox.StandardButton.Cancel)
+        box.button(self.qt.QMessageBox.StandardButton.Yes).setText("Remove anyway")
+        return box.exec() == self.qt.QMessageBox.StandardButton.Yes
 
     def _replace_original_with_copy(self, entry: BrowserEntry) -> None:
         if self.remote is None or self._operation_pending:
@@ -1136,6 +1163,14 @@ class CompactCloudBrowser:
         remote = self.remote
         all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
         if all_offline:
+            paths = [
+                path
+                for entry in entries
+                for path in self.backend.managed_file_paths_under(remote.name, entry.path)
+            ]
+            if not self._confirm_remove_open_local_files(paths):
+                return
+
             def action() -> None:
                 for entry in entries:
                     self.backend.remove_offline(remote.name, entry.path)
@@ -1427,8 +1462,10 @@ class CompactCloudBrowser:
 
     def _open_local_file(self, path: Path) -> None:
         if self._open_file and self._open_file(path):
+            self._opened_local_files.add(path)
             return
         if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
+            self._opened_local_files.add(path)
             return
         self._notify("Open file", "Could not open this file.", False)
 
