@@ -319,7 +319,18 @@ class CloudBrowserBackend:
         recorded_mtime = record.get("local_mtime_ns")
         if recorded_size is None or recorded_mtime is None:
             return False
-        return int(recorded_size) != stat_result.st_size or int(recorded_mtime) != stat_result.st_mtime_ns
+        if int(recorded_size) == stat_result.st_size and int(recorded_mtime) == stat_result.st_mtime_ns:
+            return False
+        recorded_hash = str(record.get("local_sha256") or "")
+        if recorded_hash:
+            try:
+                current_hash = _file_digest(destination)
+            except OSError:
+                return True
+            if current_hash == recorded_hash:
+                self._update_offline_record_state(remote_name, normalized, destination)
+                return False
+        return True
 
     def managed_file_paths(self, remote_name: str | None = None) -> dict[str, list[Path]]:
         result: dict[str, list[Path]] = {}
@@ -425,6 +436,7 @@ class CloudBrowserBackend:
             local_changed = local_hash != previous_hash
             cloud_changed = current_hash != previous_hash
             if not local_changed and not cloud_changed:
+                self._update_offline_record_state(remote.name, path, local)
                 continue
             if not local_changed and cloud_changed:
                 shutil.copy2(current, local)
@@ -646,6 +658,38 @@ class CloudBrowserBackend:
         prefix = f"{normalized}/" if normalized else ""
         records = self._offline_records.get(remote_name, {})
         return any((not normalized or record_path.startswith(prefix)) for record_path in records)
+
+    def has_protected_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        if self.is_offline(remote_name, path, is_dir=is_dir):
+            return True
+        if not is_dir:
+            return False
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        records = self._offline_records.get(remote_name, {})
+        return any(
+            (not normalized or record_path.startswith(prefix))
+            and not bool(record.get("is_dir"))
+            and bool(record.get("protected"))
+            for record_path, record in records.items()
+        )
+
+    def has_temporary_cache_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        if not is_dir:
+            return self.is_cached(remote_name, path, is_dir=False) and not self.is_offline(
+                remote_name,
+                path,
+                is_dir=False,
+            )
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        records = self._offline_records.get(remote_name, {})
+        return any(
+            (not normalized or record_path.startswith(prefix))
+            and not bool(record.get("is_dir"))
+            and not bool(record.get("protected"))
+            for record_path, record in records.items()
+        )
 
     def offline_path(self, remote_name: str, path: str) -> Path:
         root = self.cache_root / _safe_component(remote_name)
