@@ -253,6 +253,8 @@ class CloudBrowserTests(unittest.TestCase):
 
             self.assertEqual(backend.managed_file_paths(), {"Docs": [local]})
             self.assertEqual(backend.managed_file_paths("Docs"), {"Docs": [local]})
+            self.assertEqual(backend.managed_file_paths_under("Docs", "Reports"), [local])
+            self.assertEqual(backend.managed_file_paths_under("Docs", ""), [local])
             self.assertEqual(backend.remote_name_for_offline_path(local), "Docs")
 
     def test_changed_managed_remote_names_uses_local_metadata(self):
@@ -1366,6 +1368,65 @@ class CloudBrowserTests(unittest.TestCase):
             browser._open_item(item)
 
         browser._open_local_file.assert_called_once_with(Path("/mnt/Docs/Reports/a.ods"))
+
+    def test_open_local_file_tracks_paths_for_removal_warning(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._opened_local_files = set()
+        browser._open_file = mock.Mock(return_value=True)
+
+        browser._open_local_file(Path("/cache/Docs/a.txt"))
+
+        self.assertEqual(browser._opened_local_files, {Path("/cache/Docs/a.txt")})
+
+    def test_confirm_remove_open_local_files_warns(self):
+        yes = 1
+        cancel = 2
+
+        class Box:
+            Icon = SimpleNamespace(Warning="warning")
+            StandardButton = SimpleNamespace(Cancel=cancel, Yes=yes)
+            last = None
+
+            def __init__(self, _parent):
+                self.text = ""
+                self.informative = ""
+                self.yes_button = mock.Mock()
+                Box.last = self
+
+            def setIcon(self, _icon):
+                pass
+
+            def setWindowTitle(self, _title):
+                pass
+
+            def setText(self, text):
+                self.text = text
+
+            def setInformativeText(self, text):
+                self.informative = text
+
+            def setStandardButtons(self, _buttons):
+                pass
+
+            def setDefaultButton(self, _button):
+                pass
+
+            def button(self, _button):
+                return self.yes_button
+
+            def exec(self):
+                return yes
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(QMessageBox=Box)
+        browser.window = object()
+        browser._opened_local_files = {Path("/cache/Docs/a.txt")}
+
+        self.assertTrue(browser._confirm_remove_open_local_files([Path("/cache/Docs/a.txt")]))
+
+        self.assertIn("a.txt", Box.last.text)
+        self.assertIn("Close the file", Box.last.informative)
+        Box.last.yes_button.setText.assert_called_once_with("Remove anyway")
 
     def test_open_folder_uses_offline_cache_when_remote_is_unmounted(self):
         browser = object.__new__(CompactCloudBrowser)
