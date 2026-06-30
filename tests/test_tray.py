@@ -1434,7 +1434,8 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window._scan_local_cache_changes()
 
-        mountlet_window._refresh_file_browser_mount_state.assert_not_called()
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, {"Docs"})
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
         mountlet_window._schedule_offline_reconcile.assert_not_called()
 
     def test_mountlet_window_focus_return_scans_all_local_cache_changes(self):

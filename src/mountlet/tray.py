@@ -4488,7 +4488,13 @@ class MountletWindow:
         scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
         running = set(getattr(self, "_offline_reconcile_running", set()))
         for remote_name in changed_remote_names:
-            if remote_name not in pending and remote_name not in scheduled and remote_name not in running:
+            if remote_name in pending:
+                continue
+            if remote_name in running:
+                self._offline_reconcile_scheduled.add(remote_name)
+                self._refresh_file_browser_mount_state(remote_name)
+                continue
+            if remote_name not in scheduled:
                 self._refresh_file_browser_mount_state(remote_name)
                 self._schedule_offline_reconcile(remote_name)
 
