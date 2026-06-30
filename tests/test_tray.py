@@ -4,6 +4,7 @@ import contextlib
 import io
 import socket
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -1359,6 +1360,47 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_offline_file_watches.assert_called_once_with()
         mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
         mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
+    def test_mountlet_window_local_cache_directory_change_scans_cache(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._scan_local_cache_changes = mock.Mock()
+
+        mountlet_window._handle_local_cache_directory_changed("/tmp/cache/Docs")
+
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._scan_local_cache_changes.assert_called_once_with()
+
+    def test_mountlet_window_refresh_offline_file_watches_includes_parent_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "Docs"
+            report_dir = root / "Reports"
+            report_dir.mkdir(parents=True)
+            local = report_dir / "a.txt"
+            local.write_text("cached", encoding="utf-8")
+            watcher = mock.Mock()
+            mountlet_window = object.__new__(tray.MountletWindow)
+            mountlet_window._offline_file_watcher = watcher
+            mountlet_window._offline_watched_paths = set()
+            mountlet_window.file_browser = SimpleNamespace(
+                backend=SimpleNamespace(
+                    managed_file_paths=lambda: {"Docs": [local]},
+                    offline_path=lambda _remote, _path: root,
+                )
+            )
+
+            mountlet_window._refresh_offline_file_watches()
+
+            added = set(watcher.addPaths.call_args.args[0])
+            self.assertIn(str(root), added)
+            self.assertIn(str(report_dir), added)
+            self.assertIn(str(local), added)
+            self.assertEqual(mountlet_window._offline_watched_paths, added)
 
     def test_mountlet_window_local_cache_scan_schedules_changed_unmounted_remotes(self):
         mountlet_window = object.__new__(tray.MountletWindow)

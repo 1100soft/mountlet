@@ -4405,11 +4405,11 @@ class MountletWindow:
             return
         backend = self.file_browser.backend
         paths: set[str] = set()
-        for remote_name, files in backend.managed_file_paths().items():
+        for remote_name, local_files in backend.managed_file_paths().items():
             root = backend.offline_path(remote_name, "")
             if root.is_dir():
                 paths.add(str(root))
-            for path in files:
+            for path in local_files:
                 if path.is_file():
                     paths.add(str(path))
                 parent = path.parent
