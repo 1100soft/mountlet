@@ -21,6 +21,7 @@ OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
 REMOTE_CURRENT_DIR = ".mountlet-remote-current"
 RCLONE_FILE_OPERATION_TIMEOUT_SECONDS = 120
+RCLONE_CACHE_SYNC_TIMEOUT_SECONDS = 45
 CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
@@ -425,7 +426,7 @@ class CloudBrowserBackend:
                 continue
             current = self.remote_current_path(remote.name, path)
             try:
-                self._download_remote_file(binary, remote, path, current)
+                self._download_remote_file(binary, remote, path, current, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
             except RuntimeError as exc:
                 failures.append(f"{path}: {exc}")
                 continue
@@ -445,7 +446,7 @@ class CloudBrowserBackend:
                 continue
             if local_changed and not cloud_changed:
                 try:
-                    self._upload_remote_file(binary, remote, path, local)
+                    self._upload_remote_file(binary, remote, path, local, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
                 except RuntimeError as exc:
                     failures.append(f"{path}: {exc}")
                     continue
@@ -880,7 +881,7 @@ class CloudBrowserBackend:
     def _command(self, binary: str, *arguments: str) -> list[str]:
         return [binary, "--config", core.CONFIG_PATH, *arguments]
 
-    def _run_operation(self, binary: str, *arguments: str) -> None:
+    def _run_operation(self, binary: str, *arguments: str, timeout: int = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS) -> None:
         command = self._command(binary, *arguments)
         try:
             result = subprocess.run(
@@ -888,22 +889,44 @@ class CloudBrowserBackend:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+                timeout=timeout,
                 **core.PLATFORM.command_process_options(),
             )
         except subprocess.TimeoutExpired as exc:
             operation = arguments[0] if arguments else "operation"
-            raise RuntimeError(f"rclone {operation} timed out after {RCLONE_FILE_OPERATION_TIMEOUT_SECONDS} seconds") from exc
+            raise RuntimeError(f"rclone {operation} timed out after {timeout} seconds") from exc
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
 
-    def _download_remote_file(self, binary: str, remote: core.RemoteInfo, path: str, destination: Path) -> None:
+    def _download_remote_file(
+        self,
+        binary: str,
+        remote: core.RemoteInfo,
+        path: str,
+        destination: Path,
+        *,
+        timeout: int = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+    ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        self._run_operation(binary, "copyto", remote_target(remote, path), str(destination))
+        if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
+            self._run_operation(binary, "copyto", remote_target(remote, path), str(destination))
+        else:
+            self._run_operation(binary, "copyto", remote_target(remote, path), str(destination), timeout=timeout)
         self._make_file_writable(destination)
 
-    def _upload_remote_file(self, binary: str, remote: core.RemoteInfo, path: str, source: Path) -> None:
-        self._run_operation(binary, "copyto", str(source), remote_target(remote, path))
+    def _upload_remote_file(
+        self,
+        binary: str,
+        remote: core.RemoteInfo,
+        path: str,
+        source: Path,
+        *,
+        timeout: int = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+    ) -> None:
+        if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
+            self._run_operation(binary, "copyto", str(source), remote_target(remote, path))
+        else:
+            self._run_operation(binary, "copyto", str(source), remote_target(remote, path), timeout=timeout)
 
     def _free_cache_records(self, remote_name: str, path: str) -> int:
         records = self._offline_records.get(remote_name)

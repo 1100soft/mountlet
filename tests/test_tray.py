@@ -1331,11 +1331,33 @@ class TrayTests(unittest.TestCase):
             backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
         )
         mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
         mountlet_window._schedule_offline_reconcile = mock.Mock()
 
         mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
 
         mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
+    def test_mountlet_window_local_cache_change_rearms_file_watch(self):
+        watcher = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._offline_file_watcher = watcher
+        mountlet_window._offline_watched_paths = {"/tmp/cache/Docs/a.txt"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
+
+        watcher.removePath.assert_called_once_with("/tmp/cache/Docs/a.txt")
+        self.assertEqual(mountlet_window._offline_watched_paths, set())
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
         mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
 
     def test_mountlet_window_local_cache_scan_schedules_changed_unmounted_remotes(self):

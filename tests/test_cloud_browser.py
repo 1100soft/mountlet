@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,8 @@ from mountlet import core
 from mountlet.cloud_browser import (
     BrowserEntry,
     CloudBrowserBackend,
+    RCLONE_CACHE_SYNC_TIMEOUT_SECONDS,
+    RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
     TransferItem,
     _default_offline_cache_root,
     join_browser_path,
@@ -125,6 +128,31 @@ class CloudBrowserTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "single folder name"):
                 backend.create_folder(_remote(), "", "one/two")
+
+    def test_rclone_file_operation_uses_timeout(self):
+        response = SimpleNamespace(returncode=0, stderr="")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response) as run:
+                backend._run_operation("rclone", "copyto", "Docs:/a.txt", str(Path(tempdir) / "a.txt"))
+
+        self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_FILE_OPERATION_TIMEOUT_SECONDS)
+
+    def test_rclone_file_operation_timeout_reports_operation(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch(
+                "mountlet.cloud_browser.subprocess.run",
+                side_effect=subprocess.TimeoutExpired("rclone", RCLONE_FILE_OPERATION_TIMEOUT_SECONDS),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "copyto timed out"):
+                    backend._run_operation("rclone", "copyto", "Docs:/a.txt", str(Path(tempdir) / "a.txt"))
 
     def test_offline_file_is_indicated_by_managed_copy(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -430,7 +458,7 @@ class CloudBrowserTests(unittest.TestCase):
             cached.write_text("local edit", encoding="utf-8")
             calls: list[tuple[str, ...]] = []
 
-            def reconcile_copy(_binary: str, *arguments: str) -> None:
+            def reconcile_copy(_binary: str, *arguments: str, **_kwargs: object) -> None:
                 calls.append(arguments)
                 if arguments[0] == "copyto" and str(arguments[1]).startswith("Docs:"):
                     destination = Path(arguments[2])
@@ -444,6 +472,40 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertEqual(conflicts, [])
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+
+    def test_changed_cached_file_uses_cache_sync_timeout(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    cached = backend.cache_file(remote, entry)
+
+            cached.write_text("local edit", encoding="utf-8")
+
+            def reconcile_copy(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                if arguments[0] == "copyto" and str(arguments[1]).startswith("Docs:"):
+                    destination = Path(arguments[2])
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=reconcile_copy) as run:
+                    backend.changed_managed_files(remote)
+
+            sync_calls = [call for call in run.call_args_list if call.kwargs.get("timeout") == RCLONE_CACHE_SYNC_TIMEOUT_SECONDS]
+            self.assertEqual(len(sync_calls), 2)
 
     def test_metadata_only_local_save_refreshes_record_without_dirty_state(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -494,7 +556,7 @@ class CloudBrowserTests(unittest.TestCase):
 
             cached.write_text("local edit", encoding="utf-8")
 
-            def mutate_manifest(_binary: str, *arguments: str) -> None:
+            def mutate_manifest(_binary: str, *arguments: str, **_kwargs: object) -> None:
                 backend._offline_records.setdefault("Docs", {})["Reports/b.txt"] = {
                     "is_dir": False,
                     "local_size": 1,
@@ -532,7 +594,7 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
                     cached = backend.cache_file(remote, entry)
 
-            def remote_changed(_binary: str, *_arguments: str) -> None:
+            def remote_changed(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("cloud edit", encoding="utf-8")
