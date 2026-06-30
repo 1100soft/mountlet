@@ -4491,8 +4491,9 @@ class MountletWindow:
             if remote_name in pending:
                 continue
             if remote_name in running:
-                self._offline_reconcile_scheduled.add(remote_name)
-                self._refresh_file_browser_mount_state(remote_name)
+                if remote_name not in scheduled:
+                    self._offline_reconcile_scheduled.add(remote_name)
+                    self._refresh_file_browser_mount_state(remote_name)
                 continue
             if remote_name not in scheduled:
                 self._refresh_file_browser_mount_state(remote_name)
@@ -6437,17 +6438,27 @@ class MountletWindow:
             return
         if not conflicts:
             self._refresh_file_browser_mount_state(remote.name)
-            self._reschedule_pending_offline_reconcile(remote_name)
+            self._reschedule_pending_offline_reconcile(remote_name, only_if_dirty=True)
             return
         self._handle_offline_conflicts(remote, conflicts)
         self._reschedule_pending_offline_reconcile(remote_name)
 
-    def _reschedule_pending_offline_reconcile(self, remote_name: str) -> None:
+    def _reschedule_pending_offline_reconcile(self, remote_name: str, *, only_if_dirty: bool = False) -> None:
         scheduled = getattr(self, "_offline_reconcile_scheduled", set())
         if remote_name not in scheduled:
             return
+        if only_if_dirty and not self._remote_has_pending_local_cache_changes(remote_name):
+            scheduled.discard(remote_name)
+            return
         scheduled.discard(remote_name)
         self._schedule_offline_reconcile(remote_name, delay_ms=500)
+
+    def _remote_has_pending_local_cache_changes(self, remote_name: str) -> bool:
+        try:
+            changed = self.file_browser.backend.changed_managed_remote_names()
+        except Exception:
+            return False
+        return remote_name in set(changed) if isinstance(changed, (list, tuple, set)) else False
 
     def _set_file_browser_status(self, remote_name: str, message: str) -> None:
         file_browser = getattr(self, "file_browser", None)

@@ -1438,6 +1438,66 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
         mountlet_window._schedule_offline_reconcile.assert_not_called()
 
+    def test_mountlet_window_local_cache_scan_does_not_repaint_already_queued_running_reconcile(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._action_pending = set()
+        mountlet_window._offline_reconcile_scheduled = {"Docs"}
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._scan_local_cache_changes()
+
+        mountlet_window._refresh_file_browser_mount_state.assert_not_called()
+        mountlet_window._schedule_offline_reconcile.assert_not_called()
+
+    def test_mountlet_window_reconcile_ready_drops_stale_followup_when_clean(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window._offline_reconcile_scheduled = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: [])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            mountlet_window._handle_offline_reconcile_ready("Docs", [], None)
+
+        self.assertEqual(mountlet_window._offline_reconcile_running, set())
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, set())
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_not_called()
+
+    def test_mountlet_window_reconcile_ready_keeps_followup_when_still_dirty(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window._offline_reconcile_scheduled = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            mountlet_window._handle_offline_reconcile_ready("Docs", [], None)
+
+        self.assertEqual(mountlet_window._offline_reconcile_running, set())
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, set())
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
     def test_mountlet_window_focus_return_scans_all_local_cache_changes(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
         mountlet_window = object.__new__(tray.MountletWindow)
