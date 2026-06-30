@@ -53,6 +53,7 @@ class CompactCloudBrowser:
         open_file: Callable[[Path], bool] | None = None,
         open_local_folder: Callable[[Path], bool] | None = None,
         toggle_mount: Callable[[str, bool], None] | None = None,
+        sync_path: Callable[[core.RemoteInfo, str, bool], None] | None = None,
         embedded: bool = False,
         layout_changed: Callable[[], None] | None = None,
         local_files_changed: Callable[[], None] | None = None,
@@ -65,6 +66,7 @@ class CompactCloudBrowser:
         self._open_file = open_file
         self._open_local_folder = open_local_folder
         self._toggle_mount = toggle_mount
+        self._sync_path = sync_path
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -989,6 +991,12 @@ class CompactCloudBrowser:
         self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
         self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
         self._add_offline_menu_actions(menu, entry)
+        self._menu_action(
+            menu,
+            "Sync local copy",
+            lambda selected=entry: self._sync_cached_path(selected.path, selected.is_dir),
+            enabled=self._can_sync_cache(entry),
+        )
         if self._can_free_cache(entry):
             self._menu_action(menu, "Free cached copy", lambda selected=entry: self._free_cache(selected.path))
         self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
@@ -1011,6 +1019,7 @@ class CompactCloudBrowser:
         )
         self._menu_action(menu, "New folder", self.create_folder, enabled=edits_enabled and not self._operation_pending)
         menu.addSeparator()
+        self._menu_action(menu, "Sync cached files in this folder", lambda: self._sync_cached_path(self.path, True), enabled=self._can_sync_folder())
         self._menu_action(menu, "Free resolved cache in this folder", lambda: self._free_cache(self.path), enabled=bool(self.remote))
         self._menu_action(menu, "Free all resolved cache", self._free_all_resolved_cache)
         origin = source or self.path_field
@@ -1039,6 +1048,29 @@ class CompactCloudBrowser:
             and not self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir)
             and not self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir)
         )
+
+    def _can_sync_cache(self, entry: BrowserEntry) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(
+            remote
+            and self._sync_path is not None
+            and not self._operation_pending
+            and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
+        )
+
+    def _can_sync_folder(self) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(
+            remote
+            and self._sync_path is not None
+            and not self._operation_pending
+            and self.backend.managed_file_paths_under(remote.name, self.path)
+        )
+
+    def _sync_cached_path(self, path: str, is_dir: bool) -> None:
+        if self.remote is None or self._sync_path is None:
+            return
+        self._sync_path(self.remote, path, is_dir)
 
     def _add_offline_menu_actions(self, menu: Any, entry: BrowserEntry) -> None:
         remote = getattr(self, "remote", None)

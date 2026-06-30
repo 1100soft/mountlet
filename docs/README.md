@@ -70,6 +70,12 @@ metadata records relative path, type, size, modification time, and local cache
 state when available. Uncached files must remain metadata-only entries rather
 than fake local filesystem placeholders. Do not treat rclone VFS blocks as an
 offline guarantee.
+Remote-side cache refresh is metadata-first: background checks should poll
+managed cached/offline files in bounded batches with `lsjson --stat --hash`,
+initialize missing remote metadata without downloading file bodies, and only
+download a cloud copy when metadata differs from the recorded baseline. Keep
+the interval configurable and allow manual global and per-file/folder checks so
+large caches do not force aggressive provider polling.
 
 Install from a local checkout:
 

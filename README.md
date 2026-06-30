@@ -412,6 +412,11 @@ remote does not need to be mounted.
   the cloud file has not changed since the cache was created, Mountlet uploads
   the local change automatically when the remote is reachable. If both changed,
   Mountlet asks which version to keep or whether to keep both.
+- Mountlet also checks cached and offline files for cloud-side changes in the
+  background. The default interval is 30 seconds and can be changed in `App` >
+  `Settings` > `Cloud check interval`; set it to `0` for manual checks only.
+  Use `App` > `Sync cached files now`, or a file/folder context menu in
+  Mountlet Files, to check immediately.
 - Use **Make available offline** to protect selected cached files or folders
   from normal cache cleanup. These protected files use the same conflict flow as
   ordinary cached files, but **Free resolved cache** leaves them in place.

@@ -247,6 +247,7 @@ def _merge_app_config_from_archive(archive: zipfile.ZipFile, destination: Path) 
         open_folder_behavior=local.open_folder_behavior,
         focus_file_manager=local.focus_file_manager,
         integrated_file_edits=incoming.integrated_file_edits,
+        remote_sync_interval_seconds=incoming.remote_sync_interval_seconds,
         config_sync_remote=incoming.config_sync_remote,
         config_sync_path=incoming.config_sync_path,
         shortcuts=dict(incoming.shortcuts),
@@ -260,6 +261,7 @@ def _shared_app_settings_payload(settings: AppSettings) -> dict[str, object]:
         "auto_mount": settings.auto_mount,
         "auto_mount_delay": settings.auto_mount_delay,
         "integrated_file_edits": settings.integrated_file_edits,
+        "remote_sync_interval_seconds": settings.remote_sync_interval_seconds,
         "config_sync_remote": settings.config_sync_remote,
         "config_sync_path": settings.config_sync_path,
         "shortcuts": {

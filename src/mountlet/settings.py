@@ -50,6 +50,7 @@ class AppSettings:
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
     integrated_file_edits: bool = False
+    remote_sync_interval_seconds: float = 30.0
     config_sync_remote: str = ""
     config_sync_path: str = "Mountlet/config.mountlet"
     shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
@@ -88,6 +89,10 @@ open_folder_behavior = "current_desktop"
 focus_file_manager = true
 
 [sync]
+# Seconds between background checks for cloud-side changes in cached/offline files.
+# Set to 0 for manual sync only.
+remote_check_interval = 30
+
 # Optional encrypted config-bundle location, stored as an rclone remote and path.
 config_remote = ""
 config_path = "Mountlet/config.mountlet"
@@ -320,6 +325,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
         config_sync_remote=str(sync.get("config_remote", "")).strip(),
         config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
         shortcuts=shortcuts,
@@ -437,6 +443,10 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
             "",
             "[sync]",
+            "# Seconds between background checks for cloud-side changes in cached/offline files.",
+            "# Set to 0 for manual sync only.",
+            f"remote_check_interval = {settings.remote_sync_interval_seconds:g}",
+            "",
             "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
             f"config_remote = {_toml_string(settings.config_sync_remote)}",
             f"config_path = {_toml_string(settings.config_sync_path)}",

@@ -360,6 +360,18 @@ class CloudBrowserBackend:
             if not bool(record.get("is_dir")) and self.offline_path(remote_name, path).is_file()
         ]
 
+    def managed_record_paths_under(self, remote_name: str, path: str) -> list[str]:
+        normalized = normalize_browser_path(path)
+        prefix = f"{normalized}/" if normalized else ""
+        records = self._offline_records.get(remote_name, {})
+        return [
+            record_path
+            for record_path, record in list(records.items())
+            if not bool(record.get("is_dir"))
+            and (record_path == normalized or not normalized or record_path.startswith(prefix))
+            and self.offline_path(remote_name, record_path).is_file()
+        ]
+
     def managed_file_paths_under(self, remote_name: str, path: str) -> list[Path]:
         normalized = normalize_browser_path(path)
         prefix = f"{normalized}/" if normalized else ""

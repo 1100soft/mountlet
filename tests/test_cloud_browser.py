@@ -253,6 +253,8 @@ class CloudBrowserTests(unittest.TestCase):
 
             self.assertEqual(backend.managed_file_paths(), {"Docs": [local]})
             self.assertEqual(backend.managed_file_paths("Docs"), {"Docs": [local]})
+            self.assertEqual(backend.managed_record_paths("Docs"), ["Reports/a.txt"])
+            self.assertEqual(backend.managed_record_paths_under("Docs", "Reports"), ["Reports/a.txt"])
             self.assertEqual(backend.managed_file_paths_under("Docs", "Reports"), [local])
             self.assertEqual(backend.managed_file_paths_under("Docs", ""), [local])
             self.assertEqual(backend.remote_name_for_offline_path(local), "Docs")

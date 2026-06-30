@@ -82,7 +82,6 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
-REMOTE_CACHE_CHECK_INTERVAL_MS = 30_000
 REMOTE_CACHE_CHECK_BATCH_SIZE = 20
 FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
@@ -2177,6 +2176,7 @@ class AppConfigDialog(_ConfigDialogBase):
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
+            "remote_sync_interval": self._line(f"{app_settings.remote_sync_interval_seconds:g}"),
             "config_sync_remote": self._combo(
                 (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
                 app_settings.config_sync_remote,
@@ -2193,6 +2193,9 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["integrated_file_edits"].setToolTip(
             "Allow direct copy, move, delete, drag-and-drop, and folder creation in Mountlet Files."
         )
+        self.fields["remote_sync_interval"].setToolTip(
+            "Seconds between background checks for cloud-side changes in cached and offline files. Use 0 for manual sync only."
+        )
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("App folder", self._app_folder_selector())
@@ -2201,6 +2204,7 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow(self.fields["integrated_file_edits"])
+        form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
         form.addRow("Config sync remote", self.fields["config_sync_remote"])
         form.addRow("Config sync path", self.fields["config_sync_path"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
@@ -2217,6 +2221,10 @@ class AppConfigDialog(_ConfigDialogBase):
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
         except ValueError:
             delay = 0.0
+        try:
+            remote_sync_interval = float(self.fields["remote_sync_interval"].text().strip() or "0")
+        except ValueError:
+            remote_sync_interval = 30.0
         if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
             self.qt.QMessageBox.warning(
                 self.dialog,
@@ -2235,6 +2243,7 @@ class AppConfigDialog(_ConfigDialogBase):
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
+                remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
                 config_sync_remote=self.fields["config_sync_remote"].currentData() or "",
                 config_sync_path=self.fields["config_sync_path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
@@ -2397,6 +2406,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
                 integrated_file_edits=current.integrated_file_edits,
+                remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 config_sync_remote=current.config_sync_remote,
                 config_sync_path=current.config_sync_path,
                 shortcuts=shortcuts,
@@ -2522,6 +2532,7 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
                 integrated_file_edits=current.integrated_file_edits,
+                remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 config_sync_remote=self.fields["remote"].currentData() or "",
                 config_sync_path=self.fields["path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
@@ -4232,6 +4243,7 @@ class MountletWindow:
             open_file=self.desktop.open_file,
             open_local_folder=lambda path: self.desktop.open_folder(str(path)),
             toggle_mount=self._run_switch_action,
+            sync_path=self._sync_cached_path,
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
@@ -4508,12 +4520,20 @@ class MountletWindow:
                 self._schedule_offline_reconcile(remote_name)
 
     def _setup_remote_change_polling(self) -> None:
+        existing = getattr(self, "_remote_change_poll_timer", None)
+        if existing is not None:
+            with suppress(Exception):
+                existing.stop()
+            self._remote_change_poll_timer = None
+        interval_seconds = load_app_settings().remote_sync_interval_seconds
+        if interval_seconds <= 0:
+            return
         timer_type = getattr(self.qt, "QTimer", None)
         if timer_type is None:
             return
         try:
             timer = timer_type(self.window)
-            timer.setInterval(REMOTE_CACHE_CHECK_INTERVAL_MS)
+            timer.setInterval(max(1000, int(interval_seconds * 1000)))
             timer.timeout.connect(self._scan_remote_cache_changes)
             timer.start()
         except Exception:
@@ -4561,6 +4581,34 @@ class MountletWindow:
         start = offset % len(paths)
         return [paths[(start + index) % len(paths)] for index in range(limit)]
 
+    def _sync_all_cached_files(self) -> None:
+        remotes = _load_visible_remotes()
+        started = 0
+        for remote in remotes:
+            try:
+                paths = self.file_browser.backend.managed_record_paths(remote.name)
+            except Exception:
+                continue
+            if not paths:
+                continue
+            if remote.name in getattr(self, "_offline_reconcile_running", set()):
+                continue
+            self._start_remote_cache_check(remote, paths)
+            started += 1
+        if not started:
+            self.tray_app._notify("Cache sync", "No cached or offline files need checking.", success=True)
+
+    def _sync_cached_path(self, remote: core.RemoteInfo, path: str, is_dir: bool) -> None:
+        try:
+            paths = self.file_browser.backend.managed_record_paths_under(remote.name, path if is_dir else normalize_browser_path(path))
+        except Exception as exc:
+            self.tray_app._notify("Cache sync", f"Could not prepare sync: {exc}", success=False)
+            return
+        if not paths:
+            self.tray_app._notify("Cache sync", "No cached or offline files found there.", success=True)
+            return
+        self._start_remote_cache_check(remote, paths)
+
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
         try:
@@ -4569,6 +4617,7 @@ class MountletWindow:
             pass
         app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        self.tray_app._add_action(app_menu, "Sync cached files now", self._sync_all_cached_files)
         self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
@@ -6875,6 +6924,7 @@ class MountletWindow:
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
             self._usage_cache.clear()
+            self._setup_remote_change_polling()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
@@ -7637,6 +7687,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
+        self._add_action(self.app_menu, "Sync cached files now", self.main_window._sync_all_cached_files)
         self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
