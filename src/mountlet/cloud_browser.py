@@ -433,7 +433,7 @@ class CloudBrowserBackend:
         except RuntimeError as exc:
             _diagnostic_append(diagnostics, f"rclone: unavailable ({exc})")
             return []
-        _diagnostic_append(diagnostics, f"remote: {remote.name} ({remote.remote_type})")
+        _diagnostic_append(diagnostics, f"remote: {remote.name} provider={remote.provider} backend={remote.backend_type}")
         conflicts: list[OfflineConflict] = []
         failures: list[str] = []
         for path, record in list(self._offline_records.get(remote.name, {}).items()):
