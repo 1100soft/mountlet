@@ -4507,6 +4507,7 @@ class MountletWindow:
             pass
         app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
@@ -6460,6 +6461,112 @@ class MountletWindow:
             return False
         return remote_name in set(changed) if isinstance(changed, (list, tuple, set)) else False
 
+    def _show_cache_sync_debug_report(self) -> None:
+        report = self._cache_sync_debug_report()
+        dialog = self.qt.QDialog(self.window)
+        dialog.setWindowTitle("Cache sync debug")
+        layout = self.qt.QVBoxLayout(dialog)
+        label = self.qt.QLabel("Copy this report and paste it into the support conversation.")
+        layout.addWidget(label)
+        text = self.qt.QPlainTextEdit()
+        text.setPlainText(report)
+        text.setReadOnly(True)
+        try:
+            text.selectAll()
+        except Exception:
+            pass
+        layout.addWidget(text)
+        buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        try:
+            dialog.resize(760, 560)
+        except Exception:
+            pass
+        self._open_child_dialog(SimpleNamespace(dialog=dialog))
+
+    def _cache_sync_debug_report(self) -> str:
+        lines = [
+            "Mountlet cache sync debug",
+            f"timestamp: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+            f"platform: {platform.platform()}",
+            f"python: {sys.version.split()[0]}",
+            f"mountlet: {__version__}",
+            "",
+        ]
+        backend = self.file_browser.backend
+        try:
+            changed_remote_names = backend.changed_managed_remote_names()
+        except Exception as exc:
+            lines.append(f"changed_managed_remote_names: ERROR {type(exc).__name__}: {exc}")
+            return "\n".join(lines)
+        lines.append(f"changed_remotes_before: {list(changed_remote_names)}")
+        remotes = {remote.name: remote for remote in _load_visible_remotes()}
+        if not changed_remote_names:
+            lines.append("No pending local cache changes detected.")
+            lines.append("")
+            lines.extend(self._cache_sync_manifest_summary(remotes))
+            return "\n".join(lines)
+        for remote_name in changed_remote_names:
+            remote = remotes.get(remote_name)
+            lines.append("")
+            lines.append(f"== {remote_name} ==")
+            if remote is None:
+                lines.append("remote: not visible in current Mountlet config")
+                continue
+            diagnostics: list[str] = []
+            started = time.perf_counter()
+            try:
+                conflicts = backend.changed_managed_files(remote, diagnostics=diagnostics)
+            except Exception as exc:
+                lines.append(f"result: ERROR after {time.perf_counter() - started:.3f}s")
+                lines.append(f"error: {type(exc).__name__}: {exc}")
+            else:
+                lines.append(f"result: ok after {time.perf_counter() - started:.3f}s")
+                lines.append(f"conflicts_returned: {len(conflicts)}")
+            lines.extend(diagnostics)
+            try:
+                still_changed = remote_name in set(backend.changed_managed_remote_names())
+            except Exception as exc:
+                lines.append(f"changed_after: ERROR {type(exc).__name__}: {exc}")
+            else:
+                lines.append(f"changed_after: {still_changed}")
+        lines.append("")
+        lines.extend(self._cache_sync_manifest_summary(remotes))
+        self._refresh_offline_file_watches()
+        for remote_name in changed_remote_names:
+            self._refresh_file_browser_mount_state(str(remote_name))
+        return "\n".join(lines)
+
+    def _cache_sync_manifest_summary(self, remotes: dict[str, core.RemoteInfo]) -> list[str]:
+        lines = ["manifest:"]
+        records_by_remote = getattr(self.file_browser.backend, "_offline_records", {})
+        if not isinstance(records_by_remote, dict) or not records_by_remote:
+            return [*lines, "  no offline/cache records"]
+        for remote_name, records in sorted(records_by_remote.items()):
+            remote = remotes.get(str(remote_name))
+            lines.append(
+                f"  {remote_name}: provider={getattr(remote, 'provider', '')} "
+                f"backend={getattr(remote, 'backend_type', '')} records={len(records) if isinstance(records, dict) else '?'}"
+            )
+            if not isinstance(records, dict):
+                continue
+            for path, record in sorted(records.items()):
+                if not isinstance(record, dict) or bool(record.get("is_dir")):
+                    continue
+                try:
+                    dirty = self.file_browser.backend.offline_changed(str(remote_name), str(path))
+                except Exception as exc:
+                    dirty_text = f"ERROR {type(exc).__name__}: {exc}"
+                else:
+                    dirty_text = str(dirty)
+                lines.append(
+                    f"    {path}: dirty={dirty_text} protected={bool(record.get('protected'))} "
+                    f"local_size={record.get('local_size')} remote_size={record.get('remote_size')} "
+                    f"remote_modtime={record.get('remote_modtime')}"
+                )
+        return lines
+
     def _set_file_browser_status(self, remote_name: str, message: str) -> None:
         file_browser = getattr(self, "file_browser", None)
         remote = getattr(file_browser, "remote", None)
@@ -7377,6 +7484,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
+        self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
         self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)

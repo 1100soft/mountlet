@@ -1498,6 +1498,34 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
         mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
 
+    def test_mountlet_window_cache_sync_debug_report_runs_reconcile_with_diagnostics(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/tmp/docs")
+        diagnostic_lines = ["file: Reports/a.txt", "  upload: ok in 0.001s"]
+        backend = SimpleNamespace(
+            changed_managed_remote_names=mock.Mock(side_effect=[["Docs"], []]),
+            changed_managed_files=mock.Mock(return_value=[]),
+            _offline_records={"Docs": {"Reports/a.txt": {"is_dir": False, "local_size": 11}}},
+            offline_changed=mock.Mock(return_value=False),
+        )
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(backend=backend)
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+
+        def reconcile(_remote, diagnostics=None):
+            diagnostics.extend(diagnostic_lines)
+            return []
+
+        backend.changed_managed_files.side_effect = reconcile
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            report = mountlet_window._cache_sync_debug_report()
+
+        self.assertIn("changed_remotes_before: ['Docs']", report)
+        self.assertIn("upload: ok", report)
+        self.assertIn("changed_after: False", report)
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+
     def test_mountlet_window_focus_return_scans_all_local_cache_changes(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
         mountlet_window = object.__new__(tray.MountletWindow)
