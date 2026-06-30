@@ -4214,6 +4214,7 @@ class MountletWindow:
         self._bridge.folder_opened.connect(self._handle_folder_opened)
         self._bridge.sync_metadata_ready.connect(self._handle_sync_metadata_ready)
         self._bridge.offline_reconcile_ready.connect(self._handle_offline_reconcile_ready)
+        self._bridge.cache_sync_debug_ready.connect(self._handle_cache_sync_debug_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -4258,6 +4259,7 @@ class MountletWindow:
             folder_opened = qt.Signal(bool)
             sync_metadata_ready = qt.Signal(object, object)
             offline_reconcile_ready = qt.Signal(str, object, object)
+            cache_sync_debug_ready = qt.Signal(str)
 
         return Bridge()
 
@@ -6462,19 +6464,18 @@ class MountletWindow:
         return remote_name in set(changed) if isinstance(changed, (list, tuple, set)) else False
 
     def _show_cache_sync_debug_report(self) -> None:
-        report = self._cache_sync_debug_report()
+        if getattr(self, "_cache_sync_debug_running", False):
+            self.tray_app._notify("Cache sync debug", "A cache sync report is already running.", success=True)
+            return
+        self._cache_sync_debug_running = True
         dialog = self.qt.QDialog(self.window)
         dialog.setWindowTitle("Cache sync debug")
         layout = self.qt.QVBoxLayout(dialog)
-        label = self.qt.QLabel("Copy this report and paste it into the support conversation.")
+        label = self.qt.QLabel("Collecting cache sync diagnostics. The report will appear here when it finishes.")
         layout.addWidget(label)
         text = self.qt.QPlainTextEdit()
-        text.setPlainText(report)
+        text.setPlainText("Running cache sync diagnostics…")
         text.setReadOnly(True)
-        try:
-            text.selectAll()
-        except Exception:
-            pass
         layout.addWidget(text)
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
@@ -6483,7 +6484,35 @@ class MountletWindow:
             dialog.resize(760, 560)
         except Exception:
             pass
+        self._cache_sync_debug_dialog = dialog
+        self._cache_sync_debug_text = text
+        self._cache_sync_debug_label = label
         self._open_child_dialog(SimpleNamespace(dialog=dialog))
+
+        def worker() -> None:
+            report = self._cache_sync_debug_report()
+            self._bridge.cache_sync_debug_ready.emit(report)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_cache_sync_debug_ready(self, report: str) -> None:
+        self._cache_sync_debug_running = False
+        text = getattr(self, "_cache_sync_debug_text", None)
+        label = getattr(self, "_cache_sync_debug_label", None)
+        if label is not None:
+            with suppress(Exception):
+                label.setText("Copy this report and paste it into the support conversation.")
+        if text is not None:
+            with suppress(Exception):
+                text.setPlainText(report)
+                text.selectAll()
+        self._refresh_offline_file_watches()
+        try:
+            changed = self.file_browser.backend.changed_managed_remote_names()
+        except Exception:
+            changed = []
+        for remote_name in changed if isinstance(changed, (list, tuple, set)) else []:
+            self._refresh_file_browser_mount_state(str(remote_name))
 
     def _cache_sync_debug_report(self) -> str:
         lines = [
@@ -6533,9 +6562,6 @@ class MountletWindow:
                 lines.append(f"changed_after: {still_changed}")
         lines.append("")
         lines.extend(self._cache_sync_manifest_summary(remotes))
-        self._refresh_offline_file_watches()
-        for remote_name in changed_remote_names:
-            self._refresh_file_browser_mount_state(str(remote_name))
         return "\n".join(lines)
 
     def _cache_sync_manifest_summary(self, remotes: dict[str, core.RemoteInfo]) -> list[str]:
