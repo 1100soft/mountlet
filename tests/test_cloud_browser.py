@@ -283,6 +283,35 @@ class CloudBrowserTests(unittest.TestCase):
             local.write_text("edited", encoding="utf-8")
 
             self.assertEqual(backend.changed_managed_remote_names(), ["Docs"])
+            self.assertEqual(backend.changed_managed_paths("Docs"), ["Reports/a.txt"])
+
+    def test_changed_managed_files_skips_clean_files_without_remote_polling(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    backend.cache_file(remote, entry)
+
+            diagnostics: list[str] = []
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    conflicts = backend.changed_managed_files(remote, diagnostics=diagnostics)
+
+            self.assertEqual(conflicts, [])
+            run.assert_not_called()
+            self.assertIn("candidate_paths: 0", diagnostics)
 
     def test_offline_manifest_preserves_deep_file_ancestors(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -645,7 +674,7 @@ class CloudBrowserTests(unittest.TestCase):
 
             with mock.patch.object(backend, "_rclone", return_value="rclone"):
                 with mock.patch.object(backend, "_run_operation", side_effect=remote_changed):
-                    conflicts = backend.changed_managed_files(remote)
+                    conflicts = backend.changed_managed_files(remote, include_remote_checks=True)
 
             self.assertEqual(conflicts, [])
             self.assertEqual(cached.read_text(encoding="utf-8"), "cloud edit")

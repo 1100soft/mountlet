@@ -381,13 +381,18 @@ class CloudBrowserBackend:
 
     def changed_managed_remote_names(self) -> list[str]:
         changed: list[str] = []
-        for remote_name, records in list(self._offline_records.items()):
-            if any(
-                not bool(record.get("is_dir")) and self.offline_changed(remote_name, path)
-                for path, record in list(records.items())
-            ):
+        for remote_name in list(self._offline_records):
+            if self.changed_managed_paths(remote_name):
                 changed.append(remote_name)
         return changed
+
+    def changed_managed_paths(self, remote_name: str) -> list[str]:
+        records = self._offline_records.get(remote_name, {})
+        return [
+            path
+            for path, record in list(records.items())
+            if not bool(record.get("is_dir")) and self.offline_changed(remote_name, path)
+        ]
 
     def changed_offline_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
         conflicts: list[OfflineConflict] = []
@@ -427,6 +432,7 @@ class CloudBrowserBackend:
         remote: core.RemoteInfo,
         *,
         diagnostics: list[str] | None = None,
+        include_remote_checks: bool = False,
     ) -> list[OfflineConflict]:
         try:
             binary = self._rclone()
@@ -436,8 +442,19 @@ class CloudBrowserBackend:
         _diagnostic_append(diagnostics, f"remote: {remote.name} provider={remote.provider} backend={remote.backend_type}")
         conflicts: list[OfflineConflict] = []
         failures: list[str] = []
-        for path, record in list(self._offline_records.get(remote.name, {}).items()):
-            if bool(record.get("is_dir")):
+        records = self._offline_records.get(remote.name, {})
+        candidate_paths = (
+            [path for path, record in list(records.items()) if not bool(record.get("is_dir"))]
+            if include_remote_checks
+            else self.changed_managed_paths(remote.name)
+        )
+        _diagnostic_append(diagnostics, f"candidate_paths: {len(candidate_paths)}")
+        if not candidate_paths:
+            _diagnostic_append(diagnostics, "no locally changed managed files")
+            return []
+        for path in candidate_paths:
+            record = records.get(path)
+            if not isinstance(record, dict) or bool(record.get("is_dir")):
                 continue
             local = self.offline_path(remote.name, path)
             _diagnostic_append(diagnostics, f"file: {path}")
