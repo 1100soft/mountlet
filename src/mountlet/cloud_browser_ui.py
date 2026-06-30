@@ -500,7 +500,8 @@ class CompactCloudBrowser:
         self._working_timer = timer
 
     def _advance_working_animation(self) -> None:
-        if not self._working_paths:
+        working_paths = getattr(self, "_working_paths", {})
+        if not working_paths:
             timer = getattr(self, "_working_timer", None)
             if timer is not None:
                 with suppress(Exception):
@@ -512,6 +513,8 @@ class CompactCloudBrowser:
     def _start_working_paths(self, remote_name: str, paths: list[str], kind: str) -> None:
         if not paths:
             return
+        if not hasattr(self, "_working_paths"):
+            self._working_paths = {}
         for path in paths:
             self._working_paths[(remote_name, path)] = kind
         timer = getattr(self, "_working_timer", None)
@@ -522,6 +525,8 @@ class CompactCloudBrowser:
         self._display_entries(list(getattr(self, "entries", [])))
 
     def _finish_working_paths(self, remote_name: str, paths: list[str]) -> None:
+        if not hasattr(self, "_working_paths"):
+            return
         for path in paths:
             self._working_paths.pop((remote_name, path), None)
         if not self._working_paths:
@@ -862,7 +867,8 @@ class CompactCloudBrowser:
             cached_content = protected_content or temporary_content
             partial_cache = bool(entry.is_dir and cached_content and not offline)
             changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
-            working = self._working_paths.get((remote.name, entry.path), "") if remote else ""
+            working_paths = getattr(self, "_working_paths", {})
+            working = working_paths.get((remote.name, entry.path), "") if remote else ""
             item.setIcon(0, self._entry_icon(
                 entry,
                 directory_icon=directory_icon,
@@ -1153,6 +1159,9 @@ class CompactCloudBrowser:
             return
         self._start_working_paths(self.remote.name, [path], "sync")
         self._sync_paths(self.remote, [(path, is_dir)])
+
+    def start_sync(self, remote_name: str, paths: list[str]) -> None:
+        self._start_working_paths(remote_name, paths, "sync")
 
     def sync_selected(self) -> None:
         remote = getattr(self, "remote", None)
@@ -1552,6 +1561,8 @@ class CompactCloudBrowser:
         self._finish_working_remote(remote_name, "sync")
 
     def _finish_working_remote(self, remote_name: str, kind: str) -> None:
+        if not hasattr(self, "_working_paths"):
+            return
         changed = False
         for key in list(self._working_paths):
             if key[0] == remote_name and self._working_paths.get(key) == kind:

@@ -4593,8 +4593,12 @@ class MountletWindow:
                 continue
             if remote.name in getattr(self, "_offline_reconcile_running", set()):
                 continue
-            self._start_remote_cache_check(remote, paths)
-            started += 1
+            visible_remote = getattr(getattr(self, "file_browser", None), "remote", None)
+            if visible_remote is not None and visible_remote.name == remote.name:
+                visible_paths = [entry.path for entry in getattr(self.file_browser, "entries", [])]
+                self.file_browser.start_sync(remote.name, visible_paths or paths)
+            if self._start_remote_cache_check(remote, paths):
+                started += 1
         if not started:
             self.tray_app._notify("Cache sync", "No cached or offline files need checking.", success=True)
 
@@ -4619,7 +4623,8 @@ class MountletWindow:
             self.tray_app._notify("Cache sync", "No cached or offline files found there.", success=True)
             self.file_browser.finish_sync(remote.name)
             return
-        self._start_remote_cache_check(remote, record_paths)
+        if not self._start_remote_cache_check(remote, record_paths):
+            self.file_browser.finish_sync(remote.name)
 
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
@@ -5210,6 +5215,9 @@ class MountletWindow:
         self._pull_sync_button = button
         return button
 
+    def _all_cache_sync_toolbar_button(self) -> Any:
+        return self._toolbar_button("⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
+
     def _update_config_sync_buttons(self) -> None:
         push_button = getattr(self, "_push_sync_button", None)
         pull_button = getattr(self, "_pull_sync_button", None)
@@ -5444,6 +5452,7 @@ class MountletWindow:
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
+        layout.addWidget(self._all_cache_sync_toolbar_button())
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
@@ -6501,6 +6510,15 @@ class MountletWindow:
         except Exception:
             return
 
+    def _finish_file_browser_sync_state(self, remote_name: str) -> None:
+        finish = getattr(getattr(self, "file_browser", None), "finish_sync", None)
+        if finish is None:
+            return
+        try:
+            finish(remote_name)
+        except Exception:
+            return
+
     def _schedule_offline_reconcile(self, remote_name: str, *, delay_ms: int = 0) -> None:
         if self._tray_is_quitting() or not remote_name:
             return
@@ -6544,15 +6562,15 @@ class MountletWindow:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _start_remote_cache_check(self, remote: core.RemoteInfo, paths: list[str]) -> None:
+    def _start_remote_cache_check(self, remote: core.RemoteInfo, paths: list[str]) -> bool:
         if self._tray_is_quitting() or not paths:
-            return
+            return False
         running = getattr(self, "_offline_reconcile_running", None)
         if running is None:
             running = set()
             self._offline_reconcile_running = running
         if remote.name in running:
-            return
+            return False
         running.add(remote.name)
         self._set_file_browser_status(remote.name, "Checking cloud changes…")
 
@@ -6569,11 +6587,13 @@ class MountletWindow:
             self._bridge.offline_reconcile_ready.emit(remote.name, conflicts, None)
 
         threading.Thread(target=worker, daemon=True).start()
+        return True
 
     def _handle_offline_reconcile_ready(self, remote_name: str, conflicts: object, error: object) -> None:
         if self._tray_is_quitting():
             return
         self._offline_reconcile_running.discard(remote_name)
+        self._finish_file_browser_sync_state(remote_name)
         self._refresh_offline_file_watches()
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
