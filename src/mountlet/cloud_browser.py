@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import hashlib
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -421,77 +422,143 @@ class CloudBrowserBackend:
             )
         return conflicts
 
-    def changed_managed_files(self, remote: core.RemoteInfo) -> list[OfflineConflict]:
+    def changed_managed_files(
+        self,
+        remote: core.RemoteInfo,
+        *,
+        diagnostics: list[str] | None = None,
+    ) -> list[OfflineConflict]:
         try:
             binary = self._rclone()
-        except RuntimeError:
+        except RuntimeError as exc:
+            _diagnostic_append(diagnostics, f"rclone: unavailable ({exc})")
             return []
+        _diagnostic_append(diagnostics, f"remote: {remote.name} ({remote.remote_type})")
         conflicts: list[OfflineConflict] = []
         failures: list[str] = []
         for path, record in list(self._offline_records.get(remote.name, {}).items()):
             if bool(record.get("is_dir")):
                 continue
             local = self.offline_path(remote.name, path)
+            _diagnostic_append(diagnostics, f"file: {path}")
+            _diagnostic_append(diagnostics, f"  local_path: {local}")
             if not local.is_file():
+                _diagnostic_append(diagnostics, "  skip: local file is missing")
                 continue
             previous_hash = str(record.get("local_sha256") or "")
             if not previous_hash:
+                _diagnostic_append(diagnostics, "  baseline: missing local hash; recording current local state")
                 self._update_offline_record_state(remote.name, path, local)
                 continue
             try:
                 local_hash = _file_digest(local)
             except OSError:
+                _diagnostic_append(diagnostics, "  skip: could not hash local file")
                 continue
             local_changed = local_hash != previous_hash
+            with suppress(OSError):
+                stat_result = local.stat()
+                _diagnostic_append(
+                    diagnostics,
+                    f"  local: size={stat_result.st_size} mtime_ns={stat_result.st_mtime_ns}",
+                )
+            _diagnostic_append(diagnostics, f"  baseline_hash: {_short_digest(previous_hash)}")
+            _diagnostic_append(diagnostics, f"  local_hash: {_short_digest(local_hash)} changed={local_changed}")
             current = self.remote_current_path(remote.name, path)
             metadata: dict[str, object] | None = None
             cloud_changed: bool | None = None
             if local_changed or self._record_has_remote_metadata(record):
-                with suppress(RuntimeError):
+                started = time.perf_counter()
+                try:
                     metadata = self._remote_file_metadata(
                         binary,
                         remote,
                         path,
                         timeout=RCLONE_METADATA_TIMEOUT_SECONDS,
                     )
+                except RuntimeError as exc:
+                    _diagnostic_append(
+                        diagnostics,
+                        f"  metadata: failed after {time.perf_counter() - started:.3f}s: {exc}",
+                    )
+                else:
+                    _diagnostic_append(
+                        diagnostics,
+                        "  metadata: "
+                        f"ok in {time.perf_counter() - started:.3f}s "
+                        f"size={metadata.get('Size')} modtime={metadata.get('ModTime')} "
+                        f"hashes={sorted(_normalized_hashes(metadata.get('Hashes')))}",
+                    )
                 if metadata is not None:
                     cloud_changed = not self._remote_metadata_matches_record(record, metadata)
+                    _diagnostic_append(diagnostics, f"  cloud_changed_by_metadata: {cloud_changed}")
             try:
                 if cloud_changed is not False:
+                    started = time.perf_counter()
                     self._download_remote_file(binary, remote, path, current, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
+                    _diagnostic_append(
+                        diagnostics,
+                        f"  cloud_download: ok in {time.perf_counter() - started:.3f}s",
+                    )
             except RuntimeError as exc:
+                _diagnostic_append(
+                    diagnostics,
+                    f"  cloud_download: failed after {time.perf_counter() - started:.3f}s: {exc}",
+                )
                 failures.append(f"{path}: {exc}")
                 continue
             if cloud_changed is not False:
                 try:
                     current_hash = _file_digest(current)
                 except OSError:
+                    _diagnostic_append(diagnostics, "  skip: could not hash downloaded cloud copy")
                     continue
                 cloud_changed = current_hash != previous_hash
+                _diagnostic_append(
+                    diagnostics,
+                    f"  cloud_hash: {_short_digest(current_hash)} changed={cloud_changed}",
+                )
             if not local_changed and not cloud_changed:
                 self._update_offline_record_state(remote.name, path, local)
                 self._record_remote_metadata(remote.name, path, metadata)
+                _diagnostic_append(diagnostics, "  decision: no change")
                 continue
             if not local_changed and cloud_changed:
                 shutil.copy2(current, local)
                 self._update_offline_record_state(remote.name, path, local)
                 self._record_remote_metadata(remote.name, path, metadata)
+                _diagnostic_append(diagnostics, "  decision: downloaded cloud change to local cache")
                 continue
             if local_changed and not cloud_changed:
                 try:
+                    started = time.perf_counter()
                     self._upload_remote_file(binary, remote, path, local, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
+                    _diagnostic_append(
+                        diagnostics,
+                        f"  upload: ok in {time.perf_counter() - started:.3f}s",
+                    )
                 except RuntimeError as exc:
+                    _diagnostic_append(
+                        diagnostics,
+                        f"  upload: failed after {time.perf_counter() - started:.3f}s: {exc}",
+                    )
                     failures.append(f"{path}: {exc}")
                     continue
                 self._update_offline_record_state(remote.name, path, local)
                 self._clear_record_remote_metadata(remote.name, path)
+                _diagnostic_append(
+                    diagnostics,
+                    f"  post_upload_dirty: {self.offline_changed(remote.name, path)}",
+                )
                 with suppress(OSError):
                     current.unlink()
                 continue
             if local_hash == current_hash:
                 self._update_offline_record_state(remote.name, path, local)
                 self._record_remote_metadata(remote.name, path, metadata)
+                _diagnostic_append(diagnostics, "  decision: local and cloud are identical")
                 continue
+            _diagnostic_append(diagnostics, "  decision: conflict")
             conflicts.append(
                 OfflineConflict(
                     remote_name=remote.name,
@@ -505,7 +572,9 @@ class CloudBrowserBackend:
         if failures:
             sample = failures[0]
             suffix = f" ({len(failures) - 1} more)" if len(failures) > 1 else ""
+            _diagnostic_append(diagnostics, f"failures: {sample}{suffix}")
             raise RuntimeError(f"Some local changes could not be synced: {sample}{suffix}")
+        _diagnostic_append(diagnostics, f"conflicts: {len(conflicts)}")
         return conflicts
 
     def resolve_offline_conflict(self, conflict: OfflineConflict, choice: str) -> Path:
@@ -1155,6 +1224,15 @@ def _normalized_hashes(value: object) -> dict[str, str]:
         for key, candidate in value.items()
         if str(key).strip() and str(candidate).strip()
     }
+
+
+def _short_digest(value: str) -> str:
+    return value[:12] if value else ""
+
+
+def _diagnostic_append(diagnostics: list[str] | None, message: str) -> None:
+    if diagnostics is not None:
+        diagnostics.append(message)
 
 
 def _file_digest(path: Path) -> str:
