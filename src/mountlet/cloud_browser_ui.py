@@ -385,21 +385,19 @@ class CompactCloudBrowser:
         *,
         directory_icon: Any,
         file_icon: Any,
-        downloaded: bool = False,
-        protected: bool = False,
-        downloaded_partial: bool = False,
-        protected_partial: bool = False,
+        temporary_cached: bool = False,
+        protected_cached: bool = False,
+        cache_partial: bool = False,
         changed: bool = False,
     ) -> Any:
         base_icon = self._base_entry_icon(entry, directory_icon=directory_icon, file_icon=file_icon)
-        if not any((downloaded, protected, changed)):
+        if not any((temporary_cached, protected_cached, changed)):
             return base_icon
         return self._composite_entry_icon(
             base_icon,
-            downloaded=downloaded,
-            protected=protected,
-            downloaded_partial=downloaded_partial,
-            protected_partial=protected_partial,
+            temporary_cached=temporary_cached,
+            protected_cached=protected_cached,
+            cache_partial=cache_partial,
             changed=changed,
         )
 
@@ -407,10 +405,9 @@ class CompactCloudBrowser:
         self,
         base_icon: Any,
         *,
-        downloaded: bool,
-        protected: bool,
-        downloaded_partial: bool = False,
-        protected_partial: bool = False,
+        temporary_cached: bool,
+        protected_cached: bool,
+        cache_partial: bool = False,
         changed: bool = False,
     ) -> Any:
         pixmap_type = getattr(self.qt, "QPixmap", None)
@@ -426,41 +423,26 @@ class CompactCloudBrowser:
             painter.setRenderHint(painter_type.RenderHint.Antialiasing, True)
             base_pixmap = base_icon.pixmap(size)
             painter.drawPixmap(0, 0, base_pixmap)
-            if protected:
+            if temporary_cached or protected_cached:
+                color = "#a855f7" if temporary_cached and protected_cached else "#38bdf8" if protected_cached else "#ef4444"
+                painter.setOpacity(0.5 if cache_partial else 1.0)
                 pen = self.qt.QPen(self.qt.QColor(0, 0, 0, 170))
                 pen.setWidth(5)
-                if protected_partial:
-                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
-                painter.setPen(pen)
-                painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(12, 12, 16, 16)
-                pen = self.qt.QPen(self.qt.QColor("#facc15"))
-                pen.setWidth(3)
-                if protected_partial:
-                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
-                painter.setPen(pen)
-                painter.drawEllipse(12, 12, 16, 16)
-            if downloaded:
-                pen = self.qt.QPen(self.qt.QColor(0, 0, 0, 170))
-                pen.setWidth(5)
-                if downloaded_partial:
-                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
                 painter.drawLine(20, 12, 20, 24)
                 painter.drawLine(15, 19, 20, 24)
                 painter.drawLine(25, 19, 20, 24)
                 painter.drawLine(14, 27, 26, 27)
-                pen = self.qt.QPen(self.qt.QColor("#38bdf8"))
+                pen = self.qt.QPen(self.qt.QColor(color))
                 pen.setWidth(3)
-                if downloaded_partial:
-                    pen.setStyle(self.qt.Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.drawLine(20, 12, 20, 24)
                 painter.drawLine(15, 19, 20, 24)
                 painter.drawLine(25, 19, 20, 24)
                 painter.drawLine(14, 27, 26, 27)
             if changed:
+                painter.setOpacity(1.0)
                 painter.setPen(self.qt.Qt.PenStyle.NoPen)
                 painter.setBrush(self.qt.QColor(0, 0, 0, 180))
                 painter.drawEllipse(19, -1, 12, 12)
@@ -762,7 +744,10 @@ class CompactCloudBrowser:
     def _display_entries(self, entries: list[BrowserEntry]) -> None:
         previous_path = ""
         previous_index = 0
+        previous_scroll = 0
         selected_paths: set[str] = set()
+        with suppress(Exception):
+            previous_scroll = int(self.tree.verticalScrollBar().value())
         current_item = self.tree.currentItem()
         if current_item is not None:
             previous = current_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
@@ -790,33 +775,34 @@ class CompactCloudBrowser:
             if previous_path and entry.path == previous_path:
                 current_target = item
             offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
-            partial_offline = bool(
-                remote and self.backend.is_partially_offline(remote.name, entry.path, is_dir=entry.is_dir)
+            protected_content = bool(
+                remote and self.backend.has_protected_content(remote.name, entry.path, is_dir=entry.is_dir)
             )
-            cached = bool(remote and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir))
-            cached_content = bool(remote and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir))
+            temporary_content = bool(
+                remote and self.backend.has_temporary_cache_content(remote.name, entry.path, is_dir=entry.is_dir)
+            )
+            cached_content = protected_content or temporary_content
+            partial_cache = bool(entry.is_dir and cached_content and not offline)
             changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
-            local_content = cached or cached_content
             item.setIcon(0, self._entry_icon(
                 entry,
                 directory_icon=directory_icon,
                 file_icon=file_icon,
-                downloaded=local_content,
-                protected=offline or partial_offline,
-                downloaded_partial=entry.is_dir and cached_content and not cached,
-                protected_partial=partial_offline,
+                temporary_cached=temporary_content,
+                protected_cached=protected_content,
+                cache_partial=partial_cache,
                 changed=changed,
             ))
             if changed:
                 item.setToolTip(0, "Local copy has unresolved changes")
             elif remote and offline:
                 item.setToolTip(0, "Available offline as a local snapshot")
-            elif remote and partial_offline:
-                item.setToolTip(0, "Partially available offline")
-            elif remote and cached:
+            elif remote and protected_content and temporary_content:
+                item.setToolTip(0, "Contains saved offline files and temporary cached files")
+            elif remote and protected_content:
+                item.setToolTip(0, "Contains files saved for offline access")
+            elif remote and temporary_content:
                 item.setToolTip(0, "Cached local copy")
-            elif remote and entry.is_dir and cached_content:
-                item.setToolTip(0, "Contains cached files")
             self.tree.addTopLevelItem(item)
             if fallback_target is None and self.tree.topLevelItemCount() - 1 >= previous_index:
                 fallback_target = item
@@ -830,6 +816,8 @@ class CompactCloudBrowser:
             self._ensure_tree_selection()
         self._update_actions()
         self._update_open_folder_button()
+        with suppress(Exception):
+            self.tree.verticalScrollBar().setValue(previous_scroll)
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
 
     def _set_item_foreground(self, item: Any, color: str) -> None:

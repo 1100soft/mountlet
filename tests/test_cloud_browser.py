@@ -445,6 +445,34 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
 
+    def test_metadata_only_local_save_refreshes_record_without_dirty_state(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    cached = backend.cache_file(remote, entry)
+
+            before = cached.stat().st_mtime_ns
+            os.utime(cached, ns=(before + 1_000_000_000, before + 1_000_000_000))
+
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+            self.assertEqual(
+                backend._offline_records["Docs"]["Reports/a.txt"]["local_mtime_ns"],
+                cached.stat().st_mtime_ns,
+            )
+
     def test_changed_managed_files_tolerates_manifest_changes_during_scan(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -817,6 +845,8 @@ class CloudBrowserTests(unittest.TestCase):
             def __init__(self, current: Item) -> None:
                 self.current = current
                 self.items: list[Item] = []
+                self.scroll = mock.Mock()
+                self.scroll.value.return_value = 37
 
             def currentItem(self) -> Item:
                 return self.current
@@ -838,6 +868,9 @@ class CloudBrowserTests(unittest.TestCase):
 
             def setCurrentItem(self, item: Item) -> None:
                 self.current = item
+
+            def verticalScrollBar(self) -> mock.Mock:
+                return self.scroll
 
         previous = Item(["", "b.txt", "", ""])
         previous.setData(0, 1, BrowserEntry("b.txt", "Reports/b.txt", False))
@@ -874,6 +907,7 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser.tree.current.data(0, 1).path, "Reports/b.txt")
         self.assertTrue(browser.tree.current.selected)
+        browser.tree.scroll.setValue.assert_called_once_with(37)
 
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
