@@ -53,7 +53,7 @@ class CompactCloudBrowser:
         open_file: Callable[[Path], bool] | None = None,
         open_local_folder: Callable[[Path], bool] | None = None,
         toggle_mount: Callable[[str, bool], None] | None = None,
-        sync_path: Callable[[core.RemoteInfo, str, bool], None] | None = None,
+        sync_paths: Callable[[core.RemoteInfo, list[tuple[str, bool]]], None] | None = None,
         embedded: bool = False,
         layout_changed: Callable[[], None] | None = None,
         local_files_changed: Callable[[], None] | None = None,
@@ -66,7 +66,7 @@ class CompactCloudBrowser:
         self._open_file = open_file
         self._open_local_folder = open_local_folder
         self._toggle_mount = toggle_mount
-        self._sync_path = sync_path
+        self._sync_paths = sync_paths
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -83,6 +83,9 @@ class CompactCloudBrowser:
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
         self._opened_local_files: set[Path] = set()
+        self._working_paths: dict[tuple[str, str], str] = {}
+        self._working_phase = 0
+        self._working_timer: Any | None = None
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -91,6 +94,7 @@ class CompactCloudBrowser:
         self.window = self._make_window()
         self._file_icon_provider = self._make_file_icon_provider()
         self._build()
+        self._setup_working_animation()
 
     def _make_bridge(self) -> Any:
         qt = self.qt
@@ -155,6 +159,8 @@ class CompactCloudBrowser:
         header.addStretch(1)
         self.mount_switch = self._mount_switch()
         header.addWidget(self.mount_switch)
+        self.remote_sync_button = self._button("⇄", self.sync_remote, "Sync cached files for this remote", square=True)
+        header.addWidget(self.remote_sync_button)
         header.addWidget(self._button("×", self.hide, "Close file browser", square=True))
         layout.addLayout(header)
 
@@ -185,6 +191,7 @@ class CompactCloudBrowser:
         self.paste_button = self._button("▣", self.paste, "Paste into this folder", square=True)
         self.delete_button = self._button("⌫", self.delete_selected, "Delete selected items", square=True)
         self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
+        self.selection_sync_button = self._button("⇄", self.sync_selected, "Sync selected local copies", square=True)
         save_icon = self._offline_icon()
         self._offline_base_icon = save_icon
         if save_icon is not None:
@@ -194,6 +201,7 @@ class CompactCloudBrowser:
         item_actions.addWidget(self.paste_button)
         item_actions.addWidget(self.delete_button)
         item_actions.addWidget(self.offline_button)
+        item_actions.addWidget(self.selection_sync_button)
         item_actions.addStretch(1)
         layout.addLayout(item_actions)
 
@@ -392,9 +400,10 @@ class CompactCloudBrowser:
         protected_cached: bool = False,
         cache_partial: bool = False,
         changed: bool = False,
+        working: str = "",
     ) -> Any:
         base_icon = self._base_entry_icon(entry, directory_icon=directory_icon, file_icon=file_icon)
-        if not any((temporary_cached, protected_cached, changed)):
+        if not any((temporary_cached, protected_cached, changed, working)):
             return base_icon
         return self._composite_entry_icon(
             base_icon,
@@ -402,6 +411,7 @@ class CompactCloudBrowser:
             protected_cached=protected_cached,
             cache_partial=cache_partial,
             changed=changed,
+            working=working,
         )
 
     def _composite_entry_icon(
@@ -412,6 +422,7 @@ class CompactCloudBrowser:
         protected_cached: bool,
         cache_partial: bool = False,
         changed: bool = False,
+        working: str = "",
     ) -> Any:
         pixmap_type = getattr(self.qt, "QPixmap", None)
         painter_type = getattr(self.qt, "QPainter", None)
@@ -451,10 +462,74 @@ class CompactCloudBrowser:
                 painter.drawEllipse(19, -1, 12, 12)
                 painter.setBrush(self.qt.QColor("#ef4444"))
                 painter.drawEllipse(21, 1, 8, 8)
+            if working:
+                opacity = 0.45 if self._working_phase % 2 else 1.0
+                color = "#38bdf8" if working == "download" else "#f59e0b"
+                painter.setOpacity(opacity)
+                painter.setPen(self.qt.Qt.PenStyle.NoPen)
+                painter.setBrush(self.qt.QColor(0, 0, 0, 165))
+                painter.drawEllipse(1, 1, 14, 14)
+                pen = self.qt.QPen(self.qt.QColor(color))
+                pen.setWidth(2)
+                painter.setPen(pen)
+                painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
+                if working == "download":
+                    painter.drawLine(8, 3, 8, 10)
+                    painter.drawLine(5, 7, 8, 10)
+                    painter.drawLine(11, 7, 8, 10)
+                    painter.drawLine(4, 13, 12, 13)
+                else:
+                    painter.drawArc(4, 4, 9, 9, 40 * 16, 260 * 16)
+                    painter.drawLine(12, 5, 12, 9)
+                    painter.drawLine(12, 5, 8, 5)
             painter.end()
             return icon_type(pixmap)
         except Exception:
             return base_icon
+
+    def _setup_working_animation(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.window)
+            timer.setInterval(450)
+            timer.timeout.connect(self._advance_working_animation)
+        except Exception:
+            return
+        self._working_timer = timer
+
+    def _advance_working_animation(self) -> None:
+        if not self._working_paths:
+            timer = getattr(self, "_working_timer", None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+            return
+        self._working_phase += 1
+        self._display_entries(list(getattr(self, "entries", [])))
+
+    def _start_working_paths(self, remote_name: str, paths: list[str], kind: str) -> None:
+        if not paths:
+            return
+        for path in paths:
+            self._working_paths[(remote_name, path)] = kind
+        timer = getattr(self, "_working_timer", None)
+        if timer is not None:
+            with suppress(Exception):
+                if not timer.isActive():
+                    timer.start()
+        self._display_entries(list(getattr(self, "entries", [])))
+
+    def _finish_working_paths(self, remote_name: str, paths: list[str]) -> None:
+        for path in paths:
+            self._working_paths.pop((remote_name, path), None)
+        if not self._working_paths:
+            timer = getattr(self, "_working_timer", None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+        self._display_entries(list(getattr(self, "entries", [])))
 
     def _enlarge_button_text(self, button: Any) -> None:
         try:
@@ -787,6 +862,7 @@ class CompactCloudBrowser:
             cached_content = protected_content or temporary_content
             partial_cache = bool(entry.is_dir and cached_content and not offline)
             changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
+            working = self._working_paths.get((remote.name, entry.path), "") if remote else ""
             item.setIcon(0, self._entry_icon(
                 entry,
                 directory_icon=directory_icon,
@@ -795,8 +871,13 @@ class CompactCloudBrowser:
                 protected_cached=protected_content,
                 cache_partial=partial_cache,
                 changed=changed,
+                working=working,
             ))
-            if changed:
+            if working == "download":
+                item.setToolTip(0, "Downloading local copy")
+            elif working == "sync":
+                item.setToolTip(0, "Syncing local copy")
+            elif changed:
                 item.setToolTip(0, "Local copy has unresolved changes")
             elif remote and offline:
                 item.setToolTip(0, "Available offline as a local snapshot")
@@ -993,7 +1074,7 @@ class CompactCloudBrowser:
         self._add_offline_menu_actions(menu, entry)
         self._menu_action(
             menu,
-            "Sync local copy",
+            "Sync now",
             lambda selected=entry: self._sync_cached_path(selected.path, selected.is_dir),
             enabled=self._can_sync_cache(entry),
         )
@@ -1019,7 +1100,7 @@ class CompactCloudBrowser:
         )
         self._menu_action(menu, "New folder", self.create_folder, enabled=edits_enabled and not self._operation_pending)
         menu.addSeparator()
-        self._menu_action(menu, "Sync cached files in this folder", lambda: self._sync_cached_path(self.path, True), enabled=self._can_sync_folder())
+        self._menu_action(menu, "Sync now", lambda: self._sync_cached_path(self.path, True), enabled=self._can_sync_folder())
         self._menu_action(menu, "Free resolved cache in this folder", lambda: self._free_cache(self.path), enabled=bool(self.remote))
         self._menu_action(menu, "Free all resolved cache", self._free_all_resolved_cache)
         origin = source or self.path_field
@@ -1053,7 +1134,7 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         return bool(
             remote
-            and self._sync_path is not None
+            and self._sync_paths is not None
             and not self._operation_pending
             and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
         )
@@ -1062,15 +1143,33 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         return bool(
             remote
-            and self._sync_path is not None
+            and self._sync_paths is not None
             and not self._operation_pending
             and self.backend.managed_file_paths_under(remote.name, self.path)
         )
 
     def _sync_cached_path(self, path: str, is_dir: bool) -> None:
-        if self.remote is None or self._sync_path is None:
+        if self.remote is None or self._sync_paths is None:
             return
-        self._sync_path(self.remote, path, is_dir)
+        self._start_working_paths(self.remote.name, [path], "sync")
+        self._sync_paths(self.remote, [(path, is_dir)])
+
+    def sync_selected(self) -> None:
+        remote = getattr(self, "remote", None)
+        entries = self._selected_entries()
+        if remote is None or self._sync_paths is None or not entries or self._operation_pending:
+            return
+        paths = [(entry.path, entry.is_dir) for entry in entries]
+        self._start_working_paths(remote.name, [path for path, _is_dir in paths], "sync")
+        self._sync_paths(remote, paths)
+
+    def sync_remote(self) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or self._sync_paths is None or self._operation_pending:
+            return
+        visible_paths = [entry.path for entry in getattr(self, "entries", [])]
+        self._start_working_paths(remote.name, visible_paths, "sync")
+        self._sync_paths(remote, [("", True)])
 
     def _add_offline_menu_actions(self, menu: Any, entry: BrowserEntry) -> None:
         remote = getattr(self, "remote", None)
@@ -1214,7 +1313,12 @@ class CompactCloudBrowser:
                     self.backend.make_offline(remote, entry)
 
             message = "Downloading for offline use…"
-        self._run_operation(message, action)
+        self._run_operation(
+            message,
+            action,
+            working_paths=[entry.path for entry in entries] if not all_offline else None,
+            working_kind="download",
+        )
 
     def _offline_action_label(self) -> str:
         entries = self._selected_entries()
@@ -1231,12 +1335,17 @@ class CompactCloudBrowser:
         *,
         clear_clipboard: bool = False,
         invalidate_keys: set[tuple[str, str]] | None = None,
+        working_paths: list[str] | None = None,
+        working_kind: str = "",
     ) -> None:
         self._operation_pending = True
         current_key = (self.remote.name, self.path) if self.remote is not None else None
         self._operation_cache_keys = set(invalidate_keys or ())
         if current_key is not None:
             self._operation_cache_keys.add(current_key)
+        working_remote = self.remote.name if self.remote is not None else ""
+        if working_remote and working_paths and working_kind:
+            self._start_working_paths(working_remote, working_paths, working_kind)
         self.status.setText(message)
         self._update_actions()
 
@@ -1254,6 +1363,9 @@ class CompactCloudBrowser:
 
     def _operation_finished(self, success: bool, message: str) -> None:
         self._operation_pending = False
+        remote_name = self.remote.name if self.remote is not None else ""
+        if remote_name:
+            self._finish_working_remote(remote_name, "download")
         changed_keys = self._operation_cache_keys
         self._operation_cache_keys = set()
         for changed_key in changed_keys:
@@ -1297,6 +1409,37 @@ class CompactCloudBrowser:
                 paste_button,
                 paste_enabled,
                 "Paste into this folder" if paste_disabled_reason is None else paste_disabled_reason,
+            )
+        remote_sync_button = getattr(self, "remote_sync_button", None)
+        if remote_sync_button is not None:
+            remote_sync_enabled = bool(
+                self.remote
+                and self._sync_paths is not None
+                and not operation_pending
+                and self.backend.managed_record_paths(self.remote.name)
+            )
+            self._set_action_button_state(
+                remote_sync_button,
+                remote_sync_enabled,
+                "Sync cached files for this remote" if remote_sync_enabled else "No cached or offline files to sync",
+            )
+        selection_sync_button = getattr(self, "selection_sync_button", None)
+        if selection_sync_button is not None:
+            selected_entries = self._selected_entries()
+            selection_sync_enabled = bool(
+                self.remote
+                and self._sync_paths is not None
+                and selected_entries
+                and not operation_pending
+                and any(
+                    self.backend.has_cached_content(self.remote.name, entry.path, is_dir=entry.is_dir)
+                    for entry in selected_entries
+                )
+            )
+            self._set_action_button_state(
+                selection_sync_button,
+                selection_sync_enabled,
+                "Sync selected local copies" if selection_sync_enabled else "Select cached or offline files first",
             )
         offline_enabled = selected and not operation_pending
         self._set_action_button_state(
@@ -1405,6 +1548,18 @@ class CompactCloudBrowser:
         self._update_mount_switch()
         self._display_entries(list(getattr(self, "entries", [])))
 
+    def finish_sync(self, remote_name: str) -> None:
+        self._finish_working_remote(remote_name, "sync")
+
+    def _finish_working_remote(self, remote_name: str, kind: str) -> None:
+        changed = False
+        for key in list(self._working_paths):
+            if key[0] == remote_name and self._working_paths.get(key) == kind:
+                self._working_paths.pop(key, None)
+                changed = True
+        if changed:
+            self._display_entries(list(getattr(self, "entries", [])))
+
     def _update_open_folder_button(self) -> None:
         button = getattr(self, "open_folder_button", None)
         if button is None:
@@ -1465,6 +1620,7 @@ class CompactCloudBrowser:
         if cached.is_file():
             self._open_local_file(self.backend.prepare_offline_open(remote.name, entry.path))
             return
+        self._start_working_paths(remote.name, [entry.path], "download")
         self.status.setText("Downloading cached copy…")
         self._update_actions()
 
@@ -1479,6 +1635,7 @@ class CompactCloudBrowser:
         threading.Thread(target=worker, daemon=True).start()
 
     def _cached_file_ready(self, remote_name: str, path: str, local: object, error: str) -> None:
+        self._finish_working_paths(remote_name, [path])
         if error:
             self._notify("Open file", error, False)
             self.status.setText(error)

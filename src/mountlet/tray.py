@@ -4243,7 +4243,7 @@ class MountletWindow:
             open_file=self.desktop.open_file,
             open_local_folder=lambda path: self.desktop.open_folder(str(path)),
             toggle_mount=self._run_switch_action,
-            sync_path=self._sync_cached_path,
+            sync_paths=self._sync_cached_paths,
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
@@ -4598,16 +4598,28 @@ class MountletWindow:
         if not started:
             self.tray_app._notify("Cache sync", "No cached or offline files need checking.", success=True)
 
-    def _sync_cached_path(self, remote: core.RemoteInfo, path: str, is_dir: bool) -> None:
-        try:
-            paths = self.file_browser.backend.managed_record_paths_under(remote.name, path if is_dir else normalize_browser_path(path))
-        except Exception as exc:
-            self.tray_app._notify("Cache sync", f"Could not prepare sync: {exc}", success=False)
+    def _sync_cached_paths(self, remote: core.RemoteInfo, items: list[tuple[str, bool]]) -> None:
+        if not items:
             return
-        if not paths:
+        record_paths: list[str] = []
+        seen: set[str] = set()
+        for path, is_dir in items:
+            normalized = normalize_browser_path(path)
+            try:
+                paths = self.file_browser.backend.managed_record_paths_under(remote.name, normalized if is_dir else normalized)
+            except Exception as exc:
+                self.tray_app._notify("Cache sync", f"Could not prepare sync: {exc}", success=False)
+                return
+            for record_path in paths:
+                if record_path in seen:
+                    continue
+                seen.add(record_path)
+                record_paths.append(record_path)
+        if not record_paths:
             self.tray_app._notify("Cache sync", "No cached or offline files found there.", success=True)
+            self.file_browser.finish_sync(remote.name)
             return
-        self._start_remote_cache_check(remote, paths)
+        self._start_remote_cache_check(remote, record_paths)
 
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
