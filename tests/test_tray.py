@@ -1524,6 +1524,82 @@ class TrayTests(unittest.TestCase):
         self.assertIn("changed_remotes_before: ['Docs']", report)
         self.assertIn("upload: ok", report)
         self.assertIn("changed_after: False", report)
+        mountlet_window._refresh_file_browser_mount_state.assert_not_called()
+
+    def test_mountlet_window_cache_sync_debug_report_starts_worker(self):
+        started: list[object] = []
+
+        class Thread:
+            def __init__(self, target, daemon=False):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started.append(self)
+
+        class Dialog:
+            def setWindowTitle(self, _title):
+                pass
+
+            def reject(self):
+                pass
+
+            def resize(self, *_args):
+                pass
+
+        class Layout:
+            def __init__(self, _dialog):
+                pass
+
+            def addWidget(self, _widget):
+                pass
+
+        class Buttons:
+            StandardButton = SimpleNamespace(Close="close")
+
+            def __init__(self, _buttons):
+                self.rejected = SimpleNamespace(connect=lambda _callback: None)
+
+        text = mock.Mock()
+        label = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.qt = SimpleNamespace(
+            QDialog=lambda _parent: Dialog(),
+            QVBoxLayout=Layout,
+            QLabel=lambda _text: label,
+            QPlainTextEdit=lambda: text,
+            QDialogButtonBox=Buttons,
+        )
+        mountlet_window.window = object()
+        mountlet_window.tray_app = SimpleNamespace(_notify=mock.Mock())
+        mountlet_window._open_child_dialog = mock.Mock()
+        mountlet_window._bridge = SimpleNamespace(cache_sync_debug_ready=SimpleNamespace(emit=mock.Mock()))
+        mountlet_window._cache_sync_debug_report = mock.Mock(return_value="report")
+
+        with mock.patch.object(tray.threading, "Thread", Thread):
+            mountlet_window._show_cache_sync_debug_report()
+
+        self.assertTrue(mountlet_window._cache_sync_debug_running)
+        text.setPlainText.assert_called_once_with("Running cache sync diagnostics…")
+        self.assertEqual(len(started), 1)
+        started[0].target()
+        mountlet_window._bridge.cache_sync_debug_ready.emit.assert_called_once_with("report")
+
+    def test_mountlet_window_cache_sync_debug_ready_populates_report(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._cache_sync_debug_running = True
+        mountlet_window._cache_sync_debug_text = mock.Mock()
+        mountlet_window._cache_sync_debug_label = mock.Mock()
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+
+        mountlet_window._handle_cache_sync_debug_ready("report")
+
+        self.assertFalse(mountlet_window._cache_sync_debug_running)
+        mountlet_window._cache_sync_debug_text.setPlainText.assert_called_once_with("report")
         mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
 
     def test_mountlet_window_focus_return_scans_all_local_cache_changes(self):
