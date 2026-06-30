@@ -352,6 +352,14 @@ class CloudBrowserBackend:
                 result[candidate_name] = files
         return result
 
+    def managed_record_paths(self, remote_name: str) -> list[str]:
+        records = self._offline_records.get(remote_name, {})
+        return [
+            path
+            for path, record in list(records.items())
+            if not bool(record.get("is_dir")) and self.offline_path(remote_name, path).is_file()
+        ]
+
     def managed_file_paths_under(self, remote_name: str, path: str) -> list[Path]:
         normalized = normalize_browser_path(path)
         prefix = f"{normalized}/" if normalized else ""
@@ -433,6 +441,7 @@ class CloudBrowserBackend:
         *,
         diagnostics: list[str] | None = None,
         include_remote_checks: bool = False,
+        paths: Iterable[str] | None = None,
     ) -> list[OfflineConflict]:
         try:
             binary = self._rclone()
@@ -443,14 +452,18 @@ class CloudBrowserBackend:
         conflicts: list[OfflineConflict] = []
         failures: list[str] = []
         records = self._offline_records.get(remote.name, {})
-        candidate_paths = (
-            [path for path, record in list(records.items()) if not bool(record.get("is_dir"))]
-            if include_remote_checks
-            else self.changed_managed_paths(remote.name)
-        )
+        if paths is not None:
+            candidate_paths = [normalize_browser_path(path) for path in paths]
+        elif include_remote_checks:
+            candidate_paths = self.managed_record_paths(remote.name)
+        else:
+            candidate_paths = self.changed_managed_paths(remote.name)
         _diagnostic_append(diagnostics, f"candidate_paths: {len(candidate_paths)}")
         if not candidate_paths:
-            _diagnostic_append(diagnostics, "no locally changed managed files")
+            if include_remote_checks:
+                _diagnostic_append(diagnostics, "no managed files to check")
+            else:
+                _diagnostic_append(diagnostics, "no locally changed managed files")
             return []
         for path in candidate_paths:
             record = records.get(path)
@@ -484,7 +497,8 @@ class CloudBrowserBackend:
             current = self.remote_current_path(remote.name, path)
             metadata: dict[str, object] | None = None
             cloud_changed: bool | None = None
-            if local_changed or self._record_has_remote_metadata(record):
+            has_remote_metadata = self._record_has_remote_metadata(record)
+            if local_changed or include_remote_checks or has_remote_metadata:
                 started = time.perf_counter()
                 try:
                     metadata = self._remote_file_metadata(
@@ -507,8 +521,15 @@ class CloudBrowserBackend:
                         f"hashes={sorted(_normalized_hashes(metadata.get('Hashes')))}",
                     )
                 if metadata is not None:
+                    if include_remote_checks and not local_changed and not has_remote_metadata:
+                        self._record_remote_metadata(remote.name, path, metadata)
+                        _diagnostic_append(diagnostics, "  decision: initialized remote metadata baseline")
+                        continue
                     cloud_changed = not self._remote_metadata_matches_record(record, metadata)
                     _diagnostic_append(diagnostics, f"  cloud_changed_by_metadata: {cloud_changed}")
+                elif include_remote_checks and not local_changed:
+                    _diagnostic_append(diagnostics, "  decision: skipped remote check; metadata unavailable")
+                    continue
             try:
                 if cloud_changed is not False:
                     started = time.perf_counter()

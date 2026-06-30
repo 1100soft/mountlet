@@ -82,6 +82,8 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+REMOTE_CACHE_CHECK_INTERVAL_MS = 30_000
+REMOTE_CACHE_CHECK_BATCH_SIZE = 20
 FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Common",
@@ -4202,6 +4204,9 @@ class MountletWindow:
         self._offline_watched_paths: set[str] = set()
         self._offline_file_watcher: Any | None = None
         self._offline_change_poll_timer: Any | None = None
+        self._remote_change_poll_timer: Any | None = None
+        self._remote_change_poll_offsets: dict[str, int] = {}
+        self._remote_change_poll_index = 0
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_popup_position: tuple[int, int] | None = None
@@ -4386,6 +4391,7 @@ class MountletWindow:
     def _setup_offline_change_tracking(self) -> None:
         self._setup_offline_file_watcher()
         self._setup_offline_change_polling()
+        self._setup_remote_change_polling()
         self._scan_local_cache_changes()
 
     def _setup_offline_file_watcher(self) -> None:
@@ -4500,6 +4506,60 @@ class MountletWindow:
             if remote_name not in scheduled:
                 self._refresh_file_browser_mount_state(remote_name)
                 self._schedule_offline_reconcile(remote_name)
+
+    def _setup_remote_change_polling(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.window)
+            timer.setInterval(REMOTE_CACHE_CHECK_INTERVAL_MS)
+            timer.timeout.connect(self._scan_remote_cache_changes)
+            timer.start()
+        except Exception:
+            return
+        self._remote_change_poll_timer = timer
+
+    def _scan_remote_cache_changes(self) -> None:
+        if self._tray_is_quitting():
+            return
+        pending = set(getattr(self, "_action_pending", set()))
+        scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
+        running = set(getattr(self, "_offline_reconcile_running", set()))
+        remotes = [
+            remote
+            for remote in _load_visible_remotes()
+            if remote.name not in pending and remote.name not in scheduled and remote.name not in running
+        ]
+        if not remotes:
+            return
+        backend = self.file_browser.backend
+        start = int(getattr(self, "_remote_change_poll_index", 0)) % len(remotes)
+        for offset in range(len(remotes)):
+            remote = remotes[(start + offset) % len(remotes)]
+            try:
+                paths = backend.managed_record_paths(remote.name)
+            except Exception:
+                continue
+            if not paths:
+                continue
+            poll_offsets = getattr(self, "_remote_change_poll_offsets", {})
+            path_offset = int(poll_offsets.get(remote.name, 0))
+            selected = self._remote_change_poll_batch(paths, path_offset)
+            if not selected:
+                continue
+            poll_offsets[remote.name] = (path_offset + len(selected)) % len(paths)
+            self._remote_change_poll_offsets = poll_offsets
+            self._remote_change_poll_index = (start + offset + 1) % len(remotes)
+            self._start_remote_cache_check(remote, selected)
+            return
+
+    def _remote_change_poll_batch(self, paths: list[str], offset: int) -> list[str]:
+        if not paths:
+            return []
+        limit = min(REMOTE_CACHE_CHECK_BATCH_SIZE, len(paths))
+        start = offset % len(paths)
+        return [paths[(start + index) % len(paths)] for index in range(limit)]
 
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
@@ -6423,6 +6483,32 @@ class MountletWindow:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _start_remote_cache_check(self, remote: core.RemoteInfo, paths: list[str]) -> None:
+        if self._tray_is_quitting() or not paths:
+            return
+        running = getattr(self, "_offline_reconcile_running", None)
+        if running is None:
+            running = set()
+            self._offline_reconcile_running = running
+        if remote.name in running:
+            return
+        running.add(remote.name)
+        self._set_file_browser_status(remote.name, "Checking cloud changes…")
+
+        def worker() -> None:
+            try:
+                conflicts = self.file_browser.backend.changed_managed_files(
+                    remote,
+                    include_remote_checks=True,
+                    paths=paths,
+                )
+            except Exception as exc:
+                self._bridge.offline_reconcile_ready.emit(remote.name, None, exc)
+                return
+            self._bridge.offline_reconcile_ready.emit(remote.name, conflicts, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _handle_offline_reconcile_ready(self, remote_name: str, conflicts: object, error: object) -> None:
         if self._tray_is_quitting():
             return
@@ -6440,6 +6526,7 @@ class MountletWindow:
             self._reschedule_pending_offline_reconcile(remote_name)
             return
         if not conflicts:
+            self._set_file_browser_status(remote.name, "")
             self._refresh_file_browser_mount_state(remote.name)
             self._reschedule_pending_offline_reconcile(remote_name, only_if_dirty=True)
             return
@@ -6534,6 +6621,8 @@ class MountletWindow:
         if not changed_remote_names:
             lines.append("No pending local cache changes detected.")
             lines.append("")
+            lines.extend(self._cache_sync_remote_check_summary(remotes))
+            lines.append("")
             lines.extend(self._cache_sync_manifest_summary(remotes))
             return "\n".join(lines)
         for remote_name in changed_remote_names:
@@ -6561,8 +6650,46 @@ class MountletWindow:
             else:
                 lines.append(f"changed_after: {still_changed}")
         lines.append("")
+        lines.extend(self._cache_sync_remote_check_summary(remotes))
+        lines.append("")
         lines.extend(self._cache_sync_manifest_summary(remotes))
         return "\n".join(lines)
+
+    def _cache_sync_remote_check_summary(self, remotes: dict[str, core.RemoteInfo]) -> list[str]:
+        lines = ["remote_check:"]
+        backend = self.file_browser.backend
+        checked = False
+        for remote_name, remote in remotes.items():
+            try:
+                paths = backend.managed_record_paths(remote_name)
+            except Exception as exc:
+                lines.append(f"  {remote_name}: ERROR {type(exc).__name__}: {exc}")
+                continue
+            if not paths:
+                continue
+            checked = True
+            selected = self._remote_change_poll_batch(paths, int(getattr(self, "_remote_change_poll_offsets", {}).get(remote_name, 0)))
+            lines.append(f"  {remote_name}: checking {len(selected)} of {len(paths)} managed files")
+            diagnostics: list[str] = []
+            started = time.perf_counter()
+            try:
+                conflicts = backend.changed_managed_files(
+                    remote,
+                    diagnostics=diagnostics,
+                    include_remote_checks=True,
+                    paths=selected,
+                )
+            except Exception as exc:
+                lines.append(f"  result: ERROR after {time.perf_counter() - started:.3f}s")
+                lines.append(f"  error: {type(exc).__name__}: {exc}")
+            else:
+                lines.append(f"  result: ok after {time.perf_counter() - started:.3f}s")
+                lines.append(f"  conflicts_returned: {len(conflicts)}")
+            lines.extend(f"  {line}" for line in diagnostics)
+            break
+        if not checked:
+            lines.append("  no managed files to check")
+        return lines
 
     def _cache_sync_manifest_summary(self, remotes: dict[str, core.RemoteInfo]) -> list[str]:
         lines = ["manifest:"]

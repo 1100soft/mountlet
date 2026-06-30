@@ -580,6 +580,43 @@ class CloudBrowserTests(unittest.TestCase):
             sync_calls = [call for call in run.call_args_list if call.kwargs.get("timeout") == RCLONE_CACHE_SYNC_TIMEOUT_SECONDS]
             self.assertEqual(len(sync_calls), 2)
 
+    def test_remote_poll_initializes_metadata_without_downloading_clean_file(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    backend.cache_file(remote, entry)
+
+            metadata = {"Size": 7, "ModTime": "2026-01-02T03:04:00Z"}
+            diagnostics: list[str] = []
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata):
+                    with mock.patch.object(backend, "_run_operation") as run:
+                        conflicts = backend.changed_managed_files(
+                            remote,
+                            diagnostics=diagnostics,
+                            include_remote_checks=True,
+                        )
+
+            self.assertEqual(conflicts, [])
+            run.assert_not_called()
+            record = backend._offline_records["Docs"]["Reports/a.txt"]
+            self.assertEqual(record["remote_size"], 7)
+            self.assertEqual(record["remote_modtime"], "2026-01-02T03:04:00Z")
+            self.assertIn("  decision: initialized remote metadata baseline", diagnostics)
+
     def test_metadata_only_local_save_refreshes_record_without_dirty_state(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -667,14 +704,20 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
                     cached = backend.cache_file(remote, entry)
 
+            record = backend._offline_records["Docs"]["Reports/a.txt"]
+            record["remote_size"] = 7
+            record["remote_modtime"] = "2026-01-02T03:04:00Z"
+
             def remote_changed(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("cloud edit", encoding="utf-8")
 
+            metadata = {"Size": 10, "ModTime": "2026-01-03T03:04:00Z"}
             with mock.patch.object(backend, "_rclone", return_value="rclone"):
-                with mock.patch.object(backend, "_run_operation", side_effect=remote_changed):
-                    conflicts = backend.changed_managed_files(remote, include_remote_checks=True)
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata):
+                    with mock.patch.object(backend, "_run_operation", side_effect=remote_changed):
+                        conflicts = backend.changed_managed_files(remote, include_remote_checks=True)
 
             self.assertEqual(conflicts, [])
             self.assertEqual(cached.read_text(encoding="utf-8"), "cloud edit")
