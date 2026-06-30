@@ -475,6 +475,48 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
 
+    def test_changed_cached_file_uses_remote_metadata_before_downloading_cloud_copy(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def initial_copy(_binary: str, *_arguments: str) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_copy):
+                    cached = backend.cache_file(remote, entry)
+
+            record = backend._offline_records["Docs"]["Reports/a.txt"]
+            record["remote_size"] = 7
+            record["remote_modtime"] = "2026-01-02T03:04:00Z"
+            cached.write_text("local edit", encoding="utf-8")
+            calls: list[tuple[str, ...]] = []
+
+            def upload_only(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                calls.append(arguments)
+                self.assertEqual(arguments[0], "copyto")
+                self.assertEqual(str(arguments[1]), str(cached))
+
+            metadata = {"Size": 7, "ModTime": "2026-01-02T03:04:00Z"}
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata) as stat:
+                    with mock.patch.object(backend, "_run_operation", side_effect=upload_only):
+                        conflicts = backend.changed_managed_files(remote)
+
+            self.assertEqual(conflicts, [])
+            self.assertEqual(calls, [("copyto", str(cached), "Docs:/Reports/a.txt")])
+            self.assertFalse(backend.remote_current_path("Docs", "Reports/a.txt").exists())
+            self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+            stat.assert_called_once()
+
     def test_changed_cached_file_uses_cache_sync_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

@@ -22,6 +22,7 @@ OFFLINE_MANIFEST_FILE = "offline_manifest.json"
 REMOTE_CURRENT_DIR = ".mountlet-remote-current"
 RCLONE_FILE_OPERATION_TIMEOUT_SECONDS = 120
 RCLONE_CACHE_SYNC_TIMEOUT_SECONDS = 45
+RCLONE_METADATA_TIMEOUT_SECONDS = 15
 CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
@@ -437,25 +438,44 @@ class CloudBrowserBackend:
             if not previous_hash:
                 self._update_offline_record_state(remote.name, path, local)
                 continue
-            current = self.remote_current_path(remote.name, path)
-            try:
-                self._download_remote_file(binary, remote, path, current, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
-            except RuntimeError as exc:
-                failures.append(f"{path}: {exc}")
-                continue
             try:
                 local_hash = _file_digest(local)
-                current_hash = _file_digest(current)
             except OSError:
                 continue
             local_changed = local_hash != previous_hash
-            cloud_changed = current_hash != previous_hash
+            current = self.remote_current_path(remote.name, path)
+            metadata: dict[str, object] | None = None
+            cloud_changed: bool | None = None
+            if local_changed or self._record_has_remote_metadata(record):
+                with suppress(RuntimeError):
+                    metadata = self._remote_file_metadata(
+                        binary,
+                        remote,
+                        path,
+                        timeout=RCLONE_METADATA_TIMEOUT_SECONDS,
+                    )
+                if metadata is not None:
+                    cloud_changed = not self._remote_metadata_matches_record(record, metadata)
+            try:
+                if cloud_changed is not False:
+                    self._download_remote_file(binary, remote, path, current, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
+            except RuntimeError as exc:
+                failures.append(f"{path}: {exc}")
+                continue
+            if cloud_changed is not False:
+                try:
+                    current_hash = _file_digest(current)
+                except OSError:
+                    continue
+                cloud_changed = current_hash != previous_hash
             if not local_changed and not cloud_changed:
                 self._update_offline_record_state(remote.name, path, local)
+                self._record_remote_metadata(remote.name, path, metadata)
                 continue
             if not local_changed and cloud_changed:
                 shutil.copy2(current, local)
                 self._update_offline_record_state(remote.name, path, local)
+                self._record_remote_metadata(remote.name, path, metadata)
                 continue
             if local_changed and not cloud_changed:
                 try:
@@ -464,11 +484,13 @@ class CloudBrowserBackend:
                     failures.append(f"{path}: {exc}")
                     continue
                 self._update_offline_record_state(remote.name, path, local)
+                self._clear_record_remote_metadata(remote.name, path)
                 with suppress(OSError):
                     current.unlink()
                 continue
             if local_hash == current_hash:
                 self._update_offline_record_state(remote.name, path, local)
+                self._record_remote_metadata(remote.name, path, metadata)
                 continue
             conflicts.append(
                 OfflineConflict(
@@ -761,6 +783,9 @@ class CloudBrowserBackend:
                         "local_size": _optional_int(record.get("local_size")),
                         "local_mtime_ns": _optional_int(record.get("local_mtime_ns")),
                         "local_sha256": str(record.get("local_sha256") or ""),
+                        "remote_size": _optional_int(record.get("remote_size")),
+                        "remote_modtime": str(record.get("remote_modtime") or ""),
+                        "remote_hashes": _normalized_hashes(record.get("remote_hashes")),
                         "protected": bool(record.get("protected", True)),
                         "complete": complete,
                     }
@@ -861,6 +886,59 @@ class CloudBrowserBackend:
         record["local_sha256"] = _file_digest(local_path)
         self._save_offline_manifest()
 
+    def _record_remote_metadata(
+        self,
+        remote_name: str,
+        path: str,
+        metadata: dict[str, object] | None,
+        *,
+        save: bool = True,
+    ) -> None:
+        if metadata is None:
+            return
+        record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
+        if record is None:
+            return
+        remote_size = _optional_int(metadata.get("Size"))
+        if remote_size is not None:
+            record["remote_size"] = remote_size
+        modtime = str(metadata.get("ModTime") or "")
+        if modtime:
+            record["remote_modtime"] = modtime
+        normalized_hashes = _normalized_hashes(metadata.get("Hashes"))
+        if normalized_hashes:
+            record["remote_hashes"] = normalized_hashes
+        if save:
+            self._save_offline_manifest()
+
+    def _remote_metadata_matches_record(self, record: dict[str, object], metadata: dict[str, object]) -> bool:
+        recorded_hashes = _normalized_hashes(record.get("remote_hashes"))
+        current_hashes = _normalized_hashes(metadata.get("Hashes"))
+        shared = set(recorded_hashes).intersection(current_hashes)
+        if shared:
+            return all(recorded_hashes[key] == current_hashes[key] for key in shared)
+        recorded_size = _optional_int(record.get("remote_size"))
+        current_size = _optional_int(metadata.get("Size"))
+        recorded_modtime = str(record.get("remote_modtime") or "")
+        current_modtime = str(metadata.get("ModTime") or "")
+        if recorded_size is not None and current_size is not None and recorded_modtime and current_modtime:
+            return recorded_size == current_size and recorded_modtime == current_modtime
+        return False
+
+    def _record_has_remote_metadata(self, record: dict[str, object]) -> bool:
+        if _normalized_hashes(record.get("remote_hashes")):
+            return True
+        return _optional_int(record.get("remote_size")) is not None and bool(str(record.get("remote_modtime") or ""))
+
+    def _clear_record_remote_metadata(self, remote_name: str, path: str) -> None:
+        record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
+        if record is None:
+            return
+        record.pop("remote_size", None)
+        record.pop("remote_modtime", None)
+        record.pop("remote_hashes", None)
+        self._save_offline_manifest()
+
     def _remove_offline_records(self, remote_name: str, path: str) -> None:
         records = self._offline_records.get(remote_name)
         if not records:
@@ -910,6 +988,42 @@ class CloudBrowserBackend:
             raise RuntimeError(f"rclone {operation} timed out after {timeout} seconds") from exc
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+
+    def _remote_file_metadata(
+        self,
+        binary: str,
+        remote: core.RemoteInfo,
+        path: str,
+        *,
+        timeout: int = RCLONE_METADATA_TIMEOUT_SECONDS,
+    ) -> dict[str, object]:
+        try:
+            result = subprocess.run(
+                self._command(
+                    binary,
+                    "lsjson",
+                    remote_target(remote, path),
+                    "--stat",
+                    "--hash",
+                    "--no-mimetype",
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                **core.PLATFORM.command_process_options(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"rclone metadata check timed out after {timeout} seconds") from exc
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+        try:
+            metadata = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("rclone returned invalid file metadata") from exc
+        if not isinstance(metadata, dict) or bool(metadata.get("IsDir")):
+            raise RuntimeError("rclone did not return file metadata")
+        return metadata
 
     def _download_remote_file(
         self,
@@ -1031,6 +1145,16 @@ def _optional_int(value: object) -> int | None:
         return int(value) if value is not None and value != "" else None
     except (TypeError, ValueError):
         return None
+
+
+def _normalized_hashes(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): str(candidate)
+        for key, candidate in value.items()
+        if str(key).strip() and str(candidate).strip()
+    }
 
 
 def _file_digest(path: Path) -> str:
