@@ -20,6 +20,7 @@ BROWSER_STATE_FILE = "browser.json"
 OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
 REMOTE_CURRENT_DIR = ".mountlet-remote-current"
+RCLONE_FILE_OPERATION_TIMEOUT_SECONDS = 120
 CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
@@ -880,13 +881,19 @@ class CloudBrowserBackend:
         return [binary, "--config", core.CONFIG_PATH, *arguments]
 
     def _run_operation(self, binary: str, *arguments: str) -> None:
-        result = subprocess.run(
-            self._command(binary, *arguments),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            **core.PLATFORM.command_process_options(),
-        )
+        command = self._command(binary, *arguments)
+        try:
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+                **core.PLATFORM.command_process_options(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            operation = arguments[0] if arguments else "operation"
+            raise RuntimeError(f"rclone {operation} timed out after {RCLONE_FILE_OPERATION_TIMEOUT_SECONDS} seconds") from exc
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
 

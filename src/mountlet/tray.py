@@ -4420,11 +4420,24 @@ class MountletWindow:
         self._offline_watched_paths = paths
 
     def _handle_local_cache_file_changed(self, changed_path: str) -> None:
-        self._refresh_offline_file_watches()
+        self._rearm_offline_file_watch(changed_path)
         remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
         if remote_name:
             self._refresh_file_browser_mount_state(remote_name)
             self._schedule_offline_reconcile(remote_name, delay_ms=500)
+
+    def _rearm_offline_file_watch(self, changed_path: str) -> None:
+        watcher = getattr(self, "_offline_file_watcher", None)
+        watched = getattr(self, "_offline_watched_paths", set())
+        if watcher is None:
+            self._refresh_offline_file_watches()
+            return
+        if changed_path in watched:
+            with suppress(Exception):
+                watcher.removePath(changed_path)
+            watched.discard(changed_path)
+            self._offline_watched_paths = watched
+        self._refresh_offline_file_watches()
 
     def _setup_offline_change_polling(self) -> None:
         timer_type = getattr(self.qt, "QTimer", None)
