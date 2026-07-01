@@ -133,9 +133,10 @@ class CloudBrowserBackend:
         if old_name in self._paths:
             self._paths[new_name] = self._paths.pop(old_name)
             self._save_paths()
-        if old_name in self._offline_records:
-            self._offline_records[new_name] = self._offline_records.pop(old_name)
-            self._save_offline_manifest()
+        with self._offline_lock:
+            if old_name in self._offline_records:
+                self._offline_records[new_name] = self._offline_records.pop(old_name)
+                self._save_offline_manifest()
         old_root = self.cache_root / _safe_component(old_name)
         new_root = self.cache_root / _safe_component(new_name)
         if old_root.exists() and old_root != new_root and not new_root.exists():
@@ -998,17 +999,18 @@ class CloudBrowserBackend:
         }
 
     def _update_offline_record_state(self, remote_name: str, path: str, local_path: Path) -> None:
-        record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
-        if record is None or not local_path.is_file():
-            return
-        try:
-            stat_result = local_path.stat()
-        except OSError:
-            return
-        record["local_size"] = stat_result.st_size
-        record["local_mtime_ns"] = stat_result.st_mtime_ns
-        record["local_sha256"] = _file_digest(local_path)
-        self._save_offline_manifest()
+        with self._offline_lock:
+            record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
+            if record is None or not local_path.is_file():
+                return
+            try:
+                stat_result = local_path.stat()
+            except OSError:
+                return
+            record["local_size"] = stat_result.st_size
+            record["local_mtime_ns"] = stat_result.st_mtime_ns
+            record["local_sha256"] = _file_digest(local_path)
+            self._save_offline_manifest()
 
     def _record_remote_metadata(
         self,
@@ -1020,20 +1022,21 @@ class CloudBrowserBackend:
     ) -> None:
         if metadata is None:
             return
-        record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
-        if record is None:
-            return
-        remote_size = _optional_int(metadata.get("Size"))
-        if remote_size is not None:
-            record["remote_size"] = remote_size
-        modtime = str(metadata.get("ModTime") or "")
-        if modtime:
-            record["remote_modtime"] = modtime
-        normalized_hashes = _normalized_hashes(metadata.get("Hashes"))
-        if normalized_hashes:
-            record["remote_hashes"] = normalized_hashes
-        if save:
-            self._save_offline_manifest()
+        with self._offline_lock:
+            record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
+            if record is None:
+                return
+            remote_size = _optional_int(metadata.get("Size"))
+            if remote_size is not None:
+                record["remote_size"] = remote_size
+            modtime = str(metadata.get("ModTime") or "")
+            if modtime:
+                record["remote_modtime"] = modtime
+            normalized_hashes = _normalized_hashes(metadata.get("Hashes"))
+            if normalized_hashes:
+                record["remote_hashes"] = normalized_hashes
+            if save:
+                self._save_offline_manifest()
 
     def _remote_metadata_matches_record(self, record: dict[str, object], metadata: dict[str, object]) -> bool:
         recorded_hashes = _normalized_hashes(record.get("remote_hashes"))
@@ -1055,37 +1058,39 @@ class CloudBrowserBackend:
         return _optional_int(record.get("remote_size")) is not None and bool(str(record.get("remote_modtime") or ""))
 
     def _clear_record_remote_metadata(self, remote_name: str, path: str) -> None:
-        record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
-        if record is None:
-            return
-        record.pop("remote_size", None)
-        record.pop("remote_modtime", None)
-        record.pop("remote_hashes", None)
-        self._save_offline_manifest()
+        with self._offline_lock:
+            record = self._offline_records.get(remote_name, {}).get(normalize_browser_path(path))
+            if record is None:
+                return
+            record.pop("remote_size", None)
+            record.pop("remote_modtime", None)
+            record.pop("remote_hashes", None)
+            self._save_offline_manifest()
 
     def _remove_offline_records(self, remote_name: str, path: str) -> None:
-        records = self._offline_records.get(remote_name)
-        if not records:
-            return
-        normalized = normalize_browser_path(path)
-        prefix = f"{normalized}/"
-        for record_path in list(records):
-            if record_path == normalized or record_path.startswith(prefix):
-                records.pop(record_path, None)
-        cache_root = self.cache_root / _safe_component(remote_name)
-        for ancestor in reversed(_ancestor_paths(normalized)):
-            if self.offline_path(remote_name, ancestor).exists():
-                break
-            if any(parent_browser_path(record_path) == ancestor for record_path in records):
-                break
-            records.pop(ancestor, None)
-        if records:
-            self._offline_records[remote_name] = records
-        else:
-            self._offline_records.pop(remote_name, None)
-            if not cache_root.exists():
-                self._remove_empty_parents(cache_root, self.cache_root)
-        self._save_offline_manifest()
+        with self._offline_lock:
+            records = self._offline_records.get(remote_name)
+            if not records:
+                return
+            normalized = normalize_browser_path(path)
+            prefix = f"{normalized}/"
+            for record_path in list(records):
+                if record_path == normalized or record_path.startswith(prefix):
+                    records.pop(record_path, None)
+            cache_root = self.cache_root / _safe_component(remote_name)
+            for ancestor in reversed(_ancestor_paths(normalized)):
+                if self.offline_path(remote_name, ancestor).exists():
+                    break
+                if any(parent_browser_path(record_path) == ancestor for record_path in records):
+                    break
+                records.pop(ancestor, None)
+            if records:
+                self._offline_records[remote_name] = records
+            else:
+                self._offline_records.pop(remote_name, None)
+                if not cache_root.exists():
+                    self._remove_empty_parents(cache_root, self.cache_root)
+            self._save_offline_manifest()
 
     def _rclone(self) -> str:
         binary = core.find_rclone()
@@ -1180,30 +1185,31 @@ class CloudBrowserBackend:
             self._run_operation(binary, "copyto", str(source), remote_target(remote, path), timeout=timeout)
 
     def _free_cache_records(self, remote_name: str, path: str) -> int:
-        records = self._offline_records.get(remote_name)
-        if not records:
-            return 0
-        normalized = normalize_browser_path(path)
-        prefix = f"{normalized}/" if normalized else ""
-        candidates = [
-            record_path
-            for record_path, record in records.items()
-            if not bool(record.get("protected"))
-            and not bool(record.get("is_dir"))
-            and (record_path == normalized or not normalized or record_path.startswith(prefix))
-            and not self.offline_changed(remote_name, record_path)
-        ]
-        removed = 0
-        for record_path in candidates:
-            destination = self.offline_path(remote_name, record_path)
-            self._make_file_writable(destination)
-            with suppress(OSError):
-                destination.unlink()
-                removed += 1
-            records.pop(record_path, None)
-        self._prune_unprotected_empty_directories(remote_name)
-        self._save_offline_manifest()
-        return removed
+        with self._offline_lock:
+            records = self._offline_records.get(remote_name)
+            if not records:
+                return 0
+            normalized = normalize_browser_path(path)
+            prefix = f"{normalized}/" if normalized else ""
+            candidates = [
+                record_path
+                for record_path, record in records.items()
+                if not bool(record.get("protected"))
+                and not bool(record.get("is_dir"))
+                and (record_path == normalized or not normalized or record_path.startswith(prefix))
+                and not self.offline_changed(remote_name, record_path)
+            ]
+            removed = 0
+            for record_path in candidates:
+                destination = self.offline_path(remote_name, record_path)
+                self._make_file_writable(destination)
+                with suppress(OSError):
+                    destination.unlink()
+                    removed += 1
+                records.pop(record_path, None)
+            self._prune_unprotected_empty_directories(remote_name)
+            self._save_offline_manifest()
+            return removed
 
     def _prune_unprotected_empty_directories(self, remote_name: str) -> None:
         records = self._offline_records.get(remote_name)

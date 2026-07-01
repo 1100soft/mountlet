@@ -570,6 +570,12 @@ class CompactCloudBrowser:
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
         return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
 
+    def _remote_has_operation(self, remote_name: str, kind: str) -> bool:
+        return any(
+            key[0] == remote_name and active_kind == kind
+            for key, active_kind in getattr(self, "_working_paths", {}).items()
+        )
+
     def _enlarge_button_text(self, button: Any) -> None:
         try:
             font = button.font()
@@ -1542,6 +1548,7 @@ class CompactCloudBrowser:
                 self.remote
                 and self._sync_paths is not None
                 and not operation_pending
+                and not self._remote_has_operation(self.remote.name, "sync")
                 and self.backend.managed_record_paths(self.remote.name)
             )
             self._set_action_button_state(
@@ -1561,6 +1568,10 @@ class CompactCloudBrowser:
                     self.backend.has_cached_content(self.remote.name, entry.path, is_dir=entry.is_dir)
                     for entry in selected_entries
                 )
+                and not any(
+                    self._entry_has_operation(self.remote.name, entry.path, is_dir=entry.is_dir, kind="sync")
+                    for entry in selected_entries
+                )
             )
             self._set_action_button_state(
                 selection_sync_button,
@@ -1568,10 +1579,11 @@ class CompactCloudBrowser:
                 "Sync selected local copies" if selection_sync_enabled else "Select cached or offline files first",
             )
         offline_enabled = selected and not operation_pending
-        selected_entries = self._selected_entries() if selected and self.remote is not None else []
-        if offline_enabled and self.remote is not None:
+        remote = getattr(self, "remote", None)
+        selected_entries = self._selected_entries() if selected and remote is not None else []
+        if offline_enabled and remote is not None:
             offline_enabled = not any(
-                self._entry_has_operation(self.remote.name, entry.path, is_dir=entry.is_dir, kind="download")
+                self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
                 for entry in selected_entries
             )
         self._set_action_button_state(

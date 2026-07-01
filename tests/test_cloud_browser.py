@@ -1498,6 +1498,27 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._open_local_file.assert_called_once_with(Path("/mnt/Docs/Reports/a.ods"))
 
+    def test_open_item_ignores_deleted_qt_item(self):
+        class DeletedItem:
+            def data(self, _column: int, _role: object) -> object:
+                raise RuntimeError("Internal C++ object already deleted")
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")))
+        browser._open_entry = mock.Mock()
+
+        browser._open_item(DeletedItem())
+
+        browser._open_entry.assert_not_called()
+
+    def test_download_operation_disables_only_affected_entry(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports"): "download"}
+
+        self.assertTrue(browser._entry_has_operation("Docs", "Reports", is_dir=True, kind="download"))
+        self.assertTrue(browser._entry_has_operation("Docs", "Reports/a.txt", is_dir=False, kind="download"))
+        self.assertFalse(browser._entry_has_operation("Docs", "Other/b.txt", is_dir=False, kind="download"))
+
     def test_open_local_file_tracks_paths_for_removal_warning(self):
         browser = object.__new__(CompactCloudBrowser)
         browser._opened_local_files = set()
