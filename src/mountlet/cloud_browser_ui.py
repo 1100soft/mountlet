@@ -1339,7 +1339,7 @@ class CompactCloudBrowser:
             menu,
             "Remove offline copy" if offline else "Make available offline",
             self.toggle_offline,
-            enabled=available or (offline and has_local_content and not self._operation_pending),
+            enabled=(available or (offline and has_local_content and not self._operation_pending)) and not remove_pending,
         )
 
     def _remove_offline_copy(self, path: str) -> None:
@@ -1578,7 +1578,8 @@ class CompactCloudBrowser:
         success: bool,
         message: str,
     ) -> None:
-        self._offline_jobs_running = max(0, self._offline_jobs_running - 1)
+        if kind != "remove":
+            self._offline_jobs_running = max(0, self._offline_jobs_running - 1)
         if remote_name and isinstance(paths, list):
             self._finish_working_paths(remote_name, [str(path) for path in paths], kind)
         if not success:
