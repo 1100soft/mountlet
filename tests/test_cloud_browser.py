@@ -1070,6 +1070,55 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(position, (252, 460))
 
+    def test_rclone_output_window_attaches_to_file_browser(self):
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x = x
+                self._y = y
+                self._width = width
+                self._height = height
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        class Dialog:
+            def __init__(self) -> None:
+                self.position = None
+
+            def isVisible(self) -> bool:
+                return True
+
+            def width(self) -> int:
+                return 420
+
+            def height(self) -> int:
+                return 120
+
+            def move(self, x: int, y: int) -> None:
+                self.position = (x, y)
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._side = "right"
+        browser._rclone_output_dialog = Dialog()
+        browser.window = SimpleNamespace(
+            frameGeometry=lambda: Rect(100, 80, 520, 390),
+            screen=lambda: SimpleNamespace(availableGeometry=lambda: Rect(0, 0, 1200, 800)),
+        )
+        browser.qt = SimpleNamespace(QApplication=SimpleNamespace(primaryScreen=lambda: None))
+
+        browser._position_rclone_output()
+
+        self.assertEqual(browser._rclone_output_dialog.position, (628, 80))
+
     def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -1453,26 +1502,24 @@ class CloudBrowserTests(unittest.TestCase):
         browser._refresh_entry_icons.assert_called_once_with()
         browser._display_entries.assert_not_called()
 
-    def test_rclone_output_append_updates_buffer_and_open_editor(self):
+    def test_rclone_output_shows_latest_line_only(self):
         class Editor:
             def __init__(self) -> None:
                 self.text = ""
 
-            def moveCursor(self, _operation: object) -> None:
-                pass
-
-            def insertPlainText(self, text: str) -> None:
-                self.text += text
+            def setPlainText(self, text: str) -> None:
+                self.text = text
 
         browser = object.__new__(CompactCloudBrowser)
-        browser._rclone_output_buffer = []
+        browser._rclone_output_latest = ""
         browser._rclone_output_text = Editor()
         browser.qt = SimpleNamespace()
 
         browser._append_rclone_output("Transferred: 1 MiB\n")
+        browser._append_rclone_output("Transferred: 2 MiB\n")
 
-        self.assertEqual(browser._rclone_output_buffer, ["Transferred: 1 MiB\n"])
-        self.assertEqual(browser._rclone_output_text.text, "Transferred: 1 MiB\n")
+        self.assertEqual(browser._rclone_output_latest, "Transferred: 2 MiB")
+        self.assertEqual(browser._rclone_output_text.text, "Transferred: 2 MiB")
 
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
