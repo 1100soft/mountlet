@@ -112,6 +112,7 @@ class CompactCloudBrowser:
         self._offline_jobs_running = 0
         self._offline_job_queue: list[tuple[str, str, Callable[[], object], list[str], str]] = []
         self._pending_select_path = ""
+        self._closed_until_selected = False
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -189,7 +190,7 @@ class CompactCloudBrowser:
         header.addWidget(self.mount_switch)
         self.remote_sync_button = self._button("⇄", self.sync_remote, "Sync cached files for this remote", square=True)
         header.addWidget(self.remote_sync_button)
-        header.addWidget(self._button("×", self.hide, "Close file browser", square=True))
+        header.addWidget(self._button("×", self.hide_until_selected, "Close file browser", square=True))
         layout.addLayout(header)
 
         navigation = qt.QHBoxLayout()
@@ -579,8 +580,6 @@ class CompactCloudBrowser:
             working_path = str(key[1])
             if is_dir and prefix and working_path.startswith(prefix):
                 return kind
-            if working_path and normalized.startswith(f"{working_path}/"):
-                return kind
         return ""
 
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
@@ -591,9 +590,11 @@ class CompactCloudBrowser:
             return False
         for path in paths:
             normalized = normalize_browser_path(path)
-            is_dir = True
-            if self._entry_has_operation(remote_name, normalized, is_dir=is_dir, kind=kind):
-                return True
+            for key, active_kind in getattr(self, "_working_paths", {}).items():
+                if key[0] != remote_name or active_kind != kind:
+                    continue
+                if _paths_overlap([normalized], [str(key[1])]):
+                    return True
         return False
 
     def _queued_offline_job_overlaps(self, remote_name: str, paths: list[str], kind: str) -> bool:
@@ -643,7 +644,12 @@ class CompactCloudBrowser:
         else:
             self.window.hide()
 
+    def hide_until_selected(self) -> None:
+        self._closed_until_selected = True
+        self.hide()
+
     def close(self) -> None:
+        self._closed_until_selected = True
         if self._embedded:
             self.root.hide()
             self._layout_changed()
@@ -691,6 +697,10 @@ class CompactCloudBrowser:
         changed = self.remote is None or self.remote.name != remote.name
         self.remote = remote
         self.path = self.backend.current_path(remote.name)
+        if focus_browser:
+            self._closed_until_selected = False
+        elif show_browser and getattr(self, "_closed_until_selected", False):
+            show_browser = False
         if not self._embedded:
             self._position(row)
         if show_browser:
@@ -1364,21 +1374,16 @@ class CompactCloudBrowser:
         self._start_working_paths(remote_name, paths, "remove")
         self.status.setText("Removing local copies…")
         self._update_actions()
-        try:
-            action()
-        except Exception as exc:
-            self._finish_working_paths(remote_name, paths, "remove")
-            self._notify("Offline files", str(exc) or "The operation failed.", False)
-            return
-        self._finish_working_paths(remote_name, paths, "remove")
-        self._folder_cache = {
-            key: entries for key, entries in getattr(self, "_folder_cache", {}).items() if key[0] != remote_name
-        }
-        callback = getattr(self, "_local_files_changed", None)
-        if callable(callback):
-            callback()
-        if self.remote is not None and self.remote.name == remote_name and hasattr(self, "path"):
-            self.refresh(force=True)
+
+        def worker() -> None:
+            try:
+                action()
+            except Exception as exc:
+                self._bridge.offline_job_finished.emit(remote_name, paths, "remove", False, str(exc))
+                return
+            self._bridge.offline_job_finished.emit(remote_name, paths, "remove", True, "")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _free_cache(self, path: str) -> None:
         if self.remote is None:
@@ -1583,6 +1588,10 @@ class CompactCloudBrowser:
             self._offline_jobs_running = max(0, self._offline_jobs_running - 1)
         if remote_name and isinstance(paths, list):
             self._finish_working_paths(remote_name, [str(path) for path in paths], kind)
+        if kind == "remove":
+            self._folder_cache = {
+                key: entries for key, entries in getattr(self, "_folder_cache", {}).items() if key[0] != remote_name
+            }
         if not success:
             self._notify("Offline files", message or "The operation failed.", False)
         self._local_files_changed()

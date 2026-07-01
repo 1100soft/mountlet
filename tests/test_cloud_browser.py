@@ -1252,7 +1252,7 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_kind_for_entry("Docs", "Reports", is_dir=True), "sync")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep", is_dir=True), "sync")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep/a.txt", is_dir=False), "sync")
-        self.assertEqual(browser._working_kind_for_entry("Docs", "Downloads/b.txt", is_dir=False), "download")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Downloads/b.txt", is_dir=False), "")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Other", is_dir=True), "")
 
     def test_go_root_remembers_remote_root(self):
@@ -1267,6 +1267,35 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser.path, "")
         browser.backend.remember_path.assert_called_once_with("Docs", "")
         browser.refresh.assert_called_once_with()
+
+    def test_close_button_suppresses_hover_reopen_until_explicit_selection(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._embedded = True
+        browser.root = mock.Mock()
+        browser.root.isVisible.return_value = False
+        browser._layout_changed = mock.Mock()
+        browser.backend = mock.Mock()
+        browser.backend.current_path.return_value = ""
+        browser.remote = None
+        browser.refresh = mock.Mock()
+        browser.main_window = mock.Mock()
+        browser.tree = mock.Mock()
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(FocusReason=SimpleNamespace(ShortcutFocusReason="shortcut")))
+        browser._ensure_tree_selection = mock.Mock()
+        browser._update_focus_style = mock.Mock()
+        browser._update_main_focus_style = mock.Mock()
+
+        browser.hide_until_selected()
+        browser.show_remote(_remote(), mock.Mock(), show_browser=True, focus_browser=False)
+
+        browser.root.hide.assert_called_once_with()
+        browser.root.show.assert_not_called()
+        self.assertTrue(browser._closed_until_selected)
+
+        browser.show_remote(_remote(), mock.Mock(), show_browser=True, focus_browser=True)
+
+        self.assertEqual(browser.root.show.call_count, 2)
+        self.assertFalse(browser._closed_until_selected)
 
     def test_focus_selects_first_browser_item_when_none_is_selected(self):
         class Item:
@@ -1669,7 +1698,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._working_paths = {("Docs", "Reports"): "download"}
 
         self.assertTrue(browser._entry_has_operation("Docs", "Reports", is_dir=True, kind="download"))
-        self.assertTrue(browser._entry_has_operation("Docs", "Reports/a.txt", is_dir=False, kind="download"))
+        self.assertFalse(browser._entry_has_operation("Docs", "Reports/a.txt", is_dir=False, kind="download"))
         self.assertFalse(browser._entry_has_operation("Docs", "Other/b.txt", is_dir=False, kind="download"))
 
     def test_queued_offline_job_marks_path_before_worker_slot_opens(self):
@@ -1743,9 +1772,9 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._offline_jobs_running, 0)
         self.assertEqual(browser._offline_job_queue, [])
         self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
-        self.assertNotIn(("Docs", "Other"), browser._working_paths)
-        browser.backend.remove_offline.assert_called_once_with("Docs", "Other")
-        self.assertEqual(len(started_threads), 0)
+        self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
+        browser.backend.remove_offline.assert_not_called()
+        self.assertEqual(len(started_threads), 1)
 
     def test_unrelated_remove_offline_job_runs_when_download_workers_are_full(self):
         started_threads = []
@@ -1776,9 +1805,9 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser._offline_jobs_running, OFFLINE_JOB_CONCURRENCY)
         self.assertEqual(browser._offline_job_queue, [])
-        self.assertNotIn(("Docs", "Other"), browser._working_paths)
-        browser.backend.remove_offline.assert_called_once_with("Docs", "Other")
-        self.assertEqual(len(started_threads), 0)
+        self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
+        browser.backend.remove_offline.assert_not_called()
+        self.assertEqual(len(started_threads), 1)
 
     def test_duplicate_remove_offline_job_is_ignored(self):
         browser = object.__new__(CompactCloudBrowser)
