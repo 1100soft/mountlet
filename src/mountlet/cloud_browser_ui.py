@@ -616,17 +616,28 @@ class CompactCloudBrowser:
         state = self.backend.offline_content_state(remote_name, normalized, is_dir=True)
         if getattr(state, "offline", False) is True:
             return True
-        known_files = [
+        prefix = f"{normalized}/" if normalized else ""
+        known_entries = [
             child
             for cached_remote, _folder_path in list(getattr(self, "_folder_cache", {}))
             if cached_remote == remote_name
             for child in self._folder_cache.get((cached_remote, _folder_path), [])
-            if not child.is_dir
-            and normalize_browser_path(child.path).startswith(f"{normalized}/" if normalized else "")
+            if normalize_browser_path(child.path).startswith(prefix)
         ]
-        return bool(known_files) and all(
-            self.backend.is_cached(remote_name, child.path, is_dir=False) for child in known_files
-        )
+        if not known_entries:
+            return False
+        for child in known_entries:
+            child_path = normalize_browser_path(child.path)
+            if child.is_dir:
+                child_state = self.backend.offline_content_state(remote_name, child_path, is_dir=True)
+                if getattr(child_state, "offline", False) is True:
+                    continue
+                if (remote_name, child_path) not in getattr(self, "_folder_cache", {}):
+                    return False
+                continue
+            if not self.backend.is_cached(remote_name, child_path, is_dir=False):
+                return False
+        return True
 
     def _refresh_visible_download_state(self, remote_name: str, entries: list[BrowserEntry]) -> None:
         if not hasattr(self, "_working_paths"):

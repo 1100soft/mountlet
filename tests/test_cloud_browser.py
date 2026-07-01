@@ -1345,6 +1345,20 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertNotIn(("Docs", "Reports"), browser._working_paths)
 
+    def test_visible_download_state_keeps_directory_with_unresolved_child_folder_active(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser.backend = mock.Mock()
+        browser.backend.is_cached.return_value = True
+        browser.backend.offline_content_state.return_value = OfflineContentState()
+        browser._folder_cache = {
+            ("Docs", "Reports"): [BrowserEntry("Deep", "Reports/Deep", True)],
+        }
+
+        browser._refresh_visible_download_state("Docs", [BrowserEntry("Reports", "Reports", True)])
+
+        self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
+
     def test_known_download_paths_include_cached_descendants(self):
         browser = object.__new__(CompactCloudBrowser)
         browser._folder_cache = {
