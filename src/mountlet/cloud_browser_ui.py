@@ -111,7 +111,7 @@ class CompactCloudBrowser:
         self._working_timer: Any | None = None
         self._rclone_output_dialog: Any | None = None
         self._rclone_output_text: Any | None = None
-        self._rclone_output_buffer: list[str] = []
+        self._rclone_output_latest = ""
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
@@ -169,6 +169,15 @@ class CompactCloudBrowser:
                     outer.qt.QEvent.Type.WindowDeactivate,
                 }:
                     outer._update_focus_style()
+                    outer._position_rclone_output()
+
+            def moveEvent(self, event: Any) -> None:
+                super().moveEvent(event)
+                outer._position_rclone_output()
+
+            def resizeEvent(self, event: Any) -> None:
+                super().resizeEvent(event)
+                outer._position_rclone_output()
 
         try:
             window = BrowserWindow(None, flags)
@@ -313,32 +322,30 @@ class CompactCloudBrowser:
             layout = self.qt.QVBoxLayout(dialog)
             text = self.qt.QPlainTextEdit()
             text.setReadOnly(True)
-            text.setMinimumSize(640, 360)
+            text.setMinimumSize(420, 120)
             layout.addWidget(text)
             buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
             buttons.rejected.connect(dialog.hide)
             layout.addWidget(buttons)
             self._rclone_output_dialog = dialog
             self._rclone_output_text = text
-            if self._rclone_output_buffer:
-                text.setPlainText("".join(self._rclone_output_buffer))
-                self._scroll_rclone_output_to_end()
+            text.setPlainText(self._rclone_output_latest)
         dialog.show()
+        self._position_rclone_output()
         dialog.raise_()
         dialog.activateWindow()
 
     def _append_rclone_output(self, text: str) -> None:
         if not text:
             return
-        self._rclone_output_buffer.append(text)
-        if len(self._rclone_output_buffer) > 4000:
-            self._rclone_output_buffer = self._rclone_output_buffer[-4000:]
+        latest = text.rstrip("\r\n")
+        if not latest:
+            return
+        self._rclone_output_latest = latest
         editor = self._rclone_output_text
         if editor is None:
             return
-        self._move_rclone_output_cursor_to_end()
-        editor.insertPlainText(text)
-        self._scroll_rclone_output_to_end()
+        editor.setPlainText(latest)
 
     def _scroll_rclone_output_to_end(self) -> None:
         editor = self._rclone_output_text
@@ -346,6 +353,35 @@ class CompactCloudBrowser:
             return
         with suppress(Exception):
             self._move_rclone_output_cursor_to_end()
+
+    def _position_rclone_output(self) -> None:
+        dialog = self._rclone_output_dialog
+        if dialog is None:
+            return
+        with suppress(Exception):
+            if not dialog.isVisible():
+                return
+        try:
+            frame = self.window.frameGeometry()
+            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+            available = screen.availableGeometry()
+            width = max(dialog.width(), 420)
+            height = max(dialog.height(), 120)
+            gap = 8
+            if self._side == "left":
+                x = frame.x() - width - gap
+                if x < available.x():
+                    x = frame.x() + frame.width() + gap
+            else:
+                x = frame.x() + frame.width() + gap
+                if x + width > available.x() + available.width():
+                    x = frame.x() - width - gap
+            y = frame.y()
+            x = min(max(x, available.x()), max(available.x(), available.x() + available.width() - width))
+            y = min(max(y, available.y()), max(available.y(), available.y() + available.height() - height))
+            dialog.move(x, y)
+        except Exception:
+            return
 
     def _move_rclone_output_cursor_to_end(self) -> None:
         editor = self._rclone_output_text
