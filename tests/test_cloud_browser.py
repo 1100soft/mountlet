@@ -17,7 +17,6 @@ from mountlet.cloud_browser import (
     RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
     RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS,
     RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS,
-    OfflineContentState,
     TransferItem,
     _default_offline_cache_root,
     join_browser_path,
