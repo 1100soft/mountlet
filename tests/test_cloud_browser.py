@@ -456,7 +456,7 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertTrue(backend.has_protected_content("Docs", "Reports", is_dir=True))
             self.assertTrue(backend.is_partially_offline("Docs", "Reports", is_dir=True))
 
-    def test_offline_folder_download_uses_long_timeout(self):
+    def test_offline_folder_download_has_no_fixed_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
                 state_path=Path(tempdir) / "state.json",
@@ -468,9 +468,9 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation") as run:
                     backend.make_offline(_remote(), entry)
 
-            self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS)
+            self.assertIsNone(run.call_args.kwargs["timeout"])
 
-    def test_offline_file_download_uses_longer_offline_timeout(self):
+    def test_offline_file_download_has_no_fixed_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
                 state_path=Path(tempdir) / "state.json",
@@ -482,7 +482,7 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation") as run:
                     backend.make_offline(_remote(), entry)
 
-            self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS)
+            self.assertIsNone(run.call_args.kwargs["timeout"])
 
     def test_legacy_ancestor_folder_records_are_loaded_as_partial(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -1797,7 +1797,7 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(len(browser._offline_job_queue), 1)
         browser.status.setText.assert_called_once_with("Queued offline file work…")
 
-    def test_offline_job_discovers_paths_before_running_action(self):
+    def test_offline_job_starts_action_before_discovery_finishes(self):
         started_threads = []
         events = []
 
@@ -1805,9 +1805,16 @@ class CloudBrowserTests(unittest.TestCase):
             def __init__(self, target, daemon):
                 self.target = target
                 self.daemon = daemon
+                self.started = False
 
             def start(self):
+                self.started = True
                 started_threads.append(self)
+
+            def join(self):
+                if self.started:
+                    self.target()
+                    self.started = False
 
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
@@ -1829,7 +1836,10 @@ class CloudBrowserTests(unittest.TestCase):
                 "Downloading for offline use…",
                 lambda: events.append(("action", [])),
                 working_kind="download",
-                discover_paths=lambda: ["Reports/a.txt", "Reports/Deep/b.txt"],
+                discover_paths=lambda: [
+                    BrowserEntry("a.txt", "Reports/a.txt", False),
+                    BrowserEntry("b.txt", "Reports/Deep/b.txt", False),
+                ],
             )
 
         self.assertEqual(len(started_threads), 1)
@@ -1838,8 +1848,14 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
-                ("paths", ["Reports/a.txt", "Reports/Deep/b.txt"]),
                 ("action", []),
+                (
+                    "paths",
+                    [
+                        BrowserEntry("a.txt", "Reports/a.txt", False),
+                        BrowserEntry("b.txt", "Reports/Deep/b.txt", False),
+                    ],
+                ),
                 ("done", ["Reports/a.txt", "Reports/Deep/b.txt"]),
             ],
         )
