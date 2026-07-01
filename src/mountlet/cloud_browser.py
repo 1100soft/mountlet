@@ -23,6 +23,7 @@ OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
 REMOTE_CURRENT_DIR = ".mountlet-remote-current"
 RCLONE_FILE_OPERATION_TIMEOUT_SECONDS = 120
+RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS = 60 * 60 * 2
 RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS = 60 * 60 * 6
 RCLONE_CACHE_SYNC_TIMEOUT_SECONDS = 45
 RCLONE_METADATA_TIMEOUT_SECONDS = 15
@@ -296,7 +297,13 @@ class CloudBrowserBackend:
             self._offline_marker(destination).touch()
             self._record_offline_tree(remote.name, entry, destination, protected=True)
         else:
-            self._download_remote_file(binary, remote, entry.path, destination)
+            self._download_remote_file(
+                binary,
+                remote,
+                entry.path,
+                destination,
+                timeout=RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS,
+            )
             self.prepare_offline_open(remote.name, entry.path)
             self._record_offline_entry(remote.name, entry, protected=True)
         return destination

@@ -15,7 +15,9 @@ from mountlet.cloud_browser import (
     CloudBrowserBackend,
     RCLONE_CACHE_SYNC_TIMEOUT_SECONDS,
     RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+    RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS,
     RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS,
+    OfflineContentState,
     TransferItem,
     _default_offline_cache_root,
     join_browser_path,
@@ -441,6 +443,20 @@ class CloudBrowserTests(unittest.TestCase):
                     backend.make_offline(_remote(), entry)
 
             self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS)
+
+    def test_offline_file_download_uses_longer_offline_timeout(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("a.bin", "Reports/a.bin", False, 0, "2026-01-02 03:04")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    backend.make_offline(_remote(), entry)
+
+            self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS)
 
     def test_legacy_ancestor_folder_records_are_loaded_as_partial(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -1058,6 +1074,23 @@ class CloudBrowserTests(unittest.TestCase):
         browser._display_entries.assert_not_called()
         browser._load_folder.assert_not_called()
 
+    def test_prefetch_related_folders_fetches_parent_and_children(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports/Deep"
+        browser._folder_cache = {}
+        browser._loads_pending = set()
+        browser._load_folder = mock.Mock()
+
+        browser._prefetch_related_folders([BrowserEntry("Child", "Reports/Deep/Child", True)])
+
+        browser._load_folder.assert_has_calls(
+            [
+                mock.call(browser.remote, "Reports"),
+                mock.call(browser.remote, "Reports/Deep/Child"),
+            ]
+        )
+
     def test_display_entries_preserves_current_item_by_path(self):
         class Item:
             def __init__(self, values: list[str]) -> None:
@@ -1254,6 +1287,52 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep/a.txt", is_dir=False), "sync")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Downloads/b.txt", is_dir=False), "")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Other", is_dir=True), "")
+
+    def test_visible_entries_under_downloading_folder_get_exact_download_state(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser.backend = mock.Mock()
+        browser.backend.is_cached.return_value = False
+
+        browser._refresh_visible_download_state(
+            "Docs",
+            [
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+                BrowserEntry("Done.txt", "Reports/Done.txt", False),
+            ],
+        )
+
+        self.assertEqual(browser._working_paths[("Docs", "Reports/a.txt")], "download")
+        self.assertEqual(browser._working_paths[("Docs", "Reports/Done.txt")], "download")
+
+    def test_visible_download_state_clears_completed_file(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {
+            ("Docs", "Reports"): "download",
+            ("Docs", "Reports/a.txt"): "download",
+        }
+        browser.backend = mock.Mock()
+        browser.backend.is_cached.return_value = True
+
+        browser._refresh_visible_download_state("Docs", [BrowserEntry("a.txt", "Reports/a.txt", False)])
+
+        self.assertNotIn(("Docs", "Reports/a.txt"), browser._working_paths)
+        self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
+
+    def test_known_download_paths_include_cached_descendants(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._folder_cache = {
+            ("Docs", "Reports"): [
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+                BrowserEntry("Deep", "Reports/Deep", True),
+            ],
+            ("Docs", "Reports/Deep"): [BrowserEntry("b.txt", "Reports/Deep/b.txt", False)],
+            ("Docs", "Other"): [BrowserEntry("c.txt", "Other/c.txt", False)],
+        }
+
+        paths = browser._known_download_paths_for_entry("Docs", BrowserEntry("Reports", "Reports", True))
+
+        self.assertEqual(paths, ["Reports", "Reports/a.txt", "Reports/Deep", "Reports/Deep/b.txt"])
 
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)

@@ -582,6 +582,51 @@ class CompactCloudBrowser:
                 return kind
         return ""
 
+    def _download_ancestor_active(self, remote_name: str, path: str) -> bool:
+        normalized = normalize_browser_path(path)
+        for key, kind in getattr(self, "_working_paths", {}).items():
+            if key[0] != remote_name or kind != "download":
+                continue
+            working_path = str(key[1])
+            if working_path and normalized.startswith(f"{working_path}/"):
+                return True
+        return False
+
+    def _known_download_paths_for_entry(self, remote_name: str, entry: BrowserEntry) -> list[str]:
+        paths = [entry.path]
+        if not entry.is_dir:
+            return paths
+        prefix = f"{normalize_browser_path(entry.path)}/"
+        seen = {normalize_browser_path(entry.path)}
+        for cached_remote, _folder_path in list(getattr(self, "_folder_cache", {})):
+            if cached_remote != remote_name:
+                continue
+            for child in self._folder_cache.get((cached_remote, _folder_path), []):
+                child_path = normalize_browser_path(child.path)
+                if child_path in seen or not child_path.startswith(prefix):
+                    continue
+                seen.add(child_path)
+                paths.append(child_path)
+        return paths
+
+    def _refresh_visible_download_state(self, remote_name: str, entries: list[BrowserEntry]) -> None:
+        for entry in entries:
+            normalized = normalize_browser_path(entry.path)
+            key = (remote_name, normalized)
+            if self._working_paths.get(key) == "download" and self.backend.is_cached(
+                remote_name,
+                normalized,
+                is_dir=entry.is_dir,
+            ):
+                self._working_paths.pop(key, None)
+                continue
+            if self._download_ancestor_active(remote_name, normalized) and not self.backend.is_cached(
+                remote_name,
+                normalized,
+                is_dir=entry.is_dir,
+            ):
+                self._working_paths[key] = "download"
+
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
         return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
 
@@ -943,6 +988,8 @@ class CompactCloudBrowser:
             if isinstance(selected, BrowserEntry):
                 selected_paths.add(selected.path)
         self.entries = entries
+        if remote is not None:
+            self._refresh_visible_download_state(remote.name, entries)
         self.tree.clear()
         style = self.window.style()
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
@@ -1011,7 +1058,7 @@ class CompactCloudBrowser:
         if not pending_select_path:
             with suppress(Exception):
                 self.tree.verticalScrollBar().setValue(previous_scroll)
-        self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
+        self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_related_folders(visible_entries))
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
         qt_color = self.qt.QColor(color)
@@ -1050,6 +1097,20 @@ class CompactCloudBrowser:
         index = min(max(index + delta, 0), count - 1)
         self.tree.setCurrentItem(self.tree.topLevelItem(index))
         self._ensure_tree_selection()
+
+    def _prefetch_related_folders(self, entries: list[BrowserEntry]) -> None:
+        self._prefetch_parent_folder()
+        self._prefetch_child_folders(entries)
+
+    def _prefetch_parent_folder(self) -> None:
+        remote = self.remote
+        if remote is None or not self.path:
+            return
+        parent = parent_browser_path(self.path)
+        key = (remote.name, parent)
+        if key in self._folder_cache or key in self._loads_pending:
+            return
+        self._load_folder(remote, parent)
 
     def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
         remote = self.remote
@@ -1466,7 +1527,11 @@ class CompactCloudBrowser:
                     self.backend.make_offline(remote, entry)
 
             message = "Downloading for offline use…"
-            working_paths = [entry.path for entry in entries]
+            working_paths = [
+                path
+                for entry in entries
+                for path in self._known_download_paths_for_entry(remote.name, entry)
+            ]
             working_kind = "download"
         self._queue_offline_job(
             message,
