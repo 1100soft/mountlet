@@ -749,12 +749,6 @@ class CloudBrowserBackend:
             return True
         if not is_dir and destination.is_file():
             return True
-        root = self.cache_root / _safe_component(remote_name)
-        parent = destination if destination.is_dir() else destination.parent
-        while parent != root and root in parent.parents:
-            if self._offline_marker(parent).exists():
-                return True
-            parent = parent.parent
         return False
 
     def is_partially_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
@@ -1079,6 +1073,9 @@ class CloudBrowserBackend:
             for record_path in list(records):
                 if record_path == normalized or record_path.startswith(prefix):
                     records.pop(record_path, None)
+            for ancestor in _ancestor_paths(normalized):
+                if ancestor in records:
+                    records[ancestor]["complete"] = False
             cache_root = self.cache_root / _safe_component(remote_name)
             for ancestor in reversed(_ancestor_paths(normalized)):
                 if self.offline_path(remote_name, ancestor).exists():

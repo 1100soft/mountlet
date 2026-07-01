@@ -386,6 +386,32 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
             self.assertFalse(backend.has_offline_content("Docs", "Other", is_dir=True))
 
+    def test_removed_child_of_offline_folder_is_not_inherited_as_offline(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("Reports", "Reports", True, 0, "2026-01-02 03:04")
+
+            def copy_folder(_binary: str, *_arguments: str, **_kwargs: object) -> None:
+                destination = Path(_arguments[2])
+                (destination / "Deep").mkdir(parents=True, exist_ok=True)
+                (destination / "Deep" / "a.pdf").write_text("offline", encoding="utf-8")
+                (destination / "Deep" / "b.pdf").write_text("offline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_folder):
+                    backend.make_offline(_remote(), entry)
+
+            backend.remove_offline("Docs", "Reports/Deep/a.pdf")
+
+            self.assertFalse(backend.is_offline("Docs", "Reports/Deep/a.pdf", is_dir=False))
+            self.assertFalse(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
+            self.assertTrue(backend.is_offline("Docs", "Reports/Deep/b.pdf", is_dir=False))
+            self.assertFalse(backend.is_offline("Docs", "Reports", is_dir=True))
+            self.assertTrue(backend.is_partially_offline("Docs", "Reports", is_dir=True))
+
     def test_offline_folder_download_uses_long_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -1109,6 +1135,97 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertTrue(browser.tree.current.selected)
         browser.tree.scroll.setValue.assert_called_once_with(37)
 
+    def test_display_entries_selects_folder_returned_from_parent_navigation(self):
+        class Item:
+            def __init__(self, values: list[str]) -> None:
+                self.values = values
+                self.entry = None
+                self.selected = False
+
+            def setData(self, _column: int, _role: object, value: object) -> None:
+                self.entry = value
+
+            def data(self, _column: int, _role: object) -> object:
+                return self.entry
+
+            def setIcon(self, _column: int, _icon: object) -> None:
+                pass
+
+            def setToolTip(self, _column: int, _text: str) -> None:
+                pass
+
+            def setSelected(self, selected: bool) -> None:
+                self.selected = selected
+
+        class Tree:
+            def __init__(self) -> None:
+                self.current = None
+                self.items: list[Item] = []
+                self.scroll = mock.Mock()
+                self.scroll.value.return_value = 0
+                self.scrolled_to = None
+
+            def currentItem(self) -> object | None:
+                return self.current
+
+            def selectedItems(self) -> list[Item]:
+                return [item for item in self.items if item.selected]
+
+            def clear(self) -> None:
+                self.items = []
+
+            def addTopLevelItem(self, item: Item) -> None:
+                self.items.append(item)
+
+            def topLevelItemCount(self) -> int:
+                return len(self.items)
+
+            def setCurrentItem(self, item: Item) -> None:
+                self.current = item
+
+            def scrollToItem(self, item: Item) -> None:
+                self.scrolled_to = item
+
+            def verticalScrollBar(self) -> mock.Mock:
+                return self.scroll
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(
+            QTreeWidgetItem=Item,
+            Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole=1)),
+            QStyle=SimpleNamespace(
+                StandardPixmap=SimpleNamespace(SP_DirIcon=1, SP_FileIcon=2, SP_DialogSaveButton=3)
+            ),
+            QTimer=SimpleNamespace(singleShot=lambda *_args: None),
+        )
+        browser.tree = Tree()
+        browser.window = SimpleNamespace(style=lambda: SimpleNamespace(standardIcon=lambda _icon: object()))
+        browser.backend = mock.Mock()
+        browser.backend.is_offline.return_value = False
+        browser.backend.is_partially_offline.return_value = False
+        browser.backend.is_cached.return_value = False
+        browser.backend.has_offline_content.return_value = False
+        browser.backend.has_cached_content.return_value = False
+        browser.remote = _remote()
+        browser.status = mock.Mock()
+        browser.has_focus = mock.Mock(return_value=False)
+        browser._offline_icon = mock.Mock(return_value=None)
+        browser._update_actions = mock.Mock()
+        browser._update_open_folder_button = mock.Mock()
+        browser._pending_select_path = "Reports/Deep"
+
+        browser._display_entries(
+            [
+                BrowserEntry("Other", "Reports/Other", True),
+                BrowserEntry("Deep", "Reports/Deep", True),
+            ]
+        )
+
+        self.assertEqual(browser.tree.current.data(0, 1).path, "Reports/Deep")
+        self.assertIs(browser.tree.scrolled_to, browser.tree.current)
+        browser.tree.scroll.setValue.assert_not_called()
+        self.assertEqual(browser._pending_select_path, "")
+
     def test_working_status_applies_to_parent_and_child_paths(self):
         browser = object.__new__(CompactCloudBrowser)
         browser._working_paths = {
@@ -1562,64 +1679,52 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(len(browser._offline_job_queue), 1)
         browser.status.setText.assert_called_once_with("Queued offline file work…")
 
-    def test_open_local_file_tracks_paths_for_removal_warning(self):
+    def test_remove_offline_job_waits_for_overlapping_download(self):
         browser = object.__new__(CompactCloudBrowser)
-        browser._opened_local_files = set()
+        browser.remote = _remote()
+        browser._offline_jobs_running = 0
+        browser._offline_job_queue = []
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser._working_timer = None
+        browser.entries = []
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._update_actions = mock.Mock()
+
+        browser._queue_remove_offline_job("Docs", "Reports/Deep")
+
+        self.assertEqual(len(browser._offline_job_queue), 1)
+        self.assertEqual(browser._offline_jobs_running, 0)
+        self.assertEqual(browser._working_paths, {("Docs", "Reports"): "download"})
+
+    def test_unrelated_remove_offline_job_can_run_while_download_continues(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._offline_jobs_running = 0
+        browser._offline_job_queue = []
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser._working_timer = None
+        browser.entries = []
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._update_actions = mock.Mock()
+        browser._bridge = SimpleNamespace(offline_job_finished=SimpleNamespace(emit=mock.Mock()))
+        browser.backend = mock.Mock()
+
+        browser._queue_remove_offline_job("Docs", "Other")
+
+        self.assertEqual(browser._offline_jobs_running, 1)
+        self.assertEqual(browser._offline_job_queue, [])
+        self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
+        self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
+
+    def test_open_local_file_uses_external_opener_without_tracking_state(self):
+        browser = object.__new__(CompactCloudBrowser)
         browser._open_file = mock.Mock(return_value=True)
 
         browser._open_local_file(Path("/cache/Docs/a.txt"))
 
-        self.assertEqual(browser._opened_local_files, {Path("/cache/Docs/a.txt")})
-
-    def test_confirm_remove_open_local_files_warns(self):
-        yes = 1
-        cancel = 2
-
-        class Box:
-            Icon = SimpleNamespace(Warning="warning")
-            StandardButton = SimpleNamespace(Cancel=cancel, Yes=yes)
-            last = None
-
-            def __init__(self, _parent):
-                self.text = ""
-                self.informative = ""
-                self.yes_button = mock.Mock()
-                Box.last = self
-
-            def setIcon(self, _icon):
-                pass
-
-            def setWindowTitle(self, _title):
-                pass
-
-            def setText(self, text):
-                self.text = text
-
-            def setInformativeText(self, text):
-                self.informative = text
-
-            def setStandardButtons(self, _buttons):
-                pass
-
-            def setDefaultButton(self, _button):
-                pass
-
-            def button(self, _button):
-                return self.yes_button
-
-            def exec(self):
-                return yes
-
-        browser = object.__new__(CompactCloudBrowser)
-        browser.qt = SimpleNamespace(QMessageBox=Box)
-        browser.window = object()
-        browser._opened_local_files = {Path("/cache/Docs/a.txt")}
-
-        self.assertTrue(browser._confirm_remove_open_local_files([Path("/cache/Docs/a.txt")]))
-
-        self.assertIn("a.txt", Box.last.text)
-        self.assertIn("Close the file", Box.last.informative)
-        Box.last.yes_button.setText.assert_called_once_with("Remove anyway")
+        browser._open_file.assert_called_once_with(Path("/cache/Docs/a.txt"))
 
     def test_open_folder_uses_offline_cache_when_remote_is_unmounted(self):
         browser = object.__new__(CompactCloudBrowser)

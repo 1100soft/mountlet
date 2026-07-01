@@ -90,12 +90,12 @@ class CompactCloudBrowser:
         self._operation_cache_keys: set[tuple[str, str]] = set()
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
-        self._opened_local_files: set[Path] = set()
         self._working_paths: dict[tuple[str, str], str] = {}
         self._working_phase = 0
         self._working_timer: Any | None = None
         self._offline_jobs_running = 0
         self._offline_job_queue: list[tuple[str, str, Callable[[], object], list[str], str]] = []
+        self._pending_select_path = ""
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -570,6 +570,16 @@ class CompactCloudBrowser:
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
         return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
 
+    def _operation_paths_overlap(self, remote_name: str, paths: list[str], kind: str) -> bool:
+        if not paths:
+            return False
+        for path in paths:
+            normalized = normalize_browser_path(path)
+            is_dir = True
+            if self._entry_has_operation(remote_name, normalized, is_dir=is_dir, kind=kind):
+                return True
+        return False
+
     def _remote_has_operation(self, remote_name: str, kind: str) -> bool:
         return any(
             key[0] == remote_name and active_kind == kind
@@ -868,6 +878,7 @@ class CompactCloudBrowser:
         previous_path = ""
         previous_index = 0
         previous_scroll = 0
+        pending_select_path = getattr(self, "_pending_select_path", "")
         selected_paths: set[str] = set()
         with suppress(Exception):
             previous_scroll = int(self.tree.verticalScrollBar().value())
@@ -895,7 +906,9 @@ class CompactCloudBrowser:
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
             if entry.path in selected_paths:
                 item.setSelected(True)
-            if previous_path and entry.path == previous_path:
+            if pending_select_path and entry.path == pending_select_path:
+                current_target = item
+            if current_target is None and previous_path and entry.path == previous_path:
                 current_target = item
             offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
             protected_content = bool(
@@ -940,13 +953,19 @@ class CompactCloudBrowser:
             self.tree.setCurrentItem(target)
             if target not in self.tree.selectedItems():
                 target.setSelected(True)
+            if pending_select_path:
+                with suppress(Exception):
+                    self.tree.scrollToItem(target)
+        if pending_select_path:
+            self._pending_select_path = ""
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
             self._ensure_tree_selection()
         self._update_actions()
         self._update_open_folder_button()
-        with suppress(Exception):
-            self.tree.verticalScrollBar().setValue(previous_scroll)
+        if not pending_select_path:
+            with suppress(Exception):
+                self.tree.verticalScrollBar().setValue(previous_scroll)
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_child_folders(visible_entries))
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
@@ -1246,12 +1265,14 @@ class CompactCloudBrowser:
             return
         partial = self.backend.is_partially_offline(remote.name, entry.path, is_dir=entry.is_dir)
         offline = self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
-        available = not self._operation_pending and not self._entry_has_operation(
+        downloading = self._entry_has_operation(
             remote.name,
             entry.path,
             is_dir=entry.is_dir,
             kind="download",
         )
+        available = not self._operation_pending and not downloading
+        has_local_content = self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
         if partial:
             self._menu_action(
                 menu,
@@ -1263,56 +1284,51 @@ class CompactCloudBrowser:
                 menu,
                 "Remove offline copies",
                 lambda selected=entry: self._remove_offline_copy(selected.path),
-                enabled=available,
+                enabled=not self._operation_pending,
+            )
+            return
+        if downloading:
+            self._menu_action(
+                menu,
+                "Remove offline copies",
+                lambda selected=entry: self._remove_offline_copy(selected.path),
+                enabled=not self._operation_pending,
             )
             return
         self._menu_action(
             menu,
             "Remove offline copy" if offline else "Make available offline",
             self.toggle_offline,
-            enabled=available,
+            enabled=available or (offline and has_local_content and not self._operation_pending),
         )
 
     def _remove_offline_copy(self, path: str) -> None:
         if self.remote is None:
             return
         remote_name = self.remote.name
-        if not self._confirm_remove_open_local_files(self.backend.managed_file_paths_under(remote_name, path)):
-            return
-        self._queue_offline_job("Removing local copies…", lambda: self.backend.remove_offline(remote_name, path))
+        self._queue_remove_offline_job(remote_name, path)
+
+    def _queue_remove_offline_job(self, remote_name: str, path: str) -> None:
+        normalized = normalize_browser_path(path)
+
+        def action() -> None:
+            self.backend.remove_offline(remote_name, normalized)
+
+        self._queue_offline_job(
+            "Removing local copies…",
+            action,
+            working_paths=[normalized],
+            working_kind="remove",
+        )
 
     def _free_cache(self, path: str) -> None:
         if self.remote is None:
             return
         remote_name = self.remote.name
-        if not self._confirm_remove_open_local_files(self.backend.managed_file_paths_under(remote_name, path)):
-            return
         self._run_operation("Freeing cache…", lambda: self.backend.free_cache(remote_name, path))
 
     def _free_all_resolved_cache(self) -> None:
-        paths = [path for files in self.backend.managed_file_paths().values() for path in files]
-        if not self._confirm_remove_open_local_files(paths):
-            return
         self._run_operation("Freeing resolved cache…", self.backend.free_all_resolved_cache)
-
-    def _confirm_remove_open_local_files(self, paths: list[Path]) -> bool:
-        open_paths = sorted({path for path in paths if path in self._opened_local_files})
-        if not open_paths:
-            return True
-        names = ", ".join(path.name for path in open_paths[:3])
-        if len(open_paths) > 3:
-            names = f"{names}, and {len(open_paths) - 3} more"
-        box = self.qt.QMessageBox(self.window)
-        box.setIcon(self.qt.QMessageBox.Icon.Warning)
-        box.setWindowTitle("Local copy may still be open")
-        box.setText(f"{names} may still be open in another app.")
-        box.setInformativeText(
-            "Close the file before removing the local copy. Mountlet cannot reliably close external apps for you."
-        )
-        box.setStandardButtons(self.qt.QMessageBox.StandardButton.Cancel | self.qt.QMessageBox.StandardButton.Yes)
-        box.setDefaultButton(self.qt.QMessageBox.StandardButton.Cancel)
-        box.button(self.qt.QMessageBox.StandardButton.Yes).setText("Remove anyway")
-        return box.exec() == self.qt.QMessageBox.StandardButton.Yes
 
     def _replace_original_with_copy(self, entry: BrowserEntry) -> None:
         if self.remote is None or self._operation_pending:
@@ -1367,16 +1383,12 @@ class CompactCloudBrowser:
         if not entries or self.remote is None or self._operation_pending:
             return
         remote = self.remote
+        if any(self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download") for entry in entries):
+            for entry in entries:
+                self._queue_remove_offline_job(remote.name, entry.path)
+            return
         all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
         if all_offline:
-            paths = [
-                path
-                for entry in entries
-                for path in self.backend.managed_file_paths_under(remote.name, entry.path)
-            ]
-            if not self._confirm_remove_open_local_files(paths):
-                return
-
             def action() -> None:
                 for entry in entries:
                     self.backend.remove_offline(remote.name, entry.path)
@@ -1404,6 +1416,8 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         if not entries or remote is None:
             return "Make available offline"
+        if any(self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download") for entry in entries):
+            return "Remove offline copy"
         all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
         return "Remove offline copy" if all_offline else "Make available offline"
 
@@ -1450,7 +1464,8 @@ class CompactCloudBrowser:
     ) -> None:
         remote_name = self.remote.name if self.remote is not None else ""
         normalized_paths = [normalize_browser_path(path) for path in (working_paths or [])]
-        if remote_name and normalized_paths and working_kind:
+        mark_immediately = working_kind != "remove"
+        if mark_immediately and remote_name and normalized_paths and working_kind:
             self._start_working_paths(remote_name, normalized_paths, working_kind)
         self._offline_job_queue.append((remote_name, message, action, normalized_paths, working_kind))
         if self._offline_jobs_running >= OFFLINE_JOB_CONCURRENCY:
@@ -1460,8 +1475,13 @@ class CompactCloudBrowser:
 
     def _start_offline_jobs(self) -> None:
         while self._offline_job_queue and self._offline_jobs_running < OFFLINE_JOB_CONCURRENCY:
-            remote_name, message, action, working_paths, working_kind = self._offline_job_queue.pop(0)
+            next_index = self._next_runnable_offline_job_index()
+            if next_index is None:
+                return
+            remote_name, message, action, working_paths, working_kind = self._offline_job_queue.pop(next_index)
             self._offline_jobs_running += 1
+            if remote_name and working_paths and working_kind == "remove":
+                self._start_working_paths(remote_name, working_paths, working_kind)
             self.status.setText(message)
             self._update_actions()
 
@@ -1479,6 +1499,13 @@ class CompactCloudBrowser:
                 self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, True, "")
 
             threading.Thread(target=worker, daemon=True).start()
+
+    def _next_runnable_offline_job_index(self) -> int | None:
+        for index, (remote_name, _message, _action, paths, kind) in enumerate(self._offline_job_queue):
+            if kind == "remove" and self._operation_paths_overlap(remote_name, paths, "download"):
+                continue
+            return index
+        return None
 
     def _offline_job_finished(
         self,
@@ -1585,7 +1612,13 @@ class CompactCloudBrowser:
         offline_enabled = selected and not operation_pending
         remote = getattr(self, "remote", None)
         selected_entries = self._selected_entries() if selected and remote is not None else []
-        if offline_enabled and remote is not None:
+        selected_downloading = False
+        if remote is not None:
+            selected_downloading = any(
+                self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
+                for entry in selected_entries
+            )
+        if offline_enabled and remote is not None and not selected_downloading:
             offline_enabled = not any(
                 self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
                 for entry in selected_entries
@@ -1604,6 +1637,9 @@ class CompactCloudBrowser:
             self.offline_button.setToolTip("Wait for the current file operation to finish")
         elif selected:
             self.offline_button.setToolTip(
+                "Queue removal after the current download finishes"
+                if selected_downloading
+                else
                 "Saved offline with local changes; click to remove the local snapshot"
                 if selected_changed
                 else "Saved offline; click to remove the local snapshot"
@@ -1807,17 +1843,17 @@ class CompactCloudBrowser:
 
     def _open_local_file(self, path: Path) -> None:
         if self._open_file and self._open_file(path):
-            self._opened_local_files.add(path)
             return
         if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
-            self._opened_local_files.add(path)
             return
         self._notify("Open file", "Could not open this file.", False)
 
     def go_up(self) -> None:
         if self.remote is None:
             return
+        previous_path = self.path
         self.path = parent_browser_path(self.path)
+        self._pending_select_path = previous_path
         self.backend.remember_path(self.remote.name, self.path)
         self.refresh()
 
