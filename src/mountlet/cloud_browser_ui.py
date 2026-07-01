@@ -111,7 +111,7 @@ class CompactCloudBrowser:
         self._working_timer: Any | None = None
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
-            tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[str]] | None]
+            tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
         ] = []
         self._pending_select_path = ""
         self._closed_until_selected = False
@@ -1516,16 +1516,16 @@ class CompactCloudBrowser:
                 for entry in entries:
                     self.backend.make_offline(remote, entry)
 
-            def discover_paths() -> list[str]:
-                paths: list[str] = []
+            def discover_paths() -> list[BrowserEntry]:
+                discovered: list[BrowserEntry] = []
                 seen: set[str] = set()
                 for entry in entries:
-                    for file_entry in self.backend.list_files_recursive(remote, entry):
-                        path = normalize_browser_path(file_entry.path)
+                    for discovered_entry in self.backend.list_entries_recursive(remote, entry):
+                        path = normalize_browser_path(discovered_entry.path)
                         if path and path not in seen:
                             seen.add(path)
-                            paths.append(path)
-                return paths
+                            discovered.append(discovered_entry)
+                return discovered
 
             message = "Downloading for offline use…"
             working_paths = []
@@ -1588,7 +1588,7 @@ class CompactCloudBrowser:
         *,
         working_paths: list[str] | None = None,
         working_kind: str = "",
-        discover_paths: Callable[[], list[str]] | None = None,
+        discover_paths: Callable[[], list[BrowserEntry]] | None = None,
     ) -> None:
         remote_name = self.remote.name if self.remote is not None else ""
         normalized_paths = [normalize_browser_path(path) for path in (working_paths or [])]
@@ -1620,23 +1620,45 @@ class CompactCloudBrowser:
                 job_remote_name: str = remote_name,
                 job_paths: list[str] = list(working_paths),
                 job_kind: str = working_kind,
-                job_discover_paths: Callable[[], list[str]] | None = discover_paths,
+                job_discover_paths: Callable[[], list[BrowserEntry]] | None = discover_paths,
                 job_action: Callable[[], object] = action,
             ) -> None:
-                if job_discover_paths is not None:
-                    try:
-                        discovered_paths = [normalize_browser_path(path) for path in job_discover_paths()]
-                    except Exception as exc:
-                        self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, False, str(exc))
+                discovered_paths: list[str] = list(job_paths)
+                discovery_error = ""
+
+                def discover() -> None:
+                    nonlocal discovered_paths, discovery_error
+                    if job_discover_paths is None:
                         return
-                    job_paths = discovered_paths
-                    self._bridge.offline_job_paths_ready.emit(job_remote_name, job_paths, job_kind)
+                    try:
+                        discovered_entries = job_discover_paths()
+                    except Exception as exc:
+                        discovery_error = str(exc)
+                        return
+                    discovered_paths = [
+                        normalize_browser_path(entry.path)
+                        for entry in discovered_entries
+                        if not entry.is_dir and normalize_browser_path(entry.path)
+                    ]
+                    self._bridge.offline_job_paths_ready.emit(job_remote_name, discovered_entries, job_kind)
+
+                discovery_thread: threading.Thread | None = None
+                if job_discover_paths is not None:
+                    discovery_thread = threading.Thread(target=discover, daemon=True)
+                    discovery_thread.start()
                 try:
                     job_action()
                 except Exception as exc:
-                    self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, False, str(exc))
+                    if discovery_thread is not None:
+                        discovery_thread.join()
+                    self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, False, str(exc))
                     return
-                self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, True, "")
+                if discovery_thread is not None:
+                    discovery_thread.join()
+                if discovery_error and not discovered_paths:
+                    self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, False, discovery_error)
+                    return
+                self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, True, "")
 
             threading.Thread(target=worker, daemon=True).start()
 
@@ -1652,9 +1674,48 @@ class CompactCloudBrowser:
     def _offline_job_paths_ready(self, remote_name: str, paths: object, kind: str) -> None:
         if not isinstance(paths, list):
             return
-        normalized_paths = [normalize_browser_path(str(path)) for path in paths if normalize_browser_path(str(path))]
+        if all(isinstance(path, BrowserEntry) for path in paths):
+            entries = [path for path in paths if isinstance(path, BrowserEntry)]
+            self._cache_recursive_entries(remote_name, entries)
+            normalized_paths = [normalize_browser_path(entry.path) for entry in entries if not entry.is_dir]
+        else:
+            normalized_paths = [normalize_browser_path(str(path)) for path in paths if normalize_browser_path(str(path))]
         if remote_name and normalized_paths and kind:
             self._start_working_paths(remote_name, normalized_paths, kind)
+            self._refresh_download_working_paths(remote_name)
+            self._display_entries(list(getattr(self, "entries", [])))
+
+    def _cache_recursive_entries(self, remote_name: str, entries: list[BrowserEntry]) -> None:
+        by_parent: dict[str, dict[str, BrowserEntry]] = {}
+        for entry in entries:
+            normalized = normalize_browser_path(entry.path)
+            if not normalized:
+                continue
+            parent = parent_browser_path(normalized)
+            by_parent.setdefault(parent, {})[normalized] = BrowserEntry(
+                name=entry.name,
+                path=normalized,
+                is_dir=entry.is_dir,
+                size=entry.size,
+                modified=entry.modified,
+            )
+            current_parent = parent
+            while current_parent:
+                ancestor_parent = parent_browser_path(current_parent)
+                by_parent.setdefault(ancestor_parent, {}).setdefault(
+                    current_parent,
+                    BrowserEntry(
+                        name=current_parent.rsplit("/", 1)[-1],
+                        path=current_parent,
+                        is_dir=True,
+                    ),
+                )
+                current_parent = ancestor_parent
+        for parent, children in by_parent.items():
+            self._folder_cache[(remote_name, parent)] = sorted(
+                children.values(),
+                key=lambda entry: (not entry.is_dir, entry.name.casefold()),
+            )
 
     def _offline_job_finished(
         self,

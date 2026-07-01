@@ -201,7 +201,7 @@ class CloudBrowserBackend:
             )
         return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
 
-    def list_files_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
+    def list_entries_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
         if not entry.is_dir:
             return [entry]
         binary = self._rclone()
@@ -219,24 +219,26 @@ class CloudBrowserBackend:
             values = json.loads(result.stdout or "[]")
         except json.JSONDecodeError as exc:
             raise RuntimeError("rclone returned an invalid recursive folder listing") from exc
-        files: list[BrowserEntry] = []
+        entries: list[BrowserEntry] = []
         for value in values:
-            if bool(value.get("IsDir")):
-                continue
             relative = normalize_browser_path(str(value.get("Path") or value.get("Name") or ""))
             if not relative:
                 continue
             name = PurePosixPath(relative).name
-            files.append(
+            is_dir = bool(value.get("IsDir"))
+            entries.append(
                 BrowserEntry(
                     name=name,
                     path=join_browser_path(entry.path, relative),
-                    is_dir=False,
-                    size=max(int(value.get("Size") or 0), 0),
+                    is_dir=is_dir,
+                    size=0 if is_dir else max(int(value.get("Size") or 0), 0),
                     modified=_display_time(str(value.get("ModTime") or "")),
                 )
             )
-        return sorted(files, key=lambda item: item.path.casefold())
+        return sorted(entries, key=lambda item: (item.path.count("/"), not item.is_dir, item.path.casefold()))
+
+    def list_files_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
+        return [candidate for candidate in self.list_entries_recursive(remote, entry) if not candidate.is_dir]
 
     def _list_offline_entries(self, remote_name: str, path: str) -> list[BrowserEntry] | None:
         normalized = normalize_browser_path(path)
@@ -329,7 +331,7 @@ class CloudBrowserBackend:
                 remote_target(remote, entry.path),
                 str(destination),
                 "--create-empty-src-dirs",
-                timeout=RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS,
+                timeout=None,
             )
             self._offline_marker(destination).touch()
             self._record_offline_tree(remote.name, entry, destination, protected=True)
@@ -339,7 +341,7 @@ class CloudBrowserBackend:
                 remote,
                 entry.path,
                 destination,
-                timeout=RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS,
+                timeout=None,
             )
             self.prepare_offline_open(remote.name, entry.path)
             self._record_offline_entry(remote.name, entry, protected=True)
@@ -351,7 +353,7 @@ class CloudBrowserBackend:
         binary = self._rclone()
         destination = self.offline_path(remote.name, entry.path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        self._download_remote_file(binary, remote, entry.path, destination)
+        self._download_remote_file(binary, remote, entry.path, destination, timeout=None)
         self.prepare_offline_open(remote.name, entry.path)
         self._record_offline_entry(remote.name, entry, protected=False)
         return destination
@@ -1146,7 +1148,7 @@ class CloudBrowserBackend:
     def _command(self, binary: str, *arguments: str) -> list[str]:
         return [binary, "--config", core.CONFIG_PATH, *arguments]
 
-    def _run_operation(self, binary: str, *arguments: str, timeout: int = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS) -> None:
+    def _run_operation(self, binary: str, *arguments: str, timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS) -> None:
         command = self._command(binary, *arguments)
         try:
             result = subprocess.run(
@@ -1206,7 +1208,7 @@ class CloudBrowserBackend:
         path: str,
         destination: Path,
         *,
-        timeout: int = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+        timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
     ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
@@ -1222,7 +1224,7 @@ class CloudBrowserBackend:
         path: str,
         source: Path,
         *,
-        timeout: int = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+        timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
     ) -> None:
         if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
             self._run_operation(binary, "copyto", str(source), remote_target(remote, path))
