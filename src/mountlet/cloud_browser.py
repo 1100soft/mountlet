@@ -64,6 +64,14 @@ class OfflineConflict:
         return self.offline_mtime >= self.mounted_mtime
 
 
+@dataclass(frozen=True)
+class OfflineContentState:
+    offline: bool = False
+    protected: bool = False
+    temporary: bool = False
+    partial: bool = False
+
+
 def normalize_browser_path(path: str) -> str:
     parts: list[str] = []
     for part in PurePosixPath(path.replace("\\", "/")).parts:
@@ -738,18 +746,62 @@ class CloudBrowserBackend:
         return destination
 
     def is_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
+        return self.offline_content_state(remote_name, path, is_dir=is_dir).offline
+
+    def offline_content_state(self, remote_name: str, path: str, *, is_dir: bool = False) -> OfflineContentState:
         normalized = normalize_browser_path(path)
-        record = self._offline_records.get(remote_name, {}).get(normalized)
-        if record is not None:
-            if is_dir and not bool(record.get("complete", True)):
-                return False
-            return bool(record.get("protected"))
+        records = self._offline_records.get(remote_name, {})
+        record = records.get(normalized)
+        destination = self.offline_path(remote_name, normalized)
+        if not is_dir:
+            if record is not None and not bool(record.get("is_dir")):
+                protected = bool(record.get("protected"))
+                return OfflineContentState(offline=protected, protected=protected, temporary=not protected)
+            if destination.is_file():
+                return OfflineContentState(offline=True, protected=True)
+            return OfflineContentState()
+        full_offline = bool(
+            record is not None
+            and bool(record.get("is_dir"))
+            and bool(record.get("protected"))
+            and bool(record.get("complete", True))
+        )
         destination = self.offline_path(remote_name, path)
-        if is_dir and self._offline_marker(destination).exists():
-            return True
-        if not is_dir and destination.is_file():
-            return True
-        return False
+        if self._offline_marker(destination).exists():
+            full_offline = True
+        prefix = f"{normalized}/" if normalized else ""
+        protected = full_offline
+        temporary = False
+        for record_path, candidate in records.items():
+            if record_path == normalized:
+                if not bool(candidate.get("is_dir")) or bool(candidate.get("complete", True)):
+                    protected = protected or bool(candidate.get("protected"))
+                    temporary = temporary or not bool(candidate.get("protected"))
+                continue
+            if normalized and not record_path.startswith(prefix):
+                continue
+            if not normalized and not record_path:
+                continue
+            if bool(candidate.get("is_dir")) and not bool(candidate.get("complete", True)):
+                continue
+            protected = protected or bool(candidate.get("protected"))
+            temporary = temporary or not bool(candidate.get("protected"))
+        if not protected and not temporary and destination.is_dir():
+            try:
+                for child in destination.rglob("*"):
+                    if child.name.startswith(".mountlet-offline"):
+                        continue
+                    if child.is_file():
+                        protected = True
+                        break
+            except OSError:
+                pass
+        return OfflineContentState(
+            offline=full_offline,
+            protected=protected,
+            temporary=temporary,
+            partial=(protected or temporary) and not full_offline,
+        )
 
     def is_partially_offline(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         if not is_dir:
@@ -777,32 +829,8 @@ class CloudBrowserBackend:
         keep Reports and Reports/2026 visibly available while the remote is
         unmounted.
         """
-        if self.is_offline(remote_name, path, is_dir=is_dir):
-            return True
-        if not is_dir:
-            return False
-        normalized = normalize_browser_path(path)
-        prefix = f"{normalized}/" if normalized else ""
-        records = self._offline_records.get(remote_name, {})
-        for record_path, record in records.items():
-            if normalized and not record_path.startswith(prefix):
-                continue
-            if not normalized and not record_path:
-                continue
-            if not bool(record.get("is_dir")) or bool(record.get("complete")):
-                return True
-        directory = self.offline_path(remote_name, path)
-        if not directory.is_dir():
-            return False
-        try:
-            for child in directory.rglob("*"):
-                if child.name.startswith(".mountlet-offline"):
-                    continue
-                if child.is_file():
-                    return True
-        except OSError:
-            return False
-        return False
+        state = self.offline_content_state(remote_name, path, is_dir=is_dir)
+        return state.protected
 
     def has_cached_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         if self.is_cached(remote_name, path, is_dir=is_dir):
@@ -815,34 +843,10 @@ class CloudBrowserBackend:
         return any((not normalized or record_path.startswith(prefix)) for record_path in records)
 
     def has_protected_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
-        if self.is_offline(remote_name, path, is_dir=is_dir):
-            return True
-        if not is_dir:
-            return False
-        normalized = normalize_browser_path(path)
-        prefix = f"{normalized}/" if normalized else ""
-        records = self._offline_records.get(remote_name, {})
-        return any(
-            (not normalized or record_path.startswith(prefix))
-            and bool(record.get("protected"))
-            for record_path, record in records.items()
-        )
+        return self.offline_content_state(remote_name, path, is_dir=is_dir).protected
 
     def has_temporary_cache_content(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
-        if not is_dir:
-            return self.is_cached(remote_name, path, is_dir=False) and not self.is_offline(
-                remote_name,
-                path,
-                is_dir=False,
-            )
-        normalized = normalize_browser_path(path)
-        prefix = f"{normalized}/" if normalized else ""
-        records = self._offline_records.get(remote_name, {})
-        return any(
-            (not normalized or record_path.startswith(prefix))
-            and not bool(record.get("protected"))
-            for record_path, record in records.items()
-        )
+        return self.offline_content_state(remote_name, path, is_dir=is_dir).temporary
 
     def offline_path(self, remote_name: str, path: str) -> Path:
         root = self.cache_root / _safe_component(remote_name)
