@@ -789,7 +789,7 @@ class CloudBrowserBackend:
                 continue
             if not normalized and not record_path:
                 continue
-            if not bool(record.get("is_dir")):
+            if not bool(record.get("is_dir")) or bool(record.get("complete")):
                 return True
         directory = self.offline_path(remote_name, path)
         if not directory.is_dir():
@@ -824,7 +824,6 @@ class CloudBrowserBackend:
         records = self._offline_records.get(remote_name, {})
         return any(
             (not normalized or record_path.startswith(prefix))
-            and not bool(record.get("is_dir"))
             and bool(record.get("protected"))
             for record_path, record in records.items()
         )
@@ -841,7 +840,6 @@ class CloudBrowserBackend:
         records = self._offline_records.get(remote_name, {})
         return any(
             (not normalized or record_path.startswith(prefix))
-            and not bool(record.get("is_dir"))
             and not bool(record.get("protected"))
             for record_path, record in records.items()
         )

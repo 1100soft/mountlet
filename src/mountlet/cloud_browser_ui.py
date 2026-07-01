@@ -48,6 +48,22 @@ def cascade_position(
     return x, y
 
 
+def _paths_overlap(left_paths: list[str], right_paths: list[str]) -> bool:
+    for left in left_paths:
+        normalized_left = normalize_browser_path(left)
+        for right in right_paths:
+            normalized_right = normalize_browser_path(right)
+            if not normalized_left or not normalized_right:
+                return True
+            if normalized_left == normalized_right:
+                return True
+            if normalized_left and normalized_right.startswith(f"{normalized_left}/"):
+                return True
+            if normalized_right and normalized_left.startswith(f"{normalized_right}/"):
+                return True
+    return False
+
+
 class CompactCloudBrowser:
     def __init__(
         self,
@@ -579,6 +595,29 @@ class CompactCloudBrowser:
             if self._entry_has_operation(remote_name, normalized, is_dir=is_dir, kind=kind):
                 return True
         return False
+
+    def _queued_offline_job_overlaps(self, remote_name: str, paths: list[str], kind: str) -> bool:
+        normalized_paths = [normalize_browser_path(path) for path in paths]
+        for queued_remote, _message, _action, queued_paths, queued_kind in getattr(self, "_offline_job_queue", []):
+            if queued_remote != remote_name or queued_kind != kind:
+                continue
+            if _paths_overlap(normalized_paths, queued_paths):
+                return True
+        return False
+
+    def _offline_remove_pending(self, remote_name: str, paths: list[str]) -> bool:
+        return self._operation_paths_overlap(remote_name, paths, "remove") or self._queued_offline_job_overlaps(
+            remote_name,
+            paths,
+            "remove",
+        )
+
+    def _offline_download_pending(self, remote_name: str, paths: list[str]) -> bool:
+        return self._operation_paths_overlap(remote_name, paths, "download") or self._queued_offline_job_overlaps(
+            remote_name,
+            paths,
+            "download",
+        )
 
     def _remote_has_operation(self, remote_name: str, kind: str) -> bool:
         return any(
@@ -1271,6 +1310,7 @@ class CompactCloudBrowser:
             is_dir=entry.is_dir,
             kind="download",
         )
+        remove_pending = self._offline_remove_pending(remote.name, [entry.path])
         available = not self._operation_pending and not downloading
         has_local_content = self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
         if partial:
@@ -1284,7 +1324,7 @@ class CompactCloudBrowser:
                 menu,
                 "Remove offline copies",
                 lambda selected=entry: self._remove_offline_copy(selected.path),
-                enabled=not self._operation_pending,
+                enabled=not self._operation_pending and not remove_pending,
             )
             return
         if downloading:
@@ -1292,7 +1332,7 @@ class CompactCloudBrowser:
                 menu,
                 "Remove offline copies",
                 lambda selected=entry: self._remove_offline_copy(selected.path),
-                enabled=not self._operation_pending,
+                enabled=not self._operation_pending and not remove_pending,
             )
             return
         self._menu_action(
@@ -1310,16 +1350,34 @@ class CompactCloudBrowser:
 
     def _queue_remove_offline_job(self, remote_name: str, path: str) -> None:
         normalized = normalize_browser_path(path)
+        paths = [normalized]
+        if self._offline_remove_pending(remote_name, paths):
+            return
 
         def action() -> None:
             self.backend.remove_offline(remote_name, normalized)
 
-        self._queue_offline_job(
-            "Removing local copies…",
-            action,
-            working_paths=[normalized],
-            working_kind="remove",
-        )
+        if self._offline_download_pending(remote_name, paths):
+            self._offline_job_queue.append((remote_name, "Removing local copies…", action, paths, "remove"))
+            self.status.setText("Queued removal after download…")
+            self._update_actions()
+            return
+        self._start_local_remove_job(remote_name, paths, action)
+
+    def _start_local_remove_job(self, remote_name: str, paths: list[str], action: Callable[[], object]) -> None:
+        self._start_working_paths(remote_name, paths, "remove")
+        self.status.setText("Removing local copies…")
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                action()
+            except Exception as exc:
+                self._bridge.offline_job_finished.emit(remote_name, paths, "remove", False, str(exc))
+                return
+            self._bridge.offline_job_finished.emit(remote_name, paths, "remove", True, "")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _free_cache(self, path: str) -> None:
         if self.remote is None:
@@ -1474,14 +1532,17 @@ class CompactCloudBrowser:
         self._start_offline_jobs()
 
     def _start_offline_jobs(self) -> None:
-        while self._offline_job_queue and self._offline_jobs_running < OFFLINE_JOB_CONCURRENCY:
-            next_index = self._next_runnable_offline_job_index()
+        while self._offline_job_queue:
+            next_index = self._next_runnable_offline_job_index(
+                allow_download=self._offline_jobs_running < OFFLINE_JOB_CONCURRENCY
+            )
             if next_index is None:
                 return
             remote_name, message, action, working_paths, working_kind = self._offline_job_queue.pop(next_index)
+            if working_kind == "remove":
+                self._start_local_remove_job(remote_name, working_paths, action)
+                continue
             self._offline_jobs_running += 1
-            if remote_name and working_paths and working_kind == "remove":
-                self._start_working_paths(remote_name, working_paths, working_kind)
             self.status.setText(message)
             self._update_actions()
 
@@ -1500,8 +1561,10 @@ class CompactCloudBrowser:
 
             threading.Thread(target=worker, daemon=True).start()
 
-    def _next_runnable_offline_job_index(self) -> int | None:
+    def _next_runnable_offline_job_index(self, *, allow_download: bool = True) -> int | None:
         for index, (remote_name, _message, _action, paths, kind) in enumerate(self._offline_job_queue):
+            if kind != "remove" and not allow_download:
+                continue
             if kind == "remove" and self._operation_paths_overlap(remote_name, paths, "download"):
                 continue
             return index
@@ -1613,11 +1676,18 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         selected_entries = self._selected_entries() if selected and remote is not None else []
         selected_downloading = False
+        selected_remove_pending = False
         if remote is not None:
             selected_downloading = any(
                 self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
                 for entry in selected_entries
             )
+            selected_remove_pending = any(
+                self._offline_remove_pending(remote.name, [entry.path])
+                for entry in selected_entries
+            )
+        if offline_enabled and selected_remove_pending:
+            offline_enabled = False
         if offline_enabled and remote is not None and not selected_downloading:
             offline_enabled = not any(
                 self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
@@ -1635,6 +1705,8 @@ class CompactCloudBrowser:
         set_badge(self.offline_button, remove_offline, OFFLINE_SAVED_BADGE_COLOR)
         if operation_pending:
             self.offline_button.setToolTip("Wait for the current file operation to finish")
+        elif selected_remove_pending:
+            self.offline_button.setToolTip("Removal is already queued")
         elif selected:
             self.offline_button.setToolTip(
                 "Queue removal after the current download finishes"

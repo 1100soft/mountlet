@@ -412,6 +412,22 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertFalse(backend.is_offline("Docs", "Reports", is_dir=True))
             self.assertTrue(backend.is_partially_offline("Docs", "Reports", is_dir=True))
 
+    def test_parent_folder_reports_protected_child_folder_content(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend._offline_records = {
+                "Docs": {
+                    "Reports": {"is_dir": True, "protected": True, "complete": False},
+                    "Reports/Empty": {"is_dir": True, "protected": True, "complete": True},
+                }
+            }
+
+            self.assertTrue(backend.has_protected_content("Docs", "Reports", is_dir=True))
+            self.assertTrue(backend.is_partially_offline("Docs", "Reports", is_dir=True))
+
     def test_offline_folder_download_uses_long_timeout(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -1698,6 +1714,16 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_paths, {("Docs", "Reports"): "download"})
 
     def test_unrelated_remove_offline_job_can_run_while_download_continues(self):
+        started_threads = []
+
+        class Thread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started_threads.append(self)
+
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
         browser._offline_jobs_running = 0
@@ -1711,12 +1737,62 @@ class CloudBrowserTests(unittest.TestCase):
         browser._bridge = SimpleNamespace(offline_job_finished=SimpleNamespace(emit=mock.Mock()))
         browser.backend = mock.Mock()
 
-        browser._queue_remove_offline_job("Docs", "Other")
+        with mock.patch("mountlet.cloud_browser_ui.threading.Thread", Thread):
+            browser._queue_remove_offline_job("Docs", "Other")
 
-        self.assertEqual(browser._offline_jobs_running, 1)
+        self.assertEqual(browser._offline_jobs_running, 0)
         self.assertEqual(browser._offline_job_queue, [])
         self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
         self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
+        self.assertEqual(len(started_threads), 1)
+
+    def test_unrelated_remove_offline_job_runs_when_download_workers_are_full(self):
+        started_threads = []
+
+        class Thread:
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started_threads.append(self)
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._offline_jobs_running = OFFLINE_JOB_CONCURRENCY
+        browser._offline_job_queue = []
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser._working_timer = None
+        browser.entries = []
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._update_actions = mock.Mock()
+        browser._bridge = SimpleNamespace(offline_job_finished=SimpleNamespace(emit=mock.Mock()))
+        browser.backend = mock.Mock()
+
+        with mock.patch("mountlet.cloud_browser_ui.threading.Thread", Thread):
+            browser._queue_remove_offline_job("Docs", "Other")
+
+        self.assertEqual(browser._offline_jobs_running, OFFLINE_JOB_CONCURRENCY)
+        self.assertEqual(browser._offline_job_queue, [])
+        self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
+        self.assertEqual(len(started_threads), 1)
+
+    def test_duplicate_remove_offline_job_is_ignored(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._offline_jobs_running = 0
+        browser._offline_job_queue = [("Docs", "Removing local copies…", lambda: None, ["Reports"], "remove")]
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser._working_timer = None
+        browser.entries = []
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._update_actions = mock.Mock()
+
+        browser._queue_remove_offline_job("Docs", "Reports/Deep")
+
+        self.assertEqual(len(browser._offline_job_queue), 1)
 
     def test_open_local_file_uses_external_opener_without_tracking_state(self):
         browser = object.__new__(CompactCloudBrowser)
