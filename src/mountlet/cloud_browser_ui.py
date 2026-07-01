@@ -1013,37 +1013,8 @@ class CompactCloudBrowser:
                 current_target = item
             if current_target is None and previous_path and entry.path == previous_path:
                 current_target = item
-            state = self.backend.offline_content_state(remote.name, entry.path, is_dir=entry.is_dir) if remote else None
-            offline = bool(state and state.offline)
-            protected_content = bool(state and state.protected)
-            temporary_content = bool(state and state.temporary)
-            partial_cache = bool(state and state.partial)
-            changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
-            working = self._working_kind_for_entry(remote.name, entry.path, is_dir=entry.is_dir) if remote else ""
-            item.setIcon(0, self._entry_icon(
-                entry,
-                directory_icon=directory_icon,
-                file_icon=file_icon,
-                temporary_cached=temporary_content,
-                protected_cached=protected_content,
-                cache_partial=partial_cache,
-                changed=changed,
-                working=working,
-            ))
-            if working == "download":
-                item.setToolTip(0, "Downloading local copy")
-            elif working == "sync":
-                item.setToolTip(0, "Syncing local copy")
-            elif changed:
-                item.setToolTip(0, "Local copy has unresolved changes")
-            elif remote and offline:
-                item.setToolTip(0, "Available offline as a local snapshot")
-            elif remote and protected_content and temporary_content:
-                item.setToolTip(0, "Contains saved offline files and temporary cached files")
-            elif remote and protected_content:
-                item.setToolTip(0, "Contains files saved for offline access")
-            elif remote and temporary_content:
-                item.setToolTip(0, "Cached local copy")
+            if remote is not None:
+                self._apply_entry_state(item, entry, remote, directory_icon, file_icon)
             self.tree.addTopLevelItem(item)
             if fallback_target is None and self.tree.topLevelItemCount() - 1 >= previous_index:
                 fallback_target = item
@@ -1066,6 +1037,48 @@ class CompactCloudBrowser:
             with suppress(Exception):
                 self.tree.verticalScrollBar().setValue(previous_scroll)
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_related_folders(visible_entries))
+
+    def _apply_entry_state(
+        self,
+        item: Any,
+        entry: BrowserEntry,
+        remote: core.RemoteInfo,
+        directory_icon: Any,
+        file_icon: Any,
+    ) -> None:
+        state = self.backend.offline_content_state(remote.name, entry.path, is_dir=entry.is_dir)
+        offline = bool(state and state.offline)
+        protected_content = bool(state and state.protected)
+        temporary_content = bool(state and state.temporary)
+        partial_cache = bool(state and state.partial)
+        changed = bool(self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
+        working = self._working_kind_for_entry(remote.name, entry.path, is_dir=entry.is_dir)
+        item.setIcon(0, self._entry_icon(
+            entry,
+            directory_icon=directory_icon,
+            file_icon=file_icon,
+            temporary_cached=temporary_content,
+            protected_cached=protected_content,
+            cache_partial=partial_cache,
+            changed=changed,
+            working=working,
+        ))
+        tooltip = ""
+        if working == "download":
+            tooltip = "Downloading local copy"
+        elif working == "sync":
+            tooltip = "Syncing local copy"
+        elif changed:
+            tooltip = "Local copy has unresolved changes"
+        elif offline:
+            tooltip = "Available offline as a local snapshot"
+        elif protected_content and temporary_content:
+            tooltip = "Contains saved offline files and temporary cached files"
+        elif protected_content:
+            tooltip = "Contains files saved for offline access"
+        elif temporary_content:
+            tooltip = "Cached local copy"
+        item.setToolTip(0, tooltip)
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
         qt_color = self.qt.QColor(color)
@@ -1700,7 +1713,7 @@ class CompactCloudBrowser:
         if remote_name and normalized_paths and kind:
             self._start_working_paths(remote_name, normalized_paths, kind)
             self._refresh_download_working_paths(remote_name)
-            self._display_entries(list(getattr(self, "entries", [])))
+            self._refresh_entry_icons()
 
     def _cache_recursive_entries(self, remote_name: str, entries: list[BrowserEntry]) -> None:
         by_parent: dict[str, dict[str, BrowserEntry]] = {}
@@ -1987,7 +2000,7 @@ class CompactCloudBrowser:
                 self._working_paths.pop(key, None)
                 changed = True
         if changed:
-            self._display_entries(list(getattr(self, "entries", [])))
+            self._refresh_entry_icons()
 
     def _update_open_folder_button(self) -> None:
         button = getattr(self, "open_folder_button", None)
