@@ -25,6 +25,7 @@ EMBEDDED_BROWSER_MIN_HEIGHT = 340
 CHILD_FOLDER_PREFETCH_LIMIT = 24
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
+OFFLINE_JOB_CONCURRENCY = 3
 
 
 def cascade_position(
@@ -93,8 +94,8 @@ class CompactCloudBrowser:
         self._working_paths: dict[tuple[str, str], str] = {}
         self._working_phase = 0
         self._working_timer: Any | None = None
-        self._offline_job_running = False
-        self._offline_job_queue: list[tuple[str, Callable[[], object], list[str], str]] = []
+        self._offline_jobs_running = 0
+        self._offline_job_queue: list[tuple[str, str, Callable[[], object], list[str], str]] = []
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -113,7 +114,7 @@ class CompactCloudBrowser:
             listing_ready = qt.Signal(str, str, object, str)
             operation_finished = qt.Signal(bool, str)
             cached_file_ready = qt.Signal(str, str, object, str)
-            offline_job_finished = qt.Signal(bool, str)
+            offline_job_finished = qt.Signal(str, object, str, bool, str)
 
         return Bridge()
 
@@ -535,11 +536,13 @@ class CompactCloudBrowser:
                     timer.start()
         self._display_entries(list(getattr(self, "entries", [])))
 
-    def _finish_working_paths(self, remote_name: str, paths: list[str]) -> None:
+    def _finish_working_paths(self, remote_name: str, paths: list[str], kind: str = "") -> None:
         if not hasattr(self, "_working_paths"):
             return
         for path in paths:
-            self._working_paths.pop((remote_name, normalize_browser_path(path)), None)
+            key = (remote_name, normalize_browser_path(path))
+            if not kind or self._working_paths.get(key) == kind:
+                self._working_paths.pop(key, None)
         if not self._working_paths:
             timer = getattr(self, "_working_timer", None)
             if timer is not None:
@@ -563,6 +566,9 @@ class CompactCloudBrowser:
             if working_path and normalized.startswith(f"{working_path}/"):
                 return kind
         return ""
+
+    def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
+        return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
 
     def _enlarge_button_text(self, button: Any) -> None:
         try:
@@ -1082,7 +1088,7 @@ class CompactCloudBrowser:
         if not isinstance(entry, BrowserEntry):
             return
         menu = self.qt.QMenu(self.window)
-        self._menu_action(menu, "Open", lambda selected=item: self._open_item(selected))
+        self._menu_action(menu, "Open", lambda selected=entry: self._open_entry(selected))
         if self._can_replace_original_with_copy(entry):
             self._menu_action(
                 menu,
@@ -1169,6 +1175,7 @@ class CompactCloudBrowser:
             remote
             and self._sync_paths is not None
             and not self._operation_pending
+            and not self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="sync")
             and self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
         )
 
@@ -1178,6 +1185,7 @@ class CompactCloudBrowser:
             remote
             and self._sync_paths is not None
             and not self._operation_pending
+            and not self._entry_has_operation(remote.name, self.path, is_dir=True, kind="sync")
             and self.backend.managed_file_paths_under(remote.name, self.path)
         )
 
@@ -1232,25 +1240,31 @@ class CompactCloudBrowser:
             return
         partial = self.backend.is_partially_offline(remote.name, entry.path, is_dir=entry.is_dir)
         offline = self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        available = not self._operation_pending and not self._entry_has_operation(
+            remote.name,
+            entry.path,
+            is_dir=entry.is_dir,
+            kind="download",
+        )
         if partial:
             self._menu_action(
                 menu,
                 "Make available offline",
                 self.toggle_offline,
-                enabled=not self._operation_pending,
+                enabled=available,
             )
             self._menu_action(
                 menu,
                 "Remove offline copies",
                 lambda selected=entry: self._remove_offline_copy(selected.path),
-                enabled=not self._operation_pending,
+                enabled=available,
             )
             return
         self._menu_action(
             menu,
             "Remove offline copy" if offline else "Make available offline",
             self.toggle_offline,
-            enabled=not self._operation_pending,
+            enabled=available,
         )
 
     def _remove_offline_copy(self, path: str) -> None:
@@ -1428,40 +1442,50 @@ class CompactCloudBrowser:
         working_paths: list[str] | None = None,
         working_kind: str = "",
     ) -> None:
-        self._offline_job_queue.append((message, action, working_paths or [], working_kind))
-        self._start_next_offline_job()
-
-    def _start_next_offline_job(self) -> None:
-        if self._offline_job_running or not self._offline_job_queue:
-            return
-        message, action, working_paths, working_kind = self._offline_job_queue.pop(0)
-        self._offline_job_running = True
-        working_remote = self.remote.name if self.remote is not None else ""
-        if working_remote and working_paths and working_kind:
-            self._start_working_paths(working_remote, working_paths, working_kind)
-        self.status.setText(message)
-        self._update_actions()
-
-        def worker() -> None:
-            try:
-                action()
-            except Exception as exc:
-                self._bridge.offline_job_finished.emit(False, str(exc))
-                return
-            self._bridge.offline_job_finished.emit(True, "")
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _offline_job_finished(self, success: bool, message: str) -> None:
-        self._offline_job_running = False
         remote_name = self.remote.name if self.remote is not None else ""
-        if remote_name:
-            self._finish_working_remote(remote_name, "download")
+        self._offline_job_queue.append((remote_name, message, action, working_paths or [], working_kind))
+        self._start_offline_jobs()
+
+    def _start_offline_jobs(self) -> None:
+        while self._offline_job_queue and self._offline_jobs_running < OFFLINE_JOB_CONCURRENCY:
+            remote_name, message, action, working_paths, working_kind = self._offline_job_queue.pop(0)
+            self._offline_jobs_running += 1
+            if remote_name and working_paths and working_kind:
+                self._start_working_paths(remote_name, working_paths, working_kind)
+            self.status.setText(message)
+            self._update_actions()
+
+            def worker(
+                job_remote_name: str = remote_name,
+                job_paths: list[str] = list(working_paths),
+                job_kind: str = working_kind,
+                job_action: Callable[[], object] = action,
+            ) -> None:
+                try:
+                    job_action()
+                except Exception as exc:
+                    self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, False, str(exc))
+                    return
+                self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, True, "")
+
+            threading.Thread(target=worker, daemon=True).start()
+
+    def _offline_job_finished(
+        self,
+        remote_name: str,
+        paths: object,
+        kind: str,
+        success: bool,
+        message: str,
+    ) -> None:
+        self._offline_jobs_running = max(0, self._offline_jobs_running - 1)
+        if remote_name and isinstance(paths, list):
+            self._finish_working_paths(remote_name, [str(path) for path in paths], kind)
         if not success:
             self._notify("Offline files", message or "The operation failed.", False)
         self._local_files_changed()
         self.refresh(force=True)
-        self._start_next_offline_job()
+        self._start_offline_jobs()
 
     def _operation_finished(self, success: bool, message: str) -> None:
         self._operation_pending = False
@@ -1544,6 +1568,12 @@ class CompactCloudBrowser:
                 "Sync selected local copies" if selection_sync_enabled else "Select cached or offline files first",
             )
         offline_enabled = selected and not operation_pending
+        selected_entries = self._selected_entries() if selected and self.remote is not None else []
+        if offline_enabled and self.remote is not None:
+            offline_enabled = not any(
+                self._entry_has_operation(self.remote.name, entry.path, is_dir=entry.is_dir, kind="download")
+                for entry in selected_entries
+            )
         self._set_action_button_state(
             self.offline_button,
             offline_enabled,
@@ -1702,7 +1732,13 @@ class CompactCloudBrowser:
         return True
 
     def _open_item(self, item: Any, _column: int = 0) -> None:
-        entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        try:
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        except RuntimeError:
+            return
+        self._open_entry(entry)
+
+    def _open_entry(self, entry: object) -> None:
         if not isinstance(entry, BrowserEntry) or self.remote is None:
             return
         if entry.is_dir:

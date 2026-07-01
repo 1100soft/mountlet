@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import hashlib
 import time
+import threading
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -116,6 +117,7 @@ class CloudBrowserBackend:
             self._migrate_legacy_offline_cache()
         self.manifest_path = manifest_path or self.state_path.with_name(OFFLINE_MANIFEST_FILE)
         self._paths = self._load_paths()
+        self._offline_lock = threading.RLock()
         self._offline_records = self._load_offline_manifest()
 
     def current_path(self, remote_name: str) -> str:
@@ -913,70 +915,73 @@ class CloudBrowserBackend:
         return normalized
 
     def _save_offline_manifest(self) -> None:
-        self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.manifest_path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps({"version": 1, "remotes": self._offline_records}, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        temporary.replace(self.manifest_path)
+        with self._offline_lock:
+            self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.manifest_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps({"version": 1, "remotes": self._offline_records}, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            temporary.replace(self.manifest_path)
 
     def _record_offline_entry(self, remote_name: str, entry: BrowserEntry, *, protected: bool = True) -> None:
-        records = self._offline_records.setdefault(remote_name, {})
-        cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        for ancestor in _ancestor_paths(entry.path):
-            current = records.setdefault(
-                ancestor,
-                {
-                    "is_dir": True,
-                    "size": 0,
-                    "modified": "",
-                    "cached_at": cached_at,
-                    "protected": protected,
-                    "complete": False,
-                },
-            )
-            if protected:
-                current["protected"] = True
-        records[normalize_browser_path(entry.path)] = {
-            "is_dir": entry.is_dir,
-            "size": max(entry.size, 0),
-            "modified": entry.modified,
-            "cached_at": cached_at,
-            "protected": protected,
-            "complete": True,
-            **self._offline_file_state(remote_name, entry.path),
-        }
-        self._save_offline_manifest()
-
-    def _record_offline_tree(self, remote_name: str, entry: BrowserEntry, directory: Path, *, protected: bool = True) -> None:
-        self._record_offline_entry(remote_name, entry, protected=protected)
-        root_path = normalize_browser_path(entry.path)
-        records = self._offline_records.setdefault(remote_name, {})
-        cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        for child in directory.rglob("*"):
-            if child.name.startswith(".mountlet-offline"):
-                continue
-            relative = child.relative_to(directory)
-            child_path = root_path
-            for part in relative.parts:
-                child_path = join_browser_path(child_path, part)
-            try:
-                stat_result = child.stat()
-            except OSError:
-                continue
-            if child.is_file():
-                self._make_file_writable(child)
-            records[child_path] = {
-                "is_dir": child.is_dir(),
-                "size": 0 if child.is_dir() else stat_result.st_size,
-                "modified": datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
+        with self._offline_lock:
+            records = self._offline_records.setdefault(remote_name, {})
+            cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            for ancestor in _ancestor_paths(entry.path):
+                current = records.setdefault(
+                    ancestor,
+                    {
+                        "is_dir": True,
+                        "size": 0,
+                        "modified": "",
+                        "cached_at": cached_at,
+                        "protected": protected,
+                        "complete": False,
+                    },
+                )
+                if protected:
+                    current["protected"] = True
+            records[normalize_browser_path(entry.path)] = {
+                "is_dir": entry.is_dir,
+                "size": max(entry.size, 0),
+                "modified": entry.modified,
                 "cached_at": cached_at,
                 "protected": protected,
                 "complete": True,
-                **({} if child.is_dir() else self._offline_file_state(remote_name, child_path)),
+                **self._offline_file_state(remote_name, entry.path),
             }
-        self._save_offline_manifest()
+            self._save_offline_manifest()
+
+    def _record_offline_tree(self, remote_name: str, entry: BrowserEntry, directory: Path, *, protected: bool = True) -> None:
+        with self._offline_lock:
+            self._record_offline_entry(remote_name, entry, protected=protected)
+            root_path = normalize_browser_path(entry.path)
+            records = self._offline_records.setdefault(remote_name, {})
+            cached_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            for child in directory.rglob("*"):
+                if child.name.startswith(".mountlet-offline"):
+                    continue
+                relative = child.relative_to(directory)
+                child_path = root_path
+                for part in relative.parts:
+                    child_path = join_browser_path(child_path, part)
+                try:
+                    stat_result = child.stat()
+                except OSError:
+                    continue
+                if child.is_file():
+                    self._make_file_writable(child)
+                records[child_path] = {
+                    "is_dir": child.is_dir(),
+                    "size": 0 if child.is_dir() else stat_result.st_size,
+                    "modified": datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
+                    "cached_at": cached_at,
+                    "protected": protected,
+                    "complete": True,
+                    **({} if child.is_dir() else self._offline_file_state(remote_name, child_path)),
+                }
+            self._save_offline_manifest()
 
     def _offline_file_state(self, remote_name: str, path: str) -> dict[str, object]:
         destination = self.offline_path(remote_name, path)
