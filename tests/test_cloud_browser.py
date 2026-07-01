@@ -1349,6 +1349,23 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertNotIn(("Docs", "Reports/a.txt"), browser._working_paths)
         self.assertEqual(browser._working_paths[("Docs", "Reports/b.txt")], "download")
 
+    def test_animation_tick_refreshes_icons_without_rebuilding_entries(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports/a.txt"): "download"}
+        browser._working_phase = 0
+        browser._working_timer = None
+        browser.entries = [BrowserEntry("a.txt", "Reports/a.txt", False)]
+        browser.backend = mock.Mock()
+        browser.backend.is_cached.return_value = False
+        browser._display_entries = mock.Mock()
+        browser._refresh_entry_icons = mock.Mock()
+
+        browser._advance_working_animation()
+
+        self.assertEqual(browser._working_phase, 1)
+        browser._refresh_entry_icons.assert_called_once_with()
+        browser._display_entries.assert_not_called()
+
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
