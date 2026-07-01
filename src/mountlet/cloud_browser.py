@@ -767,7 +767,7 @@ class CloudBrowserBackend:
             and bool(record.get("complete", True))
         )
         destination = self.offline_path(remote_name, path)
-        if self._offline_marker(destination).exists():
+        if record is None and self._offline_marker(destination).exists():
             full_offline = True
         prefix = f"{normalized}/" if normalized else ""
         protected = full_offline
@@ -1365,6 +1365,7 @@ def _display_time(value: str) -> str:
 __all__ = [
     "BrowserEntry",
     "CloudBrowserBackend",
+    "OfflineContentState",
     "TransferItem",
     "format_file_size",
     "join_browser_path",

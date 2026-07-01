@@ -949,15 +949,11 @@ class CompactCloudBrowser:
                 current_target = item
             if current_target is None and previous_path and entry.path == previous_path:
                 current_target = item
-            offline = bool(remote and self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir))
-            protected_content = bool(
-                remote and self.backend.has_protected_content(remote.name, entry.path, is_dir=entry.is_dir)
-            )
-            temporary_content = bool(
-                remote and self.backend.has_temporary_cache_content(remote.name, entry.path, is_dir=entry.is_dir)
-            )
-            cached_content = protected_content or temporary_content
-            partial_cache = bool(entry.is_dir and cached_content and not offline)
+            state = self.backend.offline_content_state(remote.name, entry.path, is_dir=entry.is_dir) if remote else None
+            offline = bool(state and state.offline)
+            protected_content = bool(state and state.protected)
+            temporary_content = bool(state and state.temporary)
+            partial_cache = bool(state and state.partial)
             changed = bool(remote and self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir))
             working = self._working_kind_for_entry(remote.name, entry.path, is_dir=entry.is_dir) if remote else ""
             item.setIcon(0, self._entry_icon(
@@ -1368,16 +1364,21 @@ class CompactCloudBrowser:
         self._start_working_paths(remote_name, paths, "remove")
         self.status.setText("Removing local copies…")
         self._update_actions()
-
-        def worker() -> None:
-            try:
-                action()
-            except Exception as exc:
-                self._bridge.offline_job_finished.emit(remote_name, paths, "remove", False, str(exc))
-                return
-            self._bridge.offline_job_finished.emit(remote_name, paths, "remove", True, "")
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            action()
+        except Exception as exc:
+            self._finish_working_paths(remote_name, paths, "remove")
+            self._notify("Offline files", str(exc) or "The operation failed.", False)
+            return
+        self._finish_working_paths(remote_name, paths, "remove")
+        self._folder_cache = {
+            key: entries for key, entries in getattr(self, "_folder_cache", {}).items() if key[0] != remote_name
+        }
+        callback = getattr(self, "_local_files_changed", None)
+        if callable(callback):
+            callback()
+        if self.remote is not None and self.remote.name == remote_name and hasattr(self, "path"):
+            self.refresh(force=True)
 
     def _free_cache(self, path: str) -> None:
         if self.remote is None:
