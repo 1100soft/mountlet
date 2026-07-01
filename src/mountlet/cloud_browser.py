@@ -1149,7 +1149,7 @@ class CloudBrowserBackend:
 
     def _run_operation(self, binary: str, *arguments: str, timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS) -> None:
         command = self._command(binary, *arguments)
-        if self.operation_output_callback is not None:
+        if self.operation_output_callback is not None and timeout is None:
             self._run_operation_streaming(command)
             return
         try:

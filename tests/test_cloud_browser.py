@@ -209,6 +209,93 @@ class CloudBrowserTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "copyto timed out"):
                     backend._run_operation("rclone", "copyto", "Docs:/a.txt", str(Path(tempdir) / "a.txt"))
 
+    def test_rclone_operation_streams_output_when_callback_is_set(self):
+        class Stream:
+            def __init__(self, text: str) -> None:
+                self._text = text
+                self._index = 0
+
+            def read(self, _size: int) -> str:
+                if self._index >= len(self._text):
+                    return ""
+                value = self._text[self._index]
+                self._index += 1
+                return value
+
+        class Process:
+            stdout = Stream("Transferred: 1 MiB\rTransferred: 2 MiB\n")
+            returncode = 0
+
+            def poll(self) -> int | None:
+                return self.returncode if self.stdout._index >= len(self.stdout._text) else None
+
+            def wait(self) -> int:
+                return self.returncode
+
+        output: list[str] = []
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend.operation_output_callback = output.append
+            with mock.patch("mountlet.cloud_browser.subprocess.Popen", return_value=Process()) as popen:
+                backend._run_operation("rclone", "copyto", "Docs:/a.txt", str(Path(tempdir) / "a.txt"), timeout=None)
+
+        command = popen.call_args.args[0]
+        self.assertIn("--progress", command)
+        self.assertIn("Transferred: 1 MiB\n", output)
+        self.assertIn("Transferred: 2 MiB\n", output)
+        self.assertEqual(output[-1], "[rclone exited with code 0]\n")
+
+    def test_rclone_operation_callback_preserves_timeout_for_short_operations(self):
+        response = SimpleNamespace(returncode=0, stderr="")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend.operation_output_callback = lambda _text: None
+            with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response) as run:
+                with mock.patch("mountlet.cloud_browser.subprocess.Popen") as popen:
+                    backend._run_operation("rclone", "mkdir", "Docs:/New")
+
+        popen.assert_not_called()
+        self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_FILE_OPERATION_TIMEOUT_SECONDS)
+
+    def test_rclone_operation_streaming_failure_uses_recent_output(self):
+        class Stream:
+            def __init__(self, text: str) -> None:
+                self._text = text
+                self._index = 0
+
+            def read(self, _size: int) -> str:
+                if self._index >= len(self._text):
+                    return ""
+                value = self._text[self._index]
+                self._index += 1
+                return value
+
+        class Process:
+            stdout = Stream("first\nfatal detail\n")
+            returncode = 1
+
+            def poll(self) -> int | None:
+                return self.returncode if self.stdout._index >= len(self.stdout._text) else None
+
+            def wait(self) -> int:
+                return self.returncode
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend.operation_output_callback = lambda _text: None
+            with mock.patch("mountlet.cloud_browser.subprocess.Popen", return_value=Process()):
+                with self.assertRaisesRegex(RuntimeError, "fatal detail"):
+                    backend._run_operation("rclone", "copyto", "Docs:/a.txt", str(Path(tempdir) / "a.txt"), timeout=None)
+
     def test_offline_file_is_indicated_by_managed_copy(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -1365,6 +1452,27 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_phase, 1)
         browser._refresh_entry_icons.assert_called_once_with()
         browser._display_entries.assert_not_called()
+
+    def test_rclone_output_append_updates_buffer_and_open_editor(self):
+        class Editor:
+            def __init__(self) -> None:
+                self.text = ""
+
+            def moveCursor(self, _operation: object) -> None:
+                pass
+
+            def insertPlainText(self, text: str) -> None:
+                self.text += text
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._rclone_output_buffer = []
+        browser._rclone_output_text = Editor()
+        browser.qt = SimpleNamespace(QTextCursor=SimpleNamespace(MoveOperation=SimpleNamespace(End="end")))
+
+        browser._append_rclone_output("Transferred: 1 MiB\n")
+
+        self.assertEqual(browser._rclone_output_buffer, ["Transferred: 1 MiB\n"])
+        self.assertEqual(browser._rclone_output_text.text, "Transferred: 1 MiB\n")
 
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
