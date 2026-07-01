@@ -1743,8 +1743,9 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._offline_jobs_running, 0)
         self.assertEqual(browser._offline_job_queue, [])
         self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
-        self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
-        self.assertEqual(len(started_threads), 1)
+        self.assertNotIn(("Docs", "Other"), browser._working_paths)
+        browser.backend.remove_offline.assert_called_once_with("Docs", "Other")
+        self.assertEqual(len(started_threads), 0)
 
     def test_unrelated_remove_offline_job_runs_when_download_workers_are_full(self):
         started_threads = []
@@ -1775,8 +1776,9 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser._offline_jobs_running, OFFLINE_JOB_CONCURRENCY)
         self.assertEqual(browser._offline_job_queue, [])
-        self.assertEqual(browser._working_paths[("Docs", "Other")], "remove")
-        self.assertEqual(len(started_threads), 1)
+        self.assertNotIn(("Docs", "Other"), browser._working_paths)
+        browser.backend.remove_offline.assert_called_once_with("Docs", "Other")
+        self.assertEqual(len(started_threads), 0)
 
     def test_duplicate_remove_offline_job_is_ignored(self):
         browser = object.__new__(CompactCloudBrowser)
