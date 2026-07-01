@@ -336,7 +336,7 @@ class CompactCloudBrowser:
         editor = self._rclone_output_text
         if editor is None:
             return
-        editor.moveCursor(self.qt.QTextCursor.MoveOperation.End)
+        self._move_rclone_output_cursor_to_end()
         editor.insertPlainText(text)
         self._scroll_rclone_output_to_end()
 
@@ -345,7 +345,18 @@ class CompactCloudBrowser:
         if editor is None:
             return
         with suppress(Exception):
-            editor.moveCursor(self.qt.QTextCursor.MoveOperation.End)
+            self._move_rclone_output_cursor_to_end()
+
+    def _move_rclone_output_cursor_to_end(self) -> None:
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        text_cursor = getattr(self.qt, "QTextCursor", None)
+        move_operation = getattr(text_cursor, "MoveOperation", None)
+        end = getattr(move_operation, "End", None)
+        if end is not None:
+            with suppress(Exception):
+                editor.moveCursor(end)
 
     def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
         button = create_badged_button(self.qt, text)

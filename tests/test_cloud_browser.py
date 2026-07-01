@@ -1467,7 +1467,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser = object.__new__(CompactCloudBrowser)
         browser._rclone_output_buffer = []
         browser._rclone_output_text = Editor()
-        browser.qt = SimpleNamespace(QTextCursor=SimpleNamespace(MoveOperation=SimpleNamespace(End="end")))
+        browser.qt = SimpleNamespace()
 
         browser._append_rclone_output("Transferred: 1 MiB\n")
 
