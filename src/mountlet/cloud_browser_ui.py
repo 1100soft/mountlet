@@ -109,6 +109,9 @@ class CompactCloudBrowser:
         self._working_paths: dict[tuple[str, str], str] = {}
         self._working_phase = 0
         self._working_timer: Any | None = None
+        self._rclone_output_dialog: Any | None = None
+        self._rclone_output_text: Any | None = None
+        self._rclone_output_buffer: list[str] = []
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
@@ -122,6 +125,8 @@ class CompactCloudBrowser:
         self._bridge.cached_file_ready.connect(self._cached_file_ready)
         self._bridge.offline_job_paths_ready.connect(self._offline_job_paths_ready)
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
+        self._bridge.rclone_output_ready.connect(self._append_rclone_output)
+        self.backend.operation_output_callback = lambda text: self._bridge.rclone_output_ready.emit(text)
         self.window = self._make_window()
         self._file_icon_provider = self._make_file_icon_provider()
         self._build()
@@ -136,6 +141,7 @@ class CompactCloudBrowser:
             cached_file_ready = qt.Signal(str, str, object, str)
             offline_job_paths_ready = qt.Signal(str, object, str)
             offline_job_finished = qt.Signal(str, object, str, bool, str)
+            rclone_output_ready = qt.Signal(str)
 
         return Bridge()
 
@@ -194,6 +200,8 @@ class CompactCloudBrowser:
         header.addWidget(self.mount_switch)
         self.remote_sync_button = self._button("⇄", self.sync_remote, "Sync cached files for this remote", square=True)
         header.addWidget(self.remote_sync_button)
+        self.rclone_output_button = self._button("▤", self._show_rclone_output, "Show rclone output", square=True)
+        header.addWidget(self.rclone_output_button)
         header.addWidget(self._button("×", self.hide_until_selected, "Close file browser", square=True))
         layout.addLayout(header)
 
@@ -296,6 +304,48 @@ class CompactCloudBrowser:
         self.window.setCentralWidget(root)
         self._update_actions()
         self._update_focus_style()
+
+    def _show_rclone_output(self) -> None:
+        dialog = self._rclone_output_dialog
+        if dialog is None:
+            dialog = self.qt.QDialog(self.window)
+            dialog.setWindowTitle("rclone output")
+            layout = self.qt.QVBoxLayout(dialog)
+            text = self.qt.QPlainTextEdit()
+            text.setReadOnly(True)
+            text.setMinimumSize(640, 360)
+            layout.addWidget(text)
+            buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+            buttons.rejected.connect(dialog.hide)
+            layout.addWidget(buttons)
+            self._rclone_output_dialog = dialog
+            self._rclone_output_text = text
+            if self._rclone_output_buffer:
+                text.setPlainText("".join(self._rclone_output_buffer))
+                self._scroll_rclone_output_to_end()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _append_rclone_output(self, text: str) -> None:
+        if not text:
+            return
+        self._rclone_output_buffer.append(text)
+        if len(self._rclone_output_buffer) > 4000:
+            self._rclone_output_buffer = self._rclone_output_buffer[-4000:]
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        editor.moveCursor(self.qt.QTextCursor.MoveOperation.End)
+        editor.insertPlainText(text)
+        self._scroll_rclone_output_to_end()
+
+    def _scroll_rclone_output_to_end(self) -> None:
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        with suppress(Exception):
+            editor.moveCursor(self.qt.QTextCursor.MoveOperation.End)
 
     def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
         button = create_badged_button(self.qt, text)

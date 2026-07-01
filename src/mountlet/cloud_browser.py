@@ -11,7 +11,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Callable, Iterable
 
 from . import core
 from .config_tools.shared import app_cache_dir, app_state_dir, ensure_app_directories
@@ -127,6 +127,7 @@ class CloudBrowserBackend:
         self._paths = self._load_paths()
         self._offline_lock = threading.RLock()
         self._offline_records = self._load_offline_manifest()
+        self.operation_output_callback: Callable[[str], None] | None = None
 
     def current_path(self, remote_name: str) -> str:
         return normalize_browser_path(self._paths.get(remote_name, ""))
@@ -1148,6 +1149,9 @@ class CloudBrowserBackend:
 
     def _run_operation(self, binary: str, *arguments: str, timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS) -> None:
         command = self._command(binary, *arguments)
+        if self.operation_output_callback is not None:
+            self._run_operation_streaming(command)
+            return
         try:
             result = subprocess.run(
                 command,
@@ -1162,6 +1166,54 @@ class CloudBrowserBackend:
             raise RuntimeError(f"rclone {operation} timed out after {timeout} seconds") from exc
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+
+    def _run_operation_streaming(self, command: list[str]) -> None:
+        callback = self.operation_output_callback
+        if callback is None:
+            return
+        operation = command[3] if len(command) > 3 else "operation"
+        if operation in {"copy", "copyto", "move", "moveto", "sync"} and not any(
+            argument in {"--progress", "-P"} for argument in command
+        ):
+            command = [*command, "--progress"]
+        callback(f"$ {' '.join(command)}\n")
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                **core.PLATFORM.command_process_options(),
+            )
+        except OSError as exc:
+            raise RuntimeError(str(exc)) from exc
+        output: list[str] = []
+        buffer: list[str] = []
+        assert process.stdout is not None
+        while True:
+            char = process.stdout.read(1)
+            if char == "":
+                if process.poll() is not None:
+                    break
+                continue
+            if char in {"\n", "\r"}:
+                if buffer:
+                    line = "".join(buffer)
+                    output.append(line)
+                    callback(f"{line}\n")
+                    buffer = []
+                continue
+            buffer.append(char)
+        if buffer:
+            line = "".join(buffer)
+            output.append(line)
+            callback(f"{line}\n")
+        returncode = process.wait()
+        callback(f"[rclone exited with code {returncode}]\n")
+        if returncode != 0:
+            detail = "\n".join(output[-20:]).strip()
+            raise RuntimeError(detail or f"rclone exited with code {returncode}")
 
     def _remote_file_metadata(
         self,
