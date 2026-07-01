@@ -610,6 +610,8 @@ class CompactCloudBrowser:
         return paths
 
     def _refresh_visible_download_state(self, remote_name: str, entries: list[BrowserEntry]) -> None:
+        if not hasattr(self, "_working_paths"):
+            self._working_paths = {}
         for entry in entries:
             normalized = normalize_browser_path(entry.path)
             key = (remote_name, normalized)
