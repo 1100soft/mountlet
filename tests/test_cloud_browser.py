@@ -17,6 +17,7 @@ from mountlet.cloud_browser import (
     RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
     RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS,
     RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS,
+    OfflineContentState,
     TransferItem,
     _default_offline_cache_root,
     join_browser_path,
@@ -1317,6 +1318,32 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertNotIn(("Docs", "Reports/a.txt"), browser._working_paths)
         self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
+
+    def test_visible_download_state_keeps_incomplete_directory_active(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser.backend = mock.Mock()
+        browser.backend.is_cached.return_value = True
+        browser.backend.offline_content_state.return_value = OfflineContentState()
+        browser._folder_cache = {}
+
+        browser._refresh_visible_download_state("Docs", [BrowserEntry("Reports", "Reports", True)])
+
+        self.assertEqual(browser._working_paths[("Docs", "Reports")], "download")
+
+    def test_visible_download_state_clears_directory_when_known_files_are_cached(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports"): "download"}
+        browser.backend = mock.Mock()
+        browser.backend.is_cached.return_value = True
+        browser.backend.offline_content_state.return_value = OfflineContentState()
+        browser._folder_cache = {
+            ("Docs", "Reports"): [BrowserEntry("a.txt", "Reports/a.txt", False)],
+        }
+
+        browser._refresh_visible_download_state("Docs", [BrowserEntry("Reports", "Reports", True)])
+
+        self.assertNotIn(("Docs", "Reports"), browser._working_paths)
 
     def test_known_download_paths_include_cached_descendants(self):
         browser = object.__new__(CompactCloudBrowser)

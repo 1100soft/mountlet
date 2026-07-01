@@ -609,24 +609,36 @@ class CompactCloudBrowser:
                 paths.append(child_path)
         return paths
 
+    def _download_complete_for_entry(self, remote_name: str, entry: BrowserEntry) -> bool:
+        normalized = normalize_browser_path(entry.path)
+        if not entry.is_dir:
+            return self.backend.is_cached(remote_name, normalized, is_dir=False)
+        state = self.backend.offline_content_state(remote_name, normalized, is_dir=True)
+        if getattr(state, "offline", False) is True:
+            return True
+        known_files = [
+            child
+            for cached_remote, _folder_path in list(getattr(self, "_folder_cache", {}))
+            if cached_remote == remote_name
+            for child in self._folder_cache.get((cached_remote, _folder_path), [])
+            if not child.is_dir
+            and normalize_browser_path(child.path).startswith(f"{normalized}/" if normalized else "")
+        ]
+        return bool(known_files) and all(
+            self.backend.is_cached(remote_name, child.path, is_dir=False) for child in known_files
+        )
+
     def _refresh_visible_download_state(self, remote_name: str, entries: list[BrowserEntry]) -> None:
         if not hasattr(self, "_working_paths"):
             self._working_paths = {}
         for entry in entries:
             normalized = normalize_browser_path(entry.path)
             key = (remote_name, normalized)
-            if self._working_paths.get(key) == "download" and self.backend.is_cached(
-                remote_name,
-                normalized,
-                is_dir=entry.is_dir,
-            ):
+            complete = self._download_complete_for_entry(remote_name, entry)
+            if self._working_paths.get(key) == "download" and complete:
                 self._working_paths.pop(key, None)
                 continue
-            if self._download_ancestor_active(remote_name, normalized) and not self.backend.is_cached(
-                remote_name,
-                normalized,
-                is_dir=entry.is_dir,
-            ):
+            if self._download_ancestor_active(remote_name, normalized) and not complete:
                 self._working_paths[key] = "download"
 
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
