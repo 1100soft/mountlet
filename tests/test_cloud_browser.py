@@ -15,8 +15,6 @@ from mountlet.cloud_browser import (
     CloudBrowserBackend,
     RCLONE_CACHE_SYNC_TIMEOUT_SECONDS,
     RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
-    RCLONE_OFFLINE_FILE_DOWNLOAD_TIMEOUT_SECONDS,
-    RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS,
     TransferItem,
     _default_offline_cache_root,
     join_browser_path,
@@ -331,7 +329,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -583,7 +581,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -620,7 +618,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -662,7 +660,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -696,7 +694,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -733,7 +731,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -761,7 +759,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def initial_copy(_binary: str, *_arguments: str) -> None:
+            def initial_copy(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -1841,9 +1839,8 @@ class CloudBrowserTests(unittest.TestCase):
                     BrowserEntry("b.txt", "Reports/Deep/b.txt", False),
                 ],
             )
-
-        self.assertEqual(len(started_threads), 1)
-        started_threads[0].target()
+            self.assertEqual(len(started_threads), 1)
+            started_threads[0].target()
 
         self.assertEqual(
             events,
