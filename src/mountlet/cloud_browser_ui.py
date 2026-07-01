@@ -542,7 +542,7 @@ class CompactCloudBrowser:
             return
         self._refresh_download_working_paths()
         self._working_phase += 1
-        self._display_entries(list(getattr(self, "entries", [])))
+        self._refresh_entry_icons()
 
     def _start_working_paths(self, remote_name: str, paths: list[str], kind: str) -> None:
         if not paths:
@@ -556,7 +556,7 @@ class CompactCloudBrowser:
             with suppress(Exception):
                 if not timer.isActive():
                     timer.start()
-        self._display_entries(list(getattr(self, "entries", [])))
+        self._refresh_entry_icons()
 
     def _finish_working_paths(self, remote_name: str, paths: list[str], kind: str = "") -> None:
         if not hasattr(self, "_working_paths"):
@@ -570,7 +570,7 @@ class CompactCloudBrowser:
             if timer is not None:
                 with suppress(Exception):
                     timer.stop()
-        self._display_entries(list(getattr(self, "entries", [])))
+        self._refresh_entry_icons()
 
     def _working_kind_for_entry(self, remote_name: str, path: str, *, is_dir: bool) -> str:
         normalized = normalize_browser_path(path)
@@ -612,6 +612,23 @@ class CompactCloudBrowser:
                 continue
             if self.backend.is_cached(key[0], str(key[1]), is_dir=False):
                 self._working_paths.pop(key, None)
+
+    def _refresh_entry_icons(self) -> None:
+        remote = getattr(self, "remote", None)
+        tree = getattr(self, "tree", None)
+        window = getattr(self, "window", None)
+        if remote is None or tree is None or window is None:
+            return
+        style = window.style()
+        directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            if item is None:
+                continue
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(entry, BrowserEntry):
+                self._apply_entry_state(item, entry, remote, directory_icon, file_icon)
 
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
         return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
