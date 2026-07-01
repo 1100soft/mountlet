@@ -987,6 +987,7 @@ class CompactCloudBrowser:
             selected = selected_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
             if isinstance(selected, BrowserEntry):
                 selected_paths.add(selected.path)
+        remote = self.remote
         self.entries = entries
         if remote is not None:
             self._refresh_visible_download_state(remote.name, entries)
@@ -994,7 +995,6 @@ class CompactCloudBrowser:
         style = self.window.style()
         directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
-        remote = self.remote
         current_target = None
         fallback_target = None
         for entry in entries:

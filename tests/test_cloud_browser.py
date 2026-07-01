@@ -331,7 +331,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.txt", "Reports/Deep/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("offline", encoding="utf-8")
@@ -370,7 +370,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.pdf", "Reports/Deep/a.pdf", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("offline", encoding="utf-8")
@@ -506,7 +506,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("cached", encoding="utf-8")
@@ -532,7 +532,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("offline", encoding="utf-8")
@@ -775,7 +775,7 @@ class CloudBrowserTests(unittest.TestCase):
             remote = _remote()
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("baseline", encoding="utf-8")
@@ -815,7 +815,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("snapshot", encoding="utf-8")
@@ -845,7 +845,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("snapshot", encoding="utf-8")
@@ -877,7 +877,7 @@ class CloudBrowserTests(unittest.TestCase):
             )
             entry = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
 
-            def copy_file(_binary: str, *_arguments: str) -> None:
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
                 destination = Path(_arguments[-1])
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text("snapshot", encoding="utf-8")
