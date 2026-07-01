@@ -1449,15 +1449,19 @@ class CompactCloudBrowser:
         working_kind: str = "",
     ) -> None:
         remote_name = self.remote.name if self.remote is not None else ""
-        self._offline_job_queue.append((remote_name, message, action, working_paths or [], working_kind))
+        normalized_paths = [normalize_browser_path(path) for path in (working_paths or [])]
+        if remote_name and normalized_paths and working_kind:
+            self._start_working_paths(remote_name, normalized_paths, working_kind)
+        self._offline_job_queue.append((remote_name, message, action, normalized_paths, working_kind))
+        if self._offline_jobs_running >= OFFLINE_JOB_CONCURRENCY:
+            self.status.setText("Queued offline file work…")
+            self._update_actions()
         self._start_offline_jobs()
 
     def _start_offline_jobs(self) -> None:
         while self._offline_job_queue and self._offline_jobs_running < OFFLINE_JOB_CONCURRENCY:
             remote_name, message, action, working_paths, working_kind = self._offline_job_queue.pop(0)
             self._offline_jobs_running += 1
-            if remote_name and working_paths and working_kind:
-                self._start_working_paths(remote_name, working_paths, working_kind)
             self.status.setText(message)
             self._update_actions()
 

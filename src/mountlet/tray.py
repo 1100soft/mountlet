@@ -1422,7 +1422,9 @@ def _file_manager_label() -> str:
         return _file_manager_label_cache
     settings = load_app_settings()
     manager = resolve_file_manager(get_platform(), settings.file_manager)
-    _file_manager_label_cache = manager.label
+    label = manager.label.strip()
+    match = re.fullmatch(r"System default \((?P<name>[^)]+)\)", label, flags=re.IGNORECASE)
+    _file_manager_label_cache = match.group("name") if match else label
     return _file_manager_label_cache
 
 

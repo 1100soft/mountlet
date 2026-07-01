@@ -2594,6 +2594,17 @@ class TrayTests(unittest.TestCase):
         service.assert_not_called()
         opener.assert_called_once_with(manager, "/tmp/docs", new_window=False)
 
+    def test_file_manager_action_label_uses_tool_name_for_system_default(self):
+        settings = SimpleNamespace(file_manager="system")
+        manager = SimpleNamespace(label="System default (Dolphin)")
+        tray._file_manager_label_cache = None
+        try:
+            with mock.patch.object(tray, "load_app_settings", return_value=settings):
+                with mock.patch.object(tray, "resolve_file_manager", return_value=manager):
+                    self.assertEqual(tray._file_manager_label(), "Dolphin")
+        finally:
+            tray._file_manager_label_cache = None
+
     def test_open_folder_uses_explorer_command_on_windows(self):
         qt = mock.Mock()
         manager = SimpleNamespace(identifier="explorer")

@@ -15,6 +15,7 @@ from mountlet.cloud_browser import (
     CloudBrowserBackend,
     RCLONE_CACHE_SYNC_TIMEOUT_SECONDS,
     RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+    RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS,
     TransferItem,
     _default_offline_cache_root,
     join_browser_path,
@@ -22,7 +23,12 @@ from mountlet.cloud_browser import (
     parent_browser_path,
     remote_target,
 )
-from mountlet.cloud_browser_ui import CHILD_FOLDER_PREFETCH_LIMIT, CompactCloudBrowser, cascade_position
+from mountlet.cloud_browser_ui import (
+    CHILD_FOLDER_PREFETCH_LIMIT,
+    OFFLINE_JOB_CONCURRENCY,
+    CompactCloudBrowser,
+    cascade_position,
+)
 
 
 def _remote(name: str = "Docs") -> core.RemoteInfo:
@@ -379,6 +385,20 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertFalse(backend.is_offline("Docs", "Reports/Deep", is_dir=True))
             self.assertTrue(backend.has_offline_content("Docs", "Reports/Deep/a.pdf", is_dir=False))
             self.assertFalse(backend.has_offline_content("Docs", "Other", is_dir=True))
+
+    def test_offline_folder_download_uses_long_timeout(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            entry = BrowserEntry("Reports", "Reports", True, 0, "2026-01-02 03:04")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    backend.make_offline(_remote(), entry)
+
+            self.assertEqual(run.call_args.kwargs["timeout"], RCLONE_FOLDER_DOWNLOAD_TIMEOUT_SECONDS)
 
     def test_legacy_ancestor_folder_records_are_loaded_as_partial(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -1518,6 +1538,29 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertTrue(browser._entry_has_operation("Docs", "Reports", is_dir=True, kind="download"))
         self.assertTrue(browser._entry_has_operation("Docs", "Reports/a.txt", is_dir=False, kind="download"))
         self.assertFalse(browser._entry_has_operation("Docs", "Other/b.txt", is_dir=False, kind="download"))
+
+    def test_queued_offline_job_marks_path_before_worker_slot_opens(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._offline_jobs_running = OFFLINE_JOB_CONCURRENCY
+        browser._offline_job_queue = []
+        browser._working_paths = {}
+        browser._working_timer = None
+        browser.entries = []
+        browser.status = mock.Mock()
+        browser._display_entries = mock.Mock()
+        browser._update_actions = mock.Mock()
+
+        browser._queue_offline_job(
+            "Downloading for offline use…",
+            lambda: None,
+            working_paths=["Reports"],
+            working_kind="download",
+        )
+
+        self.assertEqual(browser._working_paths, {("Docs", "Reports"): "download"})
+        self.assertEqual(len(browser._offline_job_queue), 1)
+        browser.status.setText.assert_called_once_with("Queued offline file work…")
 
     def test_open_local_file_tracks_paths_for_removal_warning(self):
         browser = object.__new__(CompactCloudBrowser)
