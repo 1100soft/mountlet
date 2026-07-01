@@ -103,6 +103,29 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertIn("lsjson", command)
         self.assertIn("--recursive", command)
 
+    def test_list_entries_recursive_keeps_folder_entries_for_cache(self):
+        response = subprocess.CompletedProcess(
+            ["rclone"],
+            0,
+            stderr="",
+            stdout=json.dumps(
+                [
+                    {"Path": "Deep", "Name": "Deep", "IsDir": True},
+                    {"Path": "Deep/b.txt", "Name": "b.txt", "Size": 34, "IsDir": False},
+                ]
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response):
+                    entries = backend.list_entries_recursive(_remote(), BrowserEntry("Reports", "Reports", True))
+
+        self.assertEqual([entry.path for entry in entries], ["Reports/Deep", "Reports/Deep/b.txt"])
+
     def test_transfer_uses_copyto_for_file_between_remotes(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -1338,6 +1361,28 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser.path, "")
         browser.backend.remember_path.assert_called_once_with("Docs", "")
         browser.refresh.assert_called_once_with()
+
+    def test_recursive_entries_populate_folder_cache_for_navigation(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._folder_cache = {}
+
+        browser._cache_recursive_entries(
+            "Docs",
+            [
+                BrowserEntry("Deep", "Reports/Deep", True),
+                BrowserEntry("b.txt", "Reports/Deep/b.txt", False),
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+            ],
+        )
+
+        self.assertEqual(
+            [entry.path for entry in browser._folder_cache[("Docs", "Reports")]],
+            ["Reports/Deep", "Reports/a.txt"],
+        )
+        self.assertEqual(
+            [entry.path for entry in browser._folder_cache[("Docs", "Reports/Deep")]],
+            ["Reports/Deep/b.txt"],
+        )
 
     def test_close_button_suppresses_hover_reopen_until_explicit_selection(self):
         browser = object.__new__(CompactCloudBrowser)
