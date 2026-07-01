@@ -1089,6 +1089,19 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertTrue(browser.tree.current.selected)
         browser.tree.scroll.setValue.assert_called_once_with(37)
 
+    def test_working_status_applies_to_parent_and_child_paths(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {
+            ("Docs", "Reports/Deep/a.txt"): "sync",
+            ("Docs", "Downloads"): "download",
+        }
+
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Reports", is_dir=True), "sync")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep", is_dir=True), "sync")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep/a.txt", is_dir=False), "sync")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Downloads/b.txt", is_dir=False), "download")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Other", is_dir=True), "")
+
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

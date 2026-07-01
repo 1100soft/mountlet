@@ -4595,8 +4595,7 @@ class MountletWindow:
                 continue
             visible_remote = getattr(getattr(self, "file_browser", None), "remote", None)
             if visible_remote is not None and visible_remote.name == remote.name:
-                visible_paths = [entry.path for entry in getattr(self.file_browser, "entries", [])]
-                self.file_browser.start_sync(remote.name, visible_paths or paths)
+                self.file_browser.start_sync(remote.name, paths)
             if self._start_remote_cache_check(remote, paths):
                 started += 1
         if not started:
