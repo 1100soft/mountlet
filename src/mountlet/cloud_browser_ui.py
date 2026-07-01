@@ -582,75 +582,37 @@ class CompactCloudBrowser:
                 return kind
         return ""
 
-    def _download_ancestor_active(self, remote_name: str, path: str) -> bool:
-        normalized = normalize_browser_path(path)
-        for key, kind in getattr(self, "_working_paths", {}).items():
-            if key[0] != remote_name or kind != "download":
-                continue
-            working_path = str(key[1])
-            if working_path and normalized.startswith(f"{working_path}/"):
-                return True
-        return False
-
     def _known_download_paths_for_entry(self, remote_name: str, entry: BrowserEntry) -> list[str]:
-        paths = [entry.path]
         if not entry.is_dir:
-            return paths
+            return [entry.path]
+        paths: list[str] = []
         prefix = f"{normalize_browser_path(entry.path)}/"
-        seen = {normalize_browser_path(entry.path)}
+        seen: set[str] = set()
         for cached_remote, _folder_path in list(getattr(self, "_folder_cache", {})):
             if cached_remote != remote_name:
                 continue
             for child in self._folder_cache.get((cached_remote, _folder_path), []):
                 child_path = normalize_browser_path(child.path)
-                if child_path in seen or not child_path.startswith(prefix):
+                if child.is_dir or child_path in seen or not child_path.startswith(prefix):
                     continue
                 seen.add(child_path)
                 paths.append(child_path)
         return paths
 
-    def _download_complete_for_entry(self, remote_name: str, entry: BrowserEntry) -> bool:
-        normalized = normalize_browser_path(entry.path)
-        if not entry.is_dir:
-            return self.backend.is_cached(remote_name, normalized, is_dir=False)
-        state = self.backend.offline_content_state(remote_name, normalized, is_dir=True)
-        if getattr(state, "offline", False) is True:
-            return True
-        prefix = f"{normalized}/" if normalized else ""
-        known_entries = [
-            child
-            for cached_remote, _folder_path in list(getattr(self, "_folder_cache", {}))
-            if cached_remote == remote_name
-            for child in self._folder_cache.get((cached_remote, _folder_path), [])
-            if normalize_browser_path(child.path).startswith(prefix)
-        ]
-        if not known_entries:
-            return False
-        for child in known_entries:
-            child_path = normalize_browser_path(child.path)
-            if child.is_dir:
-                child_state = self.backend.offline_content_state(remote_name, child_path, is_dir=True)
-                if getattr(child_state, "offline", False) is True:
-                    continue
-                if (remote_name, child_path) not in getattr(self, "_folder_cache", {}):
-                    return False
-                continue
-            if not self.backend.is_cached(remote_name, child_path, is_dir=False):
-                return False
-        return True
-
     def _refresh_visible_download_state(self, remote_name: str, entries: list[BrowserEntry]) -> None:
         if not hasattr(self, "_working_paths"):
             self._working_paths = {}
         for entry in entries:
+            if entry.is_dir:
+                continue
             normalized = normalize_browser_path(entry.path)
             key = (remote_name, normalized)
-            complete = self._download_complete_for_entry(remote_name, entry)
-            if self._working_paths.get(key) == "download" and complete:
+            if self._working_paths.get(key) == "download" and self.backend.is_cached(
+                remote_name,
+                normalized,
+                is_dir=False,
+            ):
                 self._working_paths.pop(key, None)
-                continue
-            if self._download_ancestor_active(remote_name, normalized) and not complete:
-                self._working_paths[key] = "download"
 
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
         return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
