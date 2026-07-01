@@ -110,7 +110,9 @@ class CompactCloudBrowser:
         self._working_phase = 0
         self._working_timer: Any | None = None
         self._offline_jobs_running = 0
-        self._offline_job_queue: list[tuple[str, str, Callable[[], object], list[str], str]] = []
+        self._offline_job_queue: list[
+            tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[str]] | None]
+        ] = []
         self._pending_select_path = ""
         self._closed_until_selected = False
         self._load_slots = threading.BoundedSemaphore(4)
@@ -118,6 +120,7 @@ class CompactCloudBrowser:
         self._bridge.listing_ready.connect(self._listing_ready)
         self._bridge.operation_finished.connect(self._operation_finished)
         self._bridge.cached_file_ready.connect(self._cached_file_ready)
+        self._bridge.offline_job_paths_ready.connect(self._offline_job_paths_ready)
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
         self.window = self._make_window()
         self._file_icon_provider = self._make_file_icon_provider()
@@ -131,6 +134,7 @@ class CompactCloudBrowser:
             listing_ready = qt.Signal(str, str, object, str)
             operation_finished = qt.Signal(bool, str)
             cached_file_ready = qt.Signal(str, str, object, str)
+            offline_job_paths_ready = qt.Signal(str, object, str)
             offline_job_finished = qt.Signal(str, object, str, bool, str)
 
         return Bridge()
@@ -536,6 +540,7 @@ class CompactCloudBrowser:
                 with suppress(Exception):
                     timer.stop()
             return
+        self._refresh_download_working_paths()
         self._working_phase += 1
         self._display_entries(list(getattr(self, "entries", [])))
 
@@ -582,23 +587,6 @@ class CompactCloudBrowser:
                 return kind
         return ""
 
-    def _known_download_paths_for_entry(self, remote_name: str, entry: BrowserEntry) -> list[str]:
-        if not entry.is_dir:
-            return [entry.path]
-        paths: list[str] = []
-        prefix = f"{normalize_browser_path(entry.path)}/"
-        seen: set[str] = set()
-        for cached_remote, _folder_path in list(getattr(self, "_folder_cache", {})):
-            if cached_remote != remote_name:
-                continue
-            for child in self._folder_cache.get((cached_remote, _folder_path), []):
-                child_path = normalize_browser_path(child.path)
-                if child.is_dir or child_path in seen or not child_path.startswith(prefix):
-                    continue
-                seen.add(child_path)
-                paths.append(child_path)
-        return paths
-
     def _refresh_visible_download_state(self, remote_name: str, entries: list[BrowserEntry]) -> None:
         if not hasattr(self, "_working_paths"):
             self._working_paths = {}
@@ -612,6 +600,17 @@ class CompactCloudBrowser:
                 normalized,
                 is_dir=False,
             ):
+                self._working_paths.pop(key, None)
+
+    def _refresh_download_working_paths(self, remote_name: str | None = None) -> None:
+        if not hasattr(self, "_working_paths"):
+            return
+        for key, kind in list(self._working_paths.items()):
+            if kind != "download":
+                continue
+            if remote_name is not None and key[0] != remote_name:
+                continue
+            if self.backend.is_cached(key[0], str(key[1]), is_dir=False):
                 self._working_paths.pop(key, None)
 
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
@@ -631,7 +630,11 @@ class CompactCloudBrowser:
 
     def _queued_offline_job_overlaps(self, remote_name: str, paths: list[str], kind: str) -> bool:
         normalized_paths = [normalize_browser_path(path) for path in paths]
-        for queued_remote, _message, _action, queued_paths, queued_kind in getattr(self, "_offline_job_queue", []):
+        for queued_remote, _message, _action, queued_paths, queued_kind, _discover_paths in getattr(
+            self,
+            "_offline_job_queue",
+            [],
+        ):
             if queued_remote != remote_name or queued_kind != kind:
                 continue
             if _paths_overlap(normalized_paths, queued_paths):
@@ -1412,7 +1415,7 @@ class CompactCloudBrowser:
             self.backend.remove_offline(remote_name, normalized)
 
         if self._offline_download_pending(remote_name, paths):
-            self._offline_job_queue.append((remote_name, "Removing local copies…", action, paths, "remove"))
+            self._offline_job_queue.append((remote_name, "Removing local copies…", action, paths, "remove", None))
             self.status.setText("Queued removal after download…")
             self._update_actions()
             return
@@ -1513,18 +1516,26 @@ class CompactCloudBrowser:
                 for entry in entries:
                     self.backend.make_offline(remote, entry)
 
+            def discover_paths() -> list[str]:
+                paths: list[str] = []
+                seen: set[str] = set()
+                for entry in entries:
+                    for file_entry in self.backend.list_files_recursive(remote, entry):
+                        path = normalize_browser_path(file_entry.path)
+                        if path and path not in seen:
+                            seen.add(path)
+                            paths.append(path)
+                return paths
+
             message = "Downloading for offline use…"
-            working_paths = [
-                path
-                for entry in entries
-                for path in self._known_download_paths_for_entry(remote.name, entry)
-            ]
+            working_paths = []
             working_kind = "download"
         self._queue_offline_job(
             message,
             action,
             working_paths=working_paths,
             working_kind=working_kind,
+            discover_paths=discover_paths if not all_offline else None,
         )
 
     def _offline_action_label(self) -> str:
@@ -1577,13 +1588,14 @@ class CompactCloudBrowser:
         *,
         working_paths: list[str] | None = None,
         working_kind: str = "",
+        discover_paths: Callable[[], list[str]] | None = None,
     ) -> None:
         remote_name = self.remote.name if self.remote is not None else ""
         normalized_paths = [normalize_browser_path(path) for path in (working_paths or [])]
         mark_immediately = working_kind != "remove"
         if mark_immediately and remote_name and normalized_paths and working_kind:
             self._start_working_paths(remote_name, normalized_paths, working_kind)
-        self._offline_job_queue.append((remote_name, message, action, normalized_paths, working_kind))
+        self._offline_job_queue.append((remote_name, message, action, normalized_paths, working_kind, discover_paths))
         if self._offline_jobs_running >= OFFLINE_JOB_CONCURRENCY:
             self.status.setText("Queued offline file work…")
             self._update_actions()
@@ -1596,7 +1608,7 @@ class CompactCloudBrowser:
             )
             if next_index is None:
                 return
-            remote_name, message, action, working_paths, working_kind = self._offline_job_queue.pop(next_index)
+            remote_name, message, action, working_paths, working_kind, discover_paths = self._offline_job_queue.pop(next_index)
             if working_kind == "remove":
                 self._start_local_remove_job(remote_name, working_paths, action)
                 continue
@@ -1608,8 +1620,17 @@ class CompactCloudBrowser:
                 job_remote_name: str = remote_name,
                 job_paths: list[str] = list(working_paths),
                 job_kind: str = working_kind,
+                job_discover_paths: Callable[[], list[str]] | None = discover_paths,
                 job_action: Callable[[], object] = action,
             ) -> None:
+                if job_discover_paths is not None:
+                    try:
+                        discovered_paths = [normalize_browser_path(path) for path in job_discover_paths()]
+                    except Exception as exc:
+                        self._bridge.offline_job_finished.emit(job_remote_name, job_paths, job_kind, False, str(exc))
+                        return
+                    job_paths = discovered_paths
+                    self._bridge.offline_job_paths_ready.emit(job_remote_name, job_paths, job_kind)
                 try:
                     job_action()
                 except Exception as exc:
@@ -1620,13 +1641,20 @@ class CompactCloudBrowser:
             threading.Thread(target=worker, daemon=True).start()
 
     def _next_runnable_offline_job_index(self, *, allow_download: bool = True) -> int | None:
-        for index, (remote_name, _message, _action, paths, kind) in enumerate(self._offline_job_queue):
+        for index, (remote_name, _message, _action, paths, kind, _discover_paths) in enumerate(self._offline_job_queue):
             if kind != "remove" and not allow_download:
                 continue
             if kind == "remove" and self._operation_paths_overlap(remote_name, paths, "download"):
                 continue
             return index
         return None
+
+    def _offline_job_paths_ready(self, remote_name: str, paths: object, kind: str) -> None:
+        if not isinstance(paths, list):
+            return
+        normalized_paths = [normalize_browser_path(str(path)) for path in paths if normalize_browser_path(str(path))]
+        if remote_name and normalized_paths and kind:
+            self._start_working_paths(remote_name, normalized_paths, kind)
 
     def _offline_job_finished(
         self,
@@ -1638,6 +1666,8 @@ class CompactCloudBrowser:
     ) -> None:
         if kind != "remove":
             self._offline_jobs_running = max(0, self._offline_jobs_running - 1)
+        if kind == "download" and remote_name:
+            self._refresh_download_working_paths(remote_name)
         if remote_name and isinstance(paths, list):
             self._finish_working_paths(remote_name, [str(path) for path in paths], kind)
         if kind == "remove":

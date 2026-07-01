@@ -201,6 +201,43 @@ class CloudBrowserBackend:
             )
         return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
 
+    def list_files_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
+        if not entry.is_dir:
+            return [entry]
+        binary = self._rclone()
+        result = subprocess.run(
+            self._command(binary, "lsjson", remote_target(remote, entry.path), "--recursive"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=300,
+            **core.PLATFORM.command_process_options(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+        try:
+            values = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("rclone returned an invalid recursive folder listing") from exc
+        files: list[BrowserEntry] = []
+        for value in values:
+            if bool(value.get("IsDir")):
+                continue
+            relative = normalize_browser_path(str(value.get("Path") or value.get("Name") or ""))
+            if not relative:
+                continue
+            name = PurePosixPath(relative).name
+            files.append(
+                BrowserEntry(
+                    name=name,
+                    path=join_browser_path(entry.path, relative),
+                    is_dir=False,
+                    size=max(int(value.get("Size") or 0), 0),
+                    modified=_display_time(str(value.get("ModTime") or "")),
+                )
+            )
+        return sorted(files, key=lambda item: item.path.casefold())
+
     def _list_offline_entries(self, remote_name: str, path: str) -> list[BrowserEntry] | None:
         normalized = normalize_browser_path(path)
         directory = self.offline_path(remote_name, path)
