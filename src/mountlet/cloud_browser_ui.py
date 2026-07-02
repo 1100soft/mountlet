@@ -32,6 +32,17 @@ CHILD_FOLDER_PREFETCH_LIMIT = 24
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
 OFFLINE_JOB_CONCURRENCY = 3
+FILE_BROWSER_SELECTION_STYLE = """
+QTreeWidget::item:hover:!selected {
+    background: transparent;
+}
+QTreeWidget::item:selected,
+QTreeWidget::item:selected:active,
+QTreeWidget::item:selected:!active {
+    background: rgba(59, 130, 246, 44);
+    color: palette(text);
+}
+"""
 
 
 def cascade_position(
@@ -334,6 +345,7 @@ class CompactCloudBrowser:
             self.tree.setIconSize(qt.QSize(ENTRY_ICON_SIZE, ENTRY_ICON_SIZE))
         self.tree.setColumnWidth(0, 282)
         self.tree.setColumnWidth(1, 72)
+        self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
         layout.addWidget(self.tree, 1)
         self.status = qt.QLabel("")
         layout.addWidget(self.status)

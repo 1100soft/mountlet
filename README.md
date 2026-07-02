@@ -247,6 +247,13 @@ check that the downloaded artifact matches the Mac: `macos-arm64` for Apple
 Silicon and `macos-x64` for Intel. Current native artifacts target macOS 11 or
 newer.
 
+If the app opens silently and no menu-bar icon appears, check Mountlet's startup
+log:
+
+```bash
+cat "$HOME/Library/Application Support/mountlet/State/startup.log"
+```
+
 For a development artifact downloaded directly from this repository's GitHub
 Actions, remove quarantine from that app only if macOS offers neither option:
 

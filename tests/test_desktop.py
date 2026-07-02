@@ -37,9 +37,19 @@ class DesktopTests(unittest.TestCase):
 
     def test_desktop_entrypoint_starts_tray_without_terminal_readiness_gate(self):
         with mock.patch("mountlet.tray.main", return_value=0) as tray_main:
-            self.assertEqual(desktop.main([]), 0)
+            with mock.patch.object(desktop, "_write_startup_log") as write_log:
+                self.assertEqual(desktop.main([]), 0)
 
         tray_main.assert_called_once_with([])
+        write_log.assert_called_once()
+
+    def test_desktop_entrypoint_writes_startup_log_on_exception(self):
+        with mock.patch("mountlet.tray.main", side_effect=RuntimeError("boom")):
+            with mock.patch.object(desktop, "_write_startup_log") as write_log:
+                self.assertEqual(desktop.main([]), 1)
+
+        self.assertIn("failed during desktop startup", write_log.call_args.args[0])
+        self.assertIn("RuntimeError: boom", write_log.call_args.args[0])
 
 
 if __name__ == "__main__":
