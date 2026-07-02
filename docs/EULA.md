@@ -1,13 +1,11 @@
 # Mountlet Installer License
 
+Copyright (c) 2026 Eric Holt.
+
 You may install and use this copy of Mountlet under the purchase or trial
-terms that came with it.
+terms that came with it. Redistribution requires separate permission.
 
-You may not redistribute, resell, repackage, or offer this app as a hosted or
-managed service without a separate commercial license.
-
-Mountlet works with your own cloud accounts and third-party tools such as
-rclone and filesystem drivers. Their terms still apply.
+Third-party components remain under their own licenses.
 
 Mountlet is provided without warranty. Keep backups of important files.
 
