@@ -1699,6 +1699,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._cache_recursive_entries(
             "Docs",
             [
+                BrowserEntry("Reports", "Reports", True),
                 BrowserEntry("Deep", "Reports/Deep", True),
                 BrowserEntry("b.txt", "Reports/Deep/b.txt", False),
                 BrowserEntry("a.txt", "Reports/a.txt", False),
@@ -1712,6 +1713,50 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(
             [entry.path for entry in browser._folder_cache[("Docs", "Reports/Deep")]],
             ["Reports/Deep/b.txt"],
+        )
+
+    def test_recursive_entries_merge_parent_cache_without_hiding_siblings(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._folder_cache = {
+            ("Docs", ""): [
+                BrowserEntry("Other", "Other", True),
+                BrowserEntry("Reports", "Reports", True),
+            ]
+        }
+
+        browser._cache_recursive_entries(
+            "Docs",
+            [
+                BrowserEntry("Reports", "Reports", True),
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+            ],
+        )
+
+        self.assertEqual(
+            [entry.path for entry in browser._folder_cache[("Docs", "")]],
+            ["Other", "Reports"],
+        )
+        self.assertEqual(
+            [entry.path for entry in browser._folder_cache[("Docs", "Reports")]],
+            ["Reports/a.txt"],
+        )
+
+    def test_recursive_entries_do_not_create_partial_parent_cache(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._folder_cache = {}
+
+        browser._cache_recursive_entries(
+            "Docs",
+            [
+                BrowserEntry("Reports", "Reports", True),
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+            ],
+        )
+
+        self.assertNotIn(("Docs", ""), browser._folder_cache)
+        self.assertEqual(
+            [entry.path for entry in browser._folder_cache[("Docs", "Reports")]],
+            ["Reports/a.txt"],
         )
 
     def test_close_button_suppresses_hover_reopen_until_explicit_selection(self):

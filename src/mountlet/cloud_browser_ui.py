@@ -1753,6 +1753,10 @@ class CompactCloudBrowser:
                 discovered: list[BrowserEntry] = []
                 seen: set[str] = set()
                 for entry in entries:
+                    path = normalize_browser_path(entry.path)
+                    if path and path not in seen:
+                        seen.add(path)
+                        discovered.append(entry)
                     for discovered_entry in self.backend.list_entries_recursive(remote, entry):
                         path = normalize_browser_path(discovered_entry.path)
                         if path and path not in seen:
@@ -1920,6 +1924,13 @@ class CompactCloudBrowser:
 
     def _cache_recursive_entries(self, remote_name: str, entries: list[BrowserEntry]) -> None:
         by_parent: dict[str, dict[str, BrowserEntry]] = {}
+        directory_paths = {
+            normalize_browser_path(entry.path)
+            for entry in entries
+            if entry.is_dir and normalize_browser_path(entry.path)
+        }
+        for directory_path in directory_paths:
+            by_parent.setdefault(directory_path, {})
         for entry in entries:
             normalized = normalize_browser_path(entry.path)
             if not normalized:
@@ -1945,6 +1956,13 @@ class CompactCloudBrowser:
                 )
                 current_parent = ancestor_parent
         for parent, children in by_parent.items():
+            existing = self._folder_cache.get((remote_name, parent))
+            if existing is not None:
+                merged = {entry.path: entry for entry in existing}
+                merged.update(children)
+                children = merged
+            elif parent not in directory_paths:
+                continue
             self._folder_cache[(remote_name, parent)] = sorted(
                 children.values(),
                 key=lambda entry: (not entry.is_dir, entry.name.casefold()),
