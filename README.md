@@ -38,16 +38,18 @@ Install `fuse3` as well if you want native folder mounting.
 
 ## Install
 
-For the desktop app:
+For current native builds, use the GitHub Actions artifacts described below.
+
+For a source-based Python install from GitHub:
 
 ```bash
-pipx install "mountlet[desktop]"
+pipx install "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/main.zip"
 ```
 
-For terminal-only use:
+For terminal-only use from source:
 
 ```bash
-pipx install mountlet
+pipx install "mountlet @ https://github.com/eric-holt/mountlet/archive/refs/heads/main.zip"
 mountlet menu
 ```
 
@@ -85,8 +87,8 @@ Each native artifact contains both the portable archive and:
 
 Mountlet has three practical install tracks:
 
-- **Python package**: uses your Python environment through PyPI, pipx, or a
-  source checkout. This is the lightest path for technical users.
+- **Source-based Python install**: uses your Python environment through `pipx`
+  or a source checkout. This is the lightest path for technical users.
 - **Native system-rclone build**: includes Mountlet and its Python runtime, but
   uses a separately installed rclone.
 - **Native bundled-rclone build**: includes Mountlet, its Python runtime, and an
@@ -101,7 +103,7 @@ Uninstalling Mountlet does not remove a system rclone, FUSE/WinFsp/macFUSE,
 `rclone.conf`, or Mountlet's per-user settings.
 
 Each section starts with the system prerequisites and installs Mountlet in an
-isolated environment, so a GitHub preview does not replace a stable PyPI
+isolated environment, so a GitHub preview does not replace another Mountlet
 installation.
 
 Use only the subsection for your operating system. Linux and macOS use shell

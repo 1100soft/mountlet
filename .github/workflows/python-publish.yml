@@ -1,21 +1,15 @@
-name: Publish Python package
+name: Python package check
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  publish:
-    name: Build and publish to PyPI
+  check:
+    name: Build and check Python package
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
       - name: Check out source
@@ -41,7 +35,4 @@ jobs:
         run: python -m build
 
       - name: Check package metadata
-        run: python -m twine check dist/*
-
-      - name: Publish package to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        run: python -m twine check dist/*.whl dist/*.tar.gz

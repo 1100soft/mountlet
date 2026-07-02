@@ -105,7 +105,7 @@ python -m build
 
 Native packaging uses PyInstaller separately on each target operating system.
 These bundles intentionally include a Python runtime. Technical users who want
-to use their system Python should install from PyPI, pipx, or a source checkout
+to use their system Python should install with `pipx` from a source checkout
 instead.
 
 ```bash
@@ -150,8 +150,8 @@ ignored by git and must not be part of the installed-user workflow.
 
 - Confirm support contact.
 - Add screenshots or terminal recordings for the package page.
-- Publish PyPI/pipx desktop and terminal-menu installation instructions.
-- Publish `.deb` installation instructions for the desktop package.
+- Publish native installer instructions.
+- Keep source-based `pipx` instructions for technical users.
 - Run CI on every pull request.
 - Build a wheel and install it in a clean virtual environment.
 - Test on a fresh Ubuntu installation with `rclone` and `fuse3`.
@@ -159,7 +159,7 @@ ignored by git and must not be part of the installed-user workflow.
 - Update the provider support table in the root README after checking real
   setup paths.
 - Confirm the built wheel and source distribution do not include local secrets.
-- Follow [RELEASE.md](RELEASE.md) when merging `wip` to `main`, tagging, and publishing.
+- Follow [RELEASE.md](RELEASE.md) when merging `wip` to `main`, tagging, and collecting release artifacts.
 
 ## Provider Test Status
 
@@ -189,11 +189,11 @@ syncing the complete Mountlet config bundle.
 
 ## Release Strategy
 
-- Keep the CLI/TUI core MIT licensed.
-- Publish the desktop-capable PyPI package for `pipx` installation, with
-  terminal-only use available through `mountlet menu`.
+- Stop PyPI publishing while commercial/source-available licensing is being
+  prepared.
+- Keep source-based installs available for technical users.
 - Build unsigned standalone Linux, Windows, and macOS development artifacts in
-  GitHub Actions before introducing installers and code signing.
+  GitHub Actions before introducing signing and notarization.
 - Publish signed native desktop packages through GitHub Releases once startup,
   updates, and prerequisite handling are ready for nontechnical users.
 - Build the desktop app as the first commercial product layer.

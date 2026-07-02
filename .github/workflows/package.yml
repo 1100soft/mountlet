@@ -103,7 +103,7 @@ jobs:
           cache: pip
 
       - name: Install package and build tools
-        run: python -m pip install --upgrade --editable ".[tray,packaging]"
+        run: python -m pip install --upgrade --editable ".[desktop,packaging]"
 
       - name: Install Windows mount prerequisites
         if: runner.os == 'Windows'
