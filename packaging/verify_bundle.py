@@ -88,6 +88,16 @@ def main() -> int:
     if not result.stdout.startswith("Mountlet "):
         raise RuntimeError(f"Unexpected smoke-test output: {result.stdout!r}")
 
+    startup_result = subprocess.run(
+        [str(executable), "--packaging-startup-import-test"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if not startup_result.stdout.startswith("Mountlet ") or "startup imports ok" not in startup_result.stdout:
+        raise RuntimeError(f"Unexpected startup import output: {startup_result.stdout!r}")
+
     if system == "Darwin":
         plist_path = dist / "Mountlet.app" / "Contents" / "Info.plist"
         with plist_path.open("rb") as handle:

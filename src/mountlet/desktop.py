@@ -26,6 +26,11 @@ def main(argv: list[str] | None = None) -> int:
     if args == ["--packaging-smoke-test"]:
         print(f"Mountlet {__version__}")
         return 0
+    if args == ["--packaging-startup-import-test"]:
+        from . import tray  # noqa: F401
+
+        print(f"Mountlet {__version__} startup imports ok")
+        return 0
     if args == ["--packaging-rclone-smoke-test"]:
         from .config_tools.shared import run_rclone_version
 

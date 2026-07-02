@@ -20,6 +20,13 @@ class DesktopTests(unittest.TestCase):
 
         self.assertRegex(output.getvalue(), r"^Mountlet \d+\.\d+\.\d+\n$")
 
+    def test_packaging_startup_import_test_loads_tray(self):
+        with mock.patch.dict(sys.modules, {"mountlet.tray": mock.Mock()}):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(desktop.main(["--packaging-startup-import-test"]), 0)
+
+        self.assertRegex(output.getvalue(), r"^Mountlet \d+\.\d+\.\d+ startup imports ok\n$")
+
     def test_packaging_rclone_smoke_test_does_not_load_tray(self):
         with mock.patch.dict(sys.modules, {"mountlet.tray": None}):
             with mock.patch("mountlet.config_tools.shared.run_rclone_version", return_value="rclone v1.70.0"):
