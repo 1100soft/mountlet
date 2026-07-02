@@ -33,6 +33,7 @@ Confirm:
 - `SECURITY.md` has an active security reporting path or GitHub private vulnerability reporting is enabled.
 - Built distributions do not include `secrets/`, `rclone.conf`, or `client_secret*.json`.
 - The native package workflow passes for Linux, Windows, macOS arm64, and macOS x64.
+- Bundled-rclone workflow jobs pass the packaged-rclone smoke test before artifacts are uploaded.
 
 ## Local Native Package Smoke Test
 

@@ -23,6 +23,9 @@ on:
 permissions:
   contents: read
 
+env:
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
 concurrency:
   group: native-package-${{ github.ref }}
   cancel-in-progress: true
@@ -139,6 +142,8 @@ jobs:
         run: codesign --force --deep --sign - --timestamp=none dist/Mountlet.app
 
       - name: Verify native bundle
+        env:
+          MOUNTLET_EXPECT_BUNDLED_RCLONE: ${{ matrix.bundle_rclone }}
         run: python packaging/verify_bundle.py
 
       - name: Install Inno Setup
@@ -157,6 +162,8 @@ jobs:
         run: python packaging/build_installer.py --name ${{ matrix.installer }}
 
       - name: Verify native installer
+        env:
+          MOUNTLET_EXPECT_BUNDLED_RCLONE: ${{ matrix.bundle_rclone }}
         run: python packaging/verify_installer.py artifacts/${{ matrix.installer }}
 
       - name: Upload native bundle

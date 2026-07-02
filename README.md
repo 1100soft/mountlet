@@ -73,9 +73,10 @@ Intel. Operating-system security warnings are expected until signing and Apple
 notarization are configured.
 
 Open a successful workflow run under **Actions > Native package CI** and download
-the artifact for your platform and preferred dependency model. Artifacts whose
-name ends in `system-rclone` expect rclone to be installed separately. Artifacts
-whose name ends in `bundled-rclone` include an app-local rclone binary.
+the artifact for your platform and preferred dependency model. On macOS, use
+`macos-arm64` for Apple Silicon and `macos-x64` for Intel. Artifacts whose name
+ends in `system-rclone` expect rclone to be installed separately. Artifacts whose
+name ends in `bundled-rclone` include an app-local rclone binary.
 
 Each native artifact contains both the portable archive and:
 
@@ -240,6 +241,11 @@ Applications, Control-click **Mountlet**, choose **Open**, then confirm **Open**
 If macOS still blocks it, open **System Settings > Privacy & Security** and use
 **Open Anyway** for Mountlet. Public releases require Developer ID signing and
 Apple notarization; do not disable Gatekeeper globally.
+
+If Finder shows a prohibitory mark and says the app is not supported, first
+check that the downloaded artifact matches the Mac: `macos-arm64` for Apple
+Silicon and `macos-x64` for Intel. Current native artifacts target macOS 11 or
+newer.
 
 For a development artifact downloaded directly from this repository's GitHub
 Actions, remove quarantine from that app only if macOS offers neither option:

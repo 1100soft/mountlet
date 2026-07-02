@@ -10,6 +10,12 @@ def main(argv: list[str] | None = None) -> int:
     if args == ["--packaging-smoke-test"]:
         print(f"Mountlet {__version__}")
         return 0
+    if args == ["--packaging-rclone-smoke-test"]:
+        from .config_tools.shared import run_rclone_version
+
+        version = run_rclone_version()
+        print(version)
+        return 0 if version.startswith("rclone v") else 1
 
     from . import tray
 

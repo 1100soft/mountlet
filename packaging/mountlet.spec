@@ -70,6 +70,7 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": "Mountlet",
             "CFBundleName": "Mountlet",
             "LSUIElement": True,
+            "LSMinimumSystemVersion": os.environ.get("MACOSX_DEPLOYMENT_TARGET", "11.0"),
             "NSHighResolutionCapable": True,
             "NSPrincipalClass": "NSApplication",
         },

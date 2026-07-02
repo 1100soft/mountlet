@@ -125,16 +125,20 @@ python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 ```
 
 The staged binary is copied into `vendor/rclone/`, included in the PyInstaller
-bundle, and ignored by git. The app still honors `RCLONE_PATH` first for users
-who explicitly choose another rclone. FUSE, WinFsp, and macFUSE are not bundled;
-they remain optional native-folder support.
+bundle, and ignored by git. On Windows, the staging script rejects
+package-manager shim executables and requires the real `rclone.exe`. The app
+still honors `RCLONE_PATH` first for users who explicitly choose another
+rclone. FUSE, WinFsp, and macFUSE are not bundled; they remain optional
+native-folder support.
 
 The `Native package CI` workflow builds visible `system-rclone` and
 `bundled-rclone` artifacts. Each artifact contains a portable bundle plus a
 Linux `.deb`, Windows setup `.exe`, or macOS `.dmg` for that target. The Windows
 installer registers an uninstaller; Linux and macOS use their normal package or
-application removal flow. These development artifacts are not Windows-signed or
-Apple-notarized and expire from GitHub Actions after 14 days.
+application removal flow. Bundled-rclone jobs verify that the packaged app can
+run the packaged rclone before uploading artifacts. These development artifacts
+are not Windows-signed or Apple-notarized and expire from GitHub Actions after
+14 days.
 
 Install the desktop dependencies when working on the local app:
 

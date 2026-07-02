@@ -20,6 +20,21 @@ class DesktopTests(unittest.TestCase):
 
         self.assertRegex(output.getvalue(), r"^Mountlet \d+\.\d+\.\d+\n$")
 
+    def test_packaging_rclone_smoke_test_does_not_load_tray(self):
+        with mock.patch.dict(sys.modules, {"mountlet.tray": None}):
+            with mock.patch("mountlet.config_tools.shared.run_rclone_version", return_value="rclone v1.70.0"):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(desktop.main(["--packaging-rclone-smoke-test"]), 0)
+
+        self.assertEqual(output.getvalue(), "rclone v1.70.0\n")
+
+    def test_packaging_rclone_smoke_test_fails_when_rclone_is_missing(self):
+        with mock.patch("mountlet.config_tools.shared.run_rclone_version", return_value="rclone binary not found"):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(desktop.main(["--packaging-rclone-smoke-test"]), 1)
+
+        self.assertEqual(output.getvalue(), "rclone binary not found\n")
+
     def test_desktop_entrypoint_starts_tray_without_terminal_readiness_gate(self):
         with mock.patch("mountlet.tray.main", return_value=0) as tray_main:
             self.assertEqual(desktop.main([]), 0)
