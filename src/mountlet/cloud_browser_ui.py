@@ -277,6 +277,24 @@ class CompactCloudBrowser:
                 drag.setMimeData(mime)
                 drag.exec(qt.Qt.DropAction.CopyAction | qt.Qt.DropAction.MoveAction, qt.Qt.DropAction.CopyAction)
 
+            def dragEnterEvent(self, event: Any) -> None:
+                if outer._drop_event_supported(event):
+                    event.acceptProposedAction()
+                    return
+                super().dragEnterEvent(event)
+
+            def dragMoveEvent(self, event: Any) -> None:
+                if outer._drop_event_supported(event):
+                    event.acceptProposedAction()
+                    return
+                super().dragMoveEvent(event)
+
+            def dropEvent(self, event: Any) -> None:
+                if outer._handle_drop_event(event):
+                    event.acceptProposedAction()
+                    return
+                super().dropEvent(event)
+
             def keyPressEvent(self, event: Any) -> None:
                 if outer._handle_key(event):
                     return
@@ -305,6 +323,8 @@ class CompactCloudBrowser:
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setDragEnabled(False)
+        self.tree.setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(True)
         self.tree.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tree.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_tree_menu)
@@ -1706,6 +1726,53 @@ class CompactCloudBrowser:
             self._notify("File transfer", "The dragged files could not be read.", False)
             return
         self._transfer(items, move=move)
+
+    def accept_local_paths(self, paths: list[Path]) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        if not paths or self.remote is None or self._operation_pending:
+            return
+        remote, destination_path = self.remote, self.path
+        invalidate = {(remote.name, destination_path)}
+        self._run_operation(
+            f"Uploading {len(paths)} item{'s' if len(paths) != 1 else ''}…",
+            lambda: self.backend.copy_local_paths(paths, remote, destination_path),
+            invalidate_keys=invalidate,
+        )
+
+    def _drop_event_supported(self, event: Any) -> bool:
+        if not self._edits_enabled() or self.remote is None or self._operation_pending:
+            return False
+        mime = event.mimeData()
+        return bool(mime.hasFormat(MIME_TYPE) or self._local_paths_from_mime(mime))
+
+    def _handle_drop_event(self, event: Any) -> bool:
+        if not self._drop_event_supported(event):
+            return False
+        mime = event.mimeData()
+        if mime.hasFormat(MIME_TYPE):
+            move = event.proposedAction() == self.qt.Qt.DropAction.MoveAction
+            self.accept_drop(bytes(mime.data(MIME_TYPE)), move=move)
+            return True
+        local_paths = self._local_paths_from_mime(mime)
+        if not local_paths:
+            return False
+        self.accept_local_paths(local_paths)
+        return True
+
+    def _local_paths_from_mime(self, mime: Any) -> list[Path]:
+        if not mime.hasUrls():
+            return []
+        paths: list[Path] = []
+        for url in mime.urls():
+            with suppress(Exception):
+                if not url.isLocalFile():
+                    continue
+                path = Path(url.toLocalFile())
+                if path.exists():
+                    paths.append(path)
+        return paths
 
     def _transfer(self, items: list[TransferItem], *, move: bool) -> None:
         if not self._edits_enabled():

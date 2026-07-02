@@ -145,6 +145,43 @@ class CloudBrowserTests(unittest.TestCase):
 
         run.assert_called_once_with("rclone", "copyto", "Source:/Reports/a.txt", "Target:/Inbox/a.txt")
 
+    def test_copy_local_paths_uploads_file_without_mounting(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            source = root / "a.txt"
+            source.write_text("content", encoding="utf-8")
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    backend.copy_local_paths([source], _remote("Target"), "Inbox")
+
+        run.assert_called_once_with("rclone", "copyto", str(source), "Target:/Inbox/a.txt", timeout=None)
+
+    def test_copy_local_paths_uploads_folder_without_mounting(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            source = root / "Folder"
+            source.mkdir()
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    backend.copy_local_paths([source], _remote("Target"), "Inbox")
+
+        run.assert_called_once_with(
+            "rclone",
+            "copy",
+            str(source),
+            "Target:/Inbox/Folder",
+            "--create-empty-src-dirs",
+            timeout=None,
+        )
+
     def test_delete_uses_deletefile_and_purge(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -759,6 +796,14 @@ class CloudBrowserTests(unittest.TestCase):
                 ],
             )
 
+    def test_drive_metadata_command_reads_mimetype_for_google_document_detection(self):
+        backend = CloudBrowserBackend()
+
+        self.assertEqual(
+            backend._remote_metadata_command("rclone", _remote(), "Untitled document.docx"),
+            ["rclone", "--config", core.CONFIG_PATH, "lsjson", "Docs:/Untitled document.docx", "--stat", "--hash"],
+        )
+
     def test_drive_office_file_upload_does_not_use_import_formats(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
@@ -835,6 +880,53 @@ class CloudBrowserTests(unittest.TestCase):
                 backend._upload_remote_file("rclone", remote, "report.docx", source)
 
             self.assertEqual(calls, [("copyto", str(source), "Box:/report.docx")])
+
+    def test_changed_google_document_upload_refreshes_local_cache_from_drive_export(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("Untitled document.docx", "Untitled document.docx", False, 8, "2026-01-02 03:04")
+
+            def initial_download(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                destination = Path(arguments[2])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=initial_download):
+                    cached = backend.cache_file(remote, entry)
+
+            cached.write_text("local edit", encoding="utf-8")
+            record = backend._offline_records["Docs"]["Untitled document.docx"]
+            record["remote_size"] = -1
+            record["remote_modtime"] = "2026-01-02T03:04:00Z"
+            record["remote_mimetype"] = "application/vnd.google-apps.document"
+
+            def sync_operation(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                if arguments[0] == "copyto" and str(arguments[1]).startswith("Docs:"):
+                    destination = Path(arguments[2])
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text("canonical export", encoding="utf-8")
+
+            metadata = {
+                "Size": -1,
+                "ModTime": "2026-01-02T03:04:00Z",
+                "MimeType": "application/vnd.google-apps.document",
+            }
+            diagnostics: list[str] = []
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata):
+                    with mock.patch.object(backend, "_run_operation", side_effect=sync_operation):
+                        conflicts = backend.changed_managed_files(remote, diagnostics=diagnostics)
+
+            self.assertEqual(conflicts, [])
+            self.assertEqual(cached.read_text(encoding="utf-8"), "canonical export")
+            self.assertFalse(backend.offline_changed("Docs", "Untitled document.docx"))
+            self.assertIn("  canonical_download: refreshed local cache", diagnostics)
 
     def test_changed_cached_file_uses_remote_metadata_before_downloading_cloud_copy(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2176,6 +2268,50 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._edit_disabled.assert_called_once_with()
         browser._transfer.assert_not_called()
+
+    def test_local_file_drop_uploads_to_current_remote_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "a.txt"
+            path.write_text("content", encoding="utf-8")
+            browser = object.__new__(CompactCloudBrowser)
+            browser._edits_enabled = mock.Mock(return_value=True)
+            browser.remote = _remote()
+            browser.path = "Inbox"
+            browser._operation_pending = False
+            browser.backend = mock.Mock()
+            browser._run_operation = mock.Mock()
+
+            browser.accept_local_paths([path])
+
+            message, action = browser._run_operation.call_args.args[:2]
+            self.assertEqual(message, "Uploading 1 item…")
+            self.assertEqual(browser._run_operation.call_args.kwargs["invalidate_keys"], {("Docs", "Inbox")})
+            action()
+            browser.backend.copy_local_paths.assert_called_once_with([path], browser.remote, "Inbox")
+
+    def test_local_paths_from_mime_uses_local_file_urls(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "a.txt"
+            path.write_text("content", encoding="utf-8")
+
+            class Url:
+                def __init__(self, value: str, local: bool) -> None:
+                    self.value = value
+                    self.local = local
+
+                def isLocalFile(self) -> bool:
+                    return self.local
+
+                def toLocalFile(self) -> str:
+                    return self.value
+
+            mime = SimpleNamespace(
+                hasUrls=lambda: True,
+                urls=lambda: [Url(str(path), True), Url("https://example.com/a.txt", False)],
+            )
+            browser = object.__new__(CompactCloudBrowser)
+
+            self.assertEqual(browser._local_paths_from_mime(mime), [path])
 
     def test_drag_is_enabled_only_when_integrated_edits_are_enabled(self):
         class Tree:

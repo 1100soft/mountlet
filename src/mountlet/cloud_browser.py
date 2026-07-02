@@ -309,6 +309,24 @@ class CloudBrowserBackend:
                 arguments = ["moveto" if move else "copyto", source, target]
             self._run_operation(binary, *arguments)
 
+    def copy_local_paths(
+        self,
+        paths: Iterable[Path],
+        destination: core.RemoteInfo,
+        destination_path: str,
+    ) -> None:
+        binary = self._rclone()
+        for source in paths:
+            source = Path(source)
+            if not source.exists():
+                raise RuntimeError(f"{source} does not exist")
+            target_path = join_browser_path(destination_path, source.name)
+            target = remote_target(destination, target_path)
+            if source.is_dir():
+                self._run_operation(binary, "copy", str(source), target, "--create-empty-src-dirs", timeout=None)
+            else:
+                self._run_operation(binary, "copyto", str(source), target, timeout=None)
+
     def delete_entries(self, remote: core.RemoteInfo, entries: Iterable[BrowserEntry]) -> None:
         binary = self._rclone()
         for entry in entries:
@@ -644,7 +662,7 @@ class CloudBrowserBackend:
             if local_changed and not cloud_changed:
                 try:
                     started = time.perf_counter()
-                    self._upload_remote_file(
+                    imported_google_doc = self._upload_remote_file(
                         binary,
                         remote,
                         path,
@@ -663,8 +681,33 @@ class CloudBrowserBackend:
                     )
                     failures.append(f"{path}: {exc}")
                     continue
+                if imported_google_doc:
+                    try:
+                        self._download_remote_file(
+                            binary,
+                            remote,
+                            path,
+                            current,
+                            timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS,
+                        )
+                        shutil.copy2(current, local)
+                    except RuntimeError as exc:
+                        _diagnostic_append(diagnostics, f"  canonical_download: failed: {exc}")
+                    else:
+                        _diagnostic_append(diagnostics, "  canonical_download: refreshed local cache")
+                metadata_after = None
+                if imported_google_doc:
+                    with suppress(RuntimeError):
+                        metadata_after = self._remote_file_metadata(
+                            binary,
+                            remote,
+                            path,
+                            timeout=RCLONE_METADATA_TIMEOUT_SECONDS,
+                        )
                 self._update_offline_record_state(remote.name, path, local)
                 self._clear_record_remote_metadata(remote.name, path)
+                if metadata_after is not None:
+                    self._record_remote_metadata(remote.name, path, metadata_after)
                 _diagnostic_append(
                     diagnostics,
                     f"  post_upload_dirty: {self.offline_changed(remote.name, path)}",
@@ -731,7 +774,10 @@ class CloudBrowserBackend:
             return conflict.offline_path
         use_local = local_newer if choice == "newer" else not local_newer
         if use_local:
-            self._upload_remote_file(binary, remote, conflict.path, conflict.offline_path)
+            imported_google_doc = self._upload_remote_file(binary, remote, conflict.path, conflict.offline_path)
+            if imported_google_doc:
+                self._download_remote_file(binary, remote, conflict.path, conflict.mounted_path)
+                shutil.copy2(conflict.mounted_path, conflict.offline_path)
             self._update_offline_record_state(conflict.remote_name, conflict.path, conflict.offline_path)
             with suppress(OSError):
                 conflict.mounted_path.unlink()
@@ -1284,7 +1330,7 @@ class CloudBrowserBackend:
         *,
         timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
         remote_metadata: dict[str, object] | None = None,
-    ) -> None:
+    ) -> bool:
         import_flags = self._drive_document_import_flags(remote, source, remote_metadata)
         try:
             if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
@@ -1299,6 +1345,7 @@ class CloudBrowserBackend:
                 self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
             else:
                 self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
+        return bool(import_flags)
 
     def _remote_metadata_command(self, binary: str, remote: core.RemoteInfo, path: str) -> list[str]:
         arguments = ["lsjson", remote_target(remote, path), "--stat", "--hash"]
