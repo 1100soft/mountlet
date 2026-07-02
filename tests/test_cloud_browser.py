@@ -465,7 +465,10 @@ class CloudBrowserTests(unittest.TestCase):
                 },
             }
 
-            local.write_text("edited", encoding="utf-8")
+            # Windows filesystems can preserve the same timestamp for quick
+            # same-size rewrites, so make this metadata-only check differ by
+            # size as well.
+            local.write_text("edited content", encoding="utf-8")
 
             self.assertEqual(backend.changed_managed_remote_names(), ["Docs"])
             self.assertEqual(backend.changed_managed_paths("Docs"), ["Reports/a.txt"])

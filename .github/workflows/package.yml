@@ -110,14 +110,14 @@ jobs:
         shell: pwsh
         run: choco install rclone winfsp --no-progress --yes
 
-      - name: Install Linux rclone for bundled variant
-        if: runner.os == 'Linux' && matrix.bundle_rclone
+      - name: Install Linux rclone for tests
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes rclone
 
-      - name: Install macOS rclone for bundled variant
-        if: runner.os == 'macOS' && matrix.bundle_rclone
+      - name: Install macOS rclone for tests
+        if: runner.os == 'macOS'
         run: brew install rclone
 
       - name: Run unit tests
