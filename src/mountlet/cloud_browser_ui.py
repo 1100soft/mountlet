@@ -22,6 +22,9 @@ from .shortcuts import matches_shortcut
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+FILE_BROWSER_MIN_HEIGHT = 240
+FILE_BROWSER_MAX_VISIBLE_ROWS = 14
+RCLONE_OUTPUT_TAIL_LINES = 10
 CHILD_FOLDER_PREFETCH_LIMIT = 24
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
@@ -111,7 +114,7 @@ class CompactCloudBrowser:
         self._working_timer: Any | None = None
         self._rclone_output_dialog: Any | None = None
         self._rclone_output_text: Any | None = None
-        self._rclone_output_latest = ""
+        self._rclone_output_lines: list[str] = []
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
@@ -329,7 +332,8 @@ class CompactCloudBrowser:
             layout.addWidget(buttons)
             self._rclone_output_dialog = dialog
             self._rclone_output_text = text
-            text.setPlainText(self._rclone_output_latest)
+            text.setPlainText(self._rclone_output_text_block())
+            self._scroll_rclone_output_to_end()
         dialog.show()
         self._position_rclone_output()
         dialog.raise_()
@@ -338,14 +342,20 @@ class CompactCloudBrowser:
     def _append_rclone_output(self, text: str) -> None:
         if not text:
             return
-        latest = text.rstrip("\r\n")
-        if not latest:
+        lines = [line for line in text.replace("\r", "\n").splitlines() if line.strip()]
+        if not lines:
             return
-        self._rclone_output_latest = latest
+        self._rclone_output_lines.extend(lines)
+        if len(self._rclone_output_lines) > RCLONE_OUTPUT_TAIL_LINES:
+            self._rclone_output_lines = self._rclone_output_lines[-RCLONE_OUTPUT_TAIL_LINES:]
         editor = self._rclone_output_text
         if editor is None:
             return
-        editor.setPlainText(latest)
+        editor.setPlainText(self._rclone_output_text_block())
+        self._scroll_rclone_output_to_end()
+
+    def _rclone_output_text_block(self) -> str:
+        return "\n".join(self._rclone_output_lines)
 
     def _scroll_rclone_output_to_end(self) -> None:
         editor = self._rclone_output_text
@@ -487,6 +497,7 @@ class CompactCloudBrowser:
         with suppress(Exception):
             self.tree.resizeColumnToContents(0)
             self.tree.resizeColumnToContents(1)
+        self._resize_to_rendered_items()
         self._layout_changed()
 
     def _offline_icon(self) -> Any | None:
@@ -1133,7 +1144,45 @@ class CompactCloudBrowser:
         if not pending_select_path:
             with suppress(Exception):
                 self.tree.verticalScrollBar().setValue(previous_scroll)
+        self._resize_to_rendered_items()
+        getattr(self, "_layout_changed", lambda: None)()
         self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_related_folders(visible_entries))
+
+    def _resize_to_rendered_items(self) -> None:
+        tree = getattr(self, "tree", None)
+        root = getattr(self, "root", None)
+        if tree is None or root is None:
+            return
+        entries = getattr(self, "entries", [])
+        count = len(entries) if entries else tree.topLevelItemCount()
+        count = max(1, int(count))
+        visible_rows = min(count, FILE_BROWSER_MAX_VISIBLE_ROWS)
+        try:
+            row_height = tree.sizeHintForRow(0)
+        except Exception:
+            row_height = 0
+        if row_height <= 0:
+            try:
+                row_height = tree.fontMetrics().height() + 8
+            except Exception:
+                row_height = 24 + max(0, self._zoom_steps)
+        try:
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            header_height = 28
+        tree_height = int(header_height + row_height * visible_rows + 8)
+        with suppress(Exception):
+            tree.setMinimumHeight(tree_height)
+            tree.setMaximumHeight(tree_height)
+        try:
+            hint = root.sizeHint()
+            desired_height = max(FILE_BROWSER_MIN_HEIGHT, hint.height())
+            root.setMinimumHeight(desired_height)
+            if not self._embedded:
+                self.window.resize(max(self.window.width(), hint.width()), desired_height)
+                self._position_rclone_output()
+        except Exception:
+            pass
 
     def _apply_entry_state(
         self,

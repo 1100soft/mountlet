@@ -1119,6 +1119,50 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser._rclone_output_dialog.position, (628, 80))
 
+    def test_file_browser_resizes_tree_to_rendered_item_count(self):
+        class Tree:
+            def __init__(self) -> None:
+                self.minimum_height = None
+                self.maximum_height = None
+
+            def topLevelItemCount(self) -> int:
+                return 3
+
+            def sizeHintForRow(self, _row: int) -> int:
+                return 20
+
+            def header(self) -> object:
+                return SimpleNamespace(sizeHint=lambda: SimpleNamespace(height=lambda: 10))
+
+            def setMinimumHeight(self, height: int) -> None:
+                self.minimum_height = height
+
+            def setMaximumHeight(self, height: int) -> None:
+                self.maximum_height = height
+
+        class Root:
+            def __init__(self) -> None:
+                self.minimum_height = None
+
+            def sizeHint(self) -> object:
+                return SimpleNamespace(width=lambda: 540, height=lambda: 260)
+
+            def setMinimumHeight(self, height: int) -> None:
+                self.minimum_height = height
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser.root = Root()
+        browser.entries = [BrowserEntry(str(index), str(index), False) for index in range(3)]
+        browser._zoom_steps = 0
+        browser._embedded = True
+
+        browser._resize_to_rendered_items()
+
+        self.assertEqual(browser.tree.minimum_height, 78)
+        self.assertEqual(browser.tree.maximum_height, 78)
+        self.assertEqual(browser.root.minimum_height, 260)
+
     def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -1502,7 +1546,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._refresh_entry_icons.assert_called_once_with()
         browser._display_entries.assert_not_called()
 
-    def test_rclone_output_shows_latest_line_only(self):
+    def test_rclone_output_shows_recent_line_block(self):
         class Editor:
             def __init__(self) -> None:
                 self.text = ""
@@ -1511,15 +1555,16 @@ class CloudBrowserTests(unittest.TestCase):
                 self.text = text
 
         browser = object.__new__(CompactCloudBrowser)
-        browser._rclone_output_latest = ""
+        browser._rclone_output_lines = []
         browser._rclone_output_text = Editor()
         browser.qt = SimpleNamespace()
 
-        browser._append_rclone_output("Transferred: 1 MiB\n")
-        browser._append_rclone_output("Transferred: 2 MiB\n")
+        for index in range(12):
+            browser._append_rclone_output(f"line {index}\n")
 
-        self.assertEqual(browser._rclone_output_latest, "Transferred: 2 MiB")
-        self.assertEqual(browser._rclone_output_text.text, "Transferred: 2 MiB")
+        self.assertEqual(browser._rclone_output_lines[0], "line 2")
+        self.assertEqual(browser._rclone_output_lines[-1], "line 11")
+        self.assertEqual(browser._rclone_output_text.text, "\n".join(f"line {index}" for index in range(2, 12)))
 
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
