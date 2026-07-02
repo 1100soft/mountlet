@@ -51,6 +51,25 @@ class StageRcloneTests(unittest.TestCase):
             timeout=15,
         )
 
+    def test_windows_resolver_finds_chocolatey_portable_binary(self):
+        stage_rclone = _load_stage_rclone()
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            shim = root / "chocolatey" / "bin" / "rclone.exe"
+            real = root / "chocolatey" / "lib" / "rclone.portable" / "tools" / "rclone-v1.74.3-windows-amd64" / "rclone.exe"
+            shim.parent.mkdir(parents=True)
+            real.parent.mkdir(parents=True)
+            shim.write_bytes(b"shim")
+            real.write_bytes(b"x" * (stage_rclone.WINDOWS_SHIM_MAX_BYTES + 1))
+            with mock.patch.object(stage_rclone.shutil, "which", return_value=str(shim)):
+                with mock.patch.dict(stage_rclone.os.environ, {"ChocolateyInstall": str(root / "chocolatey")}):
+                    with mock.patch.object(
+                        stage_rclone.subprocess,
+                        "run",
+                        return_value=SimpleNamespace(returncode=0, stdout="rclone v1.74.3\n", stderr=""),
+                    ):
+                        self.assertEqual(stage_rclone.resolve_rclone_source(None, "Windows"), real.resolve())
+
     def test_resolver_rejects_non_rclone_output(self):
         stage_rclone = _load_stage_rclone()
         with tempfile.TemporaryDirectory() as tempdir:

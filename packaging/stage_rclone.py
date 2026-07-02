@@ -68,10 +68,12 @@ def _windows_real_rclone_candidates() -> list[Path]:
         Path("C:/rclone/rclone.exe"),
         scoop / "apps" / "rclone" / "current" / "rclone.exe",
         chocolatey / "lib" / "rclone" / "tools" / "rclone.exe",
+        chocolatey / "lib" / "rclone.portable" / "tools" / "rclone.exe",
     ]
     discovered: list[Path] = []
     for root in (
         chocolatey / "lib" / "rclone",
+        chocolatey / "lib" / "rclone.portable",
         scoop / "apps" / "rclone",
         local / "Microsoft" / "WinGet" / "Packages",
     ):
