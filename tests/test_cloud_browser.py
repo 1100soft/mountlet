@@ -722,7 +722,7 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
 
-    def test_drive_document_upload_uses_import_formats(self):
+    def test_drive_google_document_upload_uses_import_formats(self):
         with tempfile.TemporaryDirectory() as tempdir:
             backend = CloudBrowserBackend(
                 state_path=Path(tempdir) / "state.json",
@@ -736,7 +736,13 @@ class CloudBrowserTests(unittest.TestCase):
                 calls.append(arguments)
 
             with mock.patch.object(backend, "_run_operation", side_effect=capture):
-                backend._upload_remote_file("rclone", _remote(), "Untitled document.docx", source)
+                backend._upload_remote_file(
+                    "rclone",
+                    _remote(),
+                    "Untitled document.docx",
+                    source,
+                    remote_metadata={"MimeType": "application/vnd.google-apps.document"},
+                )
 
             self.assertEqual(
                 calls,
@@ -751,6 +757,64 @@ class CloudBrowserTests(unittest.TestCase):
                         "docx,xlsx,pptx,svg",
                     )
                 ],
+            )
+
+    def test_drive_office_file_upload_does_not_use_import_formats(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            source = Path(tempdir) / "report.docx"
+            source.write_text("edit", encoding="utf-8")
+            calls: list[tuple[str, ...]] = []
+
+            def capture(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                calls.append(arguments)
+
+            with mock.patch.object(backend, "_run_operation", side_effect=capture):
+                backend._upload_remote_file(
+                    "rclone",
+                    _remote(),
+                    "report.docx",
+                    source,
+                    remote_metadata={
+                        "MimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    },
+                )
+
+            self.assertEqual(calls, [("copyto", str(source), "Docs:/report.docx")])
+
+    def test_drive_google_document_upload_retries_import_formats_after_rclone_error(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            source = Path(tempdir) / "Untitled document.docx"
+            source.write_text("edit", encoding="utf-8")
+            calls: list[tuple[str, ...]] = []
+
+            def capture(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                calls.append(arguments)
+                if len(calls) == 1:
+                    raise RuntimeError("can't update google document type without --drive-import-formats")
+
+            with mock.patch.object(backend, "_run_operation", side_effect=capture):
+                backend._upload_remote_file("rclone", _remote(), "Untitled document.docx", source)
+
+            self.assertEqual(calls[0], ("copyto", str(source), "Docs:/Untitled document.docx"))
+            self.assertEqual(
+                calls[1],
+                (
+                    "copyto",
+                    str(source),
+                    "Docs:/Untitled document.docx",
+                    "--drive-export-formats",
+                    "docx,xlsx,pptx,svg",
+                    "--drive-import-formats",
+                    "docx,xlsx,pptx,svg",
+                ),
             )
 
     def test_non_drive_document_upload_does_not_use_drive_import_formats(self):

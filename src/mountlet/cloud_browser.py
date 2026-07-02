@@ -27,6 +27,8 @@ RCLONE_CACHE_SYNC_TIMEOUT_SECONDS = 45
 RCLONE_METADATA_TIMEOUT_SECONDS = 15
 DRIVE_EDITABLE_DOCUMENT_FORMATS = ("docx", "xlsx", "pptx", "svg")
 DRIVE_EDITABLE_DOCUMENT_FORMATS_VALUE = ",".join(DRIVE_EDITABLE_DOCUMENT_FORMATS)
+GOOGLE_APPS_MIME_PREFIX = "application/vnd.google-apps."
+GOOGLE_DOC_IMPORT_REQUIRED_MESSAGE = "can't update google document type without --drive-import-formats"
 CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
@@ -642,7 +644,14 @@ class CloudBrowserBackend:
             if local_changed and not cloud_changed:
                 try:
                     started = time.perf_counter()
-                    self._upload_remote_file(binary, remote, path, local, timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS)
+                    self._upload_remote_file(
+                        binary,
+                        remote,
+                        path,
+                        local,
+                        timeout=RCLONE_CACHE_SYNC_TIMEOUT_SECONDS,
+                        remote_metadata=metadata,
+                    )
                     _diagnostic_append(
                         diagnostics,
                         f"  upload: ok in {time.perf_counter() - started:.3f}s",
@@ -1080,6 +1089,9 @@ class CloudBrowserBackend:
             normalized_hashes = _normalized_hashes(metadata.get("Hashes"))
             if normalized_hashes:
                 record["remote_hashes"] = normalized_hashes
+            mimetype = str(metadata.get("MimeType") or "")
+            if mimetype:
+                record["remote_mimetype"] = mimetype
             if save:
                 self._save_offline_manifest()
 
@@ -1110,6 +1122,7 @@ class CloudBrowserBackend:
             record.pop("remote_size", None)
             record.pop("remote_modtime", None)
             record.pop("remote_hashes", None)
+            record.pop("remote_mimetype", None)
             self._save_offline_manifest()
 
     def _remove_offline_records(self, remote_name: str, path: str) -> None:
@@ -1227,14 +1240,7 @@ class CloudBrowserBackend:
     ) -> dict[str, object]:
         try:
             result = subprocess.run(
-                self._command(
-                    binary,
-                    "lsjson",
-                    remote_target(remote, path),
-                    "--stat",
-                    "--hash",
-                    "--no-mimetype",
-                ),
+                self._remote_metadata_command(binary, remote, path),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -1277,18 +1283,41 @@ class CloudBrowserBackend:
         source: Path,
         *,
         timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+        remote_metadata: dict[str, object] | None = None,
     ) -> None:
-        import_flags = self._drive_document_import_flags(remote, source)
-        if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
-            self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
-        else:
-            self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
+        import_flags = self._drive_document_import_flags(remote, source, remote_metadata)
+        try:
+            if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
+                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
+            else:
+                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
+        except RuntimeError as exc:
+            if import_flags or not self._drive_document_upload_needs_import_flags(remote, source, exc):
+                raise
+            import_flags = self._drive_document_import_flags(remote, source, {"MimeType": GOOGLE_APPS_MIME_PREFIX})
+            if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
+                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
+            else:
+                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
 
-    def _drive_document_import_flags(self, remote: core.RemoteInfo, source: Path) -> tuple[str, ...]:
+    def _remote_metadata_command(self, binary: str, remote: core.RemoteInfo, path: str) -> list[str]:
+        arguments = ["lsjson", remote_target(remote, path), "--stat", "--hash"]
+        if remote.backend_type.casefold() != "drive":
+            arguments.append("--no-mimetype")
+        return self._command(binary, *arguments)
+
+    def _drive_document_import_flags(
+        self,
+        remote: core.RemoteInfo,
+        source: Path,
+        remote_metadata: dict[str, object] | None,
+    ) -> tuple[str, ...]:
         if remote.backend_type.casefold() != "drive":
             return ()
         suffix = source.suffix.lower().lstrip(".")
         if suffix not in DRIVE_EDITABLE_DOCUMENT_FORMATS:
+            return ()
+        if not self._metadata_is_google_document(remote_metadata):
             return ()
         return (
             "--drive-export-formats",
@@ -1296,6 +1325,24 @@ class CloudBrowserBackend:
             "--drive-import-formats",
             DRIVE_EDITABLE_DOCUMENT_FORMATS_VALUE,
         )
+
+    def _metadata_is_google_document(self, metadata: dict[str, object] | None) -> bool:
+        if metadata is None:
+            return False
+        return str(metadata.get("MimeType") or "").startswith(GOOGLE_APPS_MIME_PREFIX)
+
+    def _drive_document_upload_needs_import_flags(
+        self,
+        remote: core.RemoteInfo,
+        source: Path,
+        error: RuntimeError,
+    ) -> bool:
+        if remote.backend_type.casefold() != "drive":
+            return False
+        suffix = source.suffix.lower().lstrip(".")
+        if suffix not in DRIVE_EDITABLE_DOCUMENT_FORMATS:
+            return False
+        return GOOGLE_DOC_IMPORT_REQUIRED_MESSAGE in str(error)
 
     def _free_cache_records(self, remote_name: str, path: str) -> int:
         with self._offline_lock:
