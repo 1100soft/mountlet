@@ -1159,9 +1159,68 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 78)
-        self.assertEqual(browser.tree.maximum_height, 78)
+        self.assertEqual(browser.tree.minimum_height, 98)
+        self.assertEqual(browser.tree.maximum_height, 98)
         self.assertEqual(browser.root.minimum_height, 260)
+
+    def test_file_browser_resize_can_shrink_window(self):
+        class Tree:
+            def __init__(self) -> None:
+                self.minimum_height = None
+                self.maximum_height = None
+
+            def topLevelItemCount(self) -> int:
+                return 1
+
+            def sizeHintForRow(self, _row: int) -> int:
+                return 20
+
+            def header(self) -> object:
+                return SimpleNamespace(sizeHint=lambda: SimpleNamespace(height=lambda: 10))
+
+            def setMinimumHeight(self, height: int) -> None:
+                self.minimum_height = height
+
+            def setMaximumHeight(self, height: int) -> None:
+                self.maximum_height = height
+
+        class Root:
+            def __init__(self) -> None:
+                self.minimum_height = 420
+
+            def sizeHint(self) -> object:
+                return SimpleNamespace(width=lambda: 540, height=lambda: self.minimum_height + 20)
+
+            def setMinimumHeight(self, height: int) -> None:
+                self.minimum_height = height
+
+        class Window:
+            def __init__(self) -> None:
+                self.minimum_height = 420
+                self.size = None
+
+            def setMinimumHeight(self, height: int) -> None:
+                self.minimum_height = height
+
+            def width(self) -> int:
+                return 620
+
+            def resize(self, width: int, height: int) -> None:
+                self.size = (width, height)
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser.root = Root()
+        browser.window = Window()
+        browser.entries = [BrowserEntry("one", "one", False)]
+        browser._zoom_steps = 0
+        browser._embedded = False
+        browser._position_rclone_output = mock.Mock()
+
+        browser._resize_to_rendered_items()
+
+        self.assertEqual(browser.tree.minimum_height, 58)
+        self.assertEqual(browser.window.size, (620, 260))
 
     def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
         with tempfile.TemporaryDirectory() as tempdir:

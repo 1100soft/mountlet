@@ -24,6 +24,7 @@ EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 FILE_BROWSER_MIN_HEIGHT = 240
 FILE_BROWSER_MAX_VISIBLE_ROWS = 14
+FILE_BROWSER_CONTEXT_ROWS = 1
 RCLONE_OUTPUT_TAIL_LINES = 10
 RCLONE_OUTPUT_MIN_LINES = 8
 RCLONE_OUTPUT_MAX_LINES = 16
@@ -1208,7 +1209,7 @@ class CompactCloudBrowser:
         entries = getattr(self, "entries", [])
         count = len(entries) if entries else tree.topLevelItemCount()
         count = max(1, int(count))
-        visible_rows = min(count, FILE_BROWSER_MAX_VISIBLE_ROWS)
+        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, FILE_BROWSER_MAX_VISIBLE_ROWS + FILE_BROWSER_CONTEXT_ROWS)
         try:
             row_height = tree.sizeHintForRow(0)
         except Exception:
@@ -1227,6 +1228,10 @@ class CompactCloudBrowser:
             tree.setMinimumHeight(tree_height)
             tree.setMaximumHeight(tree_height)
         try:
+            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            if not self._embedded:
+                with suppress(Exception):
+                    self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
             hint = root.sizeHint()
             desired_height = max(FILE_BROWSER_MIN_HEIGHT, hint.height())
             root.setMinimumHeight(desired_height)
