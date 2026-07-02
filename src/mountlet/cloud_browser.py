@@ -25,6 +25,8 @@ REMOTE_CURRENT_DIR = ".mountlet-remote-current"
 RCLONE_FILE_OPERATION_TIMEOUT_SECONDS = 120
 RCLONE_CACHE_SYNC_TIMEOUT_SECONDS = 45
 RCLONE_METADATA_TIMEOUT_SECONDS = 15
+DRIVE_EDITABLE_DOCUMENT_FORMATS = ("docx", "xlsx", "pptx", "svg")
+DRIVE_EDITABLE_DOCUMENT_FORMATS_VALUE = ",".join(DRIVE_EDITABLE_DOCUMENT_FORMATS)
 CONFLICT_COPY_RE = re.compile(r"^(?P<stem>.+) \(Mountlet offline \d{8}-\d{6}(?: \d+)?\)(?P<suffix>\.[^.]*)?$")
 
 
@@ -1276,10 +1278,24 @@ class CloudBrowserBackend:
         *,
         timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
     ) -> None:
+        import_flags = self._drive_document_import_flags(remote, source)
         if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
-            self._run_operation(binary, "copyto", str(source), remote_target(remote, path))
+            self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
         else:
-            self._run_operation(binary, "copyto", str(source), remote_target(remote, path), timeout=timeout)
+            self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
+
+    def _drive_document_import_flags(self, remote: core.RemoteInfo, source: Path) -> tuple[str, ...]:
+        if remote.backend_type.casefold() != "drive":
+            return ()
+        suffix = source.suffix.lower().lstrip(".")
+        if suffix not in DRIVE_EDITABLE_DOCUMENT_FORMATS:
+            return ()
+        return (
+            "--drive-export-formats",
+            DRIVE_EDITABLE_DOCUMENT_FORMATS_VALUE,
+            "--drive-import-formats",
+            DRIVE_EDITABLE_DOCUMENT_FORMATS_VALUE,
+        )
 
     def _free_cache_records(self, remote_name: str, path: str) -> int:
         with self._offline_lock:

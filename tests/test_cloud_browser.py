@@ -34,6 +34,10 @@ def _remote(name: str = "Docs") -> core.RemoteInfo:
     return core.RemoteInfo(name, name, "Drive", "drive", f"/mnt/{name}")
 
 
+def _remote_with_backend(name: str, backend_type: str, provider: str | None = None) -> core.RemoteInfo:
+    return core.RemoteInfo(name, name, provider or backend_type, backend_type, f"/mnt/{name}")
+
+
 class CloudBrowserTests(unittest.TestCase):
     def test_paths_are_remote_relative_and_cannot_escape(self):
         self.assertEqual(normalize_browser_path("/Projects/../Photos"), "Photos")
@@ -717,6 +721,56 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertEqual(conflicts, [])
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
+
+    def test_drive_document_upload_uses_import_formats(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            source = Path(tempdir) / "Untitled document.docx"
+            source.write_text("edit", encoding="utf-8")
+            calls: list[tuple[str, ...]] = []
+
+            def capture(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                calls.append(arguments)
+
+            with mock.patch.object(backend, "_run_operation", side_effect=capture):
+                backend._upload_remote_file("rclone", _remote(), "Untitled document.docx", source)
+
+            self.assertEqual(
+                calls,
+                [
+                    (
+                        "copyto",
+                        str(source),
+                        "Docs:/Untitled document.docx",
+                        "--drive-export-formats",
+                        "docx,xlsx,pptx,svg",
+                        "--drive-import-formats",
+                        "docx,xlsx,pptx,svg",
+                    )
+                ],
+            )
+
+    def test_non_drive_document_upload_does_not_use_drive_import_formats(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            source = Path(tempdir) / "report.docx"
+            source.write_text("edit", encoding="utf-8")
+            calls: list[tuple[str, ...]] = []
+
+            def capture(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                calls.append(arguments)
+
+            remote = _remote_with_backend("Box", "box", "Box")
+            with mock.patch.object(backend, "_run_operation", side_effect=capture):
+                backend._upload_remote_file("rclone", remote, "report.docx", source)
+
+            self.assertEqual(calls, [("copyto", str(source), "Box:/report.docx")])
 
     def test_changed_cached_file_uses_remote_metadata_before_downloading_cloud_copy(self):
         with tempfile.TemporaryDirectory() as tempdir:
