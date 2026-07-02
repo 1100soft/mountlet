@@ -7,5 +7,5 @@ terms that came with it. Redistribution requires separate permission.
 
 Third-party components remain under their own licenses.
 
-Mountlet is provided without warranty. Keep backups of important files.
+Mountlet is provided without warranty.
 
