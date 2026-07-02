@@ -25,6 +25,8 @@ EMBEDDED_BROWSER_MIN_HEIGHT = 340
 FILE_BROWSER_MIN_HEIGHT = 240
 FILE_BROWSER_MAX_VISIBLE_ROWS = 14
 RCLONE_OUTPUT_TAIL_LINES = 10
+RCLONE_OUTPUT_MIN_LINES = 8
+RCLONE_OUTPUT_MAX_LINES = 16
 CHILD_FOLDER_PREFETCH_LIMIT = 24
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
@@ -115,6 +117,7 @@ class CompactCloudBrowser:
         self._rclone_output_dialog: Any | None = None
         self._rclone_output_text: Any | None = None
         self._rclone_output_lines: list[str] = []
+        self._rclone_progress_block: list[str] = []
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
@@ -325,7 +328,7 @@ class CompactCloudBrowser:
             layout = self.qt.QVBoxLayout(dialog)
             text = self.qt.QPlainTextEdit()
             text.setReadOnly(True)
-            text.setMinimumSize(420, 120)
+            text.setMinimumWidth(520)
             layout.addWidget(text)
             buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
             buttons.rejected.connect(dialog.hide)
@@ -333,6 +336,7 @@ class CompactCloudBrowser:
             self._rclone_output_dialog = dialog
             self._rclone_output_text = text
             text.setPlainText(self._rclone_output_text_block())
+            self._resize_rclone_output_text()
             self._scroll_rclone_output_to_end()
         dialog.show()
         self._position_rclone_output()
@@ -342,20 +346,68 @@ class CompactCloudBrowser:
     def _append_rclone_output(self, text: str) -> None:
         if not text:
             return
-        lines = [line for line in text.replace("\r", "\n").splitlines() if line.strip()]
+        lines = self._split_rclone_output_lines(text)
         if not lines:
             return
-        self._rclone_output_lines.extend(lines)
+        for line in lines:
+            self._record_rclone_output_line(line)
         if len(self._rclone_output_lines) > RCLONE_OUTPUT_TAIL_LINES:
             self._rclone_output_lines = self._rclone_output_lines[-RCLONE_OUTPUT_TAIL_LINES:]
         editor = self._rclone_output_text
         if editor is None:
             return
         editor.setPlainText(self._rclone_output_text_block())
+        self._resize_rclone_output_text()
         self._scroll_rclone_output_to_end()
+        self._position_rclone_output()
+
+    def _record_rclone_output_line(self, line: str) -> None:
+        if line.startswith("[rclone exited with code"):
+            if not getattr(self, "_rclone_progress_block", []):
+                self._rclone_output_lines.append(line)
+            return
+        if self._is_rclone_progress_header(line):
+            self._rclone_progress_block = [line]
+            self._rclone_output_lines = [line]
+            return
+        if getattr(self, "_rclone_progress_block", []):
+            self._rclone_progress_block.append(line)
+            self._rclone_output_lines = list(self._rclone_progress_block)
+            return
+        self._rclone_output_lines.append(line)
+
+    def _is_rclone_progress_header(self, line: str) -> bool:
+        if not line.startswith("Transferred:"):
+            return False
+        value = line.split(":", 1)[1]
+        return any(unit in value for unit in (" B", "KiB", "MiB", "GiB", "TiB", "PiB"))
+
+    def _split_rclone_output_lines(self, text: str) -> list[str]:
+        normalized = text.replace("\r", "\n")
+        normalized = normalized.replace("Transferred:\t", "\nTransferred:\t")
+        normalized = normalized.replace("Transferred:   ", "\nTransferred:   ")
+        normalized = normalized.replace("Checks:", "\nChecks:")
+        normalized = normalized.replace("Elapsed time:", "\nElapsed time:")
+        normalized = normalized.replace("Transferring:", "\nTransferring:")
+        normalized = normalized.replace("[rclone exited with code", "\n[rclone exited with code")
+        return [line for line in normalized.splitlines() if line.strip()]
 
     def _rclone_output_text_block(self) -> str:
         return "\n".join(self._rclone_output_lines)
+
+    def _resize_rclone_output_text(self) -> None:
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        line_count = max(RCLONE_OUTPUT_MIN_LINES, min(RCLONE_OUTPUT_MAX_LINES, len(self._rclone_output_lines) or 1))
+        try:
+            line_height = editor.fontMetrics().lineSpacing()
+        except Exception:
+            line_height = 18
+        height = int(line_height * line_count + 18)
+        with suppress(Exception):
+            editor.setMinimumHeight(height)
+            editor.setMaximumHeight(height)
 
     def _scroll_rclone_output_to_end(self) -> None:
         editor = self._rclone_output_text
@@ -365,7 +417,7 @@ class CompactCloudBrowser:
             self._move_rclone_output_cursor_to_end()
 
     def _position_rclone_output(self) -> None:
-        dialog = self._rclone_output_dialog
+        dialog = getattr(self, "_rclone_output_dialog", None)
         if dialog is None:
             return
         with suppress(Exception):

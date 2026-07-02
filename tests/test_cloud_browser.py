@@ -1566,6 +1566,60 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._rclone_output_lines[-1], "line 11")
         self.assertEqual(browser._rclone_output_text.text, "\n".join(f"line {index}" for index in range(2, 12)))
 
+    def test_rclone_output_keeps_latest_progress_block(self):
+        class Editor:
+            def __init__(self) -> None:
+                self.text = ""
+                self.minimum_height = 0
+                self.maximum_height = 0
+
+            def setPlainText(self, text: str) -> None:
+                self.text = text
+
+            def fontMetrics(self) -> object:
+                return SimpleNamespace(lineSpacing=lambda: 10)
+
+            def setMinimumHeight(self, height: int) -> None:
+                self.minimum_height = height
+
+            def setMaximumHeight(self, height: int) -> None:
+                self.maximum_height = height
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._rclone_output_lines = []
+        browser._rclone_progress_block = []
+        browser._rclone_output_text = Editor()
+        browser._position_rclone_output = mock.Mock()
+        browser.qt = SimpleNamespace()
+
+        browser._append_rclone_output(
+            "Transferred:   \t    2.809 GiB / 3.457 GiB, 81%, 1.100 MiB/s, ETA 10m3s\n"
+            "Checks:                 0 / 0, -, Listed 224\n"
+            "Transferred:          182 / 190, 96%\n"
+            "Elapsed time:       3m1.0s\n"
+            "Transferring:\n"
+            " * file-a.mp4: 48% / 500.336 MiB, 727.522 KiB/s\n"
+            " * file-b.mp4:  1% / 78.786 MiB, 668 B/s\n"
+            "[rclone exited with code 0]\n"
+        )
+
+        self.assertEqual(browser._rclone_output_lines[0], "Transferred:   \t    2.809 GiB / 3.457 GiB, 81%, 1.100 MiB/s, ETA 10m3s")
+        self.assertEqual(browser._rclone_output_lines[-1], " * file-b.mp4:  1% / 78.786 MiB, 668 B/s")
+        self.assertNotIn("[rclone exited", browser._rclone_output_text.text)
+        self.assertGreaterEqual(browser._rclone_output_text.minimum_height, 98)
+
+    def test_rclone_output_splits_concatenated_progress_header(self):
+        browser = object.__new__(CompactCloudBrowser)
+
+        lines = browser._split_rclone_output_lines(
+            " * file.mp4: 13% / 161.348 MiB, 180.503 KTransferred:   \t"
+            "2.809 GiB / 3.457 GiB, 81%\nChecks: 0 / 0\n"
+        )
+
+        self.assertEqual(lines[0], " * file.mp4: 13% / 161.348 MiB, 180.503 K")
+        self.assertEqual(lines[1], "Transferred:   \t2.809 GiB / 3.457 GiB, 81%")
+        self.assertEqual(lines[2], "Checks: 0 / 0")
+
     def test_go_root_remembers_remote_root(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
