@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mountlet - Cloud storage, one tray away</title>
+    <meta
+      name="description"
+      content="Mountlet is a desktop app for browsing, opening, syncing, and optionally mounting rclone cloud remotes."
+    />
+    <meta property="og:title" content="Mountlet" />
+    <meta
+      property="og:description"
+      content="Browse, open, sync, and optionally mount cloud storage from a compact desktop tray app."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/mountlet-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="config.js"></script>
+    <script defer src="script.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Mountlet home">
+        <img src="assets/mountlet-icon.png" alt="" />
+        <span>Mountlet</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#download">Download</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#platforms">Platforms</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Desktop cloud storage for rclone users</p>
+          <h1>Cloud storage, one tray away.</h1>
+          <p class="lede">
+            Mountlet gives Google Drive, Dropbox, OneDrive, Box, S3-compatible
+            storage, and more a compact desktop control panel with an integrated
+            file browser and optional native folder mounting.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#download">Download beta</a>
+            <a class="button secondary" href="#pricing">Buy a license</a>
+          </div>
+        </div>
+        <div class="product-shot" aria-label="Mountlet app preview">
+          <div class="tray-card">
+            <div class="window-bar">
+              <span></span>
+              <strong>Mountlet</strong>
+              <span class="pin">⌖</span>
+            </div>
+            <div class="remote-row active">
+              <div>
+                <b>Work Drive</b>
+                <small>Google Drive</small>
+              </div>
+              <span class="usage"><i style="width: 58%"></i></span>
+              <span class="state">Mounted</span>
+            </div>
+            <div class="remote-row">
+              <div>
+                <b>Archive</b>
+                <small>Cloudflare R2</small>
+              </div>
+              <span class="usage"><i style="width: 35%"></i></span>
+              <span class="state quiet">Browse</span>
+            </div>
+            <div class="file-panel">
+              <div class="path">/Projects/Contracts</div>
+              <div class="file-row"><span class="doc"></span> Agreement.pdf <em>cached</em></div>
+              <div class="file-row"><span class="sheet"></span> Budget.xlsx <em>offline</em></div>
+              <div class="file-row"><span class="folder"></span> Evidence <em>syncing</em></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section strip" id="download">
+        <div class="section-heading">
+          <p class="eyebrow">Download</p>
+          <h2>Choose the build that matches how you work.</h2>
+        </div>
+        <div class="download-grid">
+          <article class="download-card">
+            <h3>Lean build</h3>
+            <p>Uses your existing rclone. Best for technical users and managed machines.</p>
+            <button class="button full download-button" data-download="system">Download lean build</button>
+          </article>
+          <article class="download-card emphasized">
+            <h3>Bundled rclone</h3>
+            <p>Includes an app-local rclone binary. Best for casual setup and fresh machines.</p>
+            <button class="button full download-button" data-download="bundled">Download bundled build</button>
+          </article>
+          <article class="download-card">
+            <h3>Source install</h3>
+            <p>Use the Python source package for development, inspection, or non-commercial use.</p>
+            <a class="button full secondary" href="https://github.com/eric-holt/mountlet">View source</a>
+          </article>
+        </div>
+        <p class="note">
+          Native folder mounting is optional. Install FUSE, WinFsp, or macFUSE only if you want
+          Mountlet to expose remotes as folders in the system file manager.
+        </p>
+      </section>
+
+      <section class="section" id="pricing">
+        <div class="section-heading">
+          <p class="eyebrow">Pricing</p>
+          <h2>Simple licensing for a focused desktop utility.</h2>
+        </div>
+        <div class="pricing-grid">
+          <article class="price-card">
+            <h3>Personal</h3>
+            <p class="price">$19</p>
+            <p>For one person using Mountlet across their own devices.</p>
+            <button class="button primary checkout-button" data-plan="personal">Buy Personal</button>
+          </article>
+          <article class="price-card featured">
+            <h3>Pro</h3>
+            <p class="price">$39</p>
+            <p>For heavy use, early builds, and priority support during beta.</p>
+            <button class="button primary checkout-button" data-plan="pro">Buy Pro</button>
+          </article>
+          <article class="price-card">
+            <h3>Team</h3>
+            <p class="price">Contact</p>
+            <p>For shared deployment, internal packaging, and support terms.</p>
+            <a class="button secondary" href="https://github.com/eric-holt/mountlet/issues/new">Contact</a>
+          </article>
+        </div>
+        <p class="note">
+          Payments use Stripe Checkout or Stripe Payment Links. Replace the placeholder links in
+          `web/config.js` before launch.
+        </p>
+      </section>
+
+      <section class="section feature-band">
+        <div>
+          <h2>Built for explicit control.</h2>
+          <p>
+            Mountlet does not hide provider behavior behind a black box. It uses rclone, keeps
+            credentials in rclone's normal config, and makes cached/offline file state visible.
+          </p>
+        </div>
+        <ul class="feature-list">
+          <li>Integrated file browser without mounting.</li>
+          <li>Optional native folder mounting.</li>
+          <li>Managed cache and offline files.</li>
+          <li>Encrypted config bundle import/export.</li>
+          <li>Google Drive, Dropbox, OneDrive, Box, pCloud, Proton Drive, and S3-compatible paths.</li>
+        </ul>
+      </section>
+
+      <section class="section" id="platforms">
+        <div class="section-heading">
+          <p class="eyebrow">Platforms</p>
+          <h2>Desktop-first, with honest platform notes.</h2>
+        </div>
+        <div class="platform-grid">
+          <article>
+            <h3>Linux</h3>
+            <p>Primary beta platform. Plasma X11 has the fullest tray behavior; GNOME and Wayland have desktop limits.</p>
+          </article>
+          <article>
+            <h3>Windows</h3>
+            <p>Works with Explorer and WinFsp for optional mounts. Unsigned beta installers can trigger SmartScreen.</p>
+          </article>
+          <article>
+            <h3>macOS</h3>
+            <p>Menu-bar app with Finder support. Public distribution needs Apple Developer ID signing and notarization.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section faq" id="faq">
+        <div class="section-heading">
+          <p class="eyebrow">FAQ</p>
+          <h2>Short answers before you install.</h2>
+        </div>
+        <details>
+          <summary>Does Mountlet replace rclone?</summary>
+          <p>No. Mountlet is a desktop interface around rclone. The bundled build includes an app-local rclone for convenience.</p>
+        </details>
+        <details>
+          <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
+          <p>Only for native folder mounting. The integrated file browser works through rclone without filesystem mounting.</p>
+        </details>
+        <details>
+          <summary>Is this open source?</summary>
+          <p>The source is available for non-commercial use. Commercial use or redistribution requires separate permission.</p>
+        </details>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>© 2026 Mountlet</span>
+      <a href="https://github.com/eric-holt/mountlet">GitHub</a>
+      <a href="https://github.com/eric-holt/mountlet/issues/new">Support</a>
+    </footer>
+  </body>
+</html>

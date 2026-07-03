@@ -14,7 +14,7 @@ Create release branches only if a maintained older line needs fixes while
 
 ## Release Checklist
 
-Run these from `wip` first:
+Run these from `wip` inside `app/` first:
 
 ```bash
 VERSION=0.5.0
@@ -58,6 +58,7 @@ git checkout main
 git pull origin main
 git merge --squash wip
 git commit -m "Release v$VERSION"
+cd app
 python packaging/run_tests.py
 python -m compileall -q src tests packaging
 ```

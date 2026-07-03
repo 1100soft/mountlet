@@ -1,6 +1,6 @@
 # Development Notes
 
-This directory contains maintainer-facing notes. The root `README.md` is the
+This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
 ## Development
@@ -160,14 +160,14 @@ ignored by git and must not be part of the installed-user workflow.
 - Build a wheel and install it in a clean virtual environment.
 - Test on a fresh Ubuntu installation with `rclone` and `fuse3`.
 - Verify import/export flows with non-sensitive sample configs.
-- Update the provider support table in the root README after checking real
+- Update the provider support table in `app/README.md` after checking real
   setup paths.
 - Confirm the built wheel and source distribution do not include local secrets.
 - Follow [RELEASE.md](RELEASE.md) when merging `wip` to `main`, tagging, and collecting release artifacts.
 
 ## Provider Test Status
 
-The root README documents provider status based on local remotes in
+`app/README.md` documents provider status based on local remotes in
 `~/.config/rclone/rclone.conf` and recent GUI setup work.
 
 Locally tested:
