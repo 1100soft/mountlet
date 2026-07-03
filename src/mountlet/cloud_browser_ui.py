@@ -40,6 +40,9 @@ QTreeWidget {
 QTreeWidget::item:hover:!selected {
     background: transparent;
 }
+QTreeWidget::item:focus {
+    outline: 0;
+}
 QTreeWidget::item:selected,
 QTreeWidget::item:selected:active,
 QTreeWidget::item:selected:!active {
