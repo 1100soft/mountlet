@@ -34,10 +34,9 @@ tool:
 - Mountlet Files is the integrated browser. It lists cloud accounts through
   `rclone`, opens files through the operating system, and keeps explicit
   cached and offline copies under the app folder.
-- Native folder mounting is optional. If you want Finder, Explorer, Dolphin, or
-  another file manager to see a cloud remote as a normal folder, install the
-  platform filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE on
-  macOS.
+- Native folder mounting turns cloud accounts into ordinary folders for Finder,
+  Explorer, Dolphin, and other file managers. It uses the platform filesystem
+  driver: FUSE on Linux, WinFsp on Windows, or macFUSE on macOS.
 
 The bundled build includes an app-local rclone for convenience. The lean build
 uses a separately installed rclone, which is useful for technical users,
@@ -51,8 +50,8 @@ inside the application install directory.
 - **Lean native build**: includes Mountlet's Python runtime and uses a separate
   rclone already installed on the computer.
 - **Source install**: requires Python 3.10 or newer and rclone.
-- **Optional native folder mounting**: requires FUSE on Linux, WinFsp on
-  Windows, or macFUSE on macOS.
+- **Native folder mounting**: requires FUSE on Linux, WinFsp on Windows, or
+  macFUSE on macOS.
 
 On Ubuntu, a source or lean install can use the system rclone:
 
@@ -239,7 +238,7 @@ brew install python@3.12 pipx
 pipx ensurepath
 ```
 
-Install macFUSE only if you want native folder mounting:
+Install macFUSE to enable native folder mounting:
 
 ```bash
 brew install --cask macfuse

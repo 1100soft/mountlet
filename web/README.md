@@ -33,5 +33,5 @@ The default download buttons point to the latest GitHub release. For paid
 downloads, either:
 
 - use Stripe Payment Links with post-payment fulfillment; or
-- replace `downloads.system` and `downloads.bundled` in `config.js` with signed
+- replace the platform keys under `downloads` in `config.js` with signed
   download URLs produced by a backend.

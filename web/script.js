@@ -42,10 +42,37 @@ function setActiveTab(nextTab, options = {}) {
   }
 }
 
+function setDownloadPlatform(nextPlatform) {
+  const platformName = String(nextPlatform || "windows");
+  const panel = document.querySelector(`[data-platform-panel="${platformName}"]`);
+  if (!panel) {
+    setDownloadPlatform("windows");
+    return;
+  }
+
+  document.querySelectorAll("[data-platform-panel]").forEach((candidate) => {
+    const isActive = candidate === panel;
+    candidate.classList.toggle("active", isActive);
+    candidate.hidden = !isActive;
+  });
+
+  document.querySelectorAll(".platform-choice").forEach((button) => {
+    const isActive = button.dataset.platform === platformName;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+}
+
 document.addEventListener("click", (event) => {
   const tabButton = event.target.closest(".tab-link, .tab-action");
   if (tabButton && tabButton.dataset.tab) {
     setActiveTab(tabButton.dataset.tab);
+    return;
+  }
+
+  const platformButton = event.target.closest(".platform-choice");
+  if (platformButton) {
+    setDownloadPlatform(platformButton.dataset.platform);
     return;
   }
 

@@ -110,28 +110,52 @@
       <section class="tab-panel" id="panel-download" role="tabpanel" aria-labelledby="tab-download" data-panel="download" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Download</p>
-          <h2>Choose the build that matches how you work.</h2>
+          <h2>Download Mountlet for your desktop.</h2>
         </div>
-        <div class="download-grid">
-          <article class="download-card">
-            <h3>Lean build</h3>
-            <p>For people who already have rclone installed or manage software centrally.</p>
-            <button class="button full download-button" data-download="system">Download lean build</button>
+
+        <div class="platform-picker" role="tablist" aria-label="Choose platform">
+          <button class="platform-choice active" type="button" data-platform="windows" aria-selected="true">Windows</button>
+          <button class="platform-choice" type="button" data-platform="macos" aria-selected="false">macOS</button>
+          <button class="platform-choice" type="button" data-platform="linux" aria-selected="false">Linux</button>
+        </div>
+
+        <div class="download-panels">
+          <article class="download-card emphasized platform-panel active" data-platform-panel="windows">
+            <h3>Windows</h3>
+            <p>The recommended installer includes Mountlet and the cloud connection engine it needs.</p>
+            <button class="button full primary download-button" data-download="windows">Download for Windows</button>
+            <details>
+              <summary>Advanced lean build</summary>
+              <p>Use this if rclone is already installed and managed separately.</p>
+              <button class="button full secondary download-button" data-download="windowsLean">Download lean Windows build</button>
+            </details>
           </article>
-          <article class="download-card emphasized">
-            <h3>Bundled build</h3>
-            <p>Includes the cloud connection engine Mountlet needs. Best for most users.</p>
-            <button class="button full download-button" data-download="bundled">Download bundled build</button>
+          <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
+            <h3>macOS</h3>
+            <p>The recommended build includes Mountlet and its cloud connection engine.</p>
+            <button class="button full primary download-button" data-download="macos">Download for macOS</button>
+            <details>
+              <summary>Advanced lean build</summary>
+              <p>Use this if rclone is already installed and managed separately.</p>
+              <button class="button full secondary download-button" data-download="macosLean">Download lean macOS build</button>
+            </details>
           </article>
-          <article class="download-card">
-            <h3>Source install</h3>
-            <p>Use the Python source package for development, inspection, or non-commercial use.</p>
-            <a class="button full secondary" href="https://github.com/eric-holt/mountlet">View source</a>
+          <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
+            <h3>Linux</h3>
+            <p>The recommended package includes Mountlet and its cloud connection engine.</p>
+            <button class="button full primary download-button" data-download="linux">Download for Linux</button>
+            <details>
+              <summary>Advanced lean build</summary>
+              <p>Use this if rclone is already installed through your distribution or admin tools.</p>
+              <button class="button full secondary download-button" data-download="linuxLean">Download lean Linux build</button>
+            </details>
           </article>
         </div>
         <p class="note">
-          Mountlet can browse and open files without native mounting. Install FUSE, WinFsp,
-          or macFUSE only if you want cloud accounts to appear as folders in the system file manager.
+          Mountlet can browse and open files immediately. Add FUSE, WinFsp, or macFUSE
+          to also mount cloud accounts as folders in the system file manager.
+          Source code is available on
+          <a href="https://github.com/eric-holt/mountlet">GitHub</a>.
         </p>
       </section>
 
@@ -144,13 +168,13 @@
           <article class="price-card">
             <h3>Personal</h3>
             <p class="price">$19</p>
-            <p>For one person using Mountlet across their own devices.</p>
+            <p>For one person using the full app across their own devices.</p>
             <button class="button primary checkout-button" data-plan="personal">Buy Personal</button>
           </article>
           <article class="price-card featured">
             <h3>Pro</h3>
             <p class="price">$39</p>
-            <p>For heavy use, early builds, and priority support during beta.</p>
+            <p>For early builds, priority support, and heavier beta use.</p>
             <button class="button primary checkout-button" data-plan="pro">Buy Pro</button>
           </article>
           <article class="price-card">
@@ -161,8 +185,8 @@
           </article>
         </div>
         <p class="note">
-          Payments use Stripe Checkout or Stripe Payment Links. Replace the placeholder links in
-          <code>web/config.js</code> before launch.
+          Personal and Pro use the same core app features during beta. Pricing
+          differs by support level, early-build access, and usage terms.
         </p>
       </section>
 
@@ -175,14 +199,32 @@
             which files stay available when the network is not.
           </p>
         </div>
-        <ul class="feature-list">
-          <li>Browse many cloud accounts side by side.</li>
-          <li>Open files in the apps already associated with those file types.</li>
-          <li>Keep selected files and folders available offline.</li>
-          <li>Sync edits back when the cloud copy has not changed.</li>
-          <li>Move config between devices with encrypted bundles.</li>
-          <li>Optionally mount accounts as normal folders for Finder, Explorer, Dolphin, and other file managers.</li>
-        </ul>
+        <div class="feature-list">
+          <details open>
+            <summary>Accounts</summary>
+            <p>Add and switch between many cloud accounts from different providers. Keep work, personal, archive, and project storage visible in one compact place.</p>
+          </details>
+          <details>
+            <summary>Files</summary>
+            <p>Browse cloud folders directly inside Mountlet, open files with the apps already configured on the computer, and drag files into cloud folders without first mounting the remote.</p>
+          </details>
+          <details>
+            <summary>Offline</summary>
+            <p>Keep selected files or folders available locally. Mountlet separates ordinary temporary cache from protected offline copies, so cleanup does not remove files you chose to keep.</p>
+          </details>
+          <details>
+            <summary>Sync</summary>
+            <p>When cached or offline files change locally, Mountlet can upload the edit if the cloud copy has not changed. If both sides changed, it asks which version to keep.</p>
+          </details>
+          <details>
+            <summary>Mount</summary>
+            <p>Mount cloud accounts as ordinary folders for Finder, Explorer, Dolphin, and other file managers when the platform filesystem driver is installed.</p>
+          </details>
+          <details>
+            <summary>Move</summary>
+            <p>Use encrypted config bundles to move cloud account settings between your own devices. Mountlet can also watch a chosen cloud path for newer config bundles.</p>
+          </details>
+        </div>
       </section>
 
       <section class="tab-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
@@ -206,7 +248,7 @@
           </article>
           <article>
             <h3>Native mounting</h3>
-            <p>Optional. Install FUSE, WinFsp, or macFUSE only if you want cloud accounts to appear as ordinary folders.</p>
+            <p>Install FUSE, WinFsp, or macFUSE to make cloud accounts appear as ordinary folders in your system file manager.</p>
           </article>
         </div>
       </section>
@@ -243,7 +285,7 @@
         </details>
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
-          <p>Only for native folder mounting. Mountlet's integrated file browser works without filesystem mounting.</p>
+          <p>Mountlet's integrated file browser works without them. Add the platform filesystem driver when you want Mountlet to mount cloud accounts as ordinary folders too.</p>
         </details>
         <details>
           <summary>What is rclone?</summary>

@@ -4,7 +4,11 @@ window.MOUNTLET_SITE_CONFIG = {
     pro: "https://buy.stripe.com/replace-pro-link"
   },
   downloads: {
-    system: "https://github.com/eric-holt/mountlet/releases/latest",
-    bundled: "https://github.com/eric-holt/mountlet/releases/latest"
+    windows: "https://github.com/eric-holt/mountlet/releases/latest",
+    macos: "https://github.com/eric-holt/mountlet/releases/latest",
+    linux: "https://github.com/eric-holt/mountlet/releases/latest",
+    windowsLean: "https://github.com/eric-holt/mountlet/releases/latest",
+    macosLean: "https://github.com/eric-holt/mountlet/releases/latest",
+    linuxLean: "https://github.com/eric-holt/mountlet/releases/latest"
   }
 };

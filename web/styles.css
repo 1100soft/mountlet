@@ -346,6 +346,58 @@ h3 {
   width: 100%;
 }
 
+.platform-picker {
+  background: color-mix(in srgb, var(--panel) 80%, var(--bg));
+  border: 1px solid var(--line);
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 4px;
+}
+
+.platform-choice {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 720;
+  min-height: 38px;
+  padding: 8px 14px;
+}
+
+.platform-choice.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.download-panels {
+  margin-top: 22px;
+  max-width: 680px;
+  width: 100%;
+}
+
+.platform-panel {
+  display: none;
+}
+
+.platform-panel.active {
+  display: block;
+}
+
+.download-card details {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 14px;
+}
+
+.download-card summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 720;
+}
+
 .download-card,
 .price-card,
 .platform-grid article,
@@ -382,15 +434,24 @@ h3 {
 .feature-list {
   display: grid;
   gap: 12px;
-  list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.feature-list li {
+.feature-list details {
   background: var(--panel);
   border-left: 4px solid var(--accent);
   padding: 14px 16px;
+}
+
+.feature-list summary {
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 760;
+}
+
+.feature-list p {
+  margin: 10px 0 0;
 }
 
 .faq {
@@ -447,6 +508,7 @@ h3 {
   .download-grid,
   .pricing-grid,
   .info-grid,
+  .download-panels,
   .platform-grid {
     grid-template-columns: 1fr;
   }
@@ -465,6 +527,12 @@ h3 {
 
   .remote-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .platform-picker {
+    align-self: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .site-footer {
@@ -492,7 +560,8 @@ h3 {
   }
 
   .button.primary,
-  .tab-nav .tab-link.active {
+  .tab-nav .tab-link.active,
+  .platform-choice.active {
     color: #06111a;
   }
 }
