@@ -179,9 +179,9 @@ class CompactCloudBrowser:
 
             def focusInEvent(self, event: Any) -> None:
                 super().focusInEvent(event)
+                outer._set_focus_owner("browser")
+                outer.qt.QTimer.singleShot(0, lambda: outer._set_focus_owner("browser"))
                 outer._ensure_tree_selection()
-                outer._update_focus_style()
-                outer._update_main_focus_style()
 
             def changeEvent(self, event: Any) -> None:
                 super().changeEvent(event)
@@ -190,7 +190,9 @@ class CompactCloudBrowser:
                     outer.qt.QEvent.Type.WindowActivate,
                     outer.qt.QEvent.Type.WindowDeactivate,
                 }:
-                    outer._update_focus_style()
+                    if event.type() == outer.qt.QEvent.Type.WindowActivate:
+                        outer._set_focus_owner("browser")
+                        outer.qt.QTimer.singleShot(0, lambda: outer._set_focus_owner("browser"))
                     outer._position_rclone_output()
 
             def moveEvent(self, event: Any) -> None:
@@ -969,14 +971,13 @@ class CompactCloudBrowser:
             self.refresh(force=False)
 
     def focus(self) -> None:
+        self._set_focus_owner("browser")
         if self._embedded:
             self.root.show()
             self.main_window.raise_()
             self.main_window.activateWindow()
             self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
             self._ensure_tree_selection()
-            self._update_focus_style()
-            self._update_main_focus_style()
             self._layout_changed()
             return
         with suppress(Exception):
@@ -986,17 +987,34 @@ class CompactCloudBrowser:
         self.window.activateWindow()
         self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
         self._ensure_tree_selection()
+        self.qt.QTimer.singleShot(0, lambda: self._set_focus_owner("browser"))
 
     def focus_main_window(self) -> None:
+        self._set_focus_owner("main")
         self.main_window.raise_()
         self.main_window.activateWindow()
         callback = getattr(self.main_window, "focus_remote_row", None)
         if callable(callback):
             callback()
-        self._update_focus_style()
+
+    def _set_focus_owner(self, owner: str) -> None:
+        callback = getattr(self.main_window, "set_mountlet_focus_owner", None)
+        if callable(callback):
+            callback(owner)
+            return
+        self._update_focus_style(owner == "browser")
         self._update_main_focus_style()
 
+    def _focus_owner_is_browser(self) -> bool:
+        callback = getattr(getattr(self, "main_window", None), "mountlet_focus_owner", None)
+        if callable(callback):
+            return callback() == "browser"
+        return self.has_focus()
+
     def has_focus(self) -> bool:
+        callback = getattr(getattr(self, "main_window", None), "mountlet_focus_owner", None)
+        if callable(callback):
+            return callback() == "browser"
         focus = self.qt.QApplication.focusWidget()
         if focus is not None:
             return bool(self.root.isAncestorOf(focus) or focus is self.root)
@@ -1011,11 +1029,12 @@ class CompactCloudBrowser:
         if callable(callback):
             callback()
 
-    def _update_focus_style(self) -> None:
+    def _update_focus_style(self, active: bool | None = None) -> None:
         root = getattr(self, "root", None)
         if root is None:
             return
-        active = self.has_focus()
+        if active is None:
+            active = self._focus_owner_is_browser()
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
@@ -1229,6 +1248,7 @@ class CompactCloudBrowser:
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
         if self.has_focus():
             self._ensure_tree_selection()
+        self._refresh_selection_backgrounds()
         self._update_actions()
         self._update_open_folder_button()
         if not pending_select_path:
@@ -2092,7 +2112,38 @@ class CompactCloudBrowser:
         self.refresh(force=current_key in changed_keys)
 
     def _selection_changed(self) -> None:
+        self._refresh_selection_backgrounds()
         self._update_actions()
+
+    def _refresh_selection_backgrounds(self) -> None:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return
+        selected = set()
+        with suppress(Exception):
+            selected = set(tree.selectedItems())
+        selected_brush = self._item_brush("#dbeafe")
+        clear_brush = self._item_brush("")
+        with suppress(Exception):
+            for row in range(tree.topLevelItemCount()):
+                item = tree.topLevelItem(row)
+                brush = selected_brush if item in selected else clear_brush
+                for column in range(tree.columnCount()):
+                    item.setBackground(column, brush)
+
+    def _item_brush(self, color: str) -> Any:
+        brush_factory = getattr(self.qt, "QBrush", None)
+        if not color:
+            if brush_factory is not None:
+                with suppress(Exception):
+                    return brush_factory()
+            color_factory = getattr(self.qt, "QColor", None)
+            return color_factory("transparent") if color_factory is not None else ""
+        color_factory = getattr(self.qt, "QColor", None)
+        if color_factory is None:
+            return color
+        qt_color = color_factory(color)
+        return brush_factory(qt_color) if brush_factory is not None else qt_color
 
     def _update_actions(self) -> None:
         selected = bool(self._selected_entries()) if hasattr(self, "tree") else False

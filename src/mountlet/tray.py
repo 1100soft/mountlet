@@ -4225,6 +4225,7 @@ class MountletWindow:
         self._last_popup_position: tuple[int, int] | None = None
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
+        self._focus_owner = "main"
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
@@ -4253,6 +4254,8 @@ class MountletWindow:
         )
         self.window.focus_remote_row = self._focus_current_remote_row
         self.window.update_focus_style = self._update_main_focus_style
+        self.window.set_mountlet_focus_owner = self._set_focus_owner
+        self.window.mountlet_focus_owner = lambda: getattr(self, "_focus_owner", "main")
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self.file_browser.preload(_load_visible_remotes())
         self._setup_offline_change_tracking()
@@ -4330,8 +4333,8 @@ class MountletWindow:
                     qt.QEvent.Type.WindowActivate,
                     qt.QEvent.Type.WindowDeactivate,
                 }:
-                    outer._update_main_focus_style()
                     if event.type() == qt.QEvent.Type.WindowActivate:
+                        outer._set_focus_owner("main")
                         outer._handle_main_window_activation(active=True)
                     elif event.type() == qt.QEvent.Type.WindowDeactivate:
                         outer._handle_main_window_activation(active=False)
@@ -4355,6 +4358,7 @@ class MountletWindow:
                             return outer._handle_window_close(event)
                         if event_type == qt.QEvent.Type.WindowActivate:
                             outer._deactivated_for_tray = False
+                            outer._set_focus_owner("main")
                             outer._handle_main_window_activation(active=True)
                         elif event_type == qt.QEvent.Type.WindowDeactivate:
                             outer._deactivated_for_tray = _windows_foreground_is_tray()
@@ -4770,6 +4774,7 @@ class MountletWindow:
             self._desktop_api().set_keep_above(self.window, True)
 
     def _activate_main_window(self) -> None:
+        self._set_focus_owner("main")
         self.window.raise_()
         self.window.activateWindow()
         qt = getattr(self, "qt", None)
@@ -5182,11 +5187,17 @@ class MountletWindow:
         root = getattr(self, "_main_surface", None)
         if root is None:
             return
-        file_browser = getattr(self, "file_browser", None)
-        browser_focused = bool(file_browser and file_browser.has_focus())
-        active = bool(self.window.isActiveWindow()) and not browser_focused
+        active = getattr(self, "_focus_owner", "main") == "main"
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
+
+    def _set_focus_owner(self, owner: str) -> None:
+        owner = "browser" if owner == "browser" else "main"
+        self._focus_owner = owner
+        self._update_main_focus_style()
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser._update_focus_style(owner == "browser")
 
     def _toolbar_button(self, text: str, tooltip: str, callback: Any) -> Any:
         button = create_badged_button(self.qt, text)
@@ -6048,6 +6059,7 @@ class MountletWindow:
 
     def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
         if focused:
+            self._set_focus_owner("main")
             for widgets in self._row_widgets.values():
                 if widgets.frame is not row:
                     widgets.frame.setProperty("keyboardFocus", False)
@@ -6176,6 +6188,7 @@ class MountletWindow:
         self._focus_remote_row(names[index])
 
     def _focus_remote_row(self, remote_name: str) -> None:
+        self._set_focus_owner("main")
         self._selected_remote_name = remote_name if remote_name in self._row_widgets else ""
         for widgets in self._row_widgets.values():
             widgets.frame.setProperty("keyboardFocus", False)
