@@ -21,20 +21,34 @@
   </head>
   <body>
     <header class="site-header">
-      <a class="brand" href="#top" aria-label="Mountlet home">
+      <button class="brand tab-link" type="button" data-tab="home" aria-label="Mountlet home">
         <img src="assets/mountlet-icon.png" alt="" />
         <span>Mountlet</span>
-      </a>
-      <nav aria-label="Primary navigation">
-        <a href="#download">Download</a>
-        <a href="#pricing">Pricing</a>
-        <a href="#platforms">Platforms</a>
-        <a href="#faq">FAQ</a>
+      </button>
+      <nav aria-label="Website sections" class="tab-nav" role="tablist">
+        <button class="tab-link active" type="button" id="tab-home" role="tab" data-tab="home" aria-controls="panel-home" aria-selected="true">
+          Home
+        </button>
+        <button class="tab-link" type="button" id="tab-download" role="tab" data-tab="download" aria-controls="panel-download" aria-selected="false">
+          Download
+        </button>
+        <button class="tab-link" type="button" id="tab-pricing" role="tab" data-tab="pricing" aria-controls="panel-pricing" aria-selected="false">
+          Pricing
+        </button>
+        <button class="tab-link" type="button" id="tab-features" role="tab" data-tab="features" aria-controls="panel-features" aria-selected="false">
+          Features
+        </button>
+        <button class="tab-link" type="button" id="tab-platforms" role="tab" data-tab="platforms" aria-controls="panel-platforms" aria-selected="false">
+          Platforms
+        </button>
+        <button class="tab-link" type="button" id="tab-faq" role="tab" data-tab="faq" aria-controls="panel-faq" aria-selected="false">
+          FAQ
+        </button>
       </nav>
     </header>
 
-    <main id="top">
-      <section class="hero">
+    <main class="page-frame">
+      <section class="tab-panel active" id="panel-home" role="tabpanel" aria-labelledby="tab-home" data-panel="home">
         <div class="hero-copy">
           <p class="eyebrow">Desktop cloud storage for rclone users</p>
           <h1>Cloud storage, one tray away.</h1>
@@ -44,8 +58,8 @@
             file browser and optional native folder mounting.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#download">Download beta</a>
-            <a class="button secondary" href="#pricing">Buy a license</a>
+            <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
+            <button class="button secondary tab-action" type="button" data-tab="pricing">Buy a license</button>
           </div>
         </div>
         <div class="product-shot" aria-label="Mountlet app preview">
@@ -81,8 +95,8 @@
         </div>
       </section>
 
-      <section class="section strip" id="download">
-        <div class="section-heading">
+      <section class="tab-panel" id="panel-download" role="tabpanel" aria-labelledby="tab-download" data-panel="download" hidden>
+        <div class="panel-heading">
           <p class="eyebrow">Download</p>
           <h2>Choose the build that matches how you work.</h2>
         </div>
@@ -109,8 +123,8 @@
         </p>
       </section>
 
-      <section class="section" id="pricing">
-        <div class="section-heading">
+      <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
+        <div class="panel-heading">
           <p class="eyebrow">Pricing</p>
           <h2>Simple licensing for a focused desktop utility.</h2>
         </div>
@@ -136,12 +150,13 @@
         </div>
         <p class="note">
           Payments use Stripe Checkout or Stripe Payment Links. Replace the placeholder links in
-          `web/config.js` before launch.
+          <code>web/config.js</code> before launch.
         </p>
       </section>
 
-      <section class="section feature-band">
+      <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>
         <div>
+          <p class="eyebrow">Features</p>
           <h2>Built for explicit control.</h2>
           <p>
             Mountlet does not hide provider behavior behind a black box. It uses rclone, keeps
@@ -157,8 +172,8 @@
         </ul>
       </section>
 
-      <section class="section" id="platforms">
-        <div class="section-heading">
+      <section class="tab-panel" id="panel-platforms" role="tabpanel" aria-labelledby="tab-platforms" data-panel="platforms" hidden>
+        <div class="panel-heading">
           <p class="eyebrow">Platforms</p>
           <h2>Desktop-first, with honest platform notes.</h2>
         </div>
@@ -178,8 +193,8 @@
         </div>
       </section>
 
-      <section class="section faq" id="faq">
-        <div class="section-heading">
+      <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>
+        <div class="panel-heading">
           <p class="eyebrow">FAQ</p>
           <h2>Short answers before you install.</h2>
         </div>
