@@ -5247,11 +5247,26 @@ class MountletWindow:
         hash_kind = str(state.get("last_synced_hash_kind") or "")
         remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
         remote_hash = str(remote_metadata.get("config_hash", ""))
+        last_local_hash = str(
+            state.get("last_local_config_hash")
+            or state.get("last_pushed_hash")
+            or state.get("last_pulled_hash")
+            or last_synced_hash
+            or ""
+        )
+        last_remote_hash = str(
+            state.get("remote_config_hash")
+            or state.get("last_remote_config_hash")
+            or state.get("last_pushed_remote_hash")
+            or state.get("last_pulled_remote_hash")
+            or last_synced_hash
+            or ""
+        )
         known_remote_hashes = {
             value
             for value in (
                 original_last_synced_hash,
-                str(state.get("remote_config_hash") or ""),
+                last_remote_hash,
                 str(state.get("last_pushed_hash") or ""),
                 str(state.get("last_pulled_hash") or ""),
             )
@@ -5266,10 +5281,12 @@ class MountletWindow:
             and local_hash != original_last_synced_hash
         ):
             last_synced_hash = local_hash
+            last_local_hash = local_hash
             state["last_synced_hash"] = local_hash
             state["last_synced_hash_kind"] = "operation"
+            state["last_local_config_hash"] = local_hash
             _save_config_sync_state(state)
-        local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
+        local_changed = bool(sync_configured and local_hash and local_hash != last_local_hash)
         remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
             push_button.setText("↑")
@@ -7433,12 +7450,16 @@ class MountletWindow:
         if local_hash:
             state["last_synced_hash"] = local_hash
             state["last_synced_hash_kind"] = "operation"
+            state["last_local_config_hash"] = local_hash
             state["last_pushed_hash"] = local_hash
             state["last_pulled_hash"] = local_hash
         for key in ("config_hash", "created_at", "device", "system", "system_release", "platform"):
             value = metadata.get(key)
             if value:
                 state[f"remote_{key}"] = value
+        remote_hash = str(metadata.get("config_hash") or "")
+        if remote_hash:
+            state["last_remote_config_hash"] = remote_hash
         _save_config_sync_state(state)
 
     def _config_sync_target(self) -> tuple[core.RemoteInfo, str] | None:

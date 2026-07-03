@@ -3375,9 +3375,11 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(saved["last_synced_hash"], "local-hash")
         self.assertEqual(saved["last_synced_hash_kind"], "operation")
+        self.assertEqual(saved["last_local_config_hash"], "local-hash")
         self.assertEqual(saved["last_pushed_hash"], "local-hash")
         self.assertEqual(saved["last_pulled_hash"], "local-hash")
         self.assertEqual(saved["remote_config_hash"], "local-hash")
+        self.assertEqual(saved["last_remote_config_hash"], "local-hash")
 
     def test_imported_cross_platform_bundle_clears_push_dot_against_local_hash(self):
         window = object.__new__(tray.MountletWindow)
@@ -3394,7 +3396,9 @@ class TrayTests(unittest.TestCase):
                     window._record_config_sync_state(window._remote_sync_metadata)
 
         self.assertEqual(saved["last_synced_hash"], "windows-local-hash")
+        self.assertEqual(saved["last_local_config_hash"], "windows-local-hash")
         self.assertEqual(saved["remote_config_hash"], "linux-bundle-hash")
+        self.assertEqual(saved["last_remote_config_hash"], "linux-bundle-hash")
 
         with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
             with mock.patch.object(tray, "_load_config_sync_state", return_value=saved):
@@ -3403,6 +3407,28 @@ class TrayTests(unittest.TestCase):
 
         push.setText.assert_called_once_with("↑")
         pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(False)
+        pull.setBadgeVisible.assert_called_once_with(False)
+
+    def test_sync_button_push_dot_uses_last_local_hash_after_pull(self):
+        window = object.__new__(tray.MountletWindow)
+        push = mock.Mock()
+        pull = mock.Mock()
+        window._push_sync_button = push
+        window._pull_sync_button = pull
+        window._remote_sync_metadata = {"config_hash": "linux-bundle-hash", "created_at": "time", "device": "linux"}
+        state = {
+            "last_synced_hash": "windows-local-hash",
+            "last_local_config_hash": "windows-local-hash",
+            "remote_config_hash": "linux-bundle-hash",
+            "last_remote_config_hash": "linux-bundle-hash",
+        }
+
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value=state):
+                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="windows-local-hash"):
+                    window._update_config_sync_buttons()
+
         push.setBadgeVisible.assert_called_once_with(False)
         pull.setBadgeVisible.assert_called_once_with(False)
 
