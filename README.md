@@ -1,60 +1,77 @@
 # Mountlet
 
-Mountlet is a desktop tray and terminal tool for mounting and unmounting
-`rclone` remotes. It uses your existing `rclone` configuration and does not
-store cloud credentials inside the application install directory.
+Mountlet is a desktop app for browsing, opening, syncing, and optionally
+mounting `rclone` cloud remotes. It uses your existing `rclone` configuration
+and does not store cloud credentials inside the application install directory.
+
+Source code is available for non-commercial use under the root `LICENSE`.
+Installer builds are covered by `docs/EULA.md`. New releases are distributed
+through GitHub; PyPI publishing is currently disabled.
 
 ## How It Works
 
-Mountlet is a friendly control panel for two standard tools:
+Mountlet is a friendly control panel for cloud storage through `rclone`:
 
 - `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
   S3-compatible storage, and WebDAV.
-- A filesystem driver lets the operating system show a cloud remote as if it
-  were a normal folder: FUSE on Linux, WinFsp on Windows, or macFUSE on macOS.
+- Mountlet Files is the integrated browser. It lists remotes directly through
+  `rclone`, opens files through the operating system, and keeps explicit
+  offline copies under the app folder.
+- Native folder mounting is optional. If you want Finder, Explorer, Dolphin, or
+  another file manager to see a cloud remote as a normal folder, install the
+  platform filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE on
+  macOS.
 
-This app reads your `rclone` remotes, creates local mount folders, and starts or
-stops `rclone mount` for you.
+This app reads your `rclone` remotes and can work without filesystem mounting.
+Mount toggles are enabled only when the optional filesystem driver is present.
 
 ## Requirements
 
 - Python 3.10 or newer.
 - `rclone`, which connects to your cloud storage.
-- A compatible filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE
-  on macOS.
+- Optional for native folder mounting: FUSE on Linux, WinFsp on Windows, or
+  macFUSE on macOS.
 
 On Ubuntu, install the system tools with:
 
 ```bash
-sudo apt install rclone fuse3
+sudo apt install rclone
 ```
+
+Install `fuse3` as well if you want native folder mounting.
 
 ## Install
 
-For isolated CLI use:
+For current native builds, use GitHub Releases when release assets are
+available. Development builds are available from the GitHub Actions artifacts
+described below.
+
+For a source-based Python install from GitHub:
 
 ```bash
-pipx install mountlet
+pipx install "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/main.zip"
 ```
 
-For the desktop tray preview:
+For terminal-only use from source:
 
 ```bash
-pipx install "mountlet[tray]"
+pipx install "mountlet @ https://github.com/eric-holt/mountlet/archive/refs/heads/main.zip"
+mountlet menu
 ```
 
 For a local checkout:
 
 ```bash
-python -m pip install .
+python -m pip install ".[desktop]"
 ```
 
 ## Install a GitHub Preview
 
 GitHub previews are source snapshots from the `wip` branch, not signed native
 installers. They may be unstable and can change without notice. Linux is the
-primary supported platform. Source-installed Windows and macOS tray and mount
-flows are available as experimental support while native packaging is developed.
+primary supported platform. Source-installed Windows and macOS desktop and
+mount flows are available as experimental support while native packaging is
+developed.
 
 The `Native package CI` workflow produces short-lived, unsigned portable bundles
 and test installers for Linux x64, Windows x64, macOS Apple Silicon, and macOS
@@ -62,7 +79,12 @@ Intel. Operating-system security warnings are expected until signing and Apple
 notarization are configured.
 
 Open a successful workflow run under **Actions > Native package CI** and download
-the artifact for your platform. It contains both the portable archive and:
+the artifact for your platform and preferred dependency model. On macOS, use
+`macos-arm64` for Apple Silicon and `macos-x64` for Intel. Artifacts whose name
+ends in `system-rclone` expect rclone to be installed separately. Artifacts whose
+name ends in `bundled-rclone` include an app-local rclone binary.
+
+Each native artifact contains both the portable archive and:
 
 - Linux: a `.deb` package, removable with your package manager.
 - Windows: a setup `.exe`, including an entry in **Installed apps** and an
@@ -70,16 +92,25 @@ the artifact for your platform. It contains both the portable archive and:
 - macOS: a `.dmg`; drag Mountlet to Applications and move the app to Trash to
   uninstall it.
 
-The Linux package recommends rclone and FUSE through package metadata. The
-Windows installer checks for rclone and WinFsp before copying Mountlet. The
-macOS DMG has no executable installation phase, so its prerequisite check runs
-when Mountlet first starts.
+Mountlet has three practical install tracks:
 
-Uninstalling Mountlet does not remove rclone, FUSE/WinFsp/macFUSE, `rclone.conf`,
-or Mountlet's per-user settings.
+- **Source-based Python install**: uses your Python environment through `pipx`
+  or a source checkout. This is the lightest path for technical users.
+- **Native system-rclone build**: includes Mountlet and its Python runtime, but
+  uses a separately installed rclone.
+- **Native bundled-rclone build**: includes Mountlet, its Python runtime, and an
+  app-local rclone binary. This does not install rclone globally or replace a
+  user's existing rclone.
+
+Both variants keep native folder mounting optional. The Linux package suggests
+FUSE, the Windows installer does not require WinFsp, and the macOS DMG does not
+bundle macFUSE.
+
+Uninstalling Mountlet does not remove a system rclone, FUSE/WinFsp/macFUSE,
+`rclone.conf`, or Mountlet's per-user settings.
 
 Each section starts with the system prerequisites and installs Mountlet in an
-isolated environment, so a GitHub preview does not replace a stable PyPI
+isolated environment, so a GitHub preview does not replace another Mountlet
 installation.
 
 Use only the subsection for your operating system. Linux and macOS use shell
@@ -87,12 +118,15 @@ commands; Windows uses PowerShell. Their syntax is not interchangeable.
 
 ### Linux
 
-Install FUSE 3 through your distribution. On Ubuntu or Debian:
+Install Python, rclone, and optionally FUSE 3 through your distribution. On
+Ubuntu or Debian:
 
 ```bash
 sudo apt update
-sudo apt install rclone fuse3 python3-venv
+sudo apt install rclone python3-venv
 ```
+
+Add `fuse3` to that command if you want native folder mounting.
 
 Install and start the preview:
 
@@ -101,8 +135,8 @@ PREVIEW="$HOME/.local/share/mountlet-preview"
 python3 -m venv "$PREVIEW"
 "$PREVIEW/bin/python" -m pip install --upgrade pip
 "$PREVIEW/bin/python" -m pip install --upgrade --force-reinstall \
-  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
-"$PREVIEW/bin/mountlet" tray
+  "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+"$PREVIEW/bin/mountlet"
 ```
 
 ### Windows (Experimental)
@@ -151,8 +185,8 @@ start Mountlet. `pipx` keeps the preview isolated while making the `mountlet`
 command available to your user account:
 
 ```powershell
-pipx install --force "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
-mountlet tray
+pipx install --force "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+mountlet
 ```
 
 ### macOS (Experimental)
@@ -175,12 +209,17 @@ printf 'eval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
 eval "$("$BREW" shellenv)"
 ```
 
-Install Python, `pipx`, and macFUSE:
+Install Python and `pipx`:
 
 ```bash
 brew install python@3.12 pipx
-brew install --cask macfuse
 pipx ensurepath
+```
+
+Install macFUSE only if you want native folder mounting:
+
+```bash
+brew install --cask macfuse
 ```
 
 Before macFUSE can mount anything, macOS may block its kernel extension. Follow
@@ -209,6 +248,18 @@ If macOS still blocks it, open **System Settings > Privacy & Security** and use
 **Open Anyway** for Mountlet. Public releases require Developer ID signing and
 Apple notarization; do not disable Gatekeeper globally.
 
+If Finder shows a prohibitory mark and says the app is not supported, first
+check that the downloaded artifact matches the Mac: `macos-arm64` for Apple
+Silicon and `macos-x64` for Intel. Current native artifacts target macOS 11 or
+newer.
+
+If the app opens silently and no menu-bar icon appears, check Mountlet's startup
+log:
+
+```bash
+cat "$HOME/Library/Application Support/mountlet/State/startup.log"
+```
+
 For a development artifact downloaded directly from this repository's GitHub
 Actions, remove quarantine from that app only if macOS offers neither option:
 
@@ -230,14 +281,14 @@ Finally, install Mountlet with the Homebrew Python:
 PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
 "$PYTHON" --version
 pipx install --force --python "$PYTHON" \
-  "mountlet[tray] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
+  "mountlet[desktop] @ https://github.com/eric-holt/mountlet/archive/refs/heads/wip.zip"
 ```
 
 The version check must report Python 3.10 or newer. Close and reopen the
 terminal after `pipx ensurepath`, then start the preview:
 
 ```bash
-mountlet tray
+mountlet
 ```
 
 Run the same install command again to update an existing preview. To test a
@@ -252,12 +303,10 @@ Open Mountlet:
 mountlet
 ```
 
-The desktop app checks for rclone and the platform filesystem driver at startup.
-If either is missing, a setup window shows the relevant official installation
-instructions and checks again while it remains open. Mountlet starts
-automatically when both are available. If an installer requires a restart,
-reopen Mountlet and the same checks resume; existing rclone remotes are used
-without being copied.
+The desktop app checks for rclone at startup. If rclone is missing, a setup
+window shows the relevant official installation instructions and checks again
+while it remains open. If the optional filesystem driver is missing, Mountlet
+still starts; only native folder mounting is disabled.
 
 For a guided setup check:
 
@@ -278,18 +327,25 @@ Normal use is:
 mountlet
 ```
 
-Quitting the menu leaves mounted remotes connected. Use `u` in the menu to
-unmount everything.
-
-## Desktop Tray Preview
-
-The tray app is optional and uses PySide6. Start it with:
+For the terminal menu instead, run:
 
 ```bash
-mountlet tray
+mountlet menu
 ```
 
-If you installed the CLI without tray support, add PySide6 with:
+Quitting the terminal menu leaves mounted remotes connected. Use `u` in the
+menu to unmount everything.
+
+## Desktop App
+
+The desktop app uses PySide6. Start it with:
+
+```bash
+mountlet
+```
+
+If you installed the terminal-only package and later want the desktop app, add
+PySide6 with:
 
 ```bash
 pipx inject mountlet PySide6
@@ -322,10 +378,11 @@ different detected file manager in App settings may provide different behavior.
 
 The Mountlet window provides:
 
-- Compact remote strips with storage usage and mount-state toggles.
+- Compact remote strips with storage usage, provider shortcuts, and quick
+  access to per-remote settings.
 - Remote strips that open a compact file browser and switch its active remote
   on hover while the browser is open.
-- Provider website shortcuts and per-remote settings.
+- Mount and unmount controls in the file browser for the active remote.
 - A guided `+` flow for adding supported cloud remotes through rclone.
 - Sorting by registration time, name, provider, total size, used space, or
   remaining space, with manual move controls for final adjustments.
@@ -369,8 +426,24 @@ remote does not need to be mounted.
   or create a folder.
 - Drag files onto another remote strip to copy them to that remote's remembered
   folder. Hold Shift while dropping to move them.
-- **Make available offline** is visible but disabled while snapshot metadata,
-  local-edit behavior, and conflict handling are designed.
+- When a remote is mounted, opening a file uses the mounted file path. When it
+  is not mounted, Mountlet downloads a managed cached copy and opens that local
+  file with the operating system's file association.
+- Mountlet tracks managed cached files. If a cached file changes locally and
+  the cloud file has not changed since the cache was created, Mountlet uploads
+  the local change automatically when the remote is reachable. If both changed,
+  Mountlet asks which version to keep or whether to keep both.
+- Mountlet also checks cached and offline files for cloud-side changes in the
+  background. The default interval is 30 seconds and can be changed in `App` >
+  `Settings` > `Cloud check interval`; set it to `0` for manual checks only.
+  Use `App` > `Sync cached files now`, or a file/folder context menu in
+  Mountlet Files, to check immediately.
+- Use **Make available offline** to protect selected cached files or folders
+  from normal cache cleanup. These protected files use the same conflict flow as
+  ordinary cached files, but **Free resolved cache** leaves them in place.
+- Folder context menus can free resolved ordinary cache for the current folder
+  or all remotes. Files with unresolved local changes are kept until the remote
+  can be checked and the change is uploaded or resolved.
 
 Integrated edits are direct rclone operations. Mountlet does not keep an
 undo/redo history, and deleted cloud items are not moved to the system trash.
@@ -473,7 +546,9 @@ On Linux:
 - `~/.config/mountlet/mounts.toml`: per-remote mount preferences.
 - `~/.local/state/mountlet/`: runtime state.
 - `~/.cache/mountlet/`: cache files.
-- `~/cloud_mounts/`: default mount root.
+- `~/Mountlet/`: default app folder.
+- `~/Mountlet/mounted/`: default mount root.
+- `~/Mountlet/offline/`: default offline snapshots.
 
 Print the paths for your system:
 
@@ -495,6 +570,10 @@ Override the mount root for a shell session:
 ```bash
 export MOUNTLET_MOUNT_BASE=/path/to/mounts
 ```
+
+The tray app's App settings use an app-folder picker. When you choose an app
+folder, Mountlet keeps mounted remotes in its `mounted` subfolder and offline
+snapshots in its `offline` subfolder.
 
 ### App Settings
 
@@ -523,8 +602,16 @@ using a key derived from the password.
 
 ## Status
 
-The current public target is Linux CLI and desktop tray use. The tray is still
-early, but it is the main direction for the app.
+The current public target is a desktop-first beta for Linux, with Windows and
+macOS available as experimental platforms until signing, notarization, and
+broader end-to-end testing are complete. The terminal menu remains available
+for systems without tray support.
+
+## License
+
+Mountlet source is source-available for non-commercial use. Commercial use or
+redistribution requires separate permission. Installer builds use the concise
+installer license in `docs/EULA.md`.
 
 See the [changelog](https://github.com/eric-holt/mountlet/blob/main/CHANGELOG.md)
 for version history.

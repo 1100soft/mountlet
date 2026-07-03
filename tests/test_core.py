@@ -16,6 +16,7 @@ from mountlet.platform_services.linux import LinuxPlatformServices
 class CoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.platform = LinuxPlatformServices()
+        self.platform.mount_driver_available = lambda: True
         patcher = mock.patch("mountlet.config_tools.shared.get_platform", return_value=self.platform)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -138,6 +139,25 @@ type = dropbox
             self.assertFalse(success)
             self.assertIn("not connected", message)
             launch.assert_not_called()
+
+    def test_mount_remote_reports_missing_optional_mount_driver(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            core.PLATFORM.mount_driver_available = lambda: False
+            core.PLATFORM.prerequisite_guidance = lambda: (
+                "Install rclone.",
+                "Install FUSE: sudo apt install fuse3",
+            )
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core, "check_remote_connection") as check_connection:
+                    success, message = core.mount_remote(remote)
+
+            self.assertFalse(success)
+            self.assertIn("Native folder mounting is not available", message)
+            self.assertIn("Mountlet Files can browse", message)
+            check_connection.assert_not_called()
 
     def test_check_remote_connection_uses_remote_source(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -460,6 +480,47 @@ type = dropbox
             remotes = core.load_remotes()
 
         self.assertEqual([remote.name for remote in remotes], ["Photos"])
+
+    def test_rename_rclone_remote_alias_preserves_provider_suffix_and_section_order(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Alpha__Drive]
+type = drive
+root_folder_id = abc
+
+[Photos__Dropbox]
+type = dropbox
+""".strip(),
+            )
+
+            renamed = core.rename_rclone_remote_alias("Alpha__Drive", "Docs")
+            remotes = core.load_remotes()
+
+        self.assertEqual(renamed, "Docs__Drive")
+        self.assertEqual([remote.name for remote in remotes], ["Docs__Drive", "Photos__Dropbox"])
+        self.assertEqual(remotes[0].alias, "Docs")
+        self.assertEqual(remotes[0].provider, "Drive")
+        self.assertEqual(remotes[0].extra_info["root_folder_id"], "abc")
+
+    def test_rename_rclone_remote_alias_rejects_existing_or_invalid_names(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Docs__Drive]
+type = drive
+
+[Photos__Drive]
+type = drive
+""".strip(),
+            )
+
+            with self.assertRaises(ValueError):
+                core.rename_rclone_remote_alias("Docs__Drive", "Photos")
+            with self.assertRaises(ValueError):
+                core.rename_rclone_remote_alias("Docs__Drive", "Bad/Name")
 
     def test_drive_oauth_credentials_reads_existing_drive_client_values(self):
         with tempfile.TemporaryDirectory() as tempdir:

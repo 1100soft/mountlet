@@ -10,6 +10,9 @@
 #ifndef OutputBaseName
   #error OutputBaseName must be defined
 #endif
+#ifndef BundledRclone
+  #define BundledRclone 0
+#endif
 
 [Setup]
 AppId={{B36E40DC-6A3E-45EC-A668-25E36A9E527F}
@@ -59,6 +62,9 @@ var
 
 function RcloneAvailable: Boolean;
 begin
+#if BundledRclone
+  Result := True;
+#else
   Result :=
     FileExists(GetEnv('RCLONE_PATH')) or
     (FileSearch('rclone.exe', GetEnv('PATH')) <> '') or
@@ -67,13 +73,7 @@ begin
     FileExists(ExpandConstant('{commonappdata}\chocolatey\bin\rclone.exe')) or
     FileExists(ExpandConstant('{pf}\rclone\rclone.exe')) or
     FileExists('C:\rclone\rclone.exe');
-end;
-
-function WinFspAvailable: Boolean;
-begin
-  Result :=
-    FileExists(ExpandConstant('{pf}\WinFsp\bin\fsptool-x64.exe')) or
-    FileExists(ExpandConstant('{pf32}\WinFsp\bin\fsptool-x86.exe'));
+#endif
 end;
 
 function HasCommandLineParam(Value: String): Boolean;
@@ -91,7 +91,7 @@ end;
 
 function InitializeSetup: Boolean;
 var
-  Missing: String;
+  MissingRclone: Boolean;
 begin
   if HasCommandLineParam('/PACKAGINGTEST') then
   begin
@@ -108,22 +108,16 @@ begin
     Result := True;
     exit;
   end;
-  Missing := '';
-  if not RcloneAvailable then
-    Missing := Missing + #13#10 + '- rclone: https://rclone.org/install/';
-  if not WinFspAvailable then
-    Missing := Missing + #13#10 + '- WinFsp: https://winfsp.dev/rel/';
-  if Missing <> '' then
+  MissingRclone := not RcloneAvailable;
+  if MissingRclone then
   begin
     MsgBox(
-      'Mountlet needs the following software before installation:' + #13#10 +
-      Missing + #13#10#13#10 +
-      'Install it, then run the Mountlet installer again.',
+      'Mountlet can be installed now, but it needs rclone before it can connect cloud storage.' + #13#10#13#10 +
+      'Install rclone later from https://rclone.org/install/, or use a Mountlet installer that bundles rclone.' + #13#10#13#10 +
+      'WinFsp is optional and only needed for native folder mounting.',
       mbInformation,
       MB_OK
     );
-    Result := False;
-    exit;
   end;
   Result := True;
 end;

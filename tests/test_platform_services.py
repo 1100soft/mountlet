@@ -4,7 +4,7 @@ import plistlib
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest import mock
 
@@ -89,8 +89,10 @@ class PlatformServicesTests(unittest.TestCase):
                 {"LOCALAPPDATA": str(local)},
                 clear=True,
             ):
-                with mock.patch("mountlet.platform_services.base.shutil.which", return_value=None):
-                    found = WindowsPlatformServices().find_rclone()
+                platform = WindowsPlatformServices()
+                with mock.patch.object(platform, "bundled_rclone_candidates", return_value=()):
+                    with mock.patch("mountlet.platform_services.base.shutil.which", return_value=None):
+                        found = platform.find_rclone()
 
         self.assertEqual(found, str(executable))
 
@@ -107,6 +109,26 @@ class PlatformServicesTests(unittest.TestCase):
                 found = WindowsPlatformServices().find_rclone()
 
         self.assertEqual(found, str(executable))
+
+    def test_bundled_rclone_is_preferred_before_system_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            bundle_root = Path(tempdir) / "bundle"
+            executable_dir = Path(tempdir) / "app"
+            bundled = bundle_root / "vendor" / "rclone" / "rclone"
+            bundled.parent.mkdir(parents=True)
+            bundled.touch()
+            executable = executable_dir / "Mountlet"
+            executable_dir.mkdir()
+            executable.touch()
+
+            with mock.patch("mountlet.platform_services.base.sys.frozen", True, create=True):
+                with mock.patch("mountlet.platform_services.base.sys._MEIPASS", str(bundle_root), create=True):
+                    with mock.patch("mountlet.platform_services.base.sys.executable", str(executable)):
+                        with mock.patch.dict("os.environ", {}, clear=True):
+                            with mock.patch("mountlet.platform_services.base.shutil.which", return_value="/usr/bin/rclone"):
+                                found = LinuxPlatformServices().find_rclone()
+
+        self.assertEqual(found, str(bundled))
 
     def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):
         process = mock.Mock()
@@ -229,6 +251,21 @@ Categories=Utility;FileManager;
         startfile.assert_called_once_with(r"C:\Users\test\Mountlet\Docs\a.txt")
         qt.QDesktopServices.openUrl.assert_not_called()
 
+    def test_linux_desktop_service_opens_files_with_system_association(self):
+        qt = SimpleNamespace(
+            QDesktopServices=SimpleNamespace(openUrl=mock.Mock(return_value=False)),
+            QUrl=SimpleNamespace(fromLocalFile=lambda path: f"file:{path}"),
+        )
+        desktop = DesktopServices(qt)
+
+        with mock.patch("mountlet.platform_services.desktop.platform.system", return_value="Linux"):
+            with mock.patch("mountlet.platform_services.desktop.shutil.which", return_value="/usr/bin/xdg-open"):
+                with mock.patch("mountlet.platform_services.desktop.subprocess.Popen") as popen:
+                    self.assertTrue(desktop.open_file(PurePosixPath("/tmp/report.ods")))
+
+        self.assertEqual(popen.call_args.args[0], ["/usr/bin/xdg-open", "/tmp/report.ods"])
+        qt.QDesktopServices.openUrl.assert_not_called()
+
     def test_macos_paths_use_library_directories(self):
         platform = MacOSPlatformServices()
         with mock.patch("pathlib.Path.home", return_value=Path("/Users/tester")):
@@ -237,7 +274,7 @@ Categories=Utility;FileManager;
 
         self.assertEqual(paths.config, Path("/Users/tester/Library/Application Support/mountlet"))
         self.assertEqual(paths.cache, Path("/Users/tester/Library/Caches/mountlet"))
-        self.assertEqual(mount_base, Path("/Users/tester/Mountlet"))
+        self.assertEqual(mount_base, Path("/Users/tester/Mountlet/mounted"))
 
     def test_windows_mountpoint_is_absent_before_rclone_mount(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -348,15 +385,15 @@ Categories=Utility;FileManager;
             LinuxPlatformServices().set_start_at_login(
                 "mountlet",
                 True,
-                command=("mountlet", "tray"),
+                command=("mountlet",),
                 destination=destination,
             )
             text = destination.read_text(encoding="utf-8")
-            self.assertIn("Exec=mountlet tray", text)
+            self.assertIn("Exec=mountlet", text)
             LinuxPlatformServices().set_start_at_login(
                 "mountlet",
                 False,
-                command=("mountlet", "tray"),
+                command=("mountlet",),
                 destination=destination,
             )
             self.assertFalse(destination.exists())
@@ -367,13 +404,13 @@ Categories=Utility;FileManager;
             MacOSPlatformServices().set_start_at_login(
                 "mountlet",
                 True,
-                command=("mountlet", "tray"),
+                command=("mountlet",),
                 destination=destination,
             )
             with destination.open("rb") as handle:
                 data = plistlib.load(handle)
 
-        self.assertEqual(data["ProgramArguments"], ["mountlet", "tray"])
+        self.assertEqual(data["ProgramArguments"], ["mountlet"])
         self.assertTrue(data["RunAtLoad"])
 
     def test_desktop_service_uses_qt_fallbacks(self):

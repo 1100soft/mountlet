@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -27,7 +28,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import __version__, core, rclone_wizard
-from .cloud_browser import normalize_browser_path, remote_target
+from .badged_button import create_badged_button, set_badge
+from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
@@ -45,6 +47,7 @@ from .settings import (
     AppSettings,
     DEFAULT_SHORTCUTS,
     MountSettings,
+    default_app_folder,
     ensure_default_config_files,
     load_app_settings,
     load_mount_settings,
@@ -79,6 +82,7 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+REMOTE_CACHE_CHECK_BATCH_SIZE = 20
 FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Common",
@@ -116,6 +120,8 @@ BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("browser_parent", "Parent folder"),
     ("browser_root", "Remote root"),
     ("browser_refresh", "Refresh folder"),
+    ("browser_zoom_in", "Zoom in"),
+    ("browser_zoom_out", "Zoom out"),
     ("browser_open_folder", "Open folder in file manager"),
     ("browser_copy", "Copy selected items"),
     ("browser_cut", "Cut selected items"),
@@ -176,6 +182,7 @@ RCLONE_SELECT_FIELDS = {
 }
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
+DRIVE_USAGE_NOTE = "Google Drive usage excludes Photos and other Google account data."
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -472,6 +479,8 @@ def _load_qt_bindings() -> SimpleNamespace:
     try:
         from PySide6.QtCore import (
             QEvent,
+            QFileInfo,
+            QItemSelectionModel,
             QKeyCombination,
             QLockFile,
             QMimeData,
@@ -484,7 +493,19 @@ def _load_qt_bindings() -> SimpleNamespace:
             Signal,
             qVersion,
         )
-        from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QDrag, QIcon, QKeySequence, QPainter
+        from PySide6.QtGui import (
+            QAction,
+            QBrush,
+            QColor,
+            QCursor,
+            QDesktopServices,
+            QDrag,
+            QIcon,
+            QKeySequence,
+            QPainter,
+            QPen,
+            QPixmap,
+        )
         from PySide6.QtWidgets import (
             QAbstractItemView,
             QApplication,
@@ -494,6 +515,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QDialog,
             QDialogButtonBox,
             QFileDialog,
+            QFileIconProvider,
             QFrame,
             QFormLayout,
             QGridLayout,
@@ -522,16 +544,18 @@ def _load_qt_bindings() -> SimpleNamespace:
         )
     except ImportError as exc:
         raise TrayDependencyError(
-            "Tray support requires PySide6. Install it with:\n"
-            '  pipx install "mountlet[tray]"\n'
+            "The Mountlet desktop app requires PySide6. Install it with:\n"
+            '  pipx install "mountlet[desktop]"\n'
             "or, for an existing pipx install:\n"
-            "  pipx inject mountlet PySide6"
+            "  pipx inject mountlet PySide6\n\n"
+            f"Import error: {exc}"
         ) from exc
 
     return SimpleNamespace(
         QAction=QAction,
         QAbstractItemView=QAbstractItemView,
         QApplication=QApplication,
+        QBrush=QBrush,
         QButtonGroup=QButtonGroup,
         QColor=QColor,
         QCheckBox=QCheckBox,
@@ -548,6 +572,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QGroupBox=QGroupBox,
         QHBoxLayout=QHBoxLayout,
         QInputDialog=QInputDialog,
+        QItemSelectionModel=QItemSelectionModel,
         QIcon=QIcon,
         QKeyCombination=QKeyCombination,
         QKeySequence=QKeySequence,
@@ -557,6 +582,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         QLockFile=QLockFile,
         QMimeData=QMimeData,
         QEvent=QEvent,
+        QFileIconProvider=QFileIconProvider,
+        QFileInfo=QFileInfo,
         QMainWindow=QMainWindow,
         QMenu=QMenu,
         QMessageBox=QMessageBox,
@@ -564,6 +591,8 @@ def _load_qt_bindings() -> SimpleNamespace:
         QObject=QObject,
         QPoint=QPoint,
         QPainter=QPainter,
+        QPen=QPen,
+        QPixmap=QPixmap,
         QProgressBar=QProgressBar,
         QPushButton=QPushButton,
         QRadioButton=QRadioButton,
@@ -617,6 +646,10 @@ def _remote_service_label(remote: core.RemoteInfo) -> str:
 
 def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
     return f"Open {_remote_service_label(remote)} in browser"
+
+
+def _is_google_drive_remote(remote: core.RemoteInfo) -> bool:
+    return remote.backend_type.casefold() == "drive"
 
 
 def _shortcut_hint(action: str) -> str:
@@ -1014,9 +1047,8 @@ class PrerequisiteWizard:
         layout.addWidget(heading)
 
         description = qt.QLabel(
-            "Mountlet uses your existing rclone configuration and your operating "
-            "system's filesystem driver. Install anything marked as missing, then "
-            "return here."
+            "Mountlet needs rclone to connect cloud storage. Filesystem mount "
+            "support is optional and only needed for native folders."
         )
         description.setWordWrap(True)
         layout.addWidget(description)
@@ -1060,11 +1092,12 @@ class PrerequisiteWizard:
                 self._row_widgets[item.key] = widgets
             name, status, help_button = widgets
             name.setText(item.label)
-            status.setText("Ready" if item.ready else item.detail)
+            required = item.key == "rclone"
+            status.setText("Ready" if item.ready else item.detail if required else f"Optional: {item.detail}")
             status.setToolTip(item.detail)
             help_button.setVisible(not item.ready)
 
-        ready = all(item.ready for item in prerequisites)
+        ready = all(item.ready for item in prerequisites if item.key == "rclone")
         self.recheck_button.setEnabled(not ready)
         if ready and not self._accept_pending:
             self._accept_pending = True
@@ -1389,7 +1422,9 @@ def _file_manager_label() -> str:
         return _file_manager_label_cache
     settings = load_app_settings()
     manager = resolve_file_manager(get_platform(), settings.file_manager)
-    _file_manager_label_cache = manager.label
+    label = manager.label.strip()
+    match = re.fullmatch(r"System default \((?P<name>[^)]+)\)", label, flags=re.IGNORECASE)
+    _file_manager_label_cache = match.group("name") if match else label
     return _file_manager_label_cache
 
 
@@ -2129,7 +2164,7 @@ class AppConfigDialog(_ConfigDialogBase):
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
         self.fields = {
-            "mount_base": self._line(app_settings.mount_base, default=core.DEFAULT_HOME_MOUNT),
+            "mount_base": self._line(app_settings.mount_base, default=str(default_app_folder())),
             "auto_mount": self._check(app_settings.auto_mount),
             "auto_mount_delay": self._line(f"{app_settings.auto_mount_delay:g}"),
             "start_at_login": self._check(app_settings.start_at_login),
@@ -2143,6 +2178,7 @@ class AppConfigDialog(_ConfigDialogBase):
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
+            "remote_sync_interval": self._line(f"{app_settings.remote_sync_interval_seconds:g}"),
             "config_sync_remote": self._combo(
                 (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
                 app_settings.config_sync_remote,
@@ -2159,14 +2195,18 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["integrated_file_edits"].setToolTip(
             "Allow direct copy, move, delete, drag-and-drop, and folder creation in Mountlet Files."
         )
+        self.fields["remote_sync_interval"].setToolTip(
+            "Seconds between background checks for cloud-side changes in cached and offline files. Use 0 for manual sync only."
+        )
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
-        form.addRow("Default mount folder", self.fields["mount_base"])
+        form.addRow("App folder", self._app_folder_selector())
         form.addRow("File manager", self.fields["file_manager"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow(self.fields["integrated_file_edits"])
+        form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
         form.addRow("Config sync remote", self.fields["config_sync_remote"])
         form.addRow("Config sync path", self.fields["config_sync_path"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
@@ -2183,6 +2223,10 @@ class AppConfigDialog(_ConfigDialogBase):
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
         except ValueError:
             delay = 0.0
+        try:
+            remote_sync_interval = float(self.fields["remote_sync_interval"].text().strip() or "0")
+        except ValueError:
+            remote_sync_interval = 30.0
         if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
             self.qt.QMessageBox.warning(
                 self.dialog,
@@ -2201,6 +2245,7 @@ class AppConfigDialog(_ConfigDialogBase):
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
+                remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
                 config_sync_remote=self.fields["config_sync_remote"].currentData() or "",
                 config_sync_path=self.fields["config_sync_path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
@@ -2210,6 +2255,27 @@ class AppConfigDialog(_ConfigDialogBase):
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
+
+    def _app_folder_selector(self) -> Any:
+        container = self.qt.QWidget()
+        layout = self.qt.QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.fields["mount_base"], 1)
+        button = self.qt.QPushButton("Browse")
+        button.setToolTip("Choose the Mountlet app folder. Mounted remotes use its mounted folder; offline files use its offline folder.")
+        button.clicked.connect(self._choose_app_folder)
+        layout.addWidget(button)
+        return container
+
+    def _choose_app_folder(self) -> None:
+        file_dialog = getattr(self.qt, "QFileDialog", None)
+        if file_dialog is None:
+            return
+        current = self.fields["mount_base"].text().strip() or str(default_app_folder())
+        selected = file_dialog.getExistingDirectory(self.dialog, "Choose Mountlet app folder", current)
+        if selected:
+            self.fields["mount_base"].setText(selected)
 
 
 class ShortcutConfigDialog(_ConfigDialogBase):
@@ -2342,6 +2408,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
                 integrated_file_edits=current.integrated_file_edits,
+                remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 config_sync_remote=current.config_sync_remote,
                 config_sync_path=current.config_sync_path,
                 shortcuts=shortcuts,
@@ -2467,6 +2534,7 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
                 integrated_file_edits=current.integrated_file_edits,
+                remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 config_sync_remote=self.fields["remote"].currentData() or "",
                 config_sync_path=self.fields["path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
@@ -2484,6 +2552,9 @@ class MountConfigDialog(_ConfigDialogBase):
         self.fields: dict[str, Any] = {}
         self.rclone_fields: dict[str, tuple[str, Any]] = {}
         self.deleted = False
+        self.renamed_from = ""
+        self.renamed_to = remote.name
+        self.remount_after_rename = False
         self._build()
 
     def _build(self) -> None:
@@ -2515,6 +2586,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self._mount_base = core.BASE_MOUNT_DIR
         default_relative_path = _path_relative_to_base(self.remote.mount_path, self._mount_base)
         self.fields = {
+            "remote_alias": self._line(self.remote.alias),
             "auto_mount": self._check(bool(auto_mount)),
             "mount_path": self._line(
                 _path_relative_to_base(mount_settings.mount_path if mount_settings else None, self._mount_base),
@@ -2525,6 +2597,11 @@ class MountConfigDialog(_ConfigDialogBase):
                 default="bucket or bucket/folder",
             ),
         }
+
+        self.fields["remote_alias"].setToolTip(
+            "Display name for this remote. Mountlet keeps the provider suffix in rclone.conf."
+        )
+        form.addRow("Remote name", self.fields["remote_alias"])
 
         path_row = self.qt.QWidget()
         path_layout = self.qt.QHBoxLayout(path_row)
@@ -2579,8 +2656,46 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.adjustSize()
 
     def _save(self) -> None:
+        remote_name = self.remote.name
+        alias = self.fields["remote_alias"].text().strip()
+        if not core.valid_remote_alias(alias):
+            self.qt.QMessageBox.warning(
+                self.dialog,
+                "Remote name",
+                "Use a name without ':', '@', line breaks, or path separators.",
+            )
+            return
+        try:
+            new_remote_name = core.remote_name_with_alias(remote_name, alias)
+        except ValueError as exc:
+            self.qt.QMessageBox.warning(self.dialog, "Remote name", str(exc))
+            return
+        if new_remote_name != remote_name:
+            if core.is_mounted(self.remote):
+                new_display_name = f"{alias} ({self.remote.provider})" if self.remote.provider else alias
+                if not self._confirm_unmount_for_change(
+                    "Rename remote?",
+                    f"Rename {self.remote.display_name} to {new_display_name}?\n\n"
+                    "Mountlet will unmount it, rename it, and mount it again.",
+                ):
+                    return
+                ok, message = core.unmount_remote(self.remote)
+                if not ok:
+                    self.qt.QMessageBox.warning(self.dialog, "Rename remote", _clean_message(message))
+                    return
+                self.remount_after_rename = True
+            try:
+                new_remote_name = core.rename_rclone_remote_alias(remote_name, alias)
+            except ValueError as exc:
+                self.qt.QMessageBox.warning(self.dialog, "Remote name", str(exc))
+                return
+
         settings = load_mount_settings()
-        settings[self.remote.name] = MountSettings(
+        if new_remote_name != remote_name:
+            settings.pop(remote_name, None)
+            self.renamed_from = remote_name
+            self.renamed_to = new_remote_name
+        settings[new_remote_name] = MountSettings(
             mount_path=self.fields["mount_path"].text().strip() or None,
             remote_path=self.fields["remote_path"].text().strip().strip("/") or None,
             mount_flags=[
@@ -2597,7 +2712,7 @@ class MountConfigDialog(_ConfigDialogBase):
         save_mount_settings(settings)
         if self.rclone_fields:
             core.save_rclone_fields(
-                self.remote.name,
+                new_remote_name,
                 {key: self._rclone_config_value(kind, field) for key, (kind, field) in self.rclone_fields.items()},
             )
         self.dialog.accept()
@@ -2614,22 +2729,29 @@ class MountConfigDialog(_ConfigDialogBase):
         return buttons
 
     def _delete_remote(self) -> None:
+        already_confirmed = False
         if core.is_mounted(self.remote):
-            self.qt.QMessageBox.warning(
+            if not self._confirm_unmount_for_change(
+                "Delete remote?",
+                f"Delete {self.remote.display_name} from rclone.conf?\n\n"
+                "Mountlet will unmount it first. This does not delete files in cloud storage.",
+            ):
+                return
+            ok, message = core.unmount_remote(self.remote)
+            if not ok:
+                self.qt.QMessageBox.warning(self.dialog, "Delete remote", _clean_message(message))
+                return
+            already_confirmed = True
+        if not already_confirmed:
+            reply = self.qt.QMessageBox.question(
                 self.dialog,
-                "Delete remote",
-                "Unmount this remote before deleting it.",
+                "Delete remote?",
+                f"Delete {self.remote.display_name} from rclone.conf?\n\nThis does not delete files in cloud storage.",
+                self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+                self.qt.QMessageBox.StandardButton.No,
             )
-            return
-        reply = self.qt.QMessageBox.question(
-            self.dialog,
-            "Delete remote?",
-            f"Delete {self.remote.display_name} from rclone.conf?\n\nThis does not delete files in cloud storage.",
-            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
-            self.qt.QMessageBox.StandardButton.No,
-        )
-        if reply != self.qt.QMessageBox.StandardButton.Yes:
-            return
+            if reply != self.qt.QMessageBox.StandardButton.Yes:
+                return
         if not core.delete_rclone_remote(self.remote.name):
             self.qt.QMessageBox.warning(self.dialog, "Delete remote", f"{self.remote.name} was not found in rclone.conf.")
             return
@@ -2639,6 +2761,16 @@ class MountConfigDialog(_ConfigDialogBase):
             save_mount_settings(settings)
         self.deleted = True
         self.dialog.accept()
+
+    def _confirm_unmount_for_change(self, title: str, message: str) -> bool:
+        reply = self.qt.QMessageBox.question(
+            self.dialog,
+            title,
+            message,
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.Yes,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
 
     def _rclone_config_field(self, key: str, value: str) -> tuple[str, Any]:
         if key in RCLONE_BOOLEAN_FIELDS:
@@ -3843,7 +3975,7 @@ class NewRemoteWizard:
         return self._answer_field.text().strip()
 
     def _valid_remote_name(self, name: str) -> bool:
-        return bool(name) and all(token not in name for token in (":", "@", "/", "\\"))
+        return core.valid_remote_alias(name)
 
     def _display_name_exists(
         self,
@@ -4079,17 +4211,29 @@ class MountletWindow:
         self._pull_sync_button: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
+        self._offline_reconcile_running: set[str] = set()
+        self._offline_reconcile_scheduled: set[str] = set()
+        self._deferred_offline_conflicts: set[tuple[str, str, float, float]] = set()
+        self._offline_watched_paths: set[str] = set()
+        self._offline_file_watcher: Any | None = None
+        self._offline_change_poll_timer: Any | None = None
+        self._remote_change_poll_timer: Any | None = None
+        self._remote_change_poll_offsets: dict[str, int] = {}
+        self._remote_change_poll_index = 0
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_popup_position: tuple[int, int] | None = None
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
+        self._focus_owner = "main"
         self._bridge = self._make_bridge()
         self._bridge.storage_ready.connect(self._handle_storage_ready)
         self._bridge.action_finished.connect(self._handle_action_finished)
         self._bridge.bulk_action_finished.connect(self._handle_bulk_action_finished)
         self._bridge.folder_opened.connect(self._handle_folder_opened)
         self._bridge.sync_metadata_ready.connect(self._handle_sync_metadata_ready)
+        self._bridge.offline_reconcile_ready.connect(self._handle_offline_reconcile_ready)
+        self._bridge.cache_sync_debug_ready.connect(self._handle_cache_sync_debug_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -4100,14 +4244,21 @@ class MountletWindow:
             notify=lambda title, message, success: self.tray_app._notify(title, message, success=success),
             open_mount=self._open_remote_path,
             open_file=self.desktop.open_file,
+            open_local_folder=lambda path: self.desktop.open_folder(str(path)),
+            toggle_mount=self._run_switch_action,
+            sync_paths=self._sync_cached_paths,
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
+            local_files_changed=self._refresh_offline_file_watches,
         )
         self.window.focus_remote_row = self._focus_current_remote_row
         self.window.update_focus_style = self._update_main_focus_style
+        self.window.set_mountlet_focus_owner = self._set_focus_owner
+        self.window.mountlet_focus_owner = lambda: getattr(self, "_focus_owner", "main")
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self.file_browser.preload(_load_visible_remotes())
+        self._setup_offline_change_tracking()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
         self.window.resize(720, 260)
@@ -4129,6 +4280,8 @@ class MountletWindow:
             bulk_action_finished = qt.Signal(str, object, object)
             folder_opened = qt.Signal(bool)
             sync_metadata_ready = qt.Signal(object, object)
+            offline_reconcile_ready = qt.Signal(str, object, object)
+            cache_sync_debug_ready = qt.Signal(str)
 
         return Bridge()
 
@@ -4180,7 +4333,11 @@ class MountletWindow:
                     qt.QEvent.Type.WindowActivate,
                     qt.QEvent.Type.WindowDeactivate,
                 }:
-                    outer._update_main_focus_style()
+                    if event.type() == qt.QEvent.Type.WindowActivate:
+                        outer._set_focus_owner("main")
+                        outer._handle_main_window_activation(active=True)
+                    elif event.type() == qt.QEvent.Type.WindowDeactivate:
+                        outer._handle_main_window_activation(active=False)
                 try:
                     super().closeEvent(event)
                 except Exception:
@@ -4201,8 +4358,11 @@ class MountletWindow:
                             return outer._handle_window_close(event)
                         if event_type == qt.QEvent.Type.WindowActivate:
                             outer._deactivated_for_tray = False
+                            outer._set_focus_owner("main")
+                            outer._handle_main_window_activation(active=True)
                         elif event_type == qt.QEvent.Type.WindowDeactivate:
                             outer._deactivated_for_tray = _windows_foreground_is_tray()
+                            outer._handle_main_window_activation(active=False)
                 except Exception:
                     return False
                 return False
@@ -4219,6 +4379,258 @@ class MountletWindow:
             pass
         return True
 
+    def _handle_main_window_activation(self, *, active: bool) -> None:
+        if active:
+            self._refresh_file_browser_after_focus_return()
+
+    def _app_window_is_active(self) -> bool:
+        qt = getattr(self, "qt", None)
+        application = getattr(qt, "QApplication", None)
+        active_window = application.activeWindow() if application is not None else None
+        if active_window is None:
+            return bool(getattr(self.window, "isActiveWindow", lambda: False)())
+        if active_window is self.window:
+            return True
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None and active_window is getattr(file_browser, "window", None):
+            return True
+        return active_window in getattr(self, "_child_dialogs", [])
+
+    def _refresh_file_browser_after_focus_return(self) -> None:
+        file_browser = getattr(self, "file_browser", None)
+        remote = getattr(file_browser, "remote", None)
+        if file_browser is None:
+            return
+        self._scan_local_cache_changes()
+        if remote is None or not file_browser.is_visible():
+            return
+        file_browser.invalidate(remote.name)
+
+    def _setup_offline_change_tracking(self) -> None:
+        self._setup_offline_file_watcher()
+        self._setup_offline_change_polling()
+        self._setup_remote_change_polling()
+        self._scan_local_cache_changes()
+
+    def _setup_offline_file_watcher(self) -> None:
+        watcher_type = getattr(self.qt, "QFileSystemWatcher", None)
+        if watcher_type is None:
+            return
+        try:
+            watcher = watcher_type(self.window)
+        except Exception:
+            return
+        watcher.fileChanged.connect(self._handle_local_cache_file_changed)
+        watcher.directoryChanged.connect(self._handle_local_cache_directory_changed)
+        self._offline_file_watcher = watcher
+        self._refresh_offline_file_watches()
+
+    def _refresh_offline_file_watches(self) -> None:
+        watcher = getattr(self, "_offline_file_watcher", None)
+        if watcher is None:
+            return
+        backend = self.file_browser.backend
+        paths: set[str] = set()
+        for remote_name, local_files in backend.managed_file_paths().items():
+            root = backend.offline_path(remote_name, "")
+            if root.is_dir():
+                paths.add(str(root))
+            for path in local_files:
+                if path.is_file():
+                    paths.add(str(path))
+                parent = path.parent
+                while True:
+                    if parent.is_dir():
+                        paths.add(str(parent))
+                    if parent == root:
+                        break
+                    try:
+                        parent.relative_to(root)
+                    except ValueError:
+                        break
+                    parent = parent.parent
+        current = set(getattr(self, "_offline_watched_paths", set()))
+        removed = sorted(current - paths)
+        added = sorted(paths - current)
+        if removed:
+            with suppress(Exception):
+                watcher.removePaths(removed)
+        if added:
+            with suppress(Exception):
+                watcher.addPaths(added)
+        self._offline_watched_paths = paths
+
+    def _handle_local_cache_file_changed(self, changed_path: str) -> None:
+        self._rearm_offline_file_watch(changed_path)
+        remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
+        if remote_name:
+            self._refresh_file_browser_mount_state(remote_name)
+            self._schedule_offline_reconcile(remote_name, delay_ms=500)
+
+    def _handle_local_cache_directory_changed(self, changed_path: str) -> None:
+        self._refresh_offline_file_watches()
+        remote_name = self.file_browser.backend.remote_name_for_offline_path(Path(changed_path))
+        if remote_name:
+            self._refresh_file_browser_mount_state(remote_name)
+        self._scan_local_cache_changes()
+
+    def _rearm_offline_file_watch(self, changed_path: str) -> None:
+        watcher = getattr(self, "_offline_file_watcher", None)
+        watched = getattr(self, "_offline_watched_paths", set())
+        if watcher is None:
+            self._refresh_offline_file_watches()
+            return
+        if changed_path in watched:
+            with suppress(Exception):
+                watcher.removePath(changed_path)
+            watched.discard(changed_path)
+            self._offline_watched_paths = watched
+        self._refresh_offline_file_watches()
+
+    def _setup_offline_change_polling(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.window)
+            timer.setInterval(2000)
+            timer.timeout.connect(self._scan_local_cache_changes)
+            timer.start()
+        except Exception:
+            return
+        self._offline_change_poll_timer = timer
+
+    def _scan_local_cache_changes(self) -> None:
+        if self._tray_is_quitting():
+            return
+        self._refresh_offline_file_watches()
+        try:
+            changed_remote_names = self.file_browser.backend.changed_managed_remote_names()
+        except Exception:
+            return
+        if not isinstance(changed_remote_names, (list, tuple, set)):
+            return
+        pending = set(getattr(self, "_action_pending", set()))
+        scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
+        running = set(getattr(self, "_offline_reconcile_running", set()))
+        for remote_name in changed_remote_names:
+            if remote_name in pending:
+                continue
+            if remote_name in running:
+                if remote_name not in scheduled:
+                    self._offline_reconcile_scheduled.add(remote_name)
+                    self._refresh_file_browser_mount_state(remote_name)
+                continue
+            if remote_name not in scheduled:
+                self._refresh_file_browser_mount_state(remote_name)
+                self._schedule_offline_reconcile(remote_name)
+
+    def _setup_remote_change_polling(self) -> None:
+        existing = getattr(self, "_remote_change_poll_timer", None)
+        if existing is not None:
+            with suppress(Exception):
+                existing.stop()
+            self._remote_change_poll_timer = None
+        interval_seconds = load_app_settings().remote_sync_interval_seconds
+        if interval_seconds <= 0:
+            return
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.window)
+            timer.setInterval(max(1000, int(interval_seconds * 1000)))
+            timer.timeout.connect(self._scan_remote_cache_changes)
+            timer.start()
+        except Exception:
+            return
+        self._remote_change_poll_timer = timer
+
+    def _scan_remote_cache_changes(self) -> None:
+        if self._tray_is_quitting():
+            return
+        pending = set(getattr(self, "_action_pending", set()))
+        scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
+        running = set(getattr(self, "_offline_reconcile_running", set()))
+        remotes = [
+            remote
+            for remote in _load_visible_remotes()
+            if remote.name not in pending and remote.name not in scheduled and remote.name not in running
+        ]
+        if not remotes:
+            return
+        backend = self.file_browser.backend
+        start = int(getattr(self, "_remote_change_poll_index", 0)) % len(remotes)
+        for offset in range(len(remotes)):
+            remote = remotes[(start + offset) % len(remotes)]
+            try:
+                paths = backend.managed_record_paths(remote.name)
+            except Exception:
+                continue
+            if not paths:
+                continue
+            poll_offsets = getattr(self, "_remote_change_poll_offsets", {})
+            path_offset = int(poll_offsets.get(remote.name, 0))
+            selected = self._remote_change_poll_batch(paths, path_offset)
+            if not selected:
+                continue
+            poll_offsets[remote.name] = (path_offset + len(selected)) % len(paths)
+            self._remote_change_poll_offsets = poll_offsets
+            self._remote_change_poll_index = (start + offset + 1) % len(remotes)
+            self._start_remote_cache_check(remote, selected)
+            return
+
+    def _remote_change_poll_batch(self, paths: list[str], offset: int) -> list[str]:
+        if not paths:
+            return []
+        limit = min(REMOTE_CACHE_CHECK_BATCH_SIZE, len(paths))
+        start = offset % len(paths)
+        return [paths[(start + index) % len(paths)] for index in range(limit)]
+
+    def _sync_all_cached_files(self) -> None:
+        remotes = _load_visible_remotes()
+        started = 0
+        for remote in remotes:
+            try:
+                paths = self.file_browser.backend.managed_record_paths(remote.name)
+            except Exception:
+                continue
+            if not paths:
+                continue
+            if remote.name in getattr(self, "_offline_reconcile_running", set()):
+                continue
+            visible_remote = getattr(getattr(self, "file_browser", None), "remote", None)
+            if visible_remote is not None and visible_remote.name == remote.name:
+                self.file_browser.start_sync(remote.name, paths)
+            if self._start_remote_cache_check(remote, paths):
+                started += 1
+        if not started:
+            self.tray_app._notify("Cache sync", "No cached or offline files need checking.", success=True)
+
+    def _sync_cached_paths(self, remote: core.RemoteInfo, items: list[tuple[str, bool]]) -> None:
+        if not items:
+            return
+        record_paths: list[str] = []
+        seen: set[str] = set()
+        for path, is_dir in items:
+            normalized = normalize_browser_path(path)
+            try:
+                paths = self.file_browser.backend.managed_record_paths_under(remote.name, normalized if is_dir else normalized)
+            except Exception as exc:
+                self.tray_app._notify("Cache sync", f"Could not prepare sync: {exc}", success=False)
+                return
+            for record_path in paths:
+                if record_path in seen:
+                    continue
+                seen.add(record_path)
+                record_paths.append(record_path)
+        if not record_paths:
+            self.tray_app._notify("Cache sync", "No cached or offline files found there.", success=True)
+            self.file_browser.finish_sync(remote.name)
+            return
+        if not self._start_remote_cache_check(remote, record_paths):
+            self.file_browser.finish_sync(remote.name)
+
     def _build_app_menu(self) -> None:
         menu_bar = self.window.menuBar()
         try:
@@ -4227,6 +4639,8 @@ class MountletWindow:
             pass
         app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        self.tray_app._add_action(app_menu, "Sync cached files now", self._sync_all_cached_files)
+        self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
@@ -4271,7 +4685,7 @@ class MountletWindow:
         visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         if self.is_visible() and visible_on_current_desktop is not False:
             if (
-                self._window_is_active()
+                self._app_window_is_active()
                 or getattr(self, "_deactivated_for_tray", False)
                 or self._has_visible_child_dialog()
             ):
@@ -4325,6 +4739,7 @@ class MountletWindow:
             self._schedule_child_window_raises()
             return
         self._activate_main_window()
+        self._schedule_main_window_activation()
         self._raise_child_windows()
         self._schedule_child_window_raises()
 
@@ -4345,6 +4760,8 @@ class MountletWindow:
         timer.singleShot(150, self._position_near_tray)
 
     def _activate_main_window_if_current_desktop(self) -> None:
+        if not self.is_visible():
+            return
         desktop = self._desktop_api()
         desktop.move_window_to_current_workspace(self.window)
         if desktop.window_is_on_current_workspace(self.window) is False:
@@ -4357,6 +4774,7 @@ class MountletWindow:
             self._desktop_api().set_keep_above(self.window, True)
 
     def _activate_main_window(self) -> None:
+        self._set_focus_owner("main")
         self.window.raise_()
         self.window.activateWindow()
         qt = getattr(self, "qt", None)
@@ -4691,8 +5109,7 @@ class MountletWindow:
             self._update_config_sync_buttons()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
-                if mounted_by_name[remote.name]:
-                    self._schedule_storage_load(remote)
+                self._schedule_storage_load(remote)
             self._browser_layout_changed()
             return
 
@@ -4712,14 +5129,14 @@ class MountletWindow:
         rows.setSpacing(6)
         self._row_widgets = {}
         self._current_remote_names = remote_names
+        self._remote_scroll = scroll
         if self._selected_remote_name not in remote_names:
             self._selected_remote_name = remote_names[0] if remote_names else ""
         self._name_column_width = name_width
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                if mounted_by_name[remote.name]:
-                    self._schedule_storage_load(remote)
+                self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
         scroll.setWidget(container)
@@ -4770,27 +5187,33 @@ class MountletWindow:
         root = getattr(self, "_main_surface", None)
         if root is None:
             return
-        file_browser = getattr(self, "file_browser", None)
-        browser_focused = bool(file_browser and file_browser.has_focus())
-        active = bool(self.window.isActiveWindow()) and not browser_focused
+        active = getattr(self, "_focus_owner", "main") == "main"
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
+    def _set_focus_owner(self, owner: str) -> None:
+        owner = "browser" if owner == "browser" else "main"
+        self._focus_owner = owner
+        self._update_main_focus_style()
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser._update_focus_style(owner == "browser")
+
     def _toolbar_button(self, text: str, tooltip: str, callback: Any) -> Any:
-        button = self.qt.QPushButton(text)
-        button.setFixedSize(30, 26)
+        button = create_badged_button(self.qt, text)
+        button.setFixedSize(34, 30)
         button.setToolTip(tooltip)
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 5, 16))
+            button.setFont(font)
+        except Exception:
+            pass
         button.clicked.connect(lambda checked=False: callback())
         return button
 
     def _settings_toolbar_button(self) -> Any:
         button = self._toolbar_button("⚙", "App settings", self._show_app_config_editor)
-        try:
-            font = button.font()
-            font.setPointSize(max(font.pointSize() + 2, 12))
-            button.setFont(font)
-        except Exception:
-            pass
         self._settings_button = button
         return button
 
@@ -4803,6 +5226,9 @@ class MountletWindow:
         button = self._toolbar_button("↓", "Pull config from sync location", self._pull_config_sync_bundle)
         self._pull_sync_button = button
         return button
+
+    def _all_cache_sync_toolbar_button(self) -> Any:
+        return self._toolbar_button("⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
 
     def _update_config_sync_buttons(self) -> None:
         push_button = getattr(self, "_push_sync_button", None)
@@ -4821,11 +5247,26 @@ class MountletWindow:
         hash_kind = str(state.get("last_synced_hash_kind") or "")
         remote_metadata = getattr(self, "_remote_sync_metadata", None) or {}
         remote_hash = str(remote_metadata.get("config_hash", ""))
+        last_local_hash = str(
+            state.get("last_local_config_hash")
+            or state.get("last_pushed_hash")
+            or state.get("last_pulled_hash")
+            or last_synced_hash
+            or ""
+        )
+        last_remote_hash = str(
+            state.get("remote_config_hash")
+            or state.get("last_remote_config_hash")
+            or state.get("last_pushed_remote_hash")
+            or state.get("last_pulled_remote_hash")
+            or last_synced_hash
+            or ""
+        )
         known_remote_hashes = {
             value
             for value in (
                 original_last_synced_hash,
-                str(state.get("remote_config_hash") or ""),
+                last_remote_hash,
                 str(state.get("last_pushed_hash") or ""),
                 str(state.get("last_pulled_hash") or ""),
             )
@@ -4840,19 +5281,23 @@ class MountletWindow:
             and local_hash != original_last_synced_hash
         ):
             last_synced_hash = local_hash
+            last_local_hash = local_hash
             state["last_synced_hash"] = local_hash
             state["last_synced_hash_kind"] = "operation"
+            state["last_local_config_hash"] = local_hash
             _save_config_sync_state(state)
-        local_changed = bool(sync_configured and local_hash and local_hash != last_synced_hash)
+        local_changed = bool(sync_configured and local_hash and local_hash != last_local_hash)
         remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
-            push_button.setText("↑•" if local_changed else "↑")
+            push_button.setText("↑")
+            set_badge(push_button, local_changed, "#ef4444")
             push_button.setEnabled(sync_configured)
             push_button.setToolTip(
                 "Local config changed since the last push." if local_changed else "Push config to sync location"
             )
         if pull_button is not None:
-            pull_button.setText("↓•" if remote_changed else "↓")
+            pull_button.setText("↓")
+            set_badge(pull_button, remote_changed, "#ef4444")
             pull_button.setEnabled(sync_configured)
             if remote_changed:
                 detail = _sync_metadata_summary(remote_metadata)
@@ -4902,11 +5347,11 @@ class MountletWindow:
 
     def _pin_button(self) -> Any:
         button = self.qt.QPushButton("📌")
-        button.setFixedSize(30, 26)
+        button.setFixedSize(34, 30)
         button.setToolTip("Keep Mountlet above other windows")
         try:
             font = button.font()
-            font.setPointSize(max(font.pointSize() + 2, 12))
+            font.setPointSize(max(font.pointSize() + 5, 16))
             button.setFont(font)
         except Exception:
             pass
@@ -5022,14 +5467,21 @@ class MountletWindow:
         sort_button.setToolTip("Sort remotes and save the new order.")
 
         reverse_button = self.qt.QPushButton("↕")
-        reverse_button.setFixedSize(30, 26)
+        reverse_button.setFixedSize(34, 30)
         reverse_button.setToolTip("Reverse the current remote order.")
+        try:
+            font = reverse_button.font()
+            font.setPointSize(max(font.pointSize() + 5, 16))
+            reverse_button.setFont(font)
+        except Exception:
+            pass
         reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
 
         layout.addWidget(drag_handle)
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
+        layout.addWidget(self._all_cache_sync_toolbar_button())
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
@@ -5125,7 +5577,7 @@ class MountletWindow:
 
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._row_usage(remote, mounted)
-        checking_usage = mounted and remote.name not in self._usage_cache
+        checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
         open_tooltip = f"Browse {remote.display_name}"
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
@@ -5164,13 +5616,12 @@ class MountletWindow:
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(0)
-        layout.setColumnMinimumWidth(0, 50)
-        layout.setColumnMinimumWidth(2, 126)
-        layout.setColumnMinimumWidth(3, 96)
+        layout.setColumnMinimumWidth(1, 126)
+        layout.setColumnMinimumWidth(2, 116)
+        layout.setColumnMinimumWidth(3, 36)
         layout.setColumnMinimumWidth(4, 36)
-        layout.setColumnMinimumWidth(5, 36)
-        layout.setColumnMinimumWidth(6, 24)
-        layout.setColumnStretch(1, 1)
+        layout.setColumnMinimumWidth(5, 24)
+        layout.setColumnStretch(0, 1)
 
         title = self.qt.QLabel(self._display_remote_name(remote))
         title.setTextFormat(self.qt.Qt.TextFormat.RichText)
@@ -5182,24 +5633,17 @@ class MountletWindow:
             title.setEnabled(False)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
-        if not mounted:
-            usage_indicator.setEnabled(False)
 
-        toggle = self._switch()
-        toggle.setProperty("rowControl", True)
-        toggle.setChecked(mounted)
-        toggle.setEnabled(not action_pending)
-        toggle_tooltip = (
-            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
-        ) + _shortcut_hint("remote_toggle_mount")
-        toggle.setToolTip(toggle_tooltip)
-        toggle.enterEvent = lambda event, widget=toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(widget, tooltip)
-        toggle.stateChanged.connect(
-            lambda state, remote_name=remote.name: self._run_switch_action(remote_name, bool(state))
-        )
         status = self.qt.QLabel()
         status.setFixedWidth(120)
         self._set_status_text(status, usage, action_pending=action_pending)
+        usage_note = self._drive_usage_note_label(remote)
+        status_group = self.qt.QWidget()
+        status_layout = self.qt.QHBoxLayout(status_group)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(2)
+        status_layout.addWidget(status)
+        status_layout.addWidget(usage_note)
         config_button = self._icon_button("⚙", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
         config_button.setProperty("rowControl", True)
         config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
@@ -5213,19 +5657,18 @@ class MountletWindow:
         self._update_browser_button(browser_button, remote)
         move_controls, up_button, down_button = self._move_button_stack(remote)
 
-        layout.addWidget(toggle, 0, 0)
-        layout.addWidget(title, 0, 1)
-        layout.addWidget(usage_indicator, 0, 2)
-        layout.addWidget(status, 0, 3)
-        layout.addWidget(config_button, 0, 4)
-        layout.addWidget(browser_button, 0, 5)
-        layout.addWidget(move_controls, 0, 6)
+        layout.addWidget(title, 0, 0)
+        layout.addWidget(usage_indicator, 0, 1)
+        layout.addWidget(status_group, 0, 2)
+        layout.addWidget(config_button, 0, 3)
+        layout.addWidget(browser_button, 0, 4)
+        layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             title=title,
             usage_indicator=usage_indicator,
-            toggle=toggle,
             status=status,
+            usage_note=usage_note,
             config_button=config_button,
             browser_button=browser_button,
             up_button=up_button,
@@ -5263,7 +5706,7 @@ class MountletWindow:
         if not row:
             return
         usage = self._row_usage(remote, mounted)
-        checking_usage = mounted and remote.name not in self._usage_cache
+        checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
         open_tooltip = f"Browse {remote.display_name}"
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
@@ -5307,21 +5750,8 @@ class MountletWindow:
             tooltip,
         )
 
-        row.usage_indicator.setEnabled(mounted)
+        row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
-
-        row.toggle.blockSignals(True)
-        row.toggle.setChecked(mounted)
-        row.toggle.blockSignals(False)
-        row.toggle.setEnabled(not action_pending)
-        toggle_tooltip = (
-            f"Unmount {remote.display_name}" if mounted else f"Mount {remote.display_name}"
-        ) + _shortcut_hint("remote_toggle_mount")
-        row.toggle.setToolTip(toggle_tooltip)
-        row.toggle.enterEvent = lambda event, widget=row.toggle, tooltip=toggle_tooltip: self._show_immediate_tooltip(
-            widget,
-            tooltip,
-        )
 
         self._set_status_text(row.status, usage, action_pending=action_pending)
         row.config_button.setEnabled(not action_pending)
@@ -5479,8 +5909,7 @@ class MountletWindow:
         return None
 
     def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
-        if not mounted:
-            return core.StorageUsage("")
+        del mounted
         return self._usage_cache.get(remote.name) or core.StorageUsage("Checking...")
 
     def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
@@ -5490,6 +5919,21 @@ class MountletWindow:
         indicator.setTextVisible(False)
         self._apply_usage_indicator(indicator, usage, checking_usage=checking_usage)
         return indicator
+
+    def _drive_usage_note_label(self, remote: core.RemoteInfo) -> Any:
+        label = self.qt.QLabel("ⓘ" if _is_google_drive_remote(remote) else "")
+        label.setFixedWidth(16)
+        label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        if _is_google_drive_remote(remote):
+            label.setToolTip(DRIVE_USAGE_NOTE)
+            label.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+            label.setStyleSheet(f"color: {_provider_color(remote)}; font-weight: 700;")
+            label.enterEvent = lambda event, widget=label: self._show_immediate_tooltip(widget, DRIVE_USAGE_NOTE)
+            label.mousePressEvent = lambda event, widget=label: self._show_usage_note(widget)
+        return label
+
+    def _show_usage_note(self, widget: Any) -> None:
+        self.qt.QToolTip.showText(self.qt.QCursor.pos(), DRIVE_USAGE_NOTE, widget)
 
     def _apply_usage_indicator(self, indicator: Any, usage: core.StorageUsage, *, checking_usage: bool) -> None:
         pct = max(0, min(usage.percent or 0, 100))
@@ -5536,34 +5980,6 @@ class MountletWindow:
             return
         label.setStyleSheet("")
         label.setText(self._usage_status_html(usage, checking_usage=usage.percent is None))
-
-    def _switch(self) -> Any:
-        qt = self.qt
-
-        class Switch(qt.QCheckBox):
-            def __init__(self) -> None:
-                super().__init__()
-                self.setText("")
-                self.setFixedSize(42, 22)
-                self.setCursor(qt.QCursor(qt.Qt.CursorShape.PointingHandCursor))
-
-            def paintEvent(self, event: Any) -> None:
-                painter = qt.QPainter(self)
-                painter.setRenderHint(qt.QPainter.RenderHint.Antialiasing)
-                painter.setPen(qt.Qt.PenStyle.NoPen)
-                track = qt.QColor("#16a34a" if self.isChecked() else "#9ca3af")
-                if not self.isEnabled():
-                    track = qt.QColor("#6b7280")
-                painter.setBrush(track)
-                painter.drawRoundedRect(1, 2, 40, 18, 9, 9)
-                painter.setBrush(qt.QColor("#ffffff"))
-                knob_x = 22 if self.isChecked() else 4
-                painter.drawEllipse(knob_x, 4, 14, 14)
-
-            def hitButton(self, position: Any) -> bool:
-                return bool(self.rect().contains(position))
-
-        return Switch()
 
     def _show_immediate_tooltip(self, widget: Any, tooltip: str) -> None:
         if tooltip:
@@ -5628,12 +6044,21 @@ class MountletWindow:
             self._select_browser_remote(remote, row)
 
     def _browse_remote(self, remote: core.RemoteInfo, row: Any) -> None:
-        self._set_browser_selected(remote.name)
-        self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=True)
+        self._show_file_browser_for_remote(remote, row, focus_browser=True)
 
     def _select_browser_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        self._show_file_browser_for_remote(remote, row, focus_browser=False)
+
+    def _show_file_browser_for_remote_name(self, remote_name: str, *, focus_browser: bool) -> None:
+        remote = self._remote_by_name(remote_name)
+        row = self._row_widgets.get(remote_name)
+        if remote is None or row is None:
+            return
+        self._show_file_browser_for_remote(remote, row.frame, focus_browser=focus_browser)
+
+    def _show_file_browser_for_remote(self, remote: core.RemoteInfo, row: Any, *, focus_browser: bool) -> None:
         self._set_browser_selected(remote.name)
-        self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=False)
+        self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=focus_browser)
 
     def _set_browser_selected(self, remote_name: str | None) -> None:
         self._selected_remote_name = remote_name or ""
@@ -5651,6 +6076,7 @@ class MountletWindow:
 
     def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
         if focused:
+            self._set_focus_owner("main")
             for widgets in self._row_widgets.values():
                 if widgets.frame is not row:
                     widgets.frame.setProperty("keyboardFocus", False)
@@ -5779,6 +6205,7 @@ class MountletWindow:
         self._focus_remote_row(names[index])
 
     def _focus_remote_row(self, remote_name: str) -> None:
+        self._set_focus_owner("main")
         self._selected_remote_name = remote_name if remote_name in self._row_widgets else ""
         for widgets in self._row_widgets.values():
             widgets.frame.setProperty("keyboardFocus", False)
@@ -5787,6 +6214,16 @@ class MountletWindow:
         row = self._row_widgets.get(remote_name)
         if row is not None:
             row.frame.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            self._ensure_remote_row_visible(row.frame)
+
+    def _ensure_remote_row_visible(self, row: Any) -> None:
+        scroll = getattr(self, "_remote_scroll", None)
+        if scroll is None:
+            return
+        try:
+            scroll.ensureWidgetVisible(row, 0, 6)
+        except Exception:
+            return
 
     def _focus_current_remote_row(self) -> None:
         name = self._focused_remote_name()
@@ -5847,14 +6284,14 @@ class MountletWindow:
     def _truncated_remote_alias(self, remote: core.RemoteInfo, *, include_provider: bool) -> str:
         name = remote.alias
         suffix_length = len(f" ({remote.provider})") if include_provider else 0
-        limit = max(4, 20 - suffix_length)
+        limit = max(4, 28 - suffix_length)
         return name if len(name) <= limit else name[: limit - 3] + "..."
 
     def _remote_name_width(self, remotes: list[core.RemoteInfo]) -> int:
         displayed = [self._plain_remote_name(remote) for remote in remotes]
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
-        return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 20) + 10)
+        return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 28) + 10)
 
     def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
         layout = root.layout()
@@ -5920,7 +6357,7 @@ class MountletWindow:
         self._resize_anchored(target_width, target_height, screen)
 
     def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
-        """Resize while preserving the window's nearest screen-edge offsets."""
+        """Resize while preserving the tray-side screen-edge offsets."""
         if not self.is_visible() or screen is None:
             self.window.resize(width, height)
             self._clamp_to_screen(screen)
@@ -5932,9 +6369,16 @@ class MountletWindow:
             right_gap = max(available.right() - frame.right(), 0)
             top_gap = max(frame.top() - available.top(), 0)
             bottom_gap = max(available.bottom() - frame.bottom(), 0)
+            anchor = getattr(self, "_last_tray_anchor", None)
+            if anchor is not None:
+                preserve_right = anchor.x() > available.left() + (available.width() / 2)
+                preserve_bottom = anchor.y() > available.top() + (available.height() / 2)
+            else:
+                preserve_right = right_gap < left_gap
+                preserve_bottom = bottom_gap < top_gap
             self.window.resize(width, height)
-            x = available.left() + left_gap if left_gap <= right_gap else available.right() - right_gap - width + 1
-            y = available.top() + top_gap if top_gap <= bottom_gap else available.bottom() - bottom_gap - height + 1
+            x = available.right() - right_gap - width + 1 if preserve_right else available.left() + left_gap
+            y = available.bottom() - bottom_gap - height + 1 if preserve_bottom else available.top() + top_gap
             self.window.move(x, y)
         except Exception:
             self.window.resize(width, height)
@@ -5957,17 +6401,17 @@ class MountletWindow:
 
     def _icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self._button(label, callback, enabled=enabled)
-        button.setFixedSize(30, 26)
+        button.setFixedSize(34, 30)
         font = button.font()
-        font.setPointSize(max(font.pointSize() + 4, 14))
+        font.setPointSize(max(font.pointSize() + 7, 18))
         button.setFont(font)
         return button
 
     def _small_icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self._button(label, callback, enabled=enabled)
-        button.setFixedSize(22, 13)
+        button.setFixedSize(24, 14)
         font = button.font()
-        font.setPointSize(max(font.pointSize() - 2, 7))
+        font.setPointSize(max(font.pointSize(), 9))
         button.setFont(font)
         return button
 
@@ -5997,9 +6441,12 @@ class MountletWindow:
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
         self.file_browser.invalidate(remote_name)
+        self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
             self._offer_reauthentication_if_relevant(remote_name, message)
+        else:
+            self._reconcile_offline_changes_after_mount(remote_name)
         self.tray_app.rebuild_menus()
         self._request_refresh()
 
@@ -6069,6 +6516,8 @@ class MountletWindow:
         self._usage_cache.clear()
         for remote_name in pending_names:
             self.file_browser.invalidate(remote_name)
+            self.file_browser.refresh_mount_state(remote_name)
+            self._reconcile_offline_changes_after_mount(remote_name)
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
@@ -6079,6 +6528,423 @@ class MountletWindow:
                 self.tray_app._notify(title, "Nothing to do.", success=True)
         self.tray_app.rebuild_menus()
         self._request_refresh()
+
+    def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
+        self._schedule_offline_reconcile(remote_name)
+
+    def _refresh_file_browser_mount_state(self, remote_name: str) -> None:
+        refresh = getattr(getattr(self, "file_browser", None), "refresh_mount_state", None)
+        if refresh is None:
+            return
+        try:
+            refresh(remote_name)
+        except Exception:
+            return
+
+    def _finish_file_browser_sync_state(self, remote_name: str) -> None:
+        finish = getattr(getattr(self, "file_browser", None), "finish_sync", None)
+        if finish is None:
+            return
+        try:
+            finish(remote_name)
+        except Exception:
+            return
+
+    def _schedule_offline_reconcile(self, remote_name: str, *, delay_ms: int = 0) -> None:
+        if self._tray_is_quitting() or not remote_name:
+            return
+        scheduled = getattr(self, "_offline_reconcile_scheduled", None)
+        if scheduled is None:
+            scheduled = set()
+            self._offline_reconcile_scheduled = scheduled
+        if remote_name in scheduled:
+            return
+        scheduled.add(remote_name)
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            return
+        timer.singleShot(delay_ms, lambda name=remote_name: self._start_offline_reconcile(name))
+
+    def _start_offline_reconcile(self, remote_name: str) -> None:
+        scheduled = getattr(self, "_offline_reconcile_scheduled", set())
+        scheduled.discard(remote_name)
+        running = getattr(self, "_offline_reconcile_running", None)
+        if running is None:
+            running = set()
+            self._offline_reconcile_running = running
+        if self._tray_is_quitting():
+            return
+        if remote_name in running:
+            scheduled.add(remote_name)
+            return
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
+        if remote is None:
+            return
+        running.add(remote_name)
+        self._set_file_browser_status(remote.name, "Uploading or downloading local changes…")
+
+        def worker() -> None:
+            try:
+                conflicts = self.file_browser.backend.changed_managed_files(remote)
+            except Exception as exc:
+                self._bridge.offline_reconcile_ready.emit(remote.name, None, exc)
+                return
+            self._bridge.offline_reconcile_ready.emit(remote.name, conflicts, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _start_remote_cache_check(self, remote: core.RemoteInfo, paths: list[str]) -> bool:
+        if self._tray_is_quitting() or not paths:
+            return False
+        running = getattr(self, "_offline_reconcile_running", None)
+        if running is None:
+            running = set()
+            self._offline_reconcile_running = running
+        if remote.name in running:
+            return False
+        running.add(remote.name)
+        self._set_file_browser_status(remote.name, "Checking cloud changes…")
+
+        def worker() -> None:
+            try:
+                conflicts = self.file_browser.backend.changed_managed_files(
+                    remote,
+                    include_remote_checks=True,
+                    paths=paths,
+                )
+            except Exception as exc:
+                self._bridge.offline_reconcile_ready.emit(remote.name, None, exc)
+                return
+            self._bridge.offline_reconcile_ready.emit(remote.name, conflicts, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _handle_offline_reconcile_ready(self, remote_name: str, conflicts: object, error: object) -> None:
+        if self._tray_is_quitting():
+            return
+        self._offline_reconcile_running.discard(remote_name)
+        self._finish_file_browser_sync_state(remote_name)
+        self._refresh_offline_file_watches()
+        remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
+        if remote is None:
+            return
+        if error is not None:
+            self._set_file_browser_status(remote.name, "Could not sync local changes")
+            self.tray_app._notify("Local cache", f"Could not sync local file changes: {error}", success=False)
+            self._reschedule_pending_offline_reconcile(remote_name)
+            return
+        if not isinstance(conflicts, list):
+            self._reschedule_pending_offline_reconcile(remote_name)
+            return
+        if not conflicts:
+            self._set_file_browser_status(remote.name, "")
+            self._refresh_file_browser_mount_state(remote.name)
+            self._reschedule_pending_offline_reconcile(remote_name, only_if_dirty=True)
+            return
+        self._handle_offline_conflicts(remote, conflicts)
+        self._reschedule_pending_offline_reconcile(remote_name)
+
+    def _reschedule_pending_offline_reconcile(self, remote_name: str, *, only_if_dirty: bool = False) -> None:
+        scheduled = getattr(self, "_offline_reconcile_scheduled", set())
+        if remote_name not in scheduled:
+            return
+        if only_if_dirty and not self._remote_has_pending_local_cache_changes(remote_name):
+            scheduled.discard(remote_name)
+            return
+        scheduled.discard(remote_name)
+        self._schedule_offline_reconcile(remote_name, delay_ms=500)
+
+    def _remote_has_pending_local_cache_changes(self, remote_name: str) -> bool:
+        try:
+            changed = self.file_browser.backend.changed_managed_remote_names()
+        except Exception:
+            return False
+        return remote_name in set(changed) if isinstance(changed, (list, tuple, set)) else False
+
+    def _show_cache_sync_debug_report(self) -> None:
+        if getattr(self, "_cache_sync_debug_running", False):
+            self.tray_app._notify("Cache sync debug", "A cache sync report is already running.", success=True)
+            return
+        self._cache_sync_debug_running = True
+        dialog = self.qt.QDialog(self.window)
+        dialog.setWindowTitle("Cache sync debug")
+        layout = self.qt.QVBoxLayout(dialog)
+        label = self.qt.QLabel("Collecting cache sync diagnostics. The report will appear here when it finishes.")
+        layout.addWidget(label)
+        text = self.qt.QPlainTextEdit()
+        text.setPlainText("Running cache sync diagnostics…")
+        text.setReadOnly(True)
+        layout.addWidget(text)
+        buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        try:
+            dialog.resize(760, 560)
+        except Exception:
+            pass
+        self._cache_sync_debug_dialog = dialog
+        self._cache_sync_debug_text = text
+        self._cache_sync_debug_label = label
+        self._open_child_dialog(SimpleNamespace(dialog=dialog))
+
+        def worker() -> None:
+            report = self._cache_sync_debug_report()
+            self._bridge.cache_sync_debug_ready.emit(report)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_cache_sync_debug_ready(self, report: str) -> None:
+        self._cache_sync_debug_running = False
+        text = getattr(self, "_cache_sync_debug_text", None)
+        label = getattr(self, "_cache_sync_debug_label", None)
+        if label is not None:
+            with suppress(Exception):
+                label.setText("Copy this report and paste it into the support conversation.")
+        if text is not None:
+            with suppress(Exception):
+                text.setPlainText(report)
+                text.selectAll()
+        self._refresh_offline_file_watches()
+        try:
+            changed = self.file_browser.backend.changed_managed_remote_names()
+        except Exception:
+            changed = []
+        for remote_name in changed if isinstance(changed, (list, tuple, set)) else []:
+            self._refresh_file_browser_mount_state(str(remote_name))
+
+    def _cache_sync_debug_report(self) -> str:
+        lines = [
+            "Mountlet cache sync debug",
+            f"timestamp: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+            f"platform: {platform.platform()}",
+            f"python: {sys.version.split()[0]}",
+            f"mountlet: {__version__}",
+            "",
+        ]
+        backend = self.file_browser.backend
+        try:
+            changed_remote_names = backend.changed_managed_remote_names()
+        except Exception as exc:
+            lines.append(f"changed_managed_remote_names: ERROR {type(exc).__name__}: {exc}")
+            return "\n".join(lines)
+        lines.append(f"changed_remotes_before: {list(changed_remote_names)}")
+        remotes = {remote.name: remote for remote in _load_visible_remotes()}
+        if not changed_remote_names:
+            lines.append("No pending local cache changes detected.")
+            lines.append("")
+            lines.extend(self._cache_sync_remote_check_summary(remotes))
+            lines.append("")
+            lines.extend(self._cache_sync_manifest_summary(remotes))
+            return "\n".join(lines)
+        for remote_name in changed_remote_names:
+            remote = remotes.get(remote_name)
+            lines.append("")
+            lines.append(f"== {remote_name} ==")
+            if remote is None:
+                lines.append("remote: not visible in current Mountlet config")
+                continue
+            diagnostics: list[str] = []
+            started = time.perf_counter()
+            try:
+                conflicts = backend.changed_managed_files(remote, diagnostics=diagnostics)
+            except Exception as exc:
+                lines.append(f"result: ERROR after {time.perf_counter() - started:.3f}s")
+                lines.append(f"error: {type(exc).__name__}: {exc}")
+            else:
+                lines.append(f"result: ok after {time.perf_counter() - started:.3f}s")
+                lines.append(f"conflicts_returned: {len(conflicts)}")
+            lines.extend(diagnostics)
+            try:
+                still_changed = remote_name in set(backend.changed_managed_remote_names())
+            except Exception as exc:
+                lines.append(f"changed_after: ERROR {type(exc).__name__}: {exc}")
+            else:
+                lines.append(f"changed_after: {still_changed}")
+        lines.append("")
+        lines.extend(self._cache_sync_remote_check_summary(remotes))
+        lines.append("")
+        lines.extend(self._cache_sync_manifest_summary(remotes))
+        return "\n".join(lines)
+
+    def _cache_sync_remote_check_summary(self, remotes: dict[str, core.RemoteInfo]) -> list[str]:
+        lines = ["remote_check:"]
+        backend = self.file_browser.backend
+        checked = False
+        for remote_name, remote in remotes.items():
+            try:
+                paths = backend.managed_record_paths(remote_name)
+            except Exception as exc:
+                lines.append(f"  {remote_name}: ERROR {type(exc).__name__}: {exc}")
+                continue
+            if not paths:
+                continue
+            checked = True
+            selected = self._remote_change_poll_batch(paths, int(getattr(self, "_remote_change_poll_offsets", {}).get(remote_name, 0)))
+            lines.append(f"  {remote_name}: checking {len(selected)} of {len(paths)} managed files")
+            diagnostics: list[str] = []
+            started = time.perf_counter()
+            try:
+                conflicts = backend.changed_managed_files(
+                    remote,
+                    diagnostics=diagnostics,
+                    include_remote_checks=True,
+                    paths=selected,
+                )
+            except Exception as exc:
+                lines.append(f"  result: ERROR after {time.perf_counter() - started:.3f}s")
+                lines.append(f"  error: {type(exc).__name__}: {exc}")
+            else:
+                lines.append(f"  result: ok after {time.perf_counter() - started:.3f}s")
+                lines.append(f"  conflicts_returned: {len(conflicts)}")
+            lines.extend(f"  {line}" for line in diagnostics)
+            break
+        if not checked:
+            lines.append("  no managed files to check")
+        return lines
+
+    def _cache_sync_manifest_summary(self, remotes: dict[str, core.RemoteInfo]) -> list[str]:
+        lines = ["manifest:"]
+        records_by_remote = getattr(self.file_browser.backend, "_offline_records", {})
+        if not isinstance(records_by_remote, dict) or not records_by_remote:
+            return [*lines, "  no offline/cache records"]
+        for remote_name, records in sorted(records_by_remote.items()):
+            remote = remotes.get(str(remote_name))
+            lines.append(
+                f"  {remote_name}: provider={getattr(remote, 'provider', '')} "
+                f"backend={getattr(remote, 'backend_type', '')} records={len(records) if isinstance(records, dict) else '?'}"
+            )
+            if not isinstance(records, dict):
+                continue
+            for path, record in sorted(records.items()):
+                if not isinstance(record, dict) or bool(record.get("is_dir")):
+                    continue
+                try:
+                    dirty = self.file_browser.backend.offline_changed(str(remote_name), str(path))
+                except Exception as exc:
+                    dirty_text = f"ERROR {type(exc).__name__}: {exc}"
+                else:
+                    dirty_text = str(dirty)
+                lines.append(
+                    f"    {path}: dirty={dirty_text} protected={bool(record.get('protected'))} "
+                    f"local_size={record.get('local_size')} remote_size={record.get('remote_size')} "
+                    f"remote_modtime={record.get('remote_modtime')}"
+                )
+        return lines
+
+    def _set_file_browser_status(self, remote_name: str, message: str) -> None:
+        file_browser = getattr(self, "file_browser", None)
+        remote = getattr(file_browser, "remote", None)
+        status = getattr(file_browser, "status", None)
+        if remote is None or remote.name != remote_name or status is None:
+            return
+        try:
+            status.setText(message)
+        except Exception:
+            return
+
+    def _handle_offline_conflicts(self, remote: core.RemoteInfo, conflicts: list[Any]) -> None:
+        resolved = 0
+        for conflict in conflicts:
+            key = self._offline_conflict_key(conflict)
+            if key in self._deferred_offline_conflicts:
+                continue
+            self._show_conflict_file_in_browser(remote, conflict.path)
+            choice = self._ask_offline_conflict_choice(remote, conflict)
+            if choice is None:
+                self._deferred_offline_conflicts.add(key)
+                continue
+            try:
+                self._set_file_browser_status(remote.name, f"Resolving {conflict.name}…")
+                self.file_browser.backend.resolve_managed_conflict(remote, conflict, choice)
+            except Exception as exc:
+                self.tray_app._notify("Local cache", f"Could not resolve {conflict.name}: {exc}", success=False)
+                continue
+            self._deferred_offline_conflicts.discard(key)
+            resolved += 1
+        self._refresh_offline_file_watches()
+        if resolved:
+            self.file_browser.invalidate(remote.name)
+            self.tray_app._notify(
+                "Local cache",
+                f"Resolved {resolved} changed local file{'s' if resolved != 1 else ''}.",
+                success=True,
+            )
+
+    def _offline_conflict_key(self, conflict: Any) -> tuple[str, str, float, float]:
+        return (
+            str(conflict.remote_name),
+            str(conflict.path),
+            float(conflict.offline_mtime),
+            float(conflict.mounted_mtime),
+        )
+
+    def _show_conflict_file_in_browser(self, remote: core.RemoteInfo, path: str) -> None:
+        folder = parent_browser_path(path)
+        row = self._row_widgets.get(remote.name)
+        try:
+            if row is not None:
+                self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=False)
+            else:
+                self.file_browser.remote = remote
+            self.file_browser.path = folder
+            self.file_browser.backend.remember_path(remote.name, folder)
+            self.file_browser.refresh(force=False)
+        except Exception:
+            return
+
+    def _ask_offline_conflict_choice(self, remote: core.RemoteInfo, conflict: Any) -> str | None:
+        newer_source = "local copy" if conflict.offline_is_newer else "cloud file"
+        older_source = "cloud file" if conflict.offline_is_newer else "local copy"
+        newer_link = "offline" if conflict.offline_is_newer else "cloud"
+        older_link = "cloud" if conflict.offline_is_newer else "offline"
+        dialog = self.qt.QDialog(self.window)
+        dialog.setWindowTitle("Local file changed")
+        layout = self.qt.QVBoxLayout(dialog)
+        title = self.qt.QLabel(f"{html.escape(conflict.name)} changed locally and in {html.escape(remote.display_name)}.")
+        layout.addWidget(title)
+        detail = self.qt.QLabel(
+            "Choose which version to keep.<br><br>"
+            f"Newer version: <a href=\"{newer_link}\">{html.escape(newer_source)}</a><br>"
+            f"Older version: <a href=\"{older_link}\">{html.escape(older_source)}</a>"
+        )
+        try:
+            detail.setTextFormat(self.qt.Qt.TextFormat.RichText)
+            detail.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+            detail.setOpenExternalLinks(False)
+        except Exception:
+            pass
+        detail.linkActivated.connect(lambda target, item=conflict: self._open_conflict_version(item, target))
+        layout.addWidget(detail)
+        buttons = self.qt.QDialogButtonBox()
+        newer_button = buttons.addButton("Use newer", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
+        older_button = buttons.addButton("Use older", self.qt.QDialogButtonBox.ButtonRole.DestructiveRole)
+        keep_button = buttons.addButton("Keep both", self.qt.QDialogButtonBox.ButtonRole.ActionRole)
+        result: dict[str, str | None] = {"choice": None}
+
+        def choose(button: Any) -> None:
+            if button is newer_button:
+                result["choice"] = "newer"
+            elif button is older_button:
+                result["choice"] = "older"
+            elif button is keep_button:
+                result["choice"] = "keep_both"
+            dialog.accept()
+
+        buttons.clicked.connect(choose)
+        layout.addWidget(buttons)
+        try:
+            newer_button.setDefault(True)
+        except Exception:
+            pass
+        dialog.exec()
+        return result["choice"]
+
+    def _open_conflict_version(self, conflict: Any, target: str) -> None:
+        path = conflict.offline_path if target == "offline" else conflict.mounted_path
+        if self.desktop.open_file(path):
+            return
+        self.tray_app._notify("Open file", f"Could not open {path.name}.", success=False)
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         self._open_remote_path(remote, "")
@@ -6121,6 +6987,7 @@ class MountletWindow:
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
             self._usage_cache.clear()
+            self._setup_remote_change_polling()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
@@ -6149,16 +7016,34 @@ class MountletWindow:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
                 self._current_remote_names = []
+                if getattr(getattr(self.file_browser, "remote", None), "name", "") == remote.name:
+                    self.file_browser.close()
+                    self.file_browser.remote = None
+                self.file_browser.invalidate(remote.name)
                 self.tray_app.rebuild_menus()
                 self.refresh()
                 self._configuration_changed()
                 return
+            if dialog.renamed_from and dialog.renamed_to != dialog.renamed_from:
+                self._usage_cache.pop(dialog.renamed_from, None)
+                self.file_browser.backend.rename_remote(dialog.renamed_from, dialog.renamed_to)
+                if getattr(getattr(self.file_browser, "remote", None), "name", "") == dialog.renamed_from:
+                    self.file_browser.close()
+                    self.file_browser.remote = None
+                self.file_browser.invalidate(dialog.renamed_from)
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
+            if dialog.remount_after_rename:
+                new_remote = next(
+                    (candidate for candidate in _load_visible_remotes() if candidate.name == dialog.renamed_to),
+                    None,
+                )
+                if new_remote is not None:
+                    self._run_remote_action(new_remote, core.mount_remote)
             self._ask_remount_for_config_changes(changes)
 
         self._open_child_dialog(dialog, on_accepted)
@@ -6565,12 +7450,16 @@ class MountletWindow:
         if local_hash:
             state["last_synced_hash"] = local_hash
             state["last_synced_hash_kind"] = "operation"
+            state["last_local_config_hash"] = local_hash
             state["last_pushed_hash"] = local_hash
             state["last_pulled_hash"] = local_hash
         for key in ("config_hash", "created_at", "device", "system", "system_release", "platform"):
             value = metadata.get(key)
             if value:
                 state[f"remote_{key}"] = value
+        remote_hash = str(metadata.get("config_hash") or "")
+        if remote_hash:
+            state["last_remote_config_hash"] = remote_hash
         _save_config_sync_state(state)
 
     def _config_sync_target(self) -> tuple[core.RemoteInfo, str] | None:
@@ -6784,7 +7673,7 @@ class MountletTray:
     def run(self) -> int:
         if not self.qt.QSystemTrayIcon.isSystemTrayAvailable():
             print("[!] No system tray is available in this desktop session.", file=sys.stderr)
-            print("    Use the terminal menu instead: mountlet", file=sys.stderr)
+            print("    Use the terminal menu instead: mountlet menu", file=sys.stderr)
             return 1
 
         self.rebuild_menus()
@@ -6865,6 +7754,8 @@ class MountletTray:
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
         self._add_action(self.app_menu, "Update status", self.rebuild_menus)
+        self._add_action(self.app_menu, "Sync cached files now", self.main_window._sync_all_cached_files)
+        self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
         self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
@@ -7016,7 +7907,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-readiness-check",
         action="store_true",
-        help="Start the tray without checking rclone, FUSE, and configured remotes first.",
+        help="Start the tray without checking rclone first.",
     )
     parser.add_argument(
         "--refresh-interval",
@@ -7032,7 +7923,7 @@ def main(argv: list[str] | None = None) -> int:
     desktop_ready, message = _desktop_session_available()
     if not desktop_ready:
         print(f"[!] {message}", file=sys.stderr)
-        print("    Use the terminal menu instead: mountlet", file=sys.stderr)
+        print("    Use the terminal menu instead: mountlet menu", file=sys.stderr)
         return 1
 
     try:

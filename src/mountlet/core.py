@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from contextlib import suppress
 import json
 import os
 import shlex
@@ -15,11 +16,11 @@ from typing import Dict, Iterable, List, Tuple
 
 from .config_tools.shared import default_config_path
 from .platform_services import get_platform
-from .settings import load_app_settings, load_mount_settings
+from .settings import default_mounted_root, load_app_settings, load_mount_settings, mounted_root
 
 PLATFORM = get_platform()
 CONFIG_PATH = str(default_config_path())
-DEFAULT_HOME_MOUNT = str(PLATFORM.default_mount_base())
+DEFAULT_HOME_MOUNT = str(default_mounted_root())
 
 ENV_BASE_VARS = ("MOUNTLET_MOUNT_BASE", "CLOUD_MOUNT_BASE", "GDRIVE_MOUNT_BASE")
 PRIMARY_BASE_ENV = ENV_BASE_VARS[0]
@@ -31,15 +32,11 @@ def _slugify(value: str) -> str:
 
 
 def _configured_mount_dir() -> str | None:
-    configured = None
     for env in ENV_BASE_VARS:
         val = os.environ.get(env)
         if val:
-            configured = os.path.expanduser(val)
-            break
-    if not configured:
-        configured = load_app_settings().mount_base
-    return configured
+            return os.path.expanduser(val)
+    return str(mounted_root(load_app_settings()))
 
 
 def _mount_dir_candidates() -> List[str]:
@@ -227,6 +224,20 @@ def _parse_remote_name(name: str, backend_type: str) -> Tuple[str, str]:
     return alias, provider
 
 
+def valid_remote_alias(alias: str) -> bool:
+    return bool(alias.strip()) and not any(token in alias for token in (":", "@", "/", "\\", "\n", "\r"))
+
+
+def remote_name_with_alias(remote_name: str, alias: str) -> str:
+    new_alias = alias.strip()
+    if not valid_remote_alias(new_alias):
+        raise ValueError("Use a name without ':', '@', line breaks, or path separators.")
+    if "__" in remote_name:
+        _old_alias, provider = remote_name.rsplit("__", 1)
+        return f"{new_alias}__{provider}"
+    return new_alias
+
+
 def _build_mount_path(provider: str, alias: str) -> str:
     provider_component = _slugify(provider.lower())
     alias_component = _slugify(alias)
@@ -266,6 +277,26 @@ def _save_config(config: configparser.ConfigParser) -> None:
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         config.write(handle)
+
+
+def rename_rclone_remote_alias(remote_name: str, alias: str) -> str:
+    new_name = remote_name_with_alias(remote_name, alias)
+    if new_name == remote_name:
+        return remote_name
+    config = _load_config()
+    if not config.has_section(remote_name):
+        raise ValueError(f"{remote_name} was not found in rclone.conf.")
+    if config.has_section(new_name):
+        raise ValueError(f"{new_name} already exists in rclone.conf.")
+
+    renamed = configparser.ConfigParser(interpolation=None)
+    for section_name in config.sections():
+        target_name = new_name if section_name == remote_name else section_name
+        renamed.add_section(target_name)
+        for key, value in config[section_name].items():
+            renamed[target_name][key] = value
+    _save_config(renamed)
+    return new_name
 
 
 def _safe_rclone_keys(backend_type: str) -> Tuple[str, ...]:
@@ -487,18 +518,14 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
 
         exit_code = proc.poll()
         if exit_code is None:
-            try:
+            with suppress(Exception):
                 proc.terminate()
-            except Exception:
-                pass
             try:
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                try:
+                with suppress(Exception):
                     proc.kill()
                     proc.wait(timeout=3)
-                except Exception:
-                    pass
             exit_code = proc.poll()
 
         PIDS.pop(remote.name, None)
@@ -522,6 +549,15 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     rclone_bin = find_rclone()
     if not rclone_bin:
         return False, "[!] rclone not found. Set RCLONE_PATH or add rclone to PATH."
+    if not PLATFORM.mount_driver_available():
+        guidance = PLATFORM.prerequisite_guidance()
+        detail = guidance[1] if len(guidance) > 1 else "Install filesystem mount support."
+        return (
+            False,
+            "[!] Native folder mounting is not available on this device.\n"
+            f"{detail}\n"
+            "Mountlet Files can browse this remote without mounting it.",
+        )
 
     connected, connection_message = check_remote_connection(remote, rclone_bin)
     if not connected:
@@ -701,25 +737,28 @@ def verify_all(remotes: Iterable[RemoteInfo]) -> List[str]:
 
 
 __all__ = [
-    "RemoteInfo",
-    "BASE_MOUNT_DIR",
     "BASE_DIR_NOTE",
+    "BASE_MOUNT_DIR",
     "CONFIG_PATH",
-    "ensure_base_mount_dir",
-    "load_remotes",
-    "editable_rclone_fields",
-    "save_rclone_fields",
-    "mount_remote",
-    "reconnect_remote",
+    "RemoteInfo",
     "check_remote_connection",
-    "unmount_remote",
-    "refresh_remote",
-    "mount_all",
-    "unmount_all",
-    "is_mounted",
+    "editable_rclone_fields",
+    "ensure_base_mount_dir",
     "get_storage_usage",
     "get_storage_usage_details",
-    "verify_remote",
+    "is_mounted",
+    "load_remotes",
+    "mount_all",
+    "mount_remote",
+    "remote_name_with_alias",
+    "rename_rclone_remote_alias",
+    "reconnect_remote",
+    "refresh_remote",
+    "save_rclone_fields",
+    "unmount_all",
+    "unmount_remote",
     "verify_all",
+    "verify_remote",
+    "valid_remote_alias",
     "wait_for",
 ]

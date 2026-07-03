@@ -237,6 +237,35 @@ class ConfigToolTests(unittest.TestCase):
             self.assertEqual(before, after_local_change)
             self.assertNotEqual(before, after_shared_change)
 
+    def test_config_fingerprint_ignores_rclone_oauth_token_refresh(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            rclone_config = root / "rclone" / "rclone.conf"
+            env = {
+                "RCLONE_CONFIG": str(rclone_config),
+                "XDG_CONFIG_HOME": str(root / "config"),
+            }
+            with mock.patch.dict("os.environ", env, clear=False):
+                rclone_config.parent.mkdir()
+                rclone_config.write_text(
+                    '[Docs]\ntype = drive\nclient_id = abc\ntoken = {"access_token":"one"}\n',
+                    encoding="utf-8",
+                )
+                before = bundle_file.current_config_fingerprint()
+                rclone_config.write_text(
+                    '[Docs]\ntype = drive\nclient_id = abc\ntoken = {"access_token":"two"}\n',
+                    encoding="utf-8",
+                )
+                after_token_refresh = bundle_file.current_config_fingerprint()
+                rclone_config.write_text(
+                    '[Docs]\ntype = drive\nclient_id = def\ntoken = {"access_token":"two"}\n',
+                    encoding="utf-8",
+                )
+                after_user_change = bundle_file.current_config_fingerprint()
+
+            self.assertEqual(before, after_token_refresh)
+            self.assertNotEqual(before, after_user_change)
+
     def test_single_file_bundle_import_preserves_platform_specific_app_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

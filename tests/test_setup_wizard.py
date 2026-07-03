@@ -84,6 +84,33 @@ class SetupWizardTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Ready. Open the menu", output.getvalue())
 
+    def test_setup_succeeds_without_optional_mount_driver(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            config_path.write_text("[Docs]\ntype = drive\n", encoding="utf-8")
+            args = argparse.Namespace(configure_rclone=False, skip_verify=True)
+
+            with mock.patch.object(setup_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(setup_wizard, "_fuse_available", return_value=False):
+                    with mock.patch.object(setup_wizard, "default_config_path", return_value=config_path):
+                        with mock.patch.object(setup_wizard.core, "BASE_MOUNT_DIR", str(Path(tempdir) / "mounts")):
+                            with mock.patch.dict(
+                                "os.environ",
+                                {
+                                    "XDG_CONFIG_HOME": str(Path(tempdir) / "config"),
+                                    "XDG_STATE_HOME": str(Path(tempdir) / "state"),
+                                    "XDG_CACHE_HOME": str(Path(tempdir) / "cache"),
+                                },
+                                clear=False,
+                            ):
+                                with contextlib.redirect_stdout(io.StringIO()) as output:
+                                    result = setup_wizard.setup_command(args)
+
+            text = output.getvalue()
+            self.assertEqual(result, 0)
+            self.assertIn("Native folder mounting is disabled", text)
+            self.assertIn("Mountlet Files can still browse remotes", text)
+
     def test_setup_reports_missing_remotes(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "missing-rclone.conf"
@@ -146,12 +173,11 @@ class SetupWizardTests(unittest.TestCase):
             text = output.getvalue()
             self.assertEqual(result, 1)
             self.assertIn("1. Install rclone: sudo apt install rclone", text)
-            self.assertIn("2. Install FUSE: sudo apt install fuse3", text)
             self.assertIn(
-                "3. After installing rclone, add cloud storage: mountlet setup --configure-rclone",
+                "2. After installing rclone, add cloud storage: mountlet setup --configure-rclone",
                 text,
             )
-            self.assertNotIn("3. Add cloud storage: mountlet setup --configure-rclone", text)
+            self.assertNotIn("2. Add cloud storage: mountlet setup --configure-rclone", text)
 
     def test_menu_readiness_does_not_suggest_rclone_config_when_rclone_is_missing(self):
         with tempfile.TemporaryDirectory() as tempdir:

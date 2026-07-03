@@ -41,6 +41,7 @@ def _build_windows(root: Path, dist: Path, output: Path, version: str) -> None:
             f"/DSourceDir={source}",
             f"/DOutputDir={output.parent}",
             f"/DOutputBaseName={output.stem}",
+            f"/DBundledRclone={1 if _bundle_has_rclone(source, 'Windows') else 0}",
             str(root / "packaging" / "windows" / "mountlet.iss"),
         ],
         check=True,
@@ -58,6 +59,14 @@ def _linux_architecture() -> str:
     if machine in {"aarch64", "arm64"}:
         return "arm64"
     raise RuntimeError(f"Unsupported Debian package architecture: {machine}")
+
+
+def _bundle_has_rclone(source: Path, system: str) -> bool:
+    name = "rclone.exe" if system == "Windows" else "rclone"
+    return any(
+        (source / relative / name).is_file()
+        for relative in (Path("vendor") / "rclone", Path("_internal") / "vendor" / "rclone")
+    )
 
 
 def _build_linux(root: Path, dist: Path, output: Path, version: str) -> None:
@@ -103,22 +112,28 @@ def _build_linux(root: Path, dist: Path, output: Path, version: str) -> None:
 
         debian = package_root / "DEBIAN"
         debian.mkdir()
+        control_lines = [
+            "Package: mountlet",
+            f"Version: {version}",
+            f"Architecture: {_linux_architecture()}",
+            "Maintainer: Eric Holt",
+            f"Installed-Size: {_installed_size_kib(app_dir)}",
+            "Section: utils",
+            "Priority: optional",
+        ]
+        if not _bundle_has_rclone(app_dir, "Linux"):
+            control_lines.append("Recommends: rclone")
+        control_lines.extend(
+            (
+                "Suggests: fuse3",
+                "Description: Desktop controls for rclone cloud storage",
+                " Mountlet uses rclone for cloud access. FUSE is optional and only needed",
+                " for native folder mounting.",
+                "",
+            )
+        )
         (debian / "control").write_text(
-            "\n".join(
-                (
-                    "Package: mountlet",
-                    f"Version: {version}",
-                    f"Architecture: {_linux_architecture()}",
-                    "Maintainer: Eric Holt",
-                    f"Installed-Size: {_installed_size_kib(app_dir)}",
-                    "Section: utils",
-                    "Priority: optional",
-                    "Recommends: rclone, fuse3",
-                    "Description: Desktop controls for mounting rclone remotes",
-                    " Mountlet uses an existing rclone configuration and FUSE installation.",
-                    "",
-                )
-            ),
+            "\n".join(control_lines),
             encoding="utf-8",
         )
         subprocess.run(

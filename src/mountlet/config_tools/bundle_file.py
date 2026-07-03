@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
+import configparser
+import hashlib
 import io
 import json
 import os
-import hashlib
 import platform
 import tempfile
 import zipfile
@@ -43,6 +44,9 @@ KDF_ITERATIONS = 390_000
 SALT_BYTES = 16
 NONCE_BYTES = 12
 AAD = b"mountlet-config-bundle-v1"
+# rclone refreshes OAuth tokens during normal use; that should not mark the
+# user's operation-level config as changed.
+VOLATILE_RCLONE_KEYS = {"token"}
 
 
 class BundlePasswordRequired(ValueError):
@@ -202,7 +206,7 @@ def _config_hash(files: dict[str, Path]) -> str:
 def _operation_config_hash(source_conf: Path | None = None) -> str:
     source_conf = source_conf or default_config_path()
     digest = hashlib.sha256()
-    _hash_file(digest, RCLONE_CONFIG_NAME, source_conf)
+    _hash_rclone_config(digest, RCLONE_CONFIG_NAME, source_conf)
     app_settings = load_app_settings()
     _hash_json(digest, APP_CONFIG_NAME, _shared_app_settings_payload(app_settings))
     mount_settings = load_mount_settings()
@@ -247,6 +251,7 @@ def _merge_app_config_from_archive(archive: zipfile.ZipFile, destination: Path) 
         open_folder_behavior=local.open_folder_behavior,
         focus_file_manager=local.focus_file_manager,
         integrated_file_edits=incoming.integrated_file_edits,
+        remote_sync_interval_seconds=incoming.remote_sync_interval_seconds,
         config_sync_remote=incoming.config_sync_remote,
         config_sync_path=incoming.config_sync_path,
         shortcuts=dict(incoming.shortcuts),
@@ -260,6 +265,7 @@ def _shared_app_settings_payload(settings: AppSettings) -> dict[str, object]:
         "auto_mount": settings.auto_mount,
         "auto_mount_delay": settings.auto_mount_delay,
         "integrated_file_edits": settings.integrated_file_edits,
+        "remote_sync_interval_seconds": settings.remote_sync_interval_seconds,
         "config_sync_remote": settings.config_sync_remote,
         "config_sync_path": settings.config_sync_path,
         "shortcuts": {
@@ -276,6 +282,29 @@ def _hash_file(digest: "hashlib._Hash", archive_name: str, source: Path) -> None
     digest.update(b"\0")
     digest.update(source.read_bytes())
     digest.update(b"\0")
+
+
+def _hash_rclone_config(digest: "hashlib._Hash", archive_name: str, source: Path) -> None:
+    if not source.exists():
+        return
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str
+    try:
+        with source.open("r", encoding="utf-8") as handle:
+            parser.read_file(handle)
+    except (OSError, UnicodeDecodeError, configparser.Error):
+        _hash_file(digest, archive_name, source)
+        return
+    payload: dict[str, dict[str, str]] = {}
+    for section in sorted(parser.sections(), key=str.casefold):
+        values: dict[str, str] = {}
+        for key, value in parser.items(section):
+            normalized_key = key.strip()
+            if normalized_key.casefold() in VOLATILE_RCLONE_KEYS:
+                continue
+            values[normalized_key] = value.strip()
+        payload[section] = values
+    _hash_json(digest, archive_name, payload)
 
 
 def _hash_json(digest: "hashlib._Hash", archive_name: str, value: object) -> None:

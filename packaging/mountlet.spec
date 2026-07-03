@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -11,11 +13,41 @@ version = project["project"]["version"]
 icon_png = root / "src" / "mountlet" / "assets" / "icon.png"
 icon = root / "src" / "mountlet" / "assets" / ("icon.icns" if sys.platform == "darwin" else "icon.png")
 hidden_imports = ["AppKit", "Foundation", "objc"] if sys.platform == "darwin" else []
+rclone_name = "rclone.exe" if sys.platform == "win32" else "rclone"
+rclone_path = os.environ.get("MOUNTLET_BUNDLED_RCLONE_PATH")
+bundled_rclone = Path(rclone_path) if rclone_path else root / "vendor" / "rclone" / rclone_name
+binaries = [(str(bundled_rclone), "vendor/rclone")] if bundled_rclone.is_file() else []
+
+
+def macos_openssl_binaries():
+    if sys.platform != "darwin":
+        return []
+    candidates = [
+        Path("/opt/homebrew/opt/openssl@3/lib"),
+        Path("/usr/local/opt/openssl@3/lib"),
+    ]
+    try:
+        prefix = subprocess.check_output(["brew", "--prefix", "openssl@3"], text=True).strip()
+    except Exception:
+        prefix = ""
+    if prefix:
+        candidates.insert(0, Path(prefix) / "lib")
+    libraries = []
+    for lib_dir in candidates:
+        libcrypto = lib_dir / "libcrypto.3.dylib"
+        libssl = lib_dir / "libssl.3.dylib"
+        if libcrypto.is_file() and libssl.is_file():
+            libraries.extend([(str(libcrypto), "."), (str(libssl), ".")])
+            break
+    return libraries
+
+
+binaries.extend(macos_openssl_binaries())
 
 a = Analysis(
     [str(root / "packaging" / "mountlet_desktop.py")],
     pathex=[str(root / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=[(str(icon_png), "mountlet/assets")],
     hiddenimports=hidden_imports,
     hookspath=[],
@@ -65,6 +97,7 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": "Mountlet",
             "CFBundleName": "Mountlet",
             "LSUIElement": True,
+            "LSMinimumSystemVersion": os.environ.get("MACOSX_DEPLOYMENT_TARGET", "11.0"),
             "NSHighResolutionCapable": True,
             "NSPrincipalClass": "NSApplication",
         },

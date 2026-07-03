@@ -40,6 +40,9 @@ file_manager = "org.example.Files.desktop"
 open_folder_behavior = "new_window"
 focus_file_manager = false
 
+[sync]
+remote_check_interval = 75
+
 [shortcuts]
 browser_parent = "Alt+Up, Backspace"
 browser_root = "Ctrl+Home"
@@ -57,6 +60,7 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.file_manager, "org.example.Files.desktop")
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
+        self.assertEqual(config.remote_sync_interval_seconds, 75.0)
         self.assertEqual(config.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
         self.assertEqual(config.shortcuts["browser_root"], ("Ctrl+Home",))
         self.assertEqual(config.shortcuts["remote_enter_browser"], settings.DEFAULT_SHORTCUTS["remote_enter_browser"])
@@ -64,6 +68,27 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.shortcuts["common_next"], ())
         self.assertEqual(config.shortcuts["remote_move_up"], ("Shift+Up",))
         self.assertEqual(config.shortcuts["remote_move_down"], ("Shift+Down",))
+
+    def test_app_folder_derives_mounted_and_offline_roots(self):
+        with mock.patch("pathlib.Path.home", return_value=Path("/home/tester")):
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HOME": "/home/tester",
+                    "USERPROFILE": "/home/tester",
+                    "HOMEDRIVE": "",
+                    "HOMEPATH": "/home/tester",
+                },
+            ):
+                default_settings = settings.AppSettings()
+                custom_settings = settings.AppSettings(mount_base="~/CustomMountlet")
+
+                self.assertEqual(settings.app_folder(default_settings), Path("/home/tester/Mountlet"))
+                self.assertEqual(settings.mounted_root(default_settings), Path("/home/tester/Mountlet/mounted"))
+                self.assertEqual(settings.offline_root(default_settings), Path("/home/tester/Mountlet/offline"))
+                self.assertEqual(settings.app_folder(custom_settings), Path("/home/tester/CustomMountlet"))
+                self.assertEqual(settings.mounted_root(custom_settings), Path("/home/tester/CustomMountlet/mounted"))
+                self.assertEqual(settings.offline_root(custom_settings), Path("/home/tester/CustomMountlet/offline"))
 
     def test_load_mount_settings_reads_per_remote_overrides(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -187,6 +212,7 @@ remote_next = "S, PageDown"
                     file_manager="org.example.Files.desktop",
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
+                    remote_sync_interval_seconds=120.0,
                     config_sync_remote="Docs__Drive",
                     config_sync_path="Mountlet/shared.mountlet",
                     shortcuts={**settings.DEFAULT_SHORTCUTS, "browser_parent": ("Alt+Up", "Backspace")},
@@ -204,6 +230,7 @@ remote_next = "S, PageDown"
         self.assertEqual(loaded.file_manager, "org.example.Files.desktop")
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
+        self.assertEqual(loaded.remote_sync_interval_seconds, 120.0)
         self.assertEqual(loaded.config_sync_remote, "Docs__Drive")
         self.assertEqual(loaded.config_sync_path, "Mountlet/shared.mountlet")
         self.assertEqual(loaded.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
@@ -213,7 +240,7 @@ remote_next = "S, PageDown"
             path = Path(tempdir) / "mountlet.desktop"
             settings.set_start_at_login(True, path)
 
-            self.assertIn("Exec=mountlet tray", path.read_text(encoding="utf-8"))
+            self.assertIn("Exec=mountlet", path.read_text(encoding="utf-8"))
 
             settings.set_start_at_login(False, path)
 

@@ -1,10 +1,39 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import subprocess
 import tempfile
 from pathlib import Path
+
+from stage_rclone import WINDOWS_SHIM_MAX_BYTES
+
+
+def _truthy(value: str | None) -> bool:
+    return value is not None and value.casefold() in {"1", "true", "yes", "on"}
+
+
+def _verify_windows_bundled_rclone(destination: Path, executable: Path) -> None:
+    candidates = [
+        destination / "vendor" / "rclone" / "rclone.exe",
+        destination / "_internal" / "vendor" / "rclone" / "rclone.exe",
+    ]
+    bundled = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if bundled is None:
+        raise RuntimeError("The installed bundled-rclone build does not contain rclone.exe.")
+    if bundled.stat().st_size < WINDOWS_SHIM_MAX_BYTES:
+        raise RuntimeError(f"The installed rclone.exe looks like a package-manager shim: {bundled}")
+    app_result = subprocess.run(
+        [str(executable), "--packaging-rclone-smoke-test"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    output = app_result.stdout.strip() or app_result.stderr.strip()
+    if app_result.returncode != 0 or not output.startswith("rclone v"):
+        raise RuntimeError(f"The installed app cannot run bundled rclone: {output!r}")
 
 
 def _verify_windows(installer: Path) -> None:
@@ -32,6 +61,8 @@ def _verify_windows(installer: Path) -> None:
         )
         if not result.stdout.startswith("Mountlet "):
             raise RuntimeError(f"Unexpected installed output: {result.stdout!r}")
+        if _truthy(os.environ.get("MOUNTLET_EXPECT_BUNDLED_RCLONE")):
+            _verify_windows_bundled_rclone(destination, executable)
         uninstaller = destination / "unins000.exe"
         subprocess.run(
             [str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],

@@ -1,6 +1,52 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-07-03
+
+- Made `mountlet` open the desktop app by default, kept `mountlet tray` as a
+  compatibility alias, and moved the terminal menu to the explicit
+  `mountlet menu` path.
+- Added a `desktop` package extra, kept the existing `tray` extra as a
+  compatibility name, refreshed install documentation around the desktop-first
+  beta path, and included the macOS icon asset in package data.
+- Split rclone and native-folder prerequisites: rclone remains required for
+  cloud access, while FUSE, WinFsp, and macFUSE are optional and only gate
+  native folder mounting. Packaging can now build a lean installer that uses a
+  system rclone or a bundled-rclone installer with an app-local rclone binary.
+- Split native package CI artifacts into visible `system-rclone` and
+  `bundled-rclone` variants, while keeping pipx and source installs as the
+  system-Python path for technical users.
+- Made keyboard navigation scroll the remote list so the selected remote remains
+  visible when the list exceeds the main window's allocated height.
+- Allowed per-remote settings to rename the alias part of a remote, preserving
+  the provider suffix while migrating Mountlet settings, remembered browser
+  paths, and offline snapshots. Mounted remotes can now be renamed or deleted
+  after confirmation; Mountlet unmounts first and remounts renamed remotes.
+- Enabled offline snapshots in Mountlet Files, including manifest metadata for
+  deep cached paths so parent folders remain browseable without a live remote
+  connection.
+- Made unmounted file opening download a managed local cache copy and open it
+  through operating-system file associations. Mountlet now tracks local cache
+  edits, uploads them automatically when the cloud file is unchanged, and prompts
+  for conflict resolution when both sides changed.
+- Added cache cleanup for resolved ordinary cached files while preserving files
+  marked as available offline.
+- Kept offline cache files user-writable so external apps such as PDF readers
+  and spreadsheet editors can open cached files normally.
+- Moved offline snapshots out of hidden or separate cache locations and into
+  the configured app folder, with best-effort migration of previous caches.
+- Consolidated user-visible Mountlet files under one app folder with
+  `mounted` and `offline` subfolders, and added an app-folder picker to App
+  settings.
+- Added real-time cache/offline status refresh, manual sync controls, rclone
+  transfer details, Google Docs import-format handling, and drag-and-drop
+  uploads into Mountlet Files.
+- Improved native packaging for Linux, Windows, macOS arm64, and macOS x64,
+  including bundled-rclone variants and macOS bundled dependency validation.
+- Switched the repository license from MIT to the concise source-available
+  license and kept installer use under the separate EULA.
+- Fixed config sync push-dot false positives after pull by ignoring rclone's
+  automatically refreshed OAuth token when computing the operation-level config
+  fingerprint.
 
 ## 0.4.1 - 2026-06-26
 

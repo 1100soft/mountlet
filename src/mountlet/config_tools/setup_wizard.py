@@ -12,7 +12,7 @@ from pathlib import Path, PureWindowsPath
 
 from .. import core
 from ..platform_services import get_platform
-from ..settings import ensure_default_config_files
+from ..settings import app_folder, ensure_default_config_files, offline_root
 from .shared import (
     app_cache_dir,
     app_config_file,
@@ -103,9 +103,11 @@ def _print_paths() -> None:
     print("App files:")
     print(f"  Settings: {app_config_file()}")
     print(f"  Mount settings: {app_mounts_file()}")
+    print(f"  App folder: {app_folder()}")
     print(f"  State:    {app_state_dir()}")
     print(f"  Cache:    {app_cache_dir()}")
     print(f"  Mounts:   {core.BASE_MOUNT_DIR}")
+    print(f"  Offline:  {offline_root()}")
     print(f"  rclone:   {default_config_path()}")
 
 
@@ -117,7 +119,7 @@ def check_readiness() -> Readiness:
     Path(core.BASE_MOUNT_DIR).mkdir(parents=True, exist_ok=True)
 
     prerequisites = check_prerequisites()
-    messages.extend(item.detail for item in prerequisites if not item.ready)
+    messages.extend(item.detail for item in prerequisites if item.key == "rclone" and not item.ready)
     rclone_bin = find_rclone()
 
     config_path = default_config_path()
@@ -163,8 +165,6 @@ def _next_steps(rclone_bin: str | None, fuse_ok: bool, remotes: list[str], failu
     command = _mountlet_command()
     if not rclone_bin:
         steps.append(_install_guidance()[0])
-    if not fuse_ok:
-        steps.append(_install_guidance()[1])
     if not remotes:
         if rclone_bin:
             steps.append(f"Add cloud storage: {command} setup --configure-rclone")
@@ -202,7 +202,7 @@ def setup_command(args: argparse.Namespace) -> int:
     print(
         _status(
             fuse_ok,
-            "Found filesystem mount support." if fuse_ok else _install_guidance()[1],
+            "Found optional filesystem mount support." if fuse_ok else f"Optional native-folder mode: {_install_guidance()[1]}",
         )
     )
 
@@ -247,16 +247,20 @@ def setup_command(args: argparse.Namespace) -> int:
     _print_paths()
     print()
 
-    ready = bool(rclone_bin and fuse_ok and config_exists and not failures)
+    ready = bool(rclone_bin and config_exists and not failures)
     if ready:
         if not remotes:
             print("Ready. Add cloud storage with the + button in the tray app, or run:")
             print(f"  {_mountlet_command()} setup --configure-rclone")
+        if not fuse_ok:
+            print()
+            print("Native folder mounting is disabled until filesystem mount support is installed.")
+            print("Mountlet Files can still browse remotes and use offline copies.")
         print("Ready. Open the menu with:")
         print(f"  {_mountlet_command()}")
         return 0
 
-    print("A few things still need attention before mounting.")
+    print("A few things still need attention before Mountlet can connect to cloud storage.")
     for number, step in enumerate(_next_steps(rclone_bin, fuse_ok, remotes, failures), start=1):
         print(f"  {number}. {step}")
     return 1

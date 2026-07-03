@@ -18,5 +18,7 @@ dist-test/
 cloud_mounts/
 secrets/*
 !secrets/.gitkeep
+vendor/rclone/*
+!vendor/rclone/.gitkeep
 *.json
 .rclone.config*

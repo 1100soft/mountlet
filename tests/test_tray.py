@@ -4,6 +4,7 @@ import contextlib
 import io
 import socket
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -106,6 +107,13 @@ class TrayTests(unittest.TestCase):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
+
+    def test_drive_usage_note_is_limited_to_google_drive_backend(self):
+        drive = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        s3 = core.RemoteInfo("Docs__S3", "Docs", "Google Drive", "s3", "/tmp/docs")
+
+        self.assertTrue(tray._is_google_drive_remote(drive))
+        self.assertFalse(tray._is_google_drive_remote(s3))
 
     def test_popup_position_clamps_full_window_to_available_screen(self):
         position = tray._popup_position(
@@ -374,6 +382,86 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(saved["Docs"].mount_flags, ["--read-only"])
         self.assertTrue(saved["Docs"].auto_mount)
         self.assertFalse(saved["Photos"].enabled)
+
+    def test_mount_config_rename_unmounts_mounted_remote_and_marks_for_remount(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Old__Drive", "Old", "Drive", "drive", "/mnt/old")
+        dialog.dialog = mock.Mock()
+        dialog.fields = {
+            "remote_alias": mock.Mock(text=mock.Mock(return_value="New")),
+            "mount_path": mock.Mock(text=mock.Mock(return_value="")),
+            "remote_path": mock.Mock(text=mock.Mock(return_value="")),
+            "auto_mount": mock.Mock(isChecked=mock.Mock(return_value=True)),
+        }
+        dialog.flag_fields = []
+        dialog._preserved_mount_flags = []
+        dialog._saved_enabled = True
+        dialog._saved_order = 4
+        dialog.rclone_fields = {}
+        dialog.renamed_from = ""
+        dialog.renamed_to = "Old__Drive"
+        dialog.remount_after_rename = False
+        dialog.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=1, No=2),
+                question=mock.Mock(return_value=1),
+                warning=mock.Mock(),
+            )
+        )
+
+        with mock.patch.object(tray.core, "is_mounted", return_value=True) as is_mounted:
+            with mock.patch.object(tray.core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
+                with mock.patch.object(tray.core, "rename_rclone_remote_alias", return_value="New__Drive") as rename:
+                    with mock.patch.object(
+                        tray,
+                        "load_mount_settings",
+                        return_value={"Old__Drive": settings.MountSettings(order=4)},
+                    ):
+                        with mock.patch.object(tray, "save_mount_settings") as save:
+                            dialog._save()
+
+        is_mounted.assert_called_once_with(dialog.remote)
+        unmount.assert_called_once_with(dialog.remote)
+        rename.assert_called_once_with("Old__Drive", "New")
+        saved = save.call_args.args[0]
+        self.assertNotIn("Old__Drive", saved)
+        self.assertIn("New__Drive", saved)
+        self.assertEqual(saved["New__Drive"].order, 4)
+        self.assertEqual(dialog.renamed_from, "Old__Drive")
+        self.assertEqual(dialog.renamed_to, "New__Drive")
+        self.assertTrue(dialog.remount_after_rename)
+        dialog.dialog.accept.assert_called_once_with()
+
+    def test_mount_config_delete_unmounts_mounted_remote_after_single_confirmation(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/mnt/docs")
+        dialog.dialog = mock.Mock()
+        dialog.deleted = False
+        dialog.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=1, No=2),
+                question=mock.Mock(return_value=1),
+                warning=mock.Mock(),
+            )
+        )
+
+        with mock.patch.object(tray.core, "is_mounted", return_value=True):
+            with mock.patch.object(tray.core, "unmount_remote", return_value=(True, "unmounted")) as unmount:
+                with mock.patch.object(tray.core, "delete_rclone_remote", return_value=True) as delete:
+                    with mock.patch.object(
+                        tray,
+                        "load_mount_settings",
+                        return_value={"Docs__Drive": settings.MountSettings()},
+                    ):
+                        with mock.patch.object(tray, "save_mount_settings") as save:
+                            dialog._delete_remote()
+
+        unmount.assert_called_once_with(dialog.remote)
+        delete.assert_called_once_with("Docs__Drive")
+        dialog.qt.QMessageBox.question.assert_called_once()
+        self.assertNotIn("Docs__Drive", save.call_args.args[0])
+        self.assertTrue(dialog.deleted)
+        dialog.dialog.accept.assert_called_once_with()
 
     def test_new_remote_wizard_requires_drive_credentials_after_completion(self):
         wizard = object.__new__(tray.NewRemoteWizard)
@@ -1107,6 +1195,23 @@ class TrayTests(unittest.TestCase):
         self.assertIn("A &lt; B", title)
         self.assertNotIn("A < B", title)
 
+    def test_mountlet_window_row_usage_loads_for_unmounted_remote(self):
+        window = object.__new__(tray.MountletWindow)
+        window._usage_cache = {}
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        usage = window._row_usage(remote, mounted=False)
+
+        self.assertEqual(usage.text, "Checking...")
+
+    def test_mountlet_window_row_usage_returns_cached_usage_when_unmounted(self):
+        window = object.__new__(tray.MountletWindow)
+        usage = core.StorageUsage("7.0/15.0 GB", used=7, total=15)
+        window._usage_cache = {"Docs__Drive": usage}
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        self.assertIs(window._row_usage(remote, mounted=False), usage)
+
     def test_mountlet_window_sort_action_saves_order(self):
         window = object.__new__(tray.MountletWindow)
         window._usage_cache = {}
@@ -1184,6 +1289,329 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window.window.hide.assert_called_once_with()
         show.assert_not_called()
+
+    def test_mountlet_window_toggle_hides_when_file_browser_has_focus(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = True
+        browser_window = mock.Mock()
+        mountlet_window.file_browser = SimpleNamespace(window=browser_window)
+        mountlet_window._child_dialogs = []
+        mountlet_window._child_dialog_owners = {}
+        mountlet_window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(activeWindow=lambda: browser_window)
+        )
+        mountlet_window.desktop = SimpleNamespace(window_is_on_current_workspace=lambda _window: True)
+
+        with mock.patch.object(mountlet_window, "_hide_window_stack") as hide_stack:
+            with mock.patch.object(mountlet_window, "show") as show:
+                mountlet_window.toggle_from_tray()
+
+        hide_stack.assert_called_once_with()
+        show.assert_not_called()
+
+    def test_mountlet_window_offline_reconcile_is_debounced(self):
+        callbacks: list[tuple[int, object]] = []
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._offline_reconcile_scheduled = set()
+        mountlet_window.qt = SimpleNamespace(
+            QTimer=SimpleNamespace(singleShot=lambda delay, callback: callbacks.append((delay, callback)))
+        )
+
+        mountlet_window._schedule_offline_reconcile("Docs", delay_ms=500)
+        mountlet_window._schedule_offline_reconcile("Docs", delay_ms=500)
+
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, {"Docs"})
+        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(callbacks[0][0], 500)
+
+    def test_mountlet_window_local_cache_change_schedules_remote_reconcile(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
+
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
+    def test_mountlet_window_local_cache_change_rearms_file_watch(self):
+        watcher = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._offline_file_watcher = watcher
+        mountlet_window._offline_watched_paths = {"/tmp/cache/Docs/a.txt"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
+
+        watcher.removePath.assert_called_once_with("/tmp/cache/Docs/a.txt")
+        self.assertEqual(mountlet_window._offline_watched_paths, set())
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
+    def test_mountlet_window_local_cache_directory_change_scans_cache(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(remote_name_for_offline_path=lambda _path: "Docs")
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._scan_local_cache_changes = mock.Mock()
+
+        mountlet_window._handle_local_cache_directory_changed("/tmp/cache/Docs")
+
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._scan_local_cache_changes.assert_called_once_with()
+
+    def test_mountlet_window_refresh_offline_file_watches_includes_parent_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir) / "Docs"
+            report_dir = root / "Reports"
+            report_dir.mkdir(parents=True)
+            local = report_dir / "a.txt"
+            local.write_text("cached", encoding="utf-8")
+            watcher = mock.Mock()
+            mountlet_window = object.__new__(tray.MountletWindow)
+            mountlet_window._offline_file_watcher = watcher
+            mountlet_window._offline_watched_paths = set()
+            mountlet_window.file_browser = SimpleNamespace(
+                backend=SimpleNamespace(
+                    managed_file_paths=lambda: {"Docs": [local]},
+                    offline_path=lambda _remote, _path: root,
+                )
+            )
+
+            mountlet_window._refresh_offline_file_watches()
+
+            added = set(watcher.addPaths.call_args.args[0])
+            self.assertIn(str(root), added)
+            self.assertIn(str(report_dir), added)
+            self.assertIn(str(local), added)
+            self.assertEqual(mountlet_window._offline_watched_paths, added)
+
+    def test_mountlet_window_local_cache_scan_schedules_changed_unmounted_remotes(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._action_pending = set()
+        mountlet_window._offline_reconcile_scheduled = set()
+        mountlet_window._offline_reconcile_running = set()
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._scan_local_cache_changes()
+
+        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs")
+
+    def test_mountlet_window_local_cache_scan_skips_running_reconcile(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._action_pending = set()
+        mountlet_window._offline_reconcile_scheduled = set()
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._scan_local_cache_changes()
+
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, {"Docs"})
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_not_called()
+
+    def test_mountlet_window_local_cache_scan_does_not_repaint_already_queued_running_reconcile(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._action_pending = set()
+        mountlet_window._offline_reconcile_scheduled = {"Docs"}
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        mountlet_window._scan_local_cache_changes()
+
+        mountlet_window._refresh_file_browser_mount_state.assert_not_called()
+        mountlet_window._schedule_offline_reconcile.assert_not_called()
+
+    def test_mountlet_window_reconcile_ready_drops_stale_followup_when_clean(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window._offline_reconcile_scheduled = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: [])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            mountlet_window._handle_offline_reconcile_ready("Docs", [], None)
+
+        self.assertEqual(mountlet_window._offline_reconcile_running, set())
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, set())
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_not_called()
+
+    def test_mountlet_window_reconcile_ready_keeps_followup_when_still_dirty(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._offline_reconcile_running = {"Docs"}
+        mountlet_window._offline_reconcile_scheduled = {"Docs"}
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+        mountlet_window._schedule_offline_reconcile = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            mountlet_window._handle_offline_reconcile_ready("Docs", [], None)
+
+        self.assertEqual(mountlet_window._offline_reconcile_running, set())
+        self.assertEqual(mountlet_window._offline_reconcile_scheduled, set())
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+        mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
+
+    def test_mountlet_window_cache_sync_debug_report_runs_reconcile_with_diagnostics(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/tmp/docs")
+        diagnostic_lines = ["file: Reports/a.txt", "  upload: ok in 0.001s"]
+        backend = SimpleNamespace(
+            changed_managed_remote_names=mock.Mock(side_effect=[["Docs"], []]),
+            changed_managed_files=mock.Mock(return_value=[]),
+            _offline_records={"Docs": {"Reports/a.txt": {"is_dir": False, "local_size": 11}}},
+            offline_changed=mock.Mock(return_value=False),
+        )
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(backend=backend)
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+
+        def reconcile(_remote, diagnostics=None):
+            diagnostics.extend(diagnostic_lines)
+            return []
+
+        backend.changed_managed_files.side_effect = reconcile
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            report = mountlet_window._cache_sync_debug_report()
+
+        self.assertIn("changed_remotes_before: ['Docs']", report)
+        self.assertIn("upload: ok", report)
+        self.assertIn("changed_after: False", report)
+        mountlet_window._refresh_file_browser_mount_state.assert_not_called()
+
+    def test_mountlet_window_cache_sync_debug_report_starts_worker(self):
+        started: list[object] = []
+
+        class Thread:
+            def __init__(self, target, daemon=False):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started.append(self)
+
+        class Dialog:
+            def setWindowTitle(self, _title):
+                pass
+
+            def reject(self):
+                pass
+
+            def resize(self, *_args):
+                pass
+
+        class Layout:
+            def __init__(self, _dialog):
+                pass
+
+            def addWidget(self, _widget):
+                pass
+
+        class Buttons:
+            StandardButton = SimpleNamespace(Close="close")
+
+            def __init__(self, _buttons):
+                self.rejected = SimpleNamespace(connect=lambda _callback: None)
+
+        text = mock.Mock()
+        label = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.qt = SimpleNamespace(
+            QDialog=lambda _parent: Dialog(),
+            QVBoxLayout=Layout,
+            QLabel=lambda _text: label,
+            QPlainTextEdit=lambda: text,
+            QDialogButtonBox=Buttons,
+        )
+        mountlet_window.window = object()
+        mountlet_window.tray_app = SimpleNamespace(_notify=mock.Mock())
+        mountlet_window._open_child_dialog = mock.Mock()
+        mountlet_window._bridge = SimpleNamespace(cache_sync_debug_ready=SimpleNamespace(emit=mock.Mock()))
+        mountlet_window._cache_sync_debug_report = mock.Mock(return_value="report")
+
+        with mock.patch.object(tray.threading, "Thread", Thread):
+            mountlet_window._show_cache_sync_debug_report()
+
+        self.assertTrue(mountlet_window._cache_sync_debug_running)
+        text.setPlainText.assert_called_once_with("Running cache sync diagnostics…")
+        self.assertEqual(len(started), 1)
+        started[0].target()
+        mountlet_window._bridge.cache_sync_debug_ready.emit.assert_called_once_with("report")
+
+    def test_mountlet_window_cache_sync_debug_ready_populates_report(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._cache_sync_debug_running = True
+        mountlet_window._cache_sync_debug_text = mock.Mock()
+        mountlet_window._cache_sync_debug_label = mock.Mock()
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=lambda: ["Docs"])
+        )
+        mountlet_window._refresh_offline_file_watches = mock.Mock()
+        mountlet_window._refresh_file_browser_mount_state = mock.Mock()
+
+        mountlet_window._handle_cache_sync_debug_ready("report")
+
+        self.assertFalse(mountlet_window._cache_sync_debug_running)
+        mountlet_window._cache_sync_debug_text.setPlainText.assert_called_once_with("report")
+        mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
+
+    def test_mountlet_window_focus_return_scans_all_local_cache_changes(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.file_browser = SimpleNamespace(remote=remote, is_visible=lambda: True, invalidate=mock.Mock())
+        mountlet_window._scan_local_cache_changes = mock.Mock()
+
+        mountlet_window._refresh_file_browser_after_focus_return()
+
+        mountlet_window._scan_local_cache_changes.assert_called_once_with()
+        mountlet_window.file_browser.invalidate.assert_called_once_with("Docs")
 
     def test_mountlet_window_toggle_hides_window_stack_when_child_is_open(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -2166,6 +2594,17 @@ class TrayTests(unittest.TestCase):
         service.assert_not_called()
         opener.assert_called_once_with(manager, "/tmp/docs", new_window=False)
 
+    def test_file_manager_action_label_uses_tool_name_for_system_default(self):
+        settings = SimpleNamespace(file_manager="system")
+        manager = SimpleNamespace(label="System default (Dolphin)")
+        tray._file_manager_label_cache = None
+        try:
+            with mock.patch.object(tray, "load_app_settings", return_value=settings):
+                with mock.patch.object(tray, "resolve_file_manager", return_value=manager):
+                    self.assertEqual(tray._file_manager_label(), "Dolphin")
+        finally:
+            tray._file_manager_label_cache = None
+
     def test_open_folder_uses_explorer_command_on_windows(self):
         qt = mock.Mock()
         manager = SimpleNamespace(identifier="explorer")
@@ -2340,6 +2779,36 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(window._selected_remote_name, "Gamma")
         self.assertTrue(rows["Gamma"].focused)
+
+    def test_keyboard_navigation_scrolls_selected_remote_into_view(self):
+        class Row:
+            def __init__(self) -> None:
+                self.properties: dict[str, object] = {}
+
+            def property(self, name: str) -> object:
+                return self.properties.get(name)
+
+            def setProperty(self, name: str, value: object) -> None:
+                self.properties[name] = value
+
+            def setStyleSheet(self, _style: str) -> None:
+                return
+
+            def setFocus(self, _reason: object) -> None:
+                return
+
+        rows = {name: Row() for name in ("Alpha", "Beta", "Gamma")}
+        scroll = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(FocusReason=SimpleNamespace(ShortcutFocusReason="shortcut")))
+        window._current_remote_names = ["Alpha", "Beta", "Gamma"]
+        window._selected_remote_name = "Beta"
+        window._row_widgets = {name: SimpleNamespace(frame=row) for name, row in rows.items()}
+        window._remote_scroll = scroll
+
+        window._focus_relative_remote(window._focused_remote_name(), 1)
+
+        scroll.ensureWidgetVisible.assert_called_once_with(rows["Gamma"], 0, 6)
 
     def test_remote_list_direction_key_enters_browser_only_toward_browser_side(self):
         class Event:
@@ -2743,6 +3212,25 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.platform, "system", return_value="Linux"):
             self.assertEqual(window._file_dialog_kwargs(), {})
 
+    def test_app_settings_folder_picker_updates_app_folder_field(self):
+        dialog = object.__new__(tray.AppConfigDialog)
+        field = mock.Mock()
+        field.text.return_value = "/home/tester/Mountlet"
+        dialog.fields = {"mount_base": field}
+        dialog.dialog = object()
+        dialog.qt = SimpleNamespace(
+            QFileDialog=SimpleNamespace(getExistingDirectory=mock.Mock(return_value="/home/tester/Storage/Mountlet"))
+        )
+
+        dialog._choose_app_folder()
+
+        dialog.qt.QFileDialog.getExistingDirectory.assert_called_once_with(
+            dialog.dialog,
+            "Choose Mountlet app folder",
+            "/home/tester/Mountlet",
+        )
+        field.setText.assert_called_once_with("/home/tester/Storage/Mountlet")
+
     def test_import_config_confirmation_includes_bundle_os_metadata(self):
         selected = "/tmp/config.mountlet"
         yes = 1
@@ -2887,9 +3375,11 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(saved["last_synced_hash"], "local-hash")
         self.assertEqual(saved["last_synced_hash_kind"], "operation")
+        self.assertEqual(saved["last_local_config_hash"], "local-hash")
         self.assertEqual(saved["last_pushed_hash"], "local-hash")
         self.assertEqual(saved["last_pulled_hash"], "local-hash")
         self.assertEqual(saved["remote_config_hash"], "local-hash")
+        self.assertEqual(saved["last_remote_config_hash"], "local-hash")
 
     def test_imported_cross_platform_bundle_clears_push_dot_against_local_hash(self):
         window = object.__new__(tray.MountletWindow)
@@ -2906,7 +3396,9 @@ class TrayTests(unittest.TestCase):
                     window._record_config_sync_state(window._remote_sync_metadata)
 
         self.assertEqual(saved["last_synced_hash"], "windows-local-hash")
+        self.assertEqual(saved["last_local_config_hash"], "windows-local-hash")
         self.assertEqual(saved["remote_config_hash"], "linux-bundle-hash")
+        self.assertEqual(saved["last_remote_config_hash"], "linux-bundle-hash")
 
         with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
             with mock.patch.object(tray, "_load_config_sync_state", return_value=saved):
@@ -2915,6 +3407,30 @@ class TrayTests(unittest.TestCase):
 
         push.setText.assert_called_once_with("↑")
         pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(False)
+        pull.setBadgeVisible.assert_called_once_with(False)
+
+    def test_sync_button_push_dot_uses_last_local_hash_after_pull(self):
+        window = object.__new__(tray.MountletWindow)
+        push = mock.Mock()
+        pull = mock.Mock()
+        window._push_sync_button = push
+        window._pull_sync_button = pull
+        window._remote_sync_metadata = {"config_hash": "linux-bundle-hash", "created_at": "time", "device": "linux"}
+        state = {
+            "last_synced_hash": "windows-local-hash",
+            "last_local_config_hash": "windows-local-hash",
+            "remote_config_hash": "linux-bundle-hash",
+            "last_remote_config_hash": "linux-bundle-hash",
+        }
+
+        with mock.patch.object(tray, "load_app_settings", return_value=settings.AppSettings(config_sync_remote="Docs")):
+            with mock.patch.object(tray, "_load_config_sync_state", return_value=state):
+                with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="windows-local-hash"):
+                    window._update_config_sync_buttons()
+
+        push.setBadgeVisible.assert_called_once_with(False)
+        pull.setBadgeVisible.assert_called_once_with(False)
 
     def test_sync_button_dots_compare_against_last_synced_hash(self):
         window = object.__new__(tray.MountletWindow)
@@ -2929,8 +3445,10 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="local-hash"):
                     window._update_config_sync_buttons()
 
-        push.setText.assert_called_once_with("↑•")
-        pull.setText.assert_called_once_with("↓•")
+        push.setText.assert_called_once_with("↑")
+        pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(True)
+        pull.setBadgeVisible.assert_called_once_with(True)
 
     def test_sync_button_push_dot_appears_after_semantic_local_change(self):
         window = object.__new__(tray.MountletWindow)
@@ -2950,8 +3468,10 @@ class TrayTests(unittest.TestCase):
                 with mock.patch.object(tray.bundle_file, "current_config_fingerprint", return_value="changed-hash"):
                     window._update_config_sync_buttons()
 
-        push.setText.assert_called_once_with("↑•")
+        push.setText.assert_called_once_with("↑")
+        push.setBadgeVisible.assert_called_once_with(True)
         pull.setText.assert_called_once_with("↓")
+        pull.setBadgeVisible.assert_called_once_with(False)
 
     def test_sync_button_dots_ignore_known_pre_update_remote_hash(self):
         window = object.__new__(tray.MountletWindow)
@@ -2969,6 +3489,8 @@ class TrayTests(unittest.TestCase):
 
         push.setText.assert_called_once_with("↑")
         pull.setText.assert_called_once_with("↓")
+        push.setBadgeVisible.assert_called_once_with(False)
+        pull.setBadgeVisible.assert_called_once_with(False)
         self.assertEqual(save.call_args.args[0]["last_synced_hash"], "semantic-hash")
         self.assertEqual(save.call_args.args[0]["last_synced_hash_kind"], "operation")
 
@@ -3069,6 +3591,63 @@ class TrayTests(unittest.TestCase):
         window.file_browser.invalidate.assert_called_once_with("Docs")
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
+
+    def test_remote_action_keeps_visible_browser_open_for_working_remote(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._action_pending = set()
+        window._request_refresh = mock.Mock()
+        window._bridge = SimpleNamespace(action_finished=SimpleNamespace(emit=mock.Mock()))
+        window.file_browser = mock.Mock(
+            remote=remote,
+            is_visible=mock.Mock(return_value=True),
+            has_focus=mock.Mock(return_value=True),
+        )
+
+        with mock.patch.object(tray.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon: mock.Mock(start=lambda: target())
+            window._run_remote_action(remote, lambda _remote: (True, "done"))
+
+        window.file_browser.close.assert_not_called()
+        window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
+
+    def test_remote_action_finish_does_not_force_reopen_browser(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        tray_app = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = tray_app
+        window._action_pending = {"Docs"}
+        window._usage_cache = {}
+        window._selected_remote_name = "Docs"
+        row = mock.Mock()
+        window._row_widgets = {"Docs": SimpleNamespace(frame=row)}
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            window._handle_action_finished("Docs", True, "[*] mounted Docs")
+
+        window.file_browser.show_remote.assert_not_called()
+
+    def test_file_browser_refreshes_when_app_regains_focus(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = mock.Mock(remote=remote, is_visible=mock.Mock(return_value=True))
+
+        window._handle_main_window_activation(active=True)
+
+        window.file_browser.invalidate.assert_called_once_with("Docs")
+        window.file_browser.close.assert_not_called()
+
+    def test_file_browser_is_left_open_when_app_loses_focus(self):
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = mock.Mock()
+
+        window._handle_main_window_activation(active=False)
+
+        window.file_browser.close.assert_not_called()
+        window.file_browser.hide.assert_not_called()
 
     def test_remote_action_failure_can_prompt_reauthentication(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")

@@ -12,6 +12,10 @@ from .config_tools.shared import APP_NAME, app_config_file, app_mounts_file, ens
 from .platform_services import get_platform
 from .platform_services.file_managers import default_file_manager_id
 
+APP_FOLDER_NAME = "Mountlet"
+MOUNTED_FOLDER_NAME = "mounted"
+OFFLINE_FOLDER_NAME = "offline"
+
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "common_previous": (),
     "common_next": (),
@@ -25,6 +29,8 @@ DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "browser_parent": ("Backspace",),
     "browser_root": ("Alt+Home",),
     "browser_refresh": ("F5",),
+    "browser_zoom_in": ("Ctrl++",),
+    "browser_zoom_out": ("Ctrl+-",),
     "browser_open_folder": ("Ctrl+Return",),
     "browser_copy": (),
     "browser_cut": (),
@@ -44,6 +50,7 @@ class AppSettings:
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
     integrated_file_edits: bool = False
+    remote_sync_interval_seconds: float = 30.0
     config_sync_remote: str = ""
     config_sync_path: str = "Mountlet/config.mountlet"
     shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
@@ -63,7 +70,7 @@ DEFAULT_APP_CONFIG = """# Mountlet app settings.
 # rclone account credentials stay in rclone.conf.
 
 [app]
-# Leave empty to use ~/cloud_mounts.
+# Leave empty to use ~/Mountlet.
 mount_base = ""
 
 # Default for remotes without their own auto_mount setting.
@@ -82,6 +89,10 @@ open_folder_behavior = "current_desktop"
 focus_file_manager = true
 
 [sync]
+# Seconds between background checks for cloud-side changes in cached/offline files.
+# Set to 0 for manual sync only.
+remote_check_interval = 30
+
 # Optional encrypted config-bundle location, stored as an rclone remote and path.
 config_remote = ""
 config_path = "Mountlet/config.mountlet"
@@ -99,6 +110,8 @@ browser_open = ""
 browser_parent = "Backspace"
 browser_root = "Alt+Home"
 browser_refresh = "F5"
+browser_zoom_in = "Ctrl++"
+browser_zoom_out = "Ctrl+-"
 browser_open_folder = "Ctrl+Return"
 browser_copy = ""
 browser_cut = ""
@@ -265,6 +278,27 @@ def _optional_int_value(value: Any) -> int | None:
         return None
 
 
+def default_app_folder() -> Path:
+    return Path.home() / APP_FOLDER_NAME
+
+
+def app_folder(settings: AppSettings | None = None) -> Path:
+    current = settings if settings is not None else load_app_settings()
+    return Path(current.mount_base).expanduser() if current.mount_base else default_app_folder()
+
+
+def mounted_root(settings: AppSettings | None = None) -> Path:
+    return app_folder(settings) / MOUNTED_FOLDER_NAME
+
+
+def offline_root(settings: AppSettings | None = None) -> Path:
+    return app_folder(settings) / OFFLINE_FOLDER_NAME
+
+
+def default_mounted_root() -> Path:
+    return default_app_folder() / MOUNTED_FOLDER_NAME
+
+
 def _toml_string(value: str | None) -> str:
     text = value or ""
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
@@ -291,6 +325,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
         config_sync_remote=str(sync.get("config_remote", "")).strip(),
         config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
         shortcuts=shortcuts,
@@ -389,7 +424,7 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# rclone account credentials stay in rclone.conf.",
             "",
             "[app]",
-            "# Leave empty to use ~/cloud_mounts.",
+            "# Leave empty to use ~/Mountlet.",
             f"mount_base = {_toml_string(settings.mount_base)}",
             "",
             "# Default for remotes without their own auto_mount setting.",
@@ -408,6 +443,10 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
             "",
             "[sync]",
+            "# Seconds between background checks for cloud-side changes in cached/offline files.",
+            "# Set to 0 for manual sync only.",
+            f"remote_check_interval = {settings.remote_sync_interval_seconds:g}",
+            "",
             "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
             f"config_remote = {_toml_string(settings.config_sync_remote)}",
             f"config_path = {_toml_string(settings.config_sync_path)}",
@@ -431,7 +470,7 @@ def set_start_at_login(enabled: bool, path: Path | None = None) -> None:
     get_platform().set_start_at_login(
         APP_NAME,
         enabled,
-        command=("mountlet", "tray"),
+        command=("mountlet",),
         destination=path,
     )
 
@@ -472,12 +511,20 @@ def save_mount_settings(settings: dict[str, MountSettings], path: Path | None = 
 
 
 __all__ = [
-    "AppSettings",
+    "APP_FOLDER_NAME",
     "DEFAULT_SHORTCUTS",
+    "MOUNTED_FOLDER_NAME",
+    "OFFLINE_FOLDER_NAME",
+    "AppSettings",
     "MountSettings",
+    "app_folder",
+    "default_app_folder",
+    "default_mounted_root",
     "ensure_default_config_files",
     "load_app_settings",
     "load_mount_settings",
+    "mounted_root",
+    "offline_root",
     "save_app_settings",
     "save_mount_settings",
     "set_start_at_login",
