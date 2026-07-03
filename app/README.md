@@ -1,38 +1,60 @@
 # Mountlet
 
-Mountlet is a desktop app for browsing, opening, syncing, and optionally
-mounting `rclone` cloud remotes. It uses your existing `rclone` configuration
-and does not store cloud credentials inside the application install directory.
+Mountlet is a desktop app for managing many cloud storage accounts from
+different providers in one place. Use it to browse, open, sync, cache, and
+organize files across Google Drive, Dropbox, OneDrive, Box, Proton Drive,
+S3-compatible storage, and more without jumping between provider apps.
+
+Mountlet can work as a compact file browser, a cache/offline-file manager, and
+an optional native folder mounter. For many daily file tasks, it can replace
+opening each provider's desktop app separately.
 
 Source code is available for non-commercial use under `LICENSE`. Installer
 builds are covered by `docs/EULA.md`. New releases are distributed through
 GitHub; PyPI publishing is currently disabled.
 
+## What You Can Do
+
+- Keep many cloud accounts visible in one tray app.
+- Browse accounts without mounting them as operating-system folders.
+- Open files in the apps already associated with those file types.
+- Keep selected files or folders available offline.
+- Sync local edits back when the cloud copy has not changed.
+- Move settings between computers with encrypted config bundles.
+- Optionally expose cloud accounts as folders in Finder, Explorer, Dolphin, or
+  another file manager.
+
 ## How It Works
 
-Mountlet is a friendly control panel for cloud storage through `rclone`:
+Mountlet is a friendly desktop layer over `rclone`, a proven cloud connection
+tool:
 
 - `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
-  S3-compatible storage, and WebDAV.
-- Mountlet Files is the integrated browser. It lists remotes directly through
+  OneDrive, Box, Proton Drive, S3-compatible storage, and WebDAV.
+- Mountlet Files is the integrated browser. It lists cloud accounts through
   `rclone`, opens files through the operating system, and keeps explicit
-  offline copies under the app folder.
+  cached and offline copies under the app folder.
 - Native folder mounting is optional. If you want Finder, Explorer, Dolphin, or
   another file manager to see a cloud remote as a normal folder, install the
   platform filesystem driver: FUSE on Linux, WinFsp on Windows, or macFUSE on
   macOS.
 
-This app reads your `rclone` remotes and can work without filesystem mounting.
-Mount toggles are enabled only when the optional filesystem driver is present.
+The bundled build includes an app-local rclone for convenience. The lean build
+uses a separately installed rclone, which is useful for technical users,
+administrators, and managed machines. Mountlet does not store cloud credentials
+inside the application install directory.
 
 ## Requirements
 
-- Python 3.10 or newer.
-- `rclone`, which connects to your cloud storage.
-- Optional for native folder mounting: FUSE on Linux, WinFsp on Windows, or
-  macFUSE on macOS.
+- **Bundled native build**: includes Mountlet's Python runtime and app-local
+  rclone.
+- **Lean native build**: includes Mountlet's Python runtime and uses a separate
+  rclone already installed on the computer.
+- **Source install**: requires Python 3.10 or newer and rclone.
+- **Optional native folder mounting**: requires FUSE on Linux, WinFsp on
+  Windows, or macFUSE on macOS.
 
-On Ubuntu, install the system tools with:
+On Ubuntu, a source or lean install can use the system rclone:
 
 ```bash
 sudo apt install rclone

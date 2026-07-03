@@ -268,6 +268,7 @@ h3 {
 .price-card p,
 .download-card p,
 .platform-grid p,
+.info-grid p,
 .faq p,
 .feature-panel p {
   color: var(--muted);
@@ -336,7 +337,8 @@ h3 {
 
 .download-grid,
 .pricing-grid,
-.platform-grid {
+.platform-grid,
+.info-grid {
   display: grid;
   gap: 18px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -347,6 +349,7 @@ h3 {
 .download-card,
 .price-card,
 .platform-grid article,
+.info-grid article,
 .faq details {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -443,6 +446,7 @@ h3 {
   .feature-panel,
   .download-grid,
   .pricing-grid,
+  .info-grid,
   .platform-grid {
     grid-template-columns: 1fr;
   }

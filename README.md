@@ -1,7 +1,7 @@
 # Mountlet
 
-Mountlet is a desktop app for browsing, opening, syncing, and optionally
-mounting rclone cloud remotes.
+Mountlet is a desktop app for managing many cloud storage accounts from
+different providers in one place.
 
 This repository is organized as a small monorepo:
 
