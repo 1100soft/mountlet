@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-07-03
 
 - Made `mountlet` open the desktop app by default, kept `mountlet tray` as a
   compatibility alias, and moved the terminal menu to the explicit
@@ -13,8 +13,8 @@
   native folder mounting. Packaging can now build a lean installer that uses a
   system rclone or a bundled-rclone installer with an app-local rclone binary.
 - Split native package CI artifacts into visible `system-rclone` and
-  `bundled-rclone` variants, while keeping PyPI, pipx, and source installs as
-  the system-Python path for technical users.
+  `bundled-rclone` variants, while keeping pipx and source installs as the
+  system-Python path for technical users.
 - Made keyboard navigation scroll the remote list so the selected remote remains
   visible when the list exceeds the main window's allocated height.
 - Allowed per-remote settings to rename the alias part of a remote, preserving
@@ -37,6 +37,16 @@
 - Consolidated user-visible Mountlet files under one app folder with
   `mounted` and `offline` subfolders, and added an app-folder picker to App
   settings.
+- Added real-time cache/offline status refresh, manual sync controls, rclone
+  transfer details, Google Docs import-format handling, and drag-and-drop
+  uploads into Mountlet Files.
+- Improved native packaging for Linux, Windows, macOS arm64, and macOS x64,
+  including bundled-rclone variants and macOS bundled dependency validation.
+- Switched the repository license from MIT to the concise source-available
+  license and kept installer use under the separate EULA.
+- Fixed config sync push-dot false positives after pull by ignoring rclone's
+  automatically refreshed OAuth token when computing the operation-level config
+  fingerprint.
 
 ## 0.4.1 - 2026-06-26
 

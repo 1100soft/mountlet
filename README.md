@@ -4,6 +4,10 @@ Mountlet is a desktop app for browsing, opening, syncing, and optionally
 mounting `rclone` cloud remotes. It uses your existing `rclone` configuration
 and does not store cloud credentials inside the application install directory.
 
+Source code is available for non-commercial use under the root `LICENSE`.
+Installer builds are covered by `docs/EULA.md`. New releases are distributed
+through GitHub; PyPI publishing is currently disabled.
+
 ## How It Works
 
 Mountlet is a friendly control panel for cloud storage through `rclone`:
@@ -38,7 +42,9 @@ Install `fuse3` as well if you want native folder mounting.
 
 ## Install
 
-For current native builds, use the GitHub Actions artifacts described below.
+For current native builds, use GitHub Releases when release assets are
+available. Development builds are available from the GitHub Actions artifacts
+described below.
 
 For a source-based Python install from GitHub:
 
@@ -600,6 +606,12 @@ The current public target is a desktop-first beta for Linux, with Windows and
 macOS available as experimental platforms until signing, notarization, and
 broader end-to-end testing are complete. The terminal menu remains available
 for systems without tray support.
+
+## License
+
+Mountlet source is source-available for non-commercial use. Commercial use or
+redistribution requires separate permission. Installer builds use the concise
+installer license in `docs/EULA.md`.
 
 See the [changelog](https://github.com/eric-holt/mountlet/blob/main/CHANGELOG.md)
 for version history.

@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mountlet"
-version = "0.4.1"
+version = "0.5.0"
 description = "Desktop app and terminal tools for browsing and optionally mounting rclone remotes"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "cryptography>=42",
 ]
-license = "MIT"
+license = "LicenseRef-Mountlet-Source-Available"
+license-files = ["LICENSE"]
 authors = [
   {name = "Eric Holt"},
 ]

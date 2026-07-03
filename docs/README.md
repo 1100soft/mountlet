@@ -193,13 +193,14 @@ syncing the complete Mountlet config bundle.
 
 ## Release Strategy
 
-- Stop PyPI publishing while commercial/source-available licensing is being
-  prepared.
+- PyPI publishing is stopped while Mountlet uses the source-available license
+  and native desktop distribution.
 - Keep source-based installs available for technical users.
 - Build unsigned standalone Linux, Windows, and macOS development artifacts in
   GitHub Actions before introducing signing and notarization.
-- Publish signed native desktop packages through GitHub Releases once startup,
-  updates, and prerequisite handling are ready for nontechnical users.
+- Publish native desktop packages through GitHub Releases. Keep unsigned builds
+  clearly labeled until Windows code signing and Apple Developer ID
+  notarization are configured.
 - Build the desktop app as the first commercial product layer.
 - Evaluate `.deb`, AppImage, Windows installer, and macOS DMG distribution after
   the standalone bundles are stable.
