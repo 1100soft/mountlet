@@ -33,14 +33,18 @@ OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
 OFFLINE_JOB_CONCURRENCY = 3
 FILE_BROWSER_SELECTION_STYLE = """
+QTreeWidget {
+    selection-background-color: #dbeafe;
+    selection-color: #111827;
+}
 QTreeWidget::item:hover:!selected {
     background: transparent;
 }
 QTreeWidget::item:selected,
 QTreeWidget::item:selected:active,
 QTreeWidget::item:selected:!active {
-    background: rgba(59, 130, 246, 44);
-    color: palette(text);
+    background-color: #dbeafe;
+    color: #111827;
 }
 """
 
@@ -993,13 +997,14 @@ class CompactCloudBrowser:
         self._update_main_focus_style()
 
     def has_focus(self) -> bool:
-        if not self._embedded:
-            try:
-                return bool(self.window.isActiveWindow())
-            except Exception:
-                return False
         focus = self.qt.QApplication.focusWidget()
-        return bool(focus is not None and (self.root.isAncestorOf(focus) or focus is self.root))
+        if focus is not None:
+            return bool(self.root.isAncestorOf(focus) or focus is self.root)
+        if self._embedded:
+            return False
+        with suppress(Exception):
+            return bool(self.tree.hasFocus())
+        return False
 
     def _update_main_focus_style(self) -> None:
         callback = getattr(self.main_window, "update_focus_style", None)
@@ -1010,7 +1015,7 @@ class CompactCloudBrowser:
         root = getattr(self, "root", None)
         if root is None:
             return
-        active = self.has_focus() if self._embedded else bool(self.window.isActiveWindow())
+        active = self.has_focus()
         color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
         root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 

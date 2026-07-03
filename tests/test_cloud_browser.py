@@ -2001,6 +2001,24 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser.root.show.call_count, 2)
         self.assertFalse(browser._closed_until_selected)
 
+    def test_browser_focus_uses_focused_widget_not_active_window(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._embedded = False
+        outside = object()
+        browser.root = mock.Mock()
+        browser.root.isAncestorOf.return_value = False
+        browser.tree = mock.Mock()
+        browser.tree.hasFocus.return_value = False
+        browser.window = mock.Mock()
+        browser.window.isActiveWindow.return_value = True
+        browser.qt = SimpleNamespace(QApplication=SimpleNamespace(focusWidget=mock.Mock(return_value=outside)))
+
+        self.assertFalse(browser.has_focus())
+
+        browser.root.isAncestorOf.return_value = True
+
+        self.assertTrue(browser.has_focus())
+
     def test_focus_selects_first_browser_item_when_none_is_selected(self):
         class Item:
             def __init__(self) -> None:
