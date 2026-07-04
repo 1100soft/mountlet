@@ -1,20 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="mountainGradient" x1="32" y1="17" x2="32" y2="59" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38d8ff" />
+      <stop offset="0.52" stop-color="#0ea5f5" />
+      <stop offset="1" stop-color="#0284d1" />
+    </linearGradient>
+  </defs>
   <path
-    d="M17.5 47.5C8.8 47.5 4 41.7 4 34.8c0-6.3 4.5-11.8 11-12.8C17.7 13.8 25.2 8 34 8c9.9 0 18.2 7 19.7 16.3C60 25.7 64 30.7 64 36.8c0 6.2-4.6 10.7-11.5 10.7H17.5Z"
+    d="M17 47C9.2 47 5 41.8 5 35.2c0-6.1 4.3-11 10.6-11.8C18.2 14.7 24.7 9 32 9c9.7 0 17.7 7 19 16.2 6.1 1.1 10 5.9 10 11.5C61 42.8 56.6 47 50 47H17Z"
     fill="#f8fafc"
     stroke="#64748b"
-    stroke-width="4"
+    stroke-width="3"
     stroke-linejoin="round"
   />
   <path
-    d="M6 58L32 16l26 42H6Z"
-    fill="#0ea5e9"
-    stroke="#0369a1"
-    stroke-width="4"
-    stroke-linejoin="round"
+    d="M7 59L32 17l25 42H7Z"
+    fill="url(#mountainGradient)"
   />
   <path
-    d="M25 58V45.5C25 37 39 37 39 45.5V58H25Z"
+    d="M25 59V45.5C25 37 39 37 39 45.5V59H25Z"
     fill="#082f49"
   />
 </svg>
