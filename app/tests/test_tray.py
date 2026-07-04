@@ -1294,6 +1294,45 @@ class TrayTests(unittest.TestCase):
         button.setStyleSheet.assert_called_once_with(f"color: {tray.PROVIDER_COLORS['drive']};")
         button.setToolTip.assert_called_once_with("Open Drive in browser")
 
+    def test_mountlet_window_remote_status_icon_symbols_match_states(self):
+        class Label:
+            def __init__(self) -> None:
+                self.text = ""
+                self.style = ""
+
+            def setToolTip(self, _text: str) -> None:
+                return
+
+            def setPixmap(self, _pixmap: object) -> None:
+                raise AssertionError("fallback path should not set a pixmap")
+
+            def setText(self, text: str) -> None:
+                self.text = text
+
+            def setStyleSheet(self, style: str) -> None:
+                self.style = style
+
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(QCursor=SimpleNamespace(pos=mock.Mock(return_value=None)))
+        window._connection_cache = {}
+        window._show_immediate_tooltip = mock.Mock()
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+
+        unreachable = Label()
+        window._connection_cache[remote.name] = False
+        window._apply_remote_status_icon(unreachable, remote, mounted=False, checking=False)
+
+        reachable = Label()
+        window._connection_cache[remote.name] = True
+        window._apply_remote_status_icon(reachable, remote, mounted=False, checking=False)
+
+        mounted = Label()
+        window._apply_remote_status_icon(mounted, remote, mounted=True, checking=False)
+
+        self.assertEqual(unreachable.text, "")
+        self.assertEqual(reachable.text, "☁")
+        self.assertEqual(mounted.text, "☁▲")
+
     def test_shortcut_hint_uses_first_assigned_shortcut(self):
         with mock.patch.object(tray, "shortcut_values", return_value=("Alt+B", "Ctrl+B")):
             self.assertEqual(tray._shortcut_hint("remote_open_browser"), "\nShortcut: Alt+B")

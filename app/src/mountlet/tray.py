@@ -6142,17 +6142,14 @@ class MountletWindow:
             label.setText("")
             return
         if mounted:
-            label.setText("▲")
+            label.setText("☁▲")
             label.setStyleSheet("color: #0ea5e9;")
         elif connected is True:
             label.setText("☁")
             label.setStyleSheet("color: #f8fafc;")
-        elif connected is False:
-            label.setText("☁")
-            label.setStyleSheet("color: #ef4444;")
         else:
-            label.setText("☁")
-            label.setStyleSheet("color: #94a3b8;")
+            label.setText("")
+            label.setStyleSheet("")
 
     def _remote_status_tooltip(
         self,
@@ -6173,49 +6170,54 @@ class MountletWindow:
         return f"{remote.display_name} has not been checked yet."
 
     def _remote_status_pixmap(self, *, mounted: bool, connected: bool | None, checking: bool) -> Any | None:
+        del checking
+        if not mounted and connected is not True:
+            return None
         try:
             pixmap = self.qt.QPixmap(22, 22)
             pixmap.fill(self.qt.Qt.GlobalColor.transparent)
             painter = self.qt.QPainter(pixmap)
             painter.setRenderHint(self.qt.QPainter.RenderHint.Antialiasing, True)
             if mounted:
+                self._paint_cloud_icon(painter)
                 self._paint_mountain_icon(painter)
             else:
-                self._paint_cloud_icon(painter, connected=connected, checking=checking)
+                self._paint_cloud_icon(painter)
             painter.end()
             return pixmap
         except Exception:
             return None
 
-    def _paint_cloud_icon(self, painter: Any, *, connected: bool | None, checking: bool) -> None:
-        del checking
-        fill = "#f8fafc" if connected is True else "#fee2e2" if connected is False else "#cbd5e1"
-        stroke = "#64748b" if connected is not False else "#ef4444"
+    def _paint_cloud_icon(self, painter: Any) -> None:
         try:
-            painter.setPen(self.qt.QPen(self.qt.QColor(stroke), 1.4))
-            painter.setBrush(self.qt.QBrush(self.qt.QColor(fill)))
-            painter.drawEllipse(3, 9, 7, 7)
-            painter.drawEllipse(7, 5, 9, 10)
-            painter.drawEllipse(13, 9, 6, 7)
-            painter.drawRoundedRect(4, 11, 14, 6, 3, 3)
+            path = self.qt.QPainterPath()
+            path.moveTo(4.0, 16.5)
+            path.cubicTo(1.9, 16.1, 1.5, 10.4, 5.4, 9.4)
+            path.cubicTo(6.3, 5.4, 13.7, 3.8, 16.0, 8.5)
+            path.cubicTo(20.5, 7.6, 21.5, 15.5, 17.8, 16.5)
+            path.lineTo(4.0, 16.5)
+            path.closeSubpath()
+            painter.setPen(self.qt.QPen(self.qt.QColor("#64748b"), 1.2))
+            painter.setBrush(self.qt.QBrush(self.qt.QColor("#f8fafc")))
+            painter.drawPath(path)
         except Exception:
             return
 
     def _paint_mountain_icon(self, painter: Any) -> None:
         try:
             path = self.qt.QPainterPath()
-            path.moveTo(2.5, 18.0)
-            path.lineTo(11.0, 4.0)
-            path.lineTo(19.5, 18.0)
+            path.moveTo(2.5, 19.0)
+            path.lineTo(11.0, 5.5)
+            path.lineTo(19.5, 19.0)
             path.closeSubpath()
             painter.setPen(self.qt.QPen(self.qt.QColor("#0369a1"), 1.2))
             painter.setBrush(self.qt.QBrush(self.qt.QColor("#0ea5e9")))
             painter.drawPath(path)
             door = self.qt.QPainterPath()
-            door.moveTo(9.0, 18.0)
-            door.lineTo(9.0, 14.0)
-            door.cubicTo(9.0, 11.8, 13.0, 11.8, 13.0, 14.0)
-            door.lineTo(13.0, 18.0)
+            door.moveTo(9.0, 19.0)
+            door.lineTo(9.0, 15.2)
+            door.cubicTo(9.0, 12.8, 13.0, 12.8, 13.0, 15.2)
+            door.lineTo(13.0, 19.0)
             door.closeSubpath()
             painter.setPen(self.qt.Qt.PenStyle.NoPen)
             painter.setBrush(self.qt.QBrush(self.qt.QColor("#082f49")))
