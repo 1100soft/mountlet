@@ -99,6 +99,9 @@ class PlatformServices:
         """Options for short-lived, non-interactive child commands."""
         return {}
 
+    def open_external_terminal(self, command: Sequence[str], *, title: str = "Mountlet") -> OperationResult:
+        return OperationResult(False, "No supported external terminal command was found.")
+
     def is_mounted(self, path: str) -> bool:
         return os.path.ismount(path)
 

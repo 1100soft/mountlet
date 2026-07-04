@@ -77,6 +77,25 @@ class WindowsPlatformServices(PlatformServices):
         # flag each console executable briefly creates a visible window.
         return {"creationflags": 0x08000000} if os.name == "nt" else {}
 
+    def open_external_terminal(self, command: Sequence[str], *, title: str = "Mountlet") -> OperationResult:
+        command_line = subprocess.list2cmdline(command)
+        try:
+            subprocess.Popen(
+                [
+                    "cmd.exe",
+                    "/c",
+                    "start",
+                    title,
+                    "cmd.exe",
+                    "/k",
+                    command_line,
+                ],
+                close_fds=True,
+            )
+        except OSError as exc:
+            return OperationResult(False, f"Could not open Command Prompt: {exc}")
+        return OperationResult(True)
+
     def is_mounted(self, path: str) -> bool:
         # A WinFsp directory mount is an NTFS junction. Python can report a
         # newly attached junction as nonexistent while Windows already

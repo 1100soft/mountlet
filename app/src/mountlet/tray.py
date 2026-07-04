@@ -187,16 +187,19 @@ DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
 FORCED_QUIT_SECONDS = 3.0
+EXTERNAL_RCLONE_CONFIG_PROVIDER = "__external__"
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Google Drive", "drive"),
     ("Dropbox", "dropbox"),
     ("Microsoft OneDrive", "onedrive"),
     ("Box", "box"),
     ("pCloud", "pcloud"),
+    ("iCloud Drive / Photos", "iclouddrive"),
     ("Koofr", "koofr"),
     ("Proton Drive", "protondrive"),
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
+    ("Other provider (rclone terminal)", EXTERNAL_RCLONE_CONFIG_PROVIDER),
 )
 REMOTE_PROVIDER_STATUSES = {
     "drive": "tested",
@@ -204,10 +207,12 @@ REMOTE_PROVIDER_STATUSES = {
     "onedrive": "tested",
     "box": "tested",
     "pcloud": "tested",
+    "iclouddrive": "untested",
     "koofr": "tested",
     "protondrive": "tested",
     "s3": "partial",
     "webdav": "untested",
+    EXTERNAL_RCLONE_CONFIG_PROVIDER: "untested",
 }
 OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
 REMOTE_CONFIG_SUFFIXES = {
@@ -216,10 +221,12 @@ REMOTE_CONFIG_SUFFIXES = {
     "onedrive": "OneDrive",
     "box": "Box",
     "pcloud": "pCloud",
+    "iclouddrive": "iCloud",
     "koofr": "Koofr",
     "protondrive": "Proton Drive",
     "s3": "S3",
     "webdav": "WebDAV",
+    EXTERNAL_RCLONE_CONFIG_PROVIDER: "Remote",
 }
 S3_PROVIDER_CONFIG_SUFFIXES = {
     "cloudflare": "Cloudflare R2",
@@ -424,6 +431,7 @@ PROVIDER_COLORS = {
     "onedrive": "#0078d4",
     "box": "#0057c2",
     "pcloud": "#17a2d4",
+    "iclouddrive": "#0a84ff",
     "koofr": "#f59e0b",
     "protondrive": "#6d4aff",
     "s3": "#ff9900",
@@ -435,6 +443,7 @@ REMOTE_BROWSER_URLS = {
     "onedrive": "https://onedrive.live.com/",
     "box": "https://app.box.com/files",
     "pcloud": "https://my.pcloud.com/",
+    "iclouddrive": "https://www.icloud.com/iclouddrive/",
     "koofr": "https://app.koofr.net/",
     "protondrive": "https://drive.proton.me/",
 }
@@ -2999,6 +3008,25 @@ class NewRemoteWizard:
         proton_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         proton_help.setStyleSheet(_muted_text_style(proton_help))
 
+        icloud_service = self.qt.QComboBox()
+        icloud_service.addItem("iCloud Drive", "drive")
+        icloud_service.addItem("iCloud Photos", "photos")
+        icloud_user = self.qt.QLineEdit()
+        icloud_user.setPlaceholderText("Apple ID email address")
+        icloud_user.setToolTip("The Apple ID used for iCloud Drive or Photos.")
+        icloud_pass = self.qt.QLineEdit()
+        icloud_pass.setPlaceholderText("Apple ID password")
+        icloud_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        icloud_pass.setToolTip("Your Apple ID password. rclone stores this obscured in rclone.conf.")
+        icloud_help = self.qt.QLabel(
+            "iCloud support depends on recent rclone versions and may ask follow-up security questions. "
+            '<a href="https://rclone.org/iclouddrive/">rclone iCloud guide</a>'
+        )
+        icloud_help.setWordWrap(True)
+        icloud_help.setOpenExternalLinks(True)
+        icloud_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        icloud_help.setStyleSheet(_muted_text_style(icloud_help))
+
         webdav_url = self.qt.QLineEdit()
         webdav_vendor = self.qt.QComboBox()
         for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
@@ -3030,11 +3058,14 @@ class NewRemoteWizard:
             proton_pass,
             proton_2fa,
             proton_mailbox_pass,
+            icloud_user,
+            icloud_pass,
             webdav_url,
             webdav_user,
             webdav_pass,
         ):
             field.textChanged.connect(self._update_action_button)
+        icloud_service.currentIndexChanged.connect(lambda _index=0: self._update_action_button())
 
         self.fields = {
             "provider": provider,
@@ -3066,6 +3097,10 @@ class NewRemoteWizard:
             "proton_2fa": proton_2fa,
             "proton_mailbox_pass": proton_mailbox_pass,
             "proton_help": proton_help,
+            "icloud_service": icloud_service,
+            "icloud_user": icloud_user,
+            "icloud_pass": icloud_pass,
+            "icloud_help": icloud_help,
             "webdav_url": webdav_url,
             "webdav_vendor": webdav_vendor,
             "webdav_user": webdav_user,
@@ -3096,6 +3131,10 @@ class NewRemoteWizard:
         form.addRow("Proton 2FA code", proton_2fa)
         form.addRow("Proton mailbox password", proton_mailbox_pass)
         form.addRow(proton_help)
+        form.addRow("iCloud service", icloud_service)
+        form.addRow("Apple ID", icloud_user)
+        form.addRow("Apple password", icloud_pass)
+        form.addRow(icloud_help)
         form.addRow("WebDAV URL", webdav_url)
         form.addRow("WebDAV vendor", webdav_vendor)
         form.addRow(webdav_help)
@@ -3140,19 +3179,26 @@ class NewRemoteWizard:
             self.action_button.setEnabled(True)
             self.action_button.setText(self._question_button_text())
             return
-        self.action_button.setText("Create remote")
+        remote_type = self.fields["provider"].currentData() if getattr(self, "fields", None) else ""
+        self.action_button.setText(
+            "Open rclone config" if remote_type == EXTERNAL_RCLONE_CONFIG_PROVIDER else "Create remote"
+        )
         self.action_button.setEnabled(self._setup_fields_are_valid() and self._browser_port_available)
 
     def _setup_fields_are_valid(self) -> bool:
+        remote_type = self.fields["provider"].currentData() or "drive"
+        if remote_type == EXTERNAL_RCLONE_CONFIG_PROVIDER:
+            return True
         if not self.fields["name"].text().strip():
             return False
-        remote_type = self.fields["provider"].currentData() or "drive"
         if remote_type == "s3":
             return self._s3_fields_are_valid()
         if remote_type == "koofr":
             return self._koofr_fields_are_valid()
         if remote_type == "protondrive":
             return self._proton_fields_are_valid()
+        if remote_type == "iclouddrive":
+            return self._icloud_fields_are_valid()
         if remote_type == "webdav":
             return self._webdav_fields_are_valid()
         return True
@@ -3176,6 +3222,9 @@ class NewRemoteWizard:
     def _proton_fields_are_valid(self) -> bool:
         return bool(self.fields["proton_user"].text().strip() and self.fields["proton_pass"].text().strip())
 
+    def _icloud_fields_are_valid(self) -> bool:
+        return bool(self.fields["icloud_user"].text().strip() and self.fields["icloud_pass"].text())
+
     def _webdav_fields_are_valid(self) -> bool:
         url = self.fields["webdav_url"].text().strip()
         return url.startswith(("http://", "https://"))
@@ -3187,6 +3236,10 @@ class NewRemoteWizard:
         self._continue()
 
     def _start(self) -> None:
+        selected_type = self.fields["provider"].currentData() or "drive"
+        if selected_type == EXTERNAL_RCLONE_CONFIG_PROVIDER:
+            self._open_external_rclone_config()
+            return
         alias = self.fields["name"].text().strip()
         if not self._valid_remote_name(alias):
             self._warning("Add remote", "Use a name without ':', '@', or path separators.")
@@ -3232,6 +3285,18 @@ class NewRemoteWizard:
             self._remote_name = ""
             self._remote_alias = ""
             return
+        if self._remote_type == "iclouddrive" and not self._icloud_fields_are_valid():
+            self._warning("Add remote", "Enter the Apple ID and password before creating the remote.")
+            return
+        if self._remote_type == "iclouddrive" and rclone_wizard.backend_is_available("iclouddrive") is False:
+            self._warning(
+                "Add remote",
+                "This rclone installation does not include iCloud Drive support.\n\n"
+                "Update rclone, then try again.",
+            )
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
             self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
             return
@@ -3249,6 +3314,17 @@ class NewRemoteWizard:
             ),
             browser_auth=self._uses_browser_auth() and self._drive_local_auth,
         )
+
+    def _open_external_rclone_config(self) -> None:
+        try:
+            config_path = rclone_wizard.open_config_in_external_terminal()
+        except Exception as exc:
+            self._warning("Add remote", str(exc))
+            return
+        self.status.setText(f"Opened rclone config in an external terminal.\nConfig file: {config_path}")
+        self._completed = True
+        self._stop_port_timer()
+        self.dialog.accept()
 
     def _continue(self) -> None:
         answer = self._answer_value()
@@ -3449,6 +3525,8 @@ class NewRemoteWizard:
             return self._koofr_config_args()
         if self._remote_type == "protondrive":
             return self._proton_config_args()
+        if self._remote_type == "iclouddrive":
+            return self._icloud_config_args()
         if self._remote_type == "webdav":
             return self._webdav_config_args()
         return []
@@ -3499,6 +3577,16 @@ class NewRemoteWizard:
         if mailbox_password:
             args.extend(["mailbox_password", mailbox_password])
         return args
+
+    def _icloud_config_args(self) -> list[str]:
+        return [
+            "service",
+            str(self.fields["icloud_service"].currentData() or "drive"),
+            "apple_id",
+            self.fields["icloud_user"].text().strip(),
+            "password",
+            self.fields["icloud_pass"].text(),
+        ]
 
     def _webdav_config_args(self) -> list[str]:
         args = [
@@ -3704,6 +3792,9 @@ class NewRemoteWizard:
             "proton_pass",
             "proton_2fa",
             "proton_mailbox_pass",
+            "icloud_service",
+            "icloud_user",
+            "icloud_pass",
             "webdav_url",
             "webdav_vendor",
             "webdav_user",
@@ -3741,7 +3832,10 @@ class NewRemoteWizard:
         is_s3 = remote_type == "s3"
         is_koofr = remote_type == "koofr"
         is_proton = remote_type == "protondrive"
+        is_icloud = remote_type == "iclouddrive"
         is_webdav = remote_type == "webdav"
+        is_external = remote_type == EXTERNAL_RCLONE_CONFIG_PROVIDER
+        self._set_form_row_visible(self.fields["name"], not is_external)
         for field_name in (
             "credential_source",
             "client_id",
@@ -3775,6 +3869,13 @@ class NewRemoteWizard:
         ):
             self._set_form_row_visible(self.fields[field_name], is_proton)
         for field_name in (
+            "icloud_service",
+            "icloud_user",
+            "icloud_pass",
+            "icloud_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_icloud)
+        for field_name in (
             "webdav_url",
             "webdav_vendor",
             "webdav_help",
@@ -3782,6 +3883,7 @@ class NewRemoteWizard:
             "webdav_pass",
         ):
             self._set_form_row_visible(self.fields[field_name], is_webdav)
+        self._set_form_row_visible(self.fields["connect_after_create"], not is_external)
         self._set_form_row_visible(self.fields["credential_help"], is_drive)
         self._set_form_row_visible(self.fields["auth_group"], uses_browser_auth)
         self.fields["name"].setPlaceholderText(self._remote_name_placeholder(remote_type))
@@ -3860,6 +3962,7 @@ class NewRemoteWizard:
             "onedrive": "Personal OneDrive",
             "box": "Work Box",
             "pcloud": "Personal pCloud",
+            "iclouddrive": "Personal iCloud",
             "koofr": "Personal Koofr",
             "protondrive": "Personal Proton Drive",
             "s3": "Archive S3",

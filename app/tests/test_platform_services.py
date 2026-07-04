@@ -159,6 +159,37 @@ class PlatformServicesTests(unittest.TestCase):
 
         self.assertEqual(environment["LD_LIBRARY_PATH"], "/custom")
 
+    def test_linux_external_terminal_uses_available_terminal(self):
+        platform = LinuxPlatformServices()
+
+        with mock.patch("mountlet.platform_services.linux.shutil.which", side_effect=lambda name: f"/usr/bin/{name}"):
+            with mock.patch("mountlet.platform_services.linux.subprocess.Popen") as popen:
+                result = platform.open_external_terminal(["rclone", "config"], title="Mountlet")
+
+        self.assertTrue(result.success)
+        self.assertEqual(popen.call_args.args[0][0], "/usr/bin/x-terminal-emulator")
+        self.assertIn("rclone config", " ".join(popen.call_args.args[0]))
+
+    def test_windows_external_terminal_opens_command_prompt(self):
+        platform = WindowsPlatformServices()
+
+        with mock.patch("mountlet.platform_services.windows.subprocess.Popen") as popen:
+            result = platform.open_external_terminal(["rclone.exe", "config"], title="Mountlet")
+
+        self.assertTrue(result.success)
+        self.assertEqual(popen.call_args.args[0][0], "cmd.exe")
+        self.assertIn("rclone.exe config", popen.call_args.args[0])
+
+    def test_macos_external_terminal_uses_osascript(self):
+        platform = MacOSPlatformServices()
+
+        with mock.patch("mountlet.platform_services.macos.subprocess.Popen") as popen:
+            result = platform.open_external_terminal(["rclone", "config"], title="Mountlet")
+
+        self.assertTrue(result.success)
+        self.assertEqual(popen.call_args.args[0][0], "osascript")
+        self.assertIn("rclone config", popen.call_args.args[0][-1])
+
     def test_macos_defaults_to_finder(self):
         platform = MacOSPlatformServices()
 

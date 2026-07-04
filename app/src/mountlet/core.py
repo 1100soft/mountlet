@@ -198,6 +198,7 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
     "koofr": ("provider", "user", "mountid"),
     "protondrive": ("username", "2fa", "mailbox_password", "enable_caching"),
+    "iclouddrive": ("service", "apple_id"),
 }
 S3_PROVIDER_DISPLAY_NAMES = {
     "cloudflare": "Cloudflare R2",
@@ -463,6 +464,8 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
             user = values.get("username", "").strip() or values.get("user", "").strip()
             password = values.get("password", "").strip() or values.get("pass", "").strip()
             return bool(user and password)
+        if backend_type == "iclouddrive":
+            return bool(values.get("apple_id", "").strip() and values.get("password", "").strip())
         return bool(backend_type)
     if backend_type == "onedrive":
         return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))

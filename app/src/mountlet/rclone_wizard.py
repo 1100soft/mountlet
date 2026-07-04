@@ -90,6 +90,21 @@ def start_remote(remote_name: str, remote_type: str, args: list[str] | None = No
     return _run_config_create(remote_name, remote_type, list(args or []))
 
 
+def open_config_in_external_terminal() -> str:
+    binary = find_rclone()
+    if not binary:
+        raise RcloneWizardError("rclone is not installed or RCLONE_PATH is not set.")
+    config_path = default_config_path()
+    _ensure_config_parent(config_path)
+    result = PLATFORM.open_external_terminal(
+        [binary, "--config", str(config_path), "config"],
+        title="Mountlet rclone config",
+    )
+    if not result.success:
+        raise RcloneWizardError(result.detail or "Could not open rclone config in an external terminal.")
+    return str(config_path)
+
+
 def backend_is_available(remote_type: str) -> bool | None:
     global _BACKEND_CACHE
     normalized = remote_type.strip().lower()

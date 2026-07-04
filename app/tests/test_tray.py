@@ -996,6 +996,55 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_uses_icloud_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "iclouddrive"
+        wizard.fields = {
+            "icloud_service": mock.Mock(currentData=mock.Mock(return_value="photos")),
+            "icloud_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "icloud_pass": mock.Mock(text=mock.Mock(return_value="apple-password")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "service",
+                "photos",
+                "apple_id",
+                "eric@example.com",
+                "password",
+                "apple-password",
+            ],
+        )
+
+    def test_new_remote_wizard_requires_icloud_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.fields = {
+            "icloud_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "icloud_pass": mock.Mock(text=mock.Mock(return_value="")),
+        }
+
+        self.assertFalse(wizard._icloud_fields_are_valid())
+
+        wizard.fields["icloud_pass"].text.return_value = "apple-password"
+
+        self.assertTrue(wizard._icloud_fields_are_valid())
+
+    def test_new_remote_wizard_external_provider_opens_rclone_terminal(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.status = mock.Mock()
+        wizard.dialog = mock.Mock()
+        wizard._completed = False
+
+        with mock.patch.object(wizard, "_stop_port_timer") as stop_timer:
+            with mock.patch.object(tray.rclone_wizard, "open_config_in_external_terminal", return_value="/tmp/rclone.conf"):
+                wizard._open_external_rclone_config()
+
+        stop_timer.assert_called_once_with()
+        wizard.dialog.accept.assert_called_once_with()
+        self.assertTrue(wizard._completed)
+        self.assertIn("/tmp/rclone.conf", wizard.status.setText.call_args.args[0])
+
     def test_new_remote_wizard_saves_initial_s3_remote_path(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_name = "Archive__S3"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -82,6 +83,27 @@ class LinuxPlatformServices(PlatformServices):
         if env.get("XDG_RUNTIME_DIR") and env.get("DBUS_SESSION_BUS_ADDRESS"):
             return OperationResult(True)
         return OperationResult(False, "No graphical desktop session was detected.")
+
+    def open_external_terminal(self, command: Sequence[str], *, title: str = "Mountlet") -> OperationResult:
+        shell_command = " ".join(shlex.quote(part) for part in command)
+        command_line = f"{shell_command}; printf '\\nPress Enter to close this terminal...'; read _"
+        candidates: tuple[tuple[str, ...], ...] = (
+            ("x-terminal-emulator", "-T", title, "-e", "sh", "-lc", command_line),
+            ("konsole", "--title", title, "-e", "sh", "-lc", command_line),
+            ("gnome-terminal", "--title", title, "--", "sh", "-lc", command_line),
+            ("xfce4-terminal", "--title", title, "-e", f"sh -lc {shlex.quote(command_line)}"),
+            ("xterm", "-T", title, "-e", "sh", "-lc", command_line),
+        )
+        for candidate in candidates:
+            executable = shutil.which(candidate[0])
+            if not executable:
+                continue
+            try:
+                subprocess.Popen((executable, *candidate[1:]), close_fds=True)
+            except OSError:
+                continue
+            return OperationResult(True)
+        return OperationResult(False, "No terminal emulator was found. Install x-terminal-emulator, Konsole, GNOME Terminal, XFCE Terminal, or xterm.")
 
     def mount_driver_available(self) -> bool:
         return bool(shutil.which("fusermount3") or shutil.which("fusermount"))

@@ -495,6 +495,7 @@ Locally tested with the current GUI flow and/or active local remotes:
 - Cloudflare R2 through the S3-compatible wizard
 - Koofr through rclone's dedicated Koofr backend
 - Proton Drive with current rclone releases
+- iCloud Drive and iCloud Photos with recent rclone releases
 
 Available but not yet locally tested:
 
@@ -502,10 +503,16 @@ Available but not yet locally tested:
 - MinIO and other S3-compatible providers
 - Wasabi
 - WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files
+- Other rclone backends through the **Other provider** terminal fallback
 
 In the setup window, tested options are shown in white and untested options in
 yellow. Untested providers may work through rclone, but expect rough edges until
 the wizard path is tested with a real account.
+
+For providers without a Mountlet-specific setup form, choose **Other provider
+(rclone terminal)**. Mountlet opens `rclone config` in an external terminal
+using the same config file. After finishing the terminal wizard, use **Update
+status** or reopen Mountlet if the new remote is not visible yet.
 
 Some providers can still require per-device reauthentication after config sync.
 Box has shown this behavior in local testing even when the synced config bundle

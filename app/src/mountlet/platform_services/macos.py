@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import plistlib
+import shlex
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Sequence
 
-from .base import PlatformServices, UserDirectories
+from .base import OperationResult, PlatformServices, UserDirectories
 
 
 class MacOSPlatformServices(PlatformServices):
@@ -24,6 +27,20 @@ class MacOSPlatformServices(PlatformServices):
             Path("/opt/homebrew/bin/rclone"),
             Path("/usr/local/bin/rclone"),
         )
+
+    def open_external_terminal(self, command: Sequence[str], *, title: str = "Mountlet") -> OperationResult:
+        shell_command = " ".join(shlex.quote(part) for part in command)
+        script = (
+            'tell application "Terminal"\n'
+            "  activate\n"
+            f"  do script {json.dumps(shell_command)}\n"
+            "end tell"
+        )
+        try:
+            subprocess.Popen(["osascript", "-e", script], close_fds=True)
+        except OSError as exc:
+            return OperationResult(False, f"Could not open Terminal: {exc}")
+        return OperationResult(True)
 
     def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         commands: list[list[str]] = []

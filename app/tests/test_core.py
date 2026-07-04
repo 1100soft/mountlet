@@ -402,6 +402,15 @@ type = koofr
 provider = koofr
 user = eric@example.com
 password = REDACTED
+
+[PartialICloud]
+type = iclouddrive
+apple_id = eric@example.com
+
+[ICloud]
+type = iclouddrive
+apple_id = eric@example.com
+password = REDACTED
 """.strip(),
             )
 
@@ -409,7 +418,7 @@ password = REDACTED
 
         self.assertEqual(
             [remote.name for remote in remotes],
-            ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav", "Koofr"],
+            ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav", "Koofr", "ICloud"],
         )
 
     def test_storage_usage_uses_timeout(self):
