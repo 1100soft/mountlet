@@ -10,8 +10,9 @@ from pathlib import Path
 root = Path.cwd()
 project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 version = project["project"]["version"]
-icon_png = root / "src" / "mountlet" / "assets" / "icon.png"
-icon = root / "src" / "mountlet" / "assets" / ("icon.icns" if sys.platform == "darwin" else "icon.png")
+assets_dir = root / "src" / "mountlet" / "assets"
+icon_png = assets_dir / "icon.png"
+icon = assets_dir / ("icon.icns" if sys.platform == "darwin" else "icon.png")
 hidden_imports = ["AppKit", "Foundation", "objc"] if sys.platform == "darwin" else []
 rclone_name = "rclone.exe" if sys.platform == "win32" else "rclone"
 rclone_path = os.environ.get("MOUNTLET_BUNDLED_RCLONE_PATH")
@@ -48,7 +49,7 @@ a = Analysis(
     [str(root / "packaging" / "mountlet_desktop.py")],
     pathex=[str(root / "src")],
     binaries=binaries,
-    datas=[(str(icon_png), "mountlet/assets")],
+    datas=[(str(assets_dir), "mountlet/assets")],
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

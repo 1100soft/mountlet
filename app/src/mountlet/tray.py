@@ -470,6 +470,17 @@ def _packaged_icon_path() -> str | None:
     return str(fallback) if fallback.is_file() else None
 
 
+def _packaged_asset_path(name: str) -> str | None:
+    try:
+        asset = files("mountlet").joinpath(f"assets/{name}")
+        if asset.is_file():
+            return str(asset)
+    except Exception:
+        pass
+    fallback = Path(__file__).resolve().parent / "assets" / name
+    return str(fallback) if fallback.is_file() else None
+
+
 def _is_gnome_wayland() -> bool:
     if get_platform().system_name != "Linux" or not os.environ.get("WAYLAND_DISPLAY"):
         return False
@@ -6173,57 +6184,20 @@ class MountletWindow:
         del checking
         if not mounted and connected is not True:
             return None
+        return self._status_asset_pixmap("status-mounted.svg" if mounted else "status-cloud.svg")
+
+    def _status_asset_pixmap(self, asset_name: str) -> Any | None:
+        path = _packaged_asset_path(asset_name)
+        if not path:
+            return None
         try:
-            pixmap = self.qt.QPixmap(22, 22)
-            pixmap.fill(self.qt.Qt.GlobalColor.transparent)
-            painter = self.qt.QPainter(pixmap)
-            painter.setRenderHint(self.qt.QPainter.RenderHint.Antialiasing, True)
-            if mounted:
-                self._paint_cloud_icon(painter)
-                self._paint_mountain_icon(painter)
-            else:
-                self._paint_cloud_icon(painter)
-            painter.end()
+            icon = self.qt.QIcon(path)
+            pixmap = icon.pixmap(22, 22)
+            if hasattr(pixmap, "isNull") and pixmap.isNull():
+                return None
             return pixmap
         except Exception:
             return None
-
-    def _paint_cloud_icon(self, painter: Any) -> None:
-        try:
-            path = self.qt.QPainterPath()
-            path.moveTo(4.0, 16.5)
-            path.cubicTo(1.9, 16.1, 1.5, 10.4, 5.4, 9.4)
-            path.cubicTo(6.3, 5.4, 13.7, 3.8, 16.0, 8.5)
-            path.cubicTo(20.5, 7.6, 21.5, 15.5, 17.8, 16.5)
-            path.lineTo(4.0, 16.5)
-            path.closeSubpath()
-            painter.setPen(self.qt.QPen(self.qt.QColor("#64748b"), 1.2))
-            painter.setBrush(self.qt.QBrush(self.qt.QColor("#f8fafc")))
-            painter.drawPath(path)
-        except Exception:
-            return
-
-    def _paint_mountain_icon(self, painter: Any) -> None:
-        try:
-            path = self.qt.QPainterPath()
-            path.moveTo(2.5, 19.0)
-            path.lineTo(11.0, 5.5)
-            path.lineTo(19.5, 19.0)
-            path.closeSubpath()
-            painter.setPen(self.qt.QPen(self.qt.QColor("#0369a1"), 1.2))
-            painter.setBrush(self.qt.QBrush(self.qt.QColor("#0ea5e9")))
-            painter.drawPath(path)
-            door = self.qt.QPainterPath()
-            door.moveTo(9.0, 19.0)
-            door.lineTo(9.0, 15.2)
-            door.cubicTo(9.0, 12.8, 13.0, 12.8, 13.0, 15.2)
-            door.lineTo(13.0, 19.0)
-            door.closeSubpath()
-            painter.setPen(self.qt.Qt.PenStyle.NoPen)
-            painter.setBrush(self.qt.QBrush(self.qt.QColor("#082f49")))
-            painter.drawPath(door)
-        except Exception:
-            return
 
     def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
         indicator = self.qt.QProgressBar()
