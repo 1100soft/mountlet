@@ -269,8 +269,8 @@ h3 {
 .download-card p,
 .platform-grid p,
 .info-grid p,
-.faq p,
-.feature-panel p {
+.faq p:not(.eyebrow),
+.feature-panel p:not(.eyebrow) {
   color: var(--muted);
 }
 
