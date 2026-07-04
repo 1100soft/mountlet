@@ -190,6 +190,7 @@ FORCED_QUIT_SECONDS = 3.0
 EXTERNAL_RCLONE_CONFIG_PROVIDER = "__external__"
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Google Drive", "drive"),
+    ("Google Photos", "gphotos"),
     ("Dropbox", "dropbox"),
     ("Microsoft OneDrive", "onedrive"),
     ("Box", "box"),
@@ -203,6 +204,7 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 REMOTE_PROVIDER_STATUSES = {
     "drive": "tested",
+    "gphotos": "untested",
     "dropbox": "tested",
     "onedrive": "tested",
     "box": "tested",
@@ -214,9 +216,10 @@ REMOTE_PROVIDER_STATUSES = {
     "webdav": "untested",
     EXTERNAL_RCLONE_CONFIG_PROVIDER: "untested",
 }
-OAUTH_REMOTE_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+OAUTH_REMOTE_TYPES = {"drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"}
 REMOTE_CONFIG_SUFFIXES = {
     "drive": "Drive",
+    "gphotos": "Google Photos",
     "dropbox": "Dropbox",
     "onedrive": "OneDrive",
     "box": "Box",
@@ -427,6 +430,7 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
 )
 PROVIDER_COLORS = {
     "drive": "#34a853",
+    "gphotos": "#ea4335",
     "dropbox": "#0061ff",
     "onedrive": "#0078d4",
     "box": "#0057c2",
@@ -439,6 +443,7 @@ PROVIDER_COLORS = {
 }
 REMOTE_BROWSER_URLS = {
     "drive": "https://drive.google.com/drive/my-drive",
+    "gphotos": "https://photos.google.com/",
     "dropbox": "https://www.dropbox.com/home",
     "onedrive": "https://onedrive.live.com/",
     "box": "https://app.box.com/files",
@@ -2848,6 +2853,44 @@ class NewRemoteWizard:
 
         return Bridge()
 
+    def _focus_widget(self, widget: Any | None) -> None:
+        if widget is None:
+            return
+        reason = None
+        try:
+            reason = self.qt.Qt.FocusReason.OtherFocusReason
+        except Exception:
+            pass
+        try:
+            if reason is None:
+                widget.setFocus()
+            else:
+                widget.setFocus(reason)
+        except TypeError:
+            try:
+                widget.setFocus()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _schedule_focus_widget(self, widget: Any | None) -> None:
+        self._focus_widget(widget)
+        try:
+            self.qt.QTimer.singleShot(0, lambda target=widget: self._focus_widget(target))
+        except Exception:
+            pass
+
+    def _answer_focus_widget(self) -> Any | None:
+        if self._answer_kind == "radio" and self._answer_group is not None:
+            try:
+                checked = self._answer_group.checkedButton()
+                if checked is not None:
+                    return checked
+            except Exception:
+                pass
+        return self._answer_field
+
     def _radio_group(self, options: list[tuple[str, str]], *, selected: str) -> tuple[Any, Any, Any]:
         widget = self.qt.QWidget()
         layout = self.qt.QVBoxLayout(widget)
@@ -3171,6 +3214,7 @@ class NewRemoteWizard:
         self._update_browser_port_status()
         self._update_action_button()
         self.dialog.adjustSize()
+        self._schedule_focus_widget(name)
 
     def _update_action_button(self) -> None:
         if not hasattr(self, "action_button"):
@@ -3266,6 +3310,15 @@ class NewRemoteWizard:
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
             self._warning("Add remote", "Enter the shared drive ID before connecting, or choose My Drive.")
+            return
+        if self._remote_type == "gphotos" and rclone_wizard.backend_is_available("gphotos") is False:
+            self._warning(
+                "Add remote",
+                "This rclone installation does not include Google Photos support.\n\n"
+                "Update rclone, then try again.",
+            )
+            self._remote_name = ""
+            self._remote_alias = ""
             return
         if self._remote_type == "s3" and not self._s3_fields_are_valid():
             self._warning("Add remote", "Enter the S3 endpoint, access key, and secret key before creating the remote.")
@@ -3517,6 +3570,13 @@ class NewRemoteWizard:
                 shared_drive=self._drive_shared_drive,
                 team_drive=self._drive_team_drive,
             )
+        if self._remote_type == "gphotos":
+            return [
+                "config_is_local",
+                "true" if self._drive_local_auth else "false",
+                "read_size",
+                "true",
+            ]
         if self._remote_type in OAUTH_REMOTE_TYPES:
             return ["config_is_local", "true" if self._drive_local_auth else "false"]
         if self._remote_type == "s3":
@@ -3958,6 +4018,7 @@ class NewRemoteWizard:
     def _remote_name_placeholder(self, remote_type: str) -> str:
         placeholders = {
             "drive": "Personal Drive",
+            "gphotos": "Personal Photos",
             "dropbox": "Personal Dropbox",
             "onedrive": "Personal OneDrive",
             "box": "Work Box",
@@ -4026,6 +4087,7 @@ class NewRemoteWizard:
         self.status.setText("")
         self._update_action_button()
         self.dialog.adjustSize()
+        self._schedule_focus_widget(self._answer_focus_widget())
 
     def _answer_widget(self, option: dict[str, Any]) -> tuple[str, Any]:
         option_type = str(option.get("Type", "")).lower()

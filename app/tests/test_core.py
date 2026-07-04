@@ -411,6 +411,13 @@ apple_id = eric@example.com
 type = iclouddrive
 apple_id = eric@example.com
 password = REDACTED
+
+[PartialGooglePhotos]
+type = gphotos
+
+[GooglePhotos]
+type = gphotos
+token = {"access_token":"token"}
 """.strip(),
             )
 
@@ -418,7 +425,7 @@ password = REDACTED
 
         self.assertEqual(
             [remote.name for remote in remotes],
-            ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav", "Koofr", "ICloud"],
+            ["ReadyDrive", "ReadyOneDrive", "ReadyS3", "WebDav", "Koofr", "ICloud", "GooglePhotos"],
         )
 
     def test_storage_usage_uses_timeout(self):

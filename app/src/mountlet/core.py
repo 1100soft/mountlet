@@ -128,7 +128,7 @@ class DriveOAuthCredentials:
 
 
 PIDS: Dict[str, int] = {}
-OAUTH_BACKEND_TYPES = {"drive", "dropbox", "onedrive", "box", "pcloud"}
+OAUTH_BACKEND_TYPES = {"drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"}
 RCLONE_STATUS_TIMEOUT_SECONDS = 20
 RCLONE_CONNECT_TIMEOUT_SECONDS = 20
 RCLONE_RECONNECT_TIMEOUT_SECONDS = 300
@@ -193,6 +193,7 @@ DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
 COMMON_SAFE_RCLONE_KEYS = ("description",)
 SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "drive": ("client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "gphotos": ("client_id", "client_secret", "read_only", "read_size", "include_archived", "start_year"),
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor"),
     "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),

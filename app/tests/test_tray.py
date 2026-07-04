@@ -1030,6 +1030,40 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(wizard._icloud_fields_are_valid())
 
+    def test_new_remote_wizard_uses_google_photos_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "gphotos"
+        wizard._drive_local_auth = True
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            ["config_is_local", "true", "read_size", "true"],
+        )
+
+    def test_new_remote_wizard_schedules_input_focus(self):
+        timer = mock.Mock(side_effect=lambda _msec, callback: callback())
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.qt = SimpleNamespace(
+            Qt=SimpleNamespace(FocusReason=SimpleNamespace(OtherFocusReason="other")),
+            QTimer=SimpleNamespace(singleShot=timer),
+        )
+        field = mock.Mock()
+
+        wizard._schedule_focus_widget(field)
+
+        self.assertEqual(field.setFocus.call_args_list, [mock.call("other"), mock.call("other")])
+        timer.assert_called_once()
+
+    def test_new_remote_wizard_focuses_checked_answer_radio(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        checked = mock.Mock()
+        fallback = mock.Mock()
+        wizard._answer_kind = "radio"
+        wizard._answer_group = mock.Mock(checkedButton=mock.Mock(return_value=checked))
+        wizard._answer_field = fallback
+
+        self.assertIs(wizard._answer_focus_widget(), checked)
+
     def test_new_remote_wizard_external_provider_opens_rclone_terminal(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard.status = mock.Mock()

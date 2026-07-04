@@ -499,6 +499,7 @@ Locally tested with the current GUI flow and/or active local remotes:
 
 Available but not yet locally tested:
 
+- Google Photos
 - Amazon S3
 - MinIO and other S3-compatible providers
 - Wasabi
@@ -517,6 +518,9 @@ status** or reopen Mountlet if the new remote is not visible yet.
 Some providers can still require per-device reauthentication after config sync.
 Box has shown this behavior in local testing even when the synced config bundle
 contains all Mountlet and rclone config files.
+
+iCloud remotes may show `?` for usage. rclone can connect to iCloud Drive and
+Photos, but it does not expose reliable quota data for this backend.
 
 ## Extra Commands
 
