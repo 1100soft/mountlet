@@ -80,6 +80,23 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(entries[1].path, "Projects/z.txt")
         self.assertIn("lsjson", run.call_args.args[0])
 
+    def test_google_photos_upload_listing_error_is_empty(self):
+        response = SimpleNamespace(
+            returncode=1,
+            stderr="ERROR : error listing: directory not found",
+            stdout="",
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response):
+                    entries = backend.list_entries(_remote_with_backend("Photos", "gphotos", "Google Photos"), "upload")
+
+        self.assertEqual(entries, [])
+
     def test_list_files_recursive_uses_full_rclone_listing(self):
         response = subprocess.CompletedProcess(
             ["rclone"],

@@ -355,8 +355,8 @@ For the terminal menu instead, run:
 mountlet menu
 ```
 
-Quitting the terminal menu leaves mounted remotes connected. Use `u` in the
-menu to unmount everything.
+Quitting the terminal menu leaves mounted remotes mounted. Use `u` in the menu
+to unmount everything.
 
 ## Desktop App
 
@@ -521,6 +521,10 @@ contains all Mountlet and rclone config files.
 
 iCloud remotes may show `?` for usage. rclone can connect to iCloud Drive and
 Photos, but it does not expose reliable quota data for this backend.
+
+Google Photos is a specialized media backend, not a general cloud drive. Due to
+Google API policy changes, current rclone releases can only download media that
+rclone uploaded, so existing Photos libraries may appear empty in Mountlet.
 
 ## Extra Commands
 

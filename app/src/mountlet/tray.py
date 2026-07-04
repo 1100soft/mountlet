@@ -2821,7 +2821,7 @@ class NewRemoteWizard:
         self._drive_team_drive = ""
         self._initial_remote_path = ""
         self._remote_type = "drive"
-        self._connect_after_create = True
+        self._connect_after_create = False
         self._question: rclone_wizard.RcloneConfigStep | None = None
         self._answer_kind = ""
         self._answer_field: Any | None = None
@@ -2988,9 +2988,17 @@ class NewRemoteWizard:
         shared_drive_id.setEnabled(False)
         shared_drive_id.setToolTip("Only needed when using a Google shared drive.")
         shared_drive.toggled.connect(lambda _checked=False: shared_drive_id.setEnabled(shared_drive.isChecked()))
-        connect_after_create = self.qt.QCheckBox("Connect this remote after creating it")
-        connect_after_create.setChecked(True)
-        connect_after_create.setToolTip("Mount the new remote immediately after setup succeeds.")
+        connect_after_create = self.qt.QCheckBox("Mount this remote after creating it")
+        connect_after_create.setChecked(False)
+        connect_after_create.setToolTip("Mount the new remote as an operating-system folder after setup succeeds.")
+        gphotos_help = self.qt.QLabel(
+            "Google Photos is limited by Google's API. Recent rclone versions can only download media uploaded "
+            'through rclone. <a href="https://rclone.org/googlephotos/#limitations">rclone Google Photos limits</a>'
+        )
+        gphotos_help.setWordWrap(True)
+        gphotos_help.setOpenExternalLinks(True)
+        gphotos_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        gphotos_help.setStyleSheet(_muted_text_style(gphotos_help))
 
         s3_provider = self.qt.QComboBox()
         for index, option in enumerate(S3_PROVIDER_OPTIONS):
@@ -3115,6 +3123,7 @@ class NewRemoteWizard:
             "name": name,
             "credential_source": credential_source,
             "credential_help": credential_help,
+            "gphotos_help": gphotos_help,
             "client_id": client_id,
             "client_secret": client_secret,
             "auth_group": auth_group,
@@ -3154,6 +3163,7 @@ class NewRemoteWizard:
         form.addRow("Name", name)
         form.addRow("Google credentials", credential_source)
         form.addRow(credential_help)
+        form.addRow(gphotos_help)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
         form.addRow("Authorization", auth_group)
@@ -3309,7 +3319,7 @@ class NewRemoteWizard:
         self._initial_remote_path = self._initial_mount_remote_path()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
-            self._warning("Add remote", "Enter the shared drive ID before connecting, or choose My Drive.")
+            self._warning("Add remote", "Enter the shared drive ID before setup, or choose My Drive.")
             return
         if self._remote_type == "gphotos" and rclone_wizard.backend_is_available("gphotos") is False:
             self._warning(
@@ -3720,6 +3730,8 @@ class NewRemoteWizard:
         option_name = self._option_name(step.option)
         if option_name == "config_is_local":
             return "true" if self._drive_local_auth else "false"
+        if self._is_warning_acknowledgement(step.option):
+            return "true"
         if option_name in {"config_edit_advanced", "edit_advanced"}:
             return "false"
         if self._is_drive_shared_drive_choice(step.option):
@@ -3747,6 +3759,14 @@ class NewRemoteWizard:
         text = self._option_search_text(option)
         return ("shared drive" in text or "team drive" in text) and "id" in text
 
+    def _is_warning_acknowledgement(self, option: dict[str, Any]) -> bool:
+        option_name = self._option_name(option).casefold()
+        option_type = str(option.get("Type", "")).casefold()
+        text = self._option_search_text(option)
+        if option_type != "bool":
+            return False
+        return "warning" in option_name or text.startswith(("warning", "important"))
+
     def _option_search_text(self, option: dict[str, Any]) -> str:
         parts = [self._option_name(option)]
         for key in ("Help", "ShortOpt", "DefaultStr"):
@@ -3756,7 +3776,7 @@ class NewRemoteWizard:
         return " ".join(parts).lower()
 
     def _mount_created_remote(self) -> None:
-        self._set_busy(True, message=f"Connecting {self._remote_display_name()}...")
+        self._set_busy(True, message=f"Mounting {self._remote_display_name()}...")
 
         def worker() -> None:
             for remote in core.load_remotes():
@@ -3802,7 +3822,7 @@ class NewRemoteWizard:
             self._reset_after_failed_registration()
             self._warning(
                 "Add remote",
-                f"{display_name} was created, but Mountlet could not connect it.\n\n"
+                f"{display_name} was created, but Mountlet could not mount it.\n\n"
                 f"{_clean_message(message)}",
             )
             return
@@ -3888,6 +3908,7 @@ class NewRemoteWizard:
         remote_type = self.fields["provider"].currentData() or "drive"
         self._remote_type = remote_type
         is_drive = remote_type == "drive"
+        is_gphotos = remote_type == "gphotos"
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
         is_s3 = remote_type == "s3"
         is_koofr = remote_type == "koofr"
@@ -3945,10 +3966,11 @@ class NewRemoteWizard:
             self._set_form_row_visible(self.fields[field_name], is_webdav)
         self._set_form_row_visible(self.fields["connect_after_create"], not is_external)
         self._set_form_row_visible(self.fields["credential_help"], is_drive)
+        self._set_form_row_visible(self.fields["gphotos_help"], is_gphotos)
         self._set_form_row_visible(self.fields["auth_group"], uses_browser_auth)
         self.fields["name"].setPlaceholderText(self._remote_name_placeholder(remote_type))
         self.fields["connect_after_create"].setToolTip(
-            "Mount the new remote immediately after setup succeeds."
+            "Mount the new remote as an operating-system folder after setup succeeds."
         )
         self._apply_credential_choice()
         if is_s3:
@@ -4358,6 +4380,7 @@ class MountletWindow:
         self.qt = tray_app.qt
         self.desktop = _desktop_services(self.qt)
         self._usage_cache: dict[str, core.StorageUsage] = {}
+        self._connection_cache: dict[str, bool] = {}
         self._usage_pending: set[str] = set()
         self._action_pending: set[str] = set()
         self._row_widgets: dict[str, SimpleNamespace] = {}
@@ -5781,21 +5804,21 @@ class MountletWindow:
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(0)
-        layout.setColumnMinimumWidth(1, 126)
-        layout.setColumnMinimumWidth(2, 116)
-        layout.setColumnMinimumWidth(3, 36)
+        layout.setColumnMinimumWidth(0, 24)
+        layout.setColumnMinimumWidth(2, 126)
+        layout.setColumnMinimumWidth(3, 116)
         layout.setColumnMinimumWidth(4, 36)
-        layout.setColumnMinimumWidth(5, 24)
-        layout.setColumnStretch(0, 1)
+        layout.setColumnMinimumWidth(5, 36)
+        layout.setColumnMinimumWidth(6, 24)
+        layout.setColumnStretch(1, 1)
 
+        status_icon = self._remote_status_icon(remote, mounted, checking=checking_usage)
         title = self.qt.QLabel(self._display_remote_name(remote))
         title.setTextFormat(self.qt.Qt.TextFormat.RichText)
         title.setToolTip(title_tooltip)
         title.setFixedWidth(self._name_column_width)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
         title.enterEvent = lambda event, widget=title, tooltip=title_tooltip: self._show_immediate_tooltip(widget, tooltip)
-        if not mounted:
-            title.setEnabled(False)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
 
@@ -5822,14 +5845,16 @@ class MountletWindow:
         self._update_browser_button(browser_button, remote)
         move_controls, up_button, down_button = self._move_button_stack(remote)
 
-        layout.addWidget(title, 0, 0)
-        layout.addWidget(usage_indicator, 0, 1)
-        layout.addWidget(status_group, 0, 2)
-        layout.addWidget(config_button, 0, 3)
-        layout.addWidget(browser_button, 0, 4)
-        layout.addWidget(move_controls, 0, 5)
+        layout.addWidget(status_icon, 0, 0)
+        layout.addWidget(title, 0, 1)
+        layout.addWidget(usage_indicator, 0, 2)
+        layout.addWidget(status_group, 0, 3)
+        layout.addWidget(config_button, 0, 4)
+        layout.addWidget(browser_button, 0, 5)
+        layout.addWidget(move_controls, 0, 6)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
+            status_icon=status_icon,
             title=title,
             usage_indicator=usage_indicator,
             status=status,
@@ -5909,12 +5934,12 @@ class MountletWindow:
         row.title.setText(self._display_remote_name(remote))
         row.title.setToolTip(title_tooltip)
         row.title.setFixedWidth(self._name_column_width)
-        row.title.setEnabled(mounted)
         row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
             widget,
             tooltip,
         )
 
+        self._apply_remote_status_icon(row.status_icon, remote, mounted, checking=checking_usage)
         row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
 
@@ -6076,6 +6101,105 @@ class MountletWindow:
     def _row_usage(self, remote: core.RemoteInfo, mounted: bool) -> core.StorageUsage:
         del mounted
         return self._usage_cache.get(remote.name) or core.StorageUsage("Checking...")
+
+    def _remote_status_icon(self, remote: core.RemoteInfo, mounted: bool, *, checking: bool) -> Any:
+        label = self.qt.QLabel()
+        label.setFixedSize(22, 22)
+        label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        self._apply_remote_status_icon(label, remote, mounted, checking=checking)
+        return label
+
+    def _apply_remote_status_icon(self, label: Any, remote: core.RemoteInfo, mounted: bool, *, checking: bool) -> None:
+        connected = self._connection_cache.get(remote.name)
+        tooltip = self._remote_status_tooltip(remote, mounted, connected, checking=checking)
+        label.setToolTip(tooltip)
+        label.enterEvent = lambda event, widget=label, text=tooltip: self._show_immediate_tooltip(widget, text)
+        pixmap = self._remote_status_pixmap(mounted=mounted, connected=connected, checking=checking)
+        if pixmap is not None:
+            label.setPixmap(pixmap)
+            label.setText("")
+            return
+        if mounted:
+            label.setText("▲")
+            label.setStyleSheet("color: #0ea5e9;")
+        elif connected is True:
+            label.setText("☁")
+            label.setStyleSheet("color: #f8fafc;")
+        elif connected is False:
+            label.setText("☁")
+            label.setStyleSheet("color: #ef4444;")
+        else:
+            label.setText("☁")
+            label.setStyleSheet("color: #94a3b8;")
+
+    def _remote_status_tooltip(
+        self,
+        remote: core.RemoteInfo,
+        mounted: bool,
+        connected: bool | None,
+        *,
+        checking: bool,
+    ) -> str:
+        if mounted:
+            return f"{remote.display_name} is mounted."
+        if connected is True:
+            return f"{remote.display_name} is reachable but not mounted."
+        if connected is False:
+            return f"{remote.display_name} could not be reached."
+        if checking:
+            return f"Checking {remote.display_name}..."
+        return f"{remote.display_name} has not been checked yet."
+
+    def _remote_status_pixmap(self, *, mounted: bool, connected: bool | None, checking: bool) -> Any | None:
+        try:
+            pixmap = self.qt.QPixmap(22, 22)
+            pixmap.fill(self.qt.Qt.GlobalColor.transparent)
+            painter = self.qt.QPainter(pixmap)
+            painter.setRenderHint(self.qt.QPainter.RenderHint.Antialiasing, True)
+            if mounted:
+                self._paint_mountain_icon(painter)
+            else:
+                self._paint_cloud_icon(painter, connected=connected, checking=checking)
+            painter.end()
+            return pixmap
+        except Exception:
+            return None
+
+    def _paint_cloud_icon(self, painter: Any, *, connected: bool | None, checking: bool) -> None:
+        del checking
+        fill = "#f8fafc" if connected is True else "#fee2e2" if connected is False else "#cbd5e1"
+        stroke = "#64748b" if connected is not False else "#ef4444"
+        try:
+            painter.setPen(self.qt.QPen(self.qt.QColor(stroke), 1.4))
+            painter.setBrush(self.qt.QBrush(self.qt.QColor(fill)))
+            painter.drawEllipse(3, 9, 7, 7)
+            painter.drawEllipse(7, 5, 9, 10)
+            painter.drawEllipse(13, 9, 6, 7)
+            painter.drawRoundedRect(4, 11, 14, 6, 3, 3)
+        except Exception:
+            return
+
+    def _paint_mountain_icon(self, painter: Any) -> None:
+        try:
+            path = self.qt.QPainterPath()
+            path.moveTo(2.5, 18.0)
+            path.lineTo(11.0, 4.0)
+            path.lineTo(19.5, 18.0)
+            path.closeSubpath()
+            painter.setPen(self.qt.QPen(self.qt.QColor("#0369a1"), 1.2))
+            painter.setBrush(self.qt.QBrush(self.qt.QColor("#0ea5e9")))
+            painter.drawPath(path)
+            door = self.qt.QPainterPath()
+            door.moveTo(9.0, 18.0)
+            door.lineTo(9.0, 14.0)
+            door.cubicTo(9.0, 11.8, 13.0, 11.8, 13.0, 14.0)
+            door.lineTo(13.0, 18.0)
+            door.closeSubpath()
+            painter.setPen(self.qt.Qt.PenStyle.NoPen)
+            painter.setBrush(self.qt.QBrush(self.qt.QColor("#082f49")))
+            painter.drawPath(door)
+        except Exception:
+            return
 
     def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
         indicator = self.qt.QProgressBar()
@@ -6605,6 +6729,7 @@ class MountletWindow:
             return
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
+        self._connection_cache.pop(remote_name, None)
         self.file_browser.invalidate(remote_name)
         self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
@@ -6679,6 +6804,7 @@ class MountletWindow:
         pending_names = set(self._action_pending)
         self._action_pending.clear()
         self._usage_cache.clear()
+        self._connection_cache.clear()
         for remote_name in pending_names:
             self.file_browser.invalidate(remote_name)
             self.file_browser.refresh_mount_state(remote_name)
@@ -7152,6 +7278,7 @@ class MountletWindow:
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
             self._usage_cache.clear()
+            self._connection_cache.clear()
             self._setup_remote_change_polling()
             self.tray_app.rebuild_menus()
             self.refresh()
@@ -7180,6 +7307,7 @@ class MountletWindow:
         def on_accepted() -> None:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
+                self._connection_cache.pop(remote.name, None)
                 self._current_remote_names = []
                 if getattr(getattr(self.file_browser, "remote", None), "name", "") == remote.name:
                     self.file_browser.close()
@@ -7191,6 +7319,7 @@ class MountletWindow:
                 return
             if dialog.renamed_from and dialog.renamed_to != dialog.renamed_from:
                 self._usage_cache.pop(dialog.renamed_from, None)
+                self._connection_cache.pop(dialog.renamed_from, None)
                 self.file_browser.backend.rename_remote(dialog.renamed_from, dialog.renamed_to)
                 if getattr(getattr(self.file_browser, "remote", None), "name", "") == dialog.renamed_from:
                     self.file_browser.close()
@@ -7199,6 +7328,7 @@ class MountletWindow:
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()
+            self._connection_cache.clear()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
@@ -7218,6 +7348,7 @@ class MountletWindow:
 
         def on_accepted() -> None:
             self._usage_cache.clear()
+            self._connection_cache.clear()
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
             self.refresh()
@@ -7703,6 +7834,7 @@ class MountletWindow:
 
     def _rclone_config_replaced(self) -> None:
         self._usage_cache.clear()
+        self._connection_cache.clear()
         self._usage_pending.clear()
         self._action_pending.clear()
         self._current_remote_names = []
@@ -7745,27 +7877,41 @@ class MountletWindow:
     def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
         if self._tray_is_quitting():
             return
-        if remote.name in self._usage_cache or remote.name in self._usage_pending:
+        if remote.name in self._usage_cache and remote.name in self._connection_cache:
+            return
+        if remote.name in self._usage_pending:
             return
         self._usage_pending.add(remote.name)
 
         def worker() -> None:
-            usage = core.get_storage_usage_details(remote)
-            self._bridge.storage_ready.emit(remote.name, usage)
+            connected, _message = core.check_remote_connection(remote)
+            usage = core.get_storage_usage_details(remote) if connected else core.StorageUsage("?")
+            self._bridge.storage_ready.emit(
+                remote.name,
+                SimpleNamespace(usage=usage, connected=connected),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _handle_storage_ready(self, remote_name: str, usage: core.StorageUsage) -> None:
+    def _handle_storage_ready(self, remote_name: str, payload: object) -> None:
         if self._tray_is_quitting():
             return
         self._usage_pending.discard(remote_name)
+        if isinstance(payload, core.StorageUsage):
+            usage = payload
+            connected = usage.text != "?"
+        else:
+            usage = getattr(payload, "usage", core.StorageUsage("?"))
+            connected = bool(getattr(payload, "connected", False))
         self._usage_cache[remote_name] = usage
+        self._connection_cache[remote_name] = connected
         if self.is_visible():
             self._request_refresh()
 
     def prepare_quit(self) -> None:
         self._refresh_pending = False
         self._usage_pending.clear()
+        self._connection_cache.clear()
         self._action_pending.clear()
         self._hide_window_stack()
 

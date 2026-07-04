@@ -845,6 +845,19 @@ class TrayTests(unittest.TestCase):
             "false",
         )
 
+    def test_new_remote_wizard_acknowledges_warning_prompts(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+
+        self.assertEqual(
+            wizard._automatic_answer(
+                tray.rclone_wizard.RcloneConfigStep(
+                    "state",
+                    {"Name": "config_warning", "Type": "bool", "Help": "IMPORTANT: Google Photos API limits apply."},
+                )
+            ),
+            "true",
+        )
+
     def test_new_remote_wizard_uses_generic_oauth_args_for_non_drive(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "dropbox"

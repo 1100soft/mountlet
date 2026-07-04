@@ -103,6 +103,14 @@ def remote_target(remote: core.RemoteInfo, relative_path: str = "") -> str:
     return f"{base}/{relative}" if relative else base
 
 
+def _is_google_photos_upload_listing(remote: core.RemoteInfo, path: str, stderr: str) -> bool:
+    return (
+        remote.backend_type.casefold() == "gphotos"
+        and normalize_browser_path(path).casefold() == "upload"
+        and "directory not found" in stderr.casefold()
+    )
+
+
 def format_file_size(size: int) -> str:
     if size < 1024:
         return f"{size} B"
@@ -179,6 +187,8 @@ class CloudBrowserBackend:
             **core.PLATFORM.command_process_options(),
         )
         if result.returncode != 0:
+            if _is_google_photos_upload_listing(remote, path, result.stderr):
+                return []
             offline = self._list_offline_entries(remote.name, path)
             if offline is not None:
                 return offline
