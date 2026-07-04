@@ -190,7 +190,7 @@ FORCED_QUIT_SECONDS = 3.0
 EXTERNAL_RCLONE_CONFIG_PROVIDER = "__external__"
 REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Google Drive", "drive"),
-    ("Google Photos", "gphotos"),
+    ("Google Photos (limited)", "gphotos"),
     ("Dropbox", "dropbox"),
     ("Microsoft OneDrive", "onedrive"),
     ("Box", "box"),
@@ -1061,7 +1061,7 @@ class PrerequisiteWizard:
         layout.addWidget(heading)
 
         description = qt.QLabel(
-            "Mountlet needs rclone to connect cloud storage. Filesystem mount "
+            "Mountlet needs rclone to access cloud storage. Filesystem mount "
             "support is optional and only needed for native folders."
         )
         description.setWordWrap(True)
@@ -2999,6 +2999,10 @@ class NewRemoteWizard:
         gphotos_help.setOpenExternalLinks(True)
         gphotos_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         gphotos_help.setStyleSheet(_muted_text_style(gphotos_help))
+        gphotos_read_only = self.qt.QCheckBox("Read only")
+        gphotos_read_only.setToolTip(
+            "Request read-only Google Photos access. Leave off if you want Mountlet/rclone to upload media."
+        )
 
         s3_provider = self.qt.QComboBox()
         for index, option in enumerate(S3_PROVIDER_OPTIONS):
@@ -3126,6 +3130,7 @@ class NewRemoteWizard:
             "gphotos_help": gphotos_help,
             "client_id": client_id,
             "client_secret": client_secret,
+            "gphotos_read_only": gphotos_read_only,
             "auth_group": auth_group,
             "local_auth": local_auth,
             "remote_auth": remote_auth,
@@ -3166,6 +3171,7 @@ class NewRemoteWizard:
         form.addRow(gphotos_help)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
+        form.addRow("Google Photos access", gphotos_read_only)
         form.addRow("Authorization", auth_group)
         form.addRow("Drive", drive_group)
         form.addRow("Shared drive ID", shared_drive_id)
@@ -3582,6 +3588,14 @@ class NewRemoteWizard:
             )
         if self._remote_type == "gphotos":
             return [
+                "client_id",
+                self._drive_client_id.strip(),
+                "client_secret",
+                self._drive_client_secret.strip(),
+                "read_only",
+                "true" if self.fields["gphotos_read_only"].isChecked() else "false",
+                "config_edit_advanced",
+                "false",
                 "config_is_local",
                 "true" if self._drive_local_auth else "false",
                 "read_size",
@@ -3866,6 +3880,7 @@ class NewRemoteWizard:
             "s3_access_key_id",
             "s3_secret_access_key",
             "s3_remote_path",
+            "gphotos_read_only",
             "koofr_user",
             "koofr_pass",
             "proton_user",
@@ -3917,10 +3932,11 @@ class NewRemoteWizard:
         is_webdav = remote_type == "webdav"
         is_external = remote_type == EXTERNAL_RCLONE_CONFIG_PROVIDER
         self._set_form_row_visible(self.fields["name"], not is_external)
+        self._set_form_row_visible(self.fields["credential_source"], is_drive)
+        self._set_form_row_visible(self.fields["client_id"], is_drive or is_gphotos)
+        self._set_form_row_visible(self.fields["client_secret"], is_drive or is_gphotos)
+        self._set_form_row_visible(self.fields["gphotos_read_only"], is_gphotos)
         for field_name in (
-            "credential_source",
-            "client_id",
-            "client_secret",
             "drive_group",
             "shared_drive_id",
         ):
@@ -4056,7 +4072,13 @@ class NewRemoteWizard:
     def _apply_credential_choice(self, *, enabled: bool | None = None) -> None:
         if not self.fields:
             return
-        if getattr(self, "_remote_type", "drive") != "drive":
+        remote_type = getattr(self, "_remote_type", "drive")
+        if remote_type == "gphotos":
+            allow_edit = enabled if enabled is not None else self._question is None
+            self.fields["client_id"].setEnabled(allow_edit)
+            self.fields["client_secret"].setEnabled(allow_edit)
+            return
+        if remote_type != "drive":
             self.fields["client_id"].clear()
             self.fields["client_secret"].clear()
             self.fields["client_id"].setEnabled(False)
@@ -6110,7 +6132,7 @@ class MountletWindow:
         return label
 
     def _apply_remote_status_icon(self, label: Any, remote: core.RemoteInfo, mounted: bool, *, checking: bool) -> None:
-        connected = self._connection_cache.get(remote.name)
+        connected = getattr(self, "_connection_cache", {}).get(remote.name)
         tooltip = self._remote_status_tooltip(remote, mounted, connected, checking=checking)
         label.setToolTip(tooltip)
         label.enterEvent = lambda event, widget=label, text=tooltip: self._show_immediate_tooltip(widget, text)
@@ -6729,7 +6751,7 @@ class MountletWindow:
             return
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
-        self._connection_cache.pop(remote_name, None)
+        getattr(self, "_connection_cache", {}).pop(remote_name, None)
         self.file_browser.invalidate(remote_name)
         self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
@@ -6804,7 +6826,7 @@ class MountletWindow:
         pending_names = set(self._action_pending)
         self._action_pending.clear()
         self._usage_cache.clear()
-        self._connection_cache.clear()
+        getattr(self, "_connection_cache", {}).clear()
         for remote_name in pending_names:
             self.file_browser.invalidate(remote_name)
             self.file_browser.refresh_mount_state(remote_name)
@@ -7278,7 +7300,7 @@ class MountletWindow:
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
             self._usage_cache.clear()
-            self._connection_cache.clear()
+            getattr(self, "_connection_cache", {}).clear()
             self._setup_remote_change_polling()
             self.tray_app.rebuild_menus()
             self.refresh()
@@ -7307,7 +7329,7 @@ class MountletWindow:
         def on_accepted() -> None:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
-                self._connection_cache.pop(remote.name, None)
+                getattr(self, "_connection_cache", {}).pop(remote.name, None)
                 self._current_remote_names = []
                 if getattr(getattr(self.file_browser, "remote", None), "name", "") == remote.name:
                     self.file_browser.close()
@@ -7319,7 +7341,7 @@ class MountletWindow:
                 return
             if dialog.renamed_from and dialog.renamed_to != dialog.renamed_from:
                 self._usage_cache.pop(dialog.renamed_from, None)
-                self._connection_cache.pop(dialog.renamed_from, None)
+                getattr(self, "_connection_cache", {}).pop(dialog.renamed_from, None)
                 self.file_browser.backend.rename_remote(dialog.renamed_from, dialog.renamed_to)
                 if getattr(getattr(self.file_browser, "remote", None), "name", "") == dialog.renamed_from:
                     self.file_browser.close()
@@ -7328,7 +7350,7 @@ class MountletWindow:
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             self._usage_cache.clear()
-            self._connection_cache.clear()
+            getattr(self, "_connection_cache", {}).clear()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
@@ -7348,7 +7370,7 @@ class MountletWindow:
 
         def on_accepted() -> None:
             self._usage_cache.clear()
-            self._connection_cache.clear()
+            getattr(self, "_connection_cache", {}).clear()
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
             self.refresh()
@@ -7834,7 +7856,7 @@ class MountletWindow:
 
     def _rclone_config_replaced(self) -> None:
         self._usage_cache.clear()
-        self._connection_cache.clear()
+        getattr(self, "_connection_cache", {}).clear()
         self._usage_pending.clear()
         self._action_pending.clear()
         self._current_remote_names = []
@@ -7904,6 +7926,8 @@ class MountletWindow:
             usage = getattr(payload, "usage", core.StorageUsage("?"))
             connected = bool(getattr(payload, "connected", False))
         self._usage_cache[remote_name] = usage
+        if not hasattr(self, "_connection_cache"):
+            self._connection_cache = {}
         self._connection_cache[remote_name] = connected
         if self.is_visible():
             self._request_refresh()
@@ -7911,7 +7935,7 @@ class MountletWindow:
     def prepare_quit(self) -> None:
         self._refresh_pending = False
         self._usage_pending.clear()
-        self._connection_cache.clear()
+        getattr(self, "_connection_cache", {}).clear()
         self._action_pending.clear()
         self._hide_window_stack()
 

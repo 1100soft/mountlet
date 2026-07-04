@@ -1047,10 +1047,26 @@ class TrayTests(unittest.TestCase):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "gphotos"
         wizard._drive_local_auth = True
+        wizard._drive_client_id = "client-id"
+        wizard._drive_client_secret = "client-secret"
+        wizard.fields = {"gphotos_read_only": mock.Mock(isChecked=mock.Mock(return_value=True))}
 
         self.assertEqual(
             wizard._initial_config_args(),
-            ["config_is_local", "true", "read_size", "true"],
+            [
+                "client_id",
+                "client-id",
+                "client_secret",
+                "client-secret",
+                "read_only",
+                "true",
+                "config_edit_advanced",
+                "false",
+                "config_is_local",
+                "true",
+                "read_size",
+                "true",
+            ],
         )
 
     def test_new_remote_wizard_schedules_input_focus(self):

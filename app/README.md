@@ -26,10 +26,9 @@ GitHub; PyPI publishing is currently disabled.
 
 ## How It Works
 
-Mountlet is a friendly desktop layer over `rclone`, a proven cloud connection
-tool:
+Mountlet is a friendly desktop layer over `rclone`, a proven cloud access tool:
 
-- `rclone` connects to cloud storage providers such as Google Drive, Dropbox,
+- `rclone` signs in to cloud storage providers such as Google Drive, Dropbox,
   OneDrive, Box, Proton Drive, S3-compatible storage, and WebDAV.
 - Mountlet Files is the integrated browser. It lists cloud accounts through
   `rclone`, opens files through the operating system, and keeps explicit
@@ -337,7 +336,7 @@ mountlet setup
 ```
 
 If you have not added any cloud storage to `rclone` yet, let setup open
-`rclone`'s connection flow:
+`rclone`'s sign-in flow:
 
 ```bash
 mountlet setup --configure-rclone
@@ -499,7 +498,8 @@ Locally tested with the current GUI flow and/or active local remotes:
 
 Available but not yet locally tested:
 
-- Google Photos
+- Google Photos (limited: current rclone releases can only download media that
+  rclone uploaded)
 - Amazon S3
 - MinIO and other S3-compatible providers
 - Wasabi
@@ -519,12 +519,13 @@ Some providers can still require per-device reauthentication after config sync.
 Box has shown this behavior in local testing even when the synced config bundle
 contains all Mountlet and rclone config files.
 
-iCloud remotes may show `?` for usage. rclone can connect to iCloud Drive and
+iCloud remotes may show `?` for usage. rclone can access iCloud Drive and
 Photos, but it does not expose reliable quota data for this backend.
 
 Google Photos is a specialized media backend, not a general cloud drive. Due to
 Google API policy changes, current rclone releases can only download media that
-rclone uploaded, so existing Photos libraries may appear empty in Mountlet.
+rclone uploaded, so existing Photos libraries may appear empty in Mountlet. See
+the [rclone Google Photos limitations](https://rclone.org/googlephotos/#limitations).
 
 ## Extra Commands
 
