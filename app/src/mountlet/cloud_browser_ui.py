@@ -777,7 +777,7 @@ class CompactCloudBrowser:
             base_pixmap = base_icon.pixmap(size)
             painter.drawPixmap(0, 0, base_pixmap)
             if temporary_cached or protected_cached:
-                color = "#a855f7" if temporary_cached and protected_cached else "#38bdf8" if protected_cached else "#ef4444"
+                color = "#00ff00" if protected_cached else "#ff0000"
                 painter.setOpacity(0.5 if cache_partial else 1.0)
                 pen = self.qt.QPen(self.qt.QColor(0, 0, 0, 170))
                 pen.setWidth(5)
@@ -1345,7 +1345,7 @@ class CompactCloudBrowser:
         target = current_target or fallback_target
         if target is not None:
             self.tree.setCurrentItem(target)
-            if target not in self.tree.selectedItems():
+            if not selected_paths and target not in self.tree.selectedItems():
                 target.setSelected(True)
             if pending_select_path:
                 with suppress(Exception):
@@ -1461,6 +1461,8 @@ class CompactCloudBrowser:
         if current is None:
             return
         self.tree.setCurrentItem(current)
+        if self.tree.selectedItems():
+            return
         selection_model = getattr(self.tree, "selectionModel", None)
         selection = selection_model() if callable(selection_model) else None
         if selection is not None:
