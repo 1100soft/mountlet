@@ -75,18 +75,6 @@
          id="stop8" />
     </linearGradient>
     <linearGradient
-       id="linearGradient5"
-       inkscape:collect="always">
-      <stop
-         style="stop-color:#0f0033;stop-opacity:1;"
-         offset="0"
-         id="stop5" />
-      <stop
-         style="stop-color:#0f0033;stop-opacity:0.5;"
-         offset="1"
-         id="stop6" />
-    </linearGradient>
-    <linearGradient
        id="mountainGradient"
        x1="32"
        y1="17"
@@ -98,22 +86,13 @@
          offset="0"
          stop-color="#38d8ff"
          id="stop1"
-         style="stop-color:#00cdff;stop-opacity:1;" />
+         style="stop-color:#80dbff;stop-opacity:1;" />
       <stop
          offset="1"
          stop-color="#0284d1"
          id="stop3"
-         style="stop-color:#0040ff;stop-opacity:1;" />
+         style="stop-color:#0044ff;stop-opacity:1;" />
     </linearGradient>
-    <linearGradient
-       inkscape:collect="always"
-       xlink:href="#linearGradient5"
-       id="linearGradient6"
-       x1="32"
-       y1="47.0625"
-       x2="32"
-       y2="61.0625"
-       gradientUnits="userSpaceOnUse" />
     <linearGradient
        inkscape:collect="always"
        xlink:href="#linearGradient7"
@@ -141,14 +120,4 @@
      stroke-linejoin="round"
      id="path3"
      style="fill:url(#linearGradient8);stroke:url(#linearGradient11)" />
-  <path
-     d="M 1,64 32,11.92 63,64 Z"
-     fill="url(#mountainGradient)"
-     id="path4"
-     style="fill:url(#mountainGradient);stroke-width:1.24" />
-  <path
-     d="M 25,64 V 50.5 C 25,42 39,42 39,50.5 V 64 Z"
-     fill="#082f49"
-     id="path5"
-     style="fill:url(#linearGradient6);fill-opacity:1" />
 </svg>
