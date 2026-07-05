@@ -136,6 +136,7 @@ class CompactCloudBrowser:
         self._working_timer: Any | None = None
         self._rclone_output_dialog: Any | None = None
         self._rclone_output_text: Any | None = None
+        self._rclone_raw_output_text: Any | None = None
         self._rclone_output_lines: list[str] = []
         self._rclone_progress_block: list[str] = []
         self._offline_jobs_running = 0
@@ -456,10 +457,16 @@ class CompactCloudBrowser:
             dialog = self.qt.QDialog(self.window)
             dialog.setWindowTitle("rclone output")
             layout = self.qt.QVBoxLayout(dialog)
+            layout.addWidget(self.qt.QLabel("Current operation"))
             text = self.qt.QPlainTextEdit()
             text.setReadOnly(True)
             text.setMinimumWidth(520)
             layout.addWidget(text)
+            layout.addWidget(self.qt.QLabel("Recent raw rclone log"))
+            raw_text = self.qt.QPlainTextEdit()
+            raw_text.setReadOnly(True)
+            raw_text.setMinimumWidth(520)
+            layout.addWidget(raw_text)
             buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
             copy_button = buttons.addButton("Copy output", self.qt.QDialogButtonBox.ButtonRole.ActionRole)
             copy_button.clicked.connect(self._copy_rclone_output)
@@ -467,6 +474,7 @@ class CompactCloudBrowser:
             layout.addWidget(buttons)
             self._rclone_output_dialog = dialog
             self._rclone_output_text = text
+            self._rclone_raw_output_text = raw_text
             self._refresh_rclone_output_text()
             self._resize_rclone_output_text()
             self._scroll_rclone_output_to_end()
@@ -531,13 +539,20 @@ class CompactCloudBrowser:
         parsed = "\n".join(self._rclone_output_lines)
         raw = rclone_log.tail_text()
         if parsed and raw:
-            return f"{parsed}\n\nRecent raw rclone log:\n{raw}"
-        return parsed or raw
+            return f"Current operation:\n{parsed}\n\nRecent raw rclone log:\n{raw}"
+        if parsed:
+            return f"Current operation:\n{parsed}"
+        if raw:
+            return f"Recent raw rclone log:\n{raw}"
+        return "No rclone output has been recorded yet."
 
     def _refresh_rclone_output_text(self) -> None:
         editor = self._rclone_output_text
         if editor is not None:
-            editor.setPlainText(self._rclone_output_text_block())
+            editor.setPlainText("\n".join(self._rclone_output_lines) or "No current operation output.")
+        raw_editor = getattr(self, "_rclone_raw_output_text", None)
+        if raw_editor is not None:
+            raw_editor.setPlainText(rclone_log.tail_text() or "No raw rclone output has been recorded.")
 
     def _copy_rclone_output(self) -> None:
         text = self._rclone_output_text_block()

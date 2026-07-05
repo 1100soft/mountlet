@@ -1991,16 +1991,37 @@ class CloudBrowserTests(unittest.TestCase):
         browser = object.__new__(CompactCloudBrowser)
         browser._rclone_output_lines = ["Transferred: 1 MiB / 2 MiB"]
         browser._rclone_output_text = None
+        browser._rclone_raw_output_text = None
         browser.qt = SimpleNamespace(QApplication=SimpleNamespace(clipboard=lambda: SimpleNamespace(setText=copied.append)))
 
         with mock.patch("mountlet.cloud_browser_ui.rclone_log.tail_text", return_value="mount failed\nmacFUSE blocked"):
             text = browser._rclone_output_text_block()
             browser._copy_rclone_output()
 
+        self.assertIn("Current operation:", text)
         self.assertIn("Transferred: 1 MiB / 2 MiB", text)
         self.assertIn("Recent raw rclone log:", text)
         self.assertIn("macFUSE blocked", text)
         self.assertEqual(copied, [text])
+
+    def test_rclone_output_refreshes_parsed_and_raw_panes(self):
+        class Editor:
+            def __init__(self) -> None:
+                self.text = ""
+
+            def setPlainText(self, text: str) -> None:
+                self.text = text
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._rclone_output_lines = []
+        browser._rclone_output_text = Editor()
+        browser._rclone_raw_output_text = Editor()
+
+        with mock.patch("mountlet.cloud_browser_ui.rclone_log.tail_text", return_value="raw line"):
+            browser._refresh_rclone_output_text()
+
+        self.assertEqual(browser._rclone_output_text.text, "No current operation output.")
+        self.assertEqual(browser._rclone_raw_output_text.text, "raw line")
 
     def test_rclone_output_keeps_latest_progress_block(self):
         class Editor:

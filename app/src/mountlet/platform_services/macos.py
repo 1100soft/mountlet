@@ -65,7 +65,7 @@ class MacOSPlatformServices(PlatformServices):
             )
         except (OSError, subprocess.TimeoutExpired):
             return False
-        mount_path = str(Path(path).expanduser())
+        mount_path = str(path).replace("\\", "/").rstrip("/")
         return any(f" on {mount_path} (" in line for line in result.stdout.splitlines())
 
     def mount_start_timeout_seconds(self) -> float:
