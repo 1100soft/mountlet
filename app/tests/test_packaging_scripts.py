@@ -4,6 +4,7 @@ import importlib.util
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -95,6 +96,22 @@ class StageRcloneTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "usable rclone"):
                     stage_rclone.resolve_rclone_source(fake, "Linux")
+
+    def test_macos_bundled_rclone_uses_official_download_archive(self):
+        stage_rclone = _load_stage_rclone()
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+
+            def fake_download(_url: str, archive: Path) -> None:
+                with zipfile.ZipFile(archive, "w") as handle:
+                    handle.writestr("rclone-v1.74.3-osx-amd64/rclone", b"official")
+
+            with mock.patch.object(stage_rclone.urllib.request, "urlretrieve", side_effect=fake_download) as download:
+                binary = stage_rclone.download_official_macos_rclone(root, arch="amd64")
+
+            self.assertEqual(binary.read_bytes(), b"official")
+            self.assertTrue(binary.stat().st_mode & 0o755)
+            self.assertIn("rclone-current-osx-amd64.zip", download.call_args.args[0])
 
 
 if __name__ == "__main__":

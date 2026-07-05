@@ -19,6 +19,19 @@ class RcloneLogTests(unittest.TestCase):
 
                 self.assertEqual(rclone_log.tail_text(max_lines=10), "two\nthree\nfour")
 
+    def test_append_raw_notifies_subscribers_unless_disabled(self):
+        received = []
+        unsubscribe = rclone_log.subscribe(received.append)
+        self.addCleanup(unsubscribe)
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "rclone-output.log"
+            with mock.patch.object(rclone_log, "log_path", return_value=path):
+                with mock.patch.object(rclone_log, "apply_permissions"):
+                    rclone_log.append_raw("shown\n")
+                    rclone_log.append_raw("silent\n", notify=False)
+
+        self.assertEqual(received, ["shown\n"])
+
 
 if __name__ == "__main__":
     unittest.main()

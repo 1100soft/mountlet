@@ -5,10 +5,14 @@ import os
 import platform
 import shutil
 import subprocess
+import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 
 WINDOWS_SHIM_MAX_BYTES = 1_000_000
+RCLONE_DOWNLOAD_BASE = "https://downloads.rclone.org/rclone-current-osx-{arch}.zip"
 
 
 def _binary_name(system: str) -> str:
@@ -82,6 +86,31 @@ def _windows_real_rclone_candidates() -> list[Path]:
     return [*direct, *discovered]
 
 
+def _macos_download_arch(machine: str | None = None) -> str:
+    value = (machine or platform.machine()).casefold()
+    if value in {"arm64", "aarch64"}:
+        return "arm64"
+    return "amd64"
+
+
+def download_official_macos_rclone(destination: Path, *, arch: str | None = None) -> Path:
+    resolved_arch = arch or _macos_download_arch()
+    url = RCLONE_DOWNLOAD_BASE.format(arch=resolved_arch)
+    destination.mkdir(parents=True, exist_ok=True)
+    archive = destination / f"rclone-current-osx-{resolved_arch}.zip"
+    urllib.request.urlretrieve(url, archive)
+    with zipfile.ZipFile(archive) as handle:
+        members = [name for name in handle.namelist() if name.endswith("/rclone")]
+        if not members:
+            raise RuntimeError(f"The downloaded rclone archive did not contain a macOS rclone binary: {url}")
+        member = members[0]
+        target = destination / "rclone"
+        with handle.open(member) as source, target.open("wb") as output:
+            shutil.copyfileobj(source, output)
+    target.chmod(target.stat().st_mode | 0o755)
+    return target
+
+
 def resolve_rclone_source(source: Path | None, system: str) -> Path:
     candidates: list[Path] = []
     if source is not None:
@@ -118,8 +147,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--destination", type=Path, default=Path("vendor") / "rclone")
     args = parser.parse_args(argv)
 
-    source = resolve_rclone_source(args.rclone, platform.system())
-    target = stage_rclone(source.resolve(), args.destination.resolve(), platform.system())
+    system = platform.system()
+    if system == "Darwin" and args.rclone is None:
+        with tempfile.TemporaryDirectory(prefix="mountlet-rclone-") as tempdir:
+            source = download_official_macos_rclone(Path(tempdir))
+            target = stage_rclone(source.resolve(), args.destination.resolve(), system)
+    else:
+        source = resolve_rclone_source(args.rclone, system)
+        target = stage_rclone(source.resolve(), args.destination.resolve(), system)
     print(target)
     return 0
 

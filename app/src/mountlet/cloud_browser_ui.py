@@ -153,7 +153,11 @@ class CompactCloudBrowser:
         self._bridge.offline_job_paths_ready.connect(self._offline_job_paths_ready)
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
         self._bridge.rclone_output_ready.connect(self._append_rclone_output)
+        self._bridge.rclone_raw_log_changed.connect(self._raw_rclone_log_changed)
         self.backend.operation_output_callback = lambda text: self._bridge.rclone_output_ready.emit(text)
+        self._unsubscribe_rclone_log = rclone_log.subscribe(
+            lambda _text: self._bridge.rclone_raw_log_changed.emit()
+        )
         self.window = self._make_window()
         self._file_icon_provider = self._make_file_icon_provider()
         self._build()
@@ -169,6 +173,7 @@ class CompactCloudBrowser:
             offline_job_paths_ready = qt.Signal(str, object, str)
             offline_job_finished = qt.Signal(str, object, str, bool, str)
             rclone_output_ready = qt.Signal(str)
+            rclone_raw_log_changed = qt.Signal()
 
         return Bridge()
 
@@ -478,6 +483,7 @@ class CompactCloudBrowser:
             self._refresh_rclone_output_text()
             self._resize_rclone_output_text()
             self._scroll_rclone_output_to_end()
+            self._scroll_raw_rclone_output_to_end()
         else:
             self._refresh_rclone_output_text()
         dialog.show()
@@ -488,7 +494,7 @@ class CompactCloudBrowser:
     def _append_rclone_output(self, text: str) -> None:
         if not text:
             return
-        rclone_log.append_raw(text)
+        rclone_log.append_raw(text, notify=False)
         lines = self._split_rclone_output_lines(text)
         if not lines:
             return
@@ -502,6 +508,17 @@ class CompactCloudBrowser:
         self._refresh_rclone_output_text()
         self._resize_rclone_output_text()
         self._scroll_rclone_output_to_end()
+        self._position_rclone_output()
+
+    def _raw_rclone_log_changed(self) -> None:
+        dialog = getattr(self, "_rclone_output_dialog", None)
+        if dialog is not None:
+            with suppress(Exception):
+                if not dialog.isVisible():
+                    return
+        self._refresh_rclone_output_text()
+        self._scroll_rclone_output_to_end()
+        self._scroll_raw_rclone_output_to_end()
         self._position_rclone_output()
 
     def _record_rclone_output_line(self, line: str) -> None:
@@ -582,6 +599,13 @@ class CompactCloudBrowser:
         with suppress(Exception):
             self._move_rclone_output_cursor_to_end()
 
+    def _scroll_raw_rclone_output_to_end(self) -> None:
+        editor = getattr(self, "_rclone_raw_output_text", None)
+        if editor is None:
+            return
+        with suppress(Exception):
+            self._move_text_editor_cursor_to_end(editor)
+
     def _position_rclone_output(self) -> None:
         dialog = getattr(self, "_rclone_output_dialog", None)
         if dialog is None:
@@ -615,6 +639,9 @@ class CompactCloudBrowser:
         editor = self._rclone_output_text
         if editor is None:
             return
+        self._move_text_editor_cursor_to_end(editor)
+
+    def _move_text_editor_cursor_to_end(self, editor: Any) -> None:
         text_cursor = getattr(self.qt, "QTextCursor", None)
         move_operation = getattr(text_cursor, "MoveOperation", None)
         end = getattr(move_operation, "End", None)

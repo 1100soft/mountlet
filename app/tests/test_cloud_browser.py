@@ -2023,6 +2023,35 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._rclone_output_text.text, "No current operation output.")
         self.assertEqual(browser._rclone_raw_output_text.text, "raw line")
 
+    def test_raw_rclone_log_update_does_not_raise_output_dialog(self):
+        class Editor:
+            def __init__(self) -> None:
+                self.text = ""
+
+            def setPlainText(self, text: str) -> None:
+                self.text = text
+
+            def moveCursor(self, _operation: object) -> None:
+                pass
+
+        dialog = mock.Mock()
+        dialog.isVisible.return_value = True
+        browser = object.__new__(CompactCloudBrowser)
+        browser._rclone_output_dialog = dialog
+        browser._rclone_output_lines = []
+        browser._rclone_output_text = Editor()
+        browser._rclone_raw_output_text = Editor()
+        browser._position_rclone_output = mock.Mock()
+        browser.qt = SimpleNamespace(QTextCursor=SimpleNamespace(MoveOperation=SimpleNamespace(End=1)))
+
+        with mock.patch("mountlet.cloud_browser_ui.rclone_log.tail_text", return_value="new raw line"):
+            browser._raw_rclone_log_changed()
+
+        self.assertEqual(browser._rclone_raw_output_text.text, "new raw line")
+        browser._position_rclone_output.assert_called_once_with()
+        dialog.raise_.assert_not_called()
+        dialog.activateWindow.assert_not_called()
+
     def test_rclone_output_keeps_latest_progress_block(self):
         class Editor:
             def __init__(self) -> None:
