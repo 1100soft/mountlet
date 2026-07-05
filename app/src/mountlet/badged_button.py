@@ -12,6 +12,34 @@ def create_badged_button(qt: Any, text: str = "") -> Any:
             self._mountlet_badge_visible = False
             self._mountlet_badge_color = "#ef4444"
             self._mountlet_badge_size = 8
+            self._mountlet_disabled_opacity_effect = None
+            self._update_mountlet_disabled_opacity()
+
+        def setEnabled(self, enabled: bool) -> None:
+            super().setEnabled(enabled)
+            self._update_mountlet_disabled_opacity()
+
+        def changeEvent(self, event: Any) -> None:
+            super().changeEvent(event)
+            try:
+                if event.type() == qt.QEvent.Type.EnabledChange:
+                    self._update_mountlet_disabled_opacity()
+            except Exception:
+                return
+
+        def _update_mountlet_disabled_opacity(self) -> None:
+            effect_type = getattr(qt, "QGraphicsOpacityEffect", None)
+            if effect_type is None:
+                return
+            try:
+                effect = self._mountlet_disabled_opacity_effect
+                if effect is None:
+                    effect = effect_type(self)
+                    self._mountlet_disabled_opacity_effect = effect
+                    self.setGraphicsEffect(effect)
+                effect.setOpacity(1.0 if self.isEnabled() else 0.38)
+            except Exception:
+                return
 
         def setBadgeVisible(self, visible: bool) -> None:
             visible = bool(visible)

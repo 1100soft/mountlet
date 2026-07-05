@@ -5,6 +5,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+NEUTRAL_ICON_COLOR = "#334155"
+
 
 def icon_path(name: str) -> str | None:
     filename = name if name.endswith(".svg") else f"{name}.svg"
@@ -29,26 +31,39 @@ def mountlet_icon(qt: Any, name: str, *, size: int = 22, color: str | None = Non
         return None
     if color is None:
         return icon
+    recolored = _recolored_svg_icon(qt, path, size=size, color=color)
+    if recolored is not None:
+        return recolored
+    return icon
+
+
+def _recolored_svg_icon(qt: Any, path: str, *, size: int, color: str) -> Any | None:
     pixmap_type = getattr(qt, "QPixmap", None)
     painter_type = getattr(qt, "QPainter", None)
-    color_type = getattr(qt, "QColor", None)
+    icon_type = getattr(qt, "QIcon", None)
     size_type = getattr(qt, "QSize", None)
-    if pixmap_type is None or painter_type is None or color_type is None or size_type is None:
-        return icon
+    if pixmap_type is None or painter_type is None or icon_type is None or size_type is None:
+        return None
     try:
-        source = icon.pixmap(size_type(size, size))
-        if source.isNull():
-            return icon
-        pixmap = pixmap_type(source.size())
+        from PySide6.QtCore import QByteArray
+        from PySide6.QtSvg import QSvgRenderer
+
+        svg = Path(path).read_text(encoding="utf-8")
+        svg = svg.replace(NEUTRAL_ICON_COLOR, color).replace(NEUTRAL_ICON_COLOR.upper(), color)
+        renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        if not renderer.isValid():
+            return None
+    except Exception:
+        return None
+    try:
+        pixmap = pixmap_type(size_type(size, size))
         pixmap.fill(qt.Qt.GlobalColor.transparent)
         painter = painter_type(pixmap)
-        painter.drawPixmap(0, 0, source)
-        painter.setCompositionMode(painter_type.CompositionMode.CompositionMode_SourceIn)
-        painter.fillRect(pixmap.rect(), color_type(color))
+        renderer.render(painter)
         painter.end()
         return icon_type(pixmap)
     except Exception:
-        return icon
+        return None
 
 
 def apply_button_icon(
