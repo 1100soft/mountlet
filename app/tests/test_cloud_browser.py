@@ -795,9 +795,11 @@ class CloudBrowserTests(unittest.TestCase):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_text("baseline", encoding="utf-8")
 
+            metadata = {"Size": 7, "ModTime": "2026-01-02T03:04:00Z"}
             with mock.patch.object(backend, "_rclone", return_value="rclone"):
-                with mock.patch.object(backend, "_run_operation", side_effect=reconcile_copy):
-                    conflicts = backend.changed_managed_files(remote)
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata):
+                    with mock.patch.object(backend, "_run_operation", side_effect=reconcile_copy):
+                        conflicts = backend.changed_managed_files(remote)
 
             self.assertEqual(conflicts, [])
             self.assertIn(("copyto", str(cached), "Docs:/Reports/a.txt"), calls)
@@ -1041,9 +1043,11 @@ class CloudBrowserTests(unittest.TestCase):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_text("baseline", encoding="utf-8")
 
+            metadata = {"Size": 7, "ModTime": "2026-01-02T03:04:00Z"}
             with mock.patch.object(backend, "_rclone", return_value="rclone"):
-                with mock.patch.object(backend, "_run_operation", side_effect=reconcile_copy) as run:
-                    backend.changed_managed_files(remote)
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata):
+                    with mock.patch.object(backend, "_run_operation", side_effect=reconcile_copy) as run:
+                        backend.changed_managed_files(remote)
 
             sync_calls = [call for call in run.call_args_list if call.kwargs.get("timeout") == RCLONE_CACHE_SYNC_TIMEOUT_SECONDS]
             self.assertEqual(len(sync_calls), 2)
@@ -1146,9 +1150,11 @@ class CloudBrowserTests(unittest.TestCase):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_text("baseline", encoding="utf-8")
 
+            metadata = {"Size": 7, "ModTime": "2026-01-02T03:04:00Z"}
             with mock.patch.object(backend, "_rclone", return_value="rclone"):
-                with mock.patch.object(backend, "_run_operation", side_effect=mutate_manifest):
-                    conflicts = backend.changed_managed_files(remote)
+                with mock.patch.object(backend, "_remote_file_metadata", return_value=metadata):
+                    with mock.patch.object(backend, "_run_operation", side_effect=mutate_manifest):
+                        conflicts = backend.changed_managed_files(remote)
 
             self.assertEqual(conflicts, [])
             self.assertFalse(backend.offline_changed("Docs", "Reports/a.txt"))
