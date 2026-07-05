@@ -56,6 +56,7 @@ from .settings import (
     set_start_at_login,
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
+from .ui_icons import apply_button_icon
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -5420,10 +5421,11 @@ class MountletWindow:
         if file_browser is not None:
             file_browser._update_focus_style(owner == "browser")
 
-    def _toolbar_button(self, text: str, tooltip: str, callback: Any) -> Any:
-        button = create_badged_button(self.qt, text)
+    def _toolbar_button(self, icon_name: str, fallback_text: str, tooltip: str, callback: Any) -> Any:
+        button = create_badged_button(self.qt, fallback_text)
         button.setFixedSize(34, 30)
         button.setToolTip(tooltip)
+        apply_button_icon(self.qt, button, icon_name, fallback_text=fallback_text, size=22)
         try:
             font = button.font()
             font.setPointSize(max(font.pointSize() + 5, 16))
@@ -5434,22 +5436,32 @@ class MountletWindow:
         return button
 
     def _settings_toolbar_button(self) -> Any:
-        button = self._toolbar_button("⚙", "App settings", self._show_app_config_editor)
+        button = self._toolbar_button("ui-app-settings", "⚙", "App settings", self._show_app_config_editor)
         self._settings_button = button
         return button
 
     def _push_sync_toolbar_button(self) -> Any:
-        button = self._toolbar_button("↑", "Push config to sync location", self._push_config_sync_bundle)
+        button = self._toolbar_button(
+            "ui-config-push",
+            "↑",
+            "Push config to sync location",
+            self._push_config_sync_bundle,
+        )
         self._push_sync_button = button
         return button
 
     def _pull_sync_toolbar_button(self) -> Any:
-        button = self._toolbar_button("↓", "Pull config from sync location", self._pull_config_sync_bundle)
+        button = self._toolbar_button(
+            "ui-config-pull",
+            "↓",
+            "Pull config from sync location",
+            self._pull_config_sync_bundle,
+        )
         self._pull_sync_button = button
         return button
 
     def _all_cache_sync_toolbar_button(self) -> Any:
-        return self._toolbar_button("⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
+        return self._toolbar_button("ui-sync", "⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
 
     def _update_config_sync_buttons(self) -> None:
         push_button = getattr(self, "_push_sync_button", None)
@@ -5510,14 +5522,14 @@ class MountletWindow:
         local_changed = bool(sync_configured and local_hash and local_hash != last_local_hash)
         remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
-            push_button.setText("↑")
+            self._apply_button_icon_if_available(push_button, "ui-config-push", "↑", size=22)
             set_badge(push_button, local_changed, "#ef4444")
             push_button.setEnabled(sync_configured)
             push_button.setToolTip(
                 "Local config changed since the last push." if local_changed else "Push config to sync location"
             )
         if pull_button is not None:
-            pull_button.setText("↓")
+            self._apply_button_icon_if_available(pull_button, "ui-config-pull", "↓", size=22)
             set_badge(pull_button, remote_changed, "#ef4444")
             pull_button.setEnabled(sync_configured)
             if remote_changed:
@@ -5528,6 +5540,22 @@ class MountletWindow:
 
     def _configuration_changed(self) -> None:
         self._update_config_sync_buttons()
+
+    def _apply_button_icon_if_available(
+        self,
+        button: Any,
+        icon_name: str,
+        fallback_text: str,
+        *,
+        size: int = 22,
+        color: str | None = None,
+    ) -> None:
+        qt = getattr(self, "qt", None)
+        if qt is None:
+            with suppress(Exception):
+                button.setText(fallback_text)
+            return
+        apply_button_icon(qt, button, icon_name, fallback_text=fallback_text, size=size, color=color)
 
     def _request_config_sync_metadata_check(self, remotes: list[core.RemoteInfo]) -> None:
         if self._remote_sync_check_pending or self._tray_is_quitting():
@@ -5570,6 +5598,7 @@ class MountletWindow:
         button = self.qt.QPushButton("📌")
         button.setFixedSize(34, 30)
         button.setToolTip("Keep Mountlet above other windows")
+        apply_button_icon(self.qt, button, "ui-pin", fallback_text="📌", size=22)
         try:
             font = button.font()
             font.setPointSize(max(font.pointSize() + 5, 16))
@@ -5690,6 +5719,7 @@ class MountletWindow:
         reverse_button = self.qt.QPushButton("↕")
         reverse_button.setFixedSize(34, 30)
         reverse_button.setToolTip("Reverse the current remote order.")
+        apply_button_icon(self.qt, reverse_button, "ui-reorder", fallback_text="↕", size=22)
         try:
             font = reverse_button.font()
             font.setPointSize(max(font.pointSize() + 5, 16))
@@ -5865,7 +5895,12 @@ class MountletWindow:
         status_layout.setSpacing(2)
         status_layout.addWidget(status)
         status_layout.addWidget(usage_note)
-        config_button = self._icon_button("⚙", lambda: self._show_mount_config_editor(remote), enabled=not action_pending)
+        config_button = self._icon_button(
+            "ui-config",
+            lambda: self._show_mount_config_editor(remote),
+            enabled=not action_pending,
+            fallback_text="⚙",
+        )
         config_button.setProperty("rowControl", True)
         config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
         config_button.setToolTip(config_tooltip)
@@ -5873,7 +5908,11 @@ class MountletWindow:
             widget,
             tooltip,
         )
-        browser_button = self._icon_button("↗", lambda selected=remote: self._open_remote_in_browser(selected))
+        browser_button = self._icon_button(
+            "ui-external-link",
+            lambda selected=remote: self._open_remote_in_browser(selected),
+            fallback_text="↗",
+        )
         browser_button.setProperty("rowControl", True)
         self._update_browser_button(browser_button, remote)
         move_controls, up_button, down_button = self._move_button_stack(remote)
@@ -5913,7 +5952,7 @@ class MountletWindow:
         layout = self.qt.QHBoxLayout(frame)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(8)
-        add_button = self._icon_button("+", self._show_new_remote_wizard)
+        add_button = self._icon_button("ui-add", self._show_new_remote_wizard, fallback_text="+")
         add_button.setProperty("rowControl", True)
         add_button.setToolTip(tooltip)
         add_button.enterEvent = lambda event, widget=add_button: self._show_immediate_tooltip(widget, tooltip)
@@ -5992,10 +6031,14 @@ class MountletWindow:
         if url:
             tooltip = _remote_browser_tooltip(remote) + _shortcut_hint("remote_open_browser")
             button.setEnabled(True)
+            self._apply_button_icon_if_available(
+                button, "ui-external-link", "↗", size=22, color=_provider_color(remote)
+            )
             button.setStyleSheet(f"color: {_provider_color(remote)};")
         else:
             tooltip = f"No browser view is configured for {remote.display_name}" + _shortcut_hint("remote_open_browser")
             button.setEnabled(False)
+            self._apply_button_icon_if_available(button, "ui-external-link", "↗", size=22)
             button.setStyleSheet("")
         button.setToolTip(tooltip)
         button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
@@ -6013,7 +6056,11 @@ class MountletWindow:
         return widget, up_button, down_button
 
     def _move_button(self, remote: core.RemoteInfo, delta: int) -> Any:
-        button = self._small_icon_button("▲" if delta < 0 else "▼", lambda: self._move_remote(remote.name, delta))
+        button = self._small_icon_button(
+            "ui-move-up" if delta < 0 else "ui-move-down",
+            lambda: self._move_remote(remote.name, delta),
+            fallback_text="▲" if delta < 0 else "▼",
+        )
         button.setProperty("rowControl", True)
         self._update_move_button(button, remote, delta)
         return button
@@ -6686,17 +6733,33 @@ class MountletWindow:
         button.clicked.connect(lambda checked=False: callback())
         return button
 
-    def _icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
-        button = self._button(label, callback, enabled=enabled)
+    def _icon_button(
+        self,
+        icon_name: str,
+        callback: Any,
+        *,
+        enabled: bool = True,
+        fallback_text: str = "",
+    ) -> Any:
+        button = self._button(fallback_text, callback, enabled=enabled)
         button.setFixedSize(34, 30)
+        apply_button_icon(self.qt, button, icon_name, fallback_text=fallback_text, size=22)
         font = button.font()
         font.setPointSize(max(font.pointSize() + 7, 18))
         button.setFont(font)
         return button
 
-    def _small_icon_button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
-        button = self._button(label, callback, enabled=enabled)
+    def _small_icon_button(
+        self,
+        icon_name: str,
+        callback: Any,
+        *,
+        enabled: bool = True,
+        fallback_text: str = "",
+    ) -> Any:
+        button = self._button(fallback_text, callback, enabled=enabled)
         button.setFixedSize(24, 14)
+        apply_button_icon(self.qt, button, icon_name, fallback_text=fallback_text, size=12)
         font = button.font()
         font.setPointSize(max(font.pointSize(), 9))
         button.setFont(font)

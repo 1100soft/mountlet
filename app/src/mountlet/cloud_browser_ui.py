@@ -18,6 +18,7 @@ from .cloud_browser import (
 )
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
+from .ui_icons import apply_button_icon, mountlet_icon
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
@@ -234,16 +235,36 @@ class CompactCloudBrowser:
         header.addStretch(1)
         self.mount_switch = self._mount_switch()
         header.addWidget(self.mount_switch)
-        self.remote_sync_button = self._button("⇄", self.sync_remote, "Sync cached files for this remote", square=True)
+        self.remote_sync_button = self._button(
+            "⇄",
+            self.sync_remote,
+            "Sync cached files for this remote",
+            square=True,
+            icon_name="ui-sync",
+        )
         header.addWidget(self.remote_sync_button)
-        self.rclone_output_button = self._button("▤", self._show_rclone_output, "Show rclone output", square=True)
+        self.rclone_output_button = self._button(
+            "▤",
+            self._show_rclone_output,
+            "Show rclone output",
+            square=True,
+            icon_name="ui-rclone-output",
+        )
         header.addWidget(self.rclone_output_button)
-        header.addWidget(self._button("×", self.hide_until_selected, "Close file browser", square=True))
+        header.addWidget(
+            self._button(
+                "×",
+                self.hide_until_selected,
+                "Close file browser",
+                square=True,
+                icon_name="ui-window-close",
+            )
+        )
         layout.addLayout(header)
 
         navigation = qt.QHBoxLayout()
-        self.up_button = self._button("↑", self.go_up, "Parent folder", square=True)
-        self.root_button = self._button("⌂", self.go_root, "Remote root", square=True)
+        self.up_button = self._button("↑", self.go_up, "Parent folder", square=True, icon_name="ui-parent")
+        self.root_button = self._button("⌂", self.go_root, "Remote root", square=True, icon_name="ui-home")
         self.path_field = qt.QLineEdit()
         self.path_field.setReadOnly(True)
         self.path_field.setPlaceholderText("Remote root")
@@ -252,23 +273,50 @@ class CompactCloudBrowser:
         navigation.addWidget(self.up_button)
         navigation.addWidget(self.root_button)
         navigation.addWidget(self.path_field, 1)
-        navigation.addWidget(self._button("↻", lambda: self.refresh(force=True), "Refresh folder", square=True))
+        navigation.addWidget(
+            self._button(
+                "↻",
+                lambda: self.refresh(force=True),
+                "Refresh folder",
+                square=True,
+                icon_name="ui-refresh",
+            )
+        )
         self.open_folder_button = self._button(
             "↗",
             self._open_current_mount,
             "Open this folder in the system file manager",
             square=True,
+            icon_name="ui-folder-open",
         )
         navigation.addWidget(self.open_folder_button)
         layout.addLayout(navigation)
 
         item_actions = qt.QHBoxLayout()
-        self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True)
-        self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True)
-        self.paste_button = self._button("▣", self.paste, "Paste into this folder", square=True)
-        self.delete_button = self._button("⌫", self.delete_selected, "Delete selected items", square=True)
-        self.offline_button = self._button("", self.toggle_offline, "Make selected items available offline", square=True)
-        self.selection_sync_button = self._button("⇄", self.sync_selected, "Sync selected local copies", square=True)
+        self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True, icon_name="ui-copy")
+        self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True, icon_name="ui-cut")
+        self.paste_button = self._button("▣", self.paste, "Paste into this folder", square=True, icon_name="ui-paste")
+        self.delete_button = self._button(
+            "⌫",
+            self.delete_selected,
+            "Delete selected items",
+            square=True,
+            icon_name="ui-delete",
+        )
+        self.offline_button = self._button(
+            "",
+            self.toggle_offline,
+            "Make selected items available offline",
+            square=True,
+            icon_name="ui-save-offline",
+        )
+        self.selection_sync_button = self._button(
+            "⇄",
+            self.sync_selected,
+            "Sync selected local copies",
+            square=True,
+            icon_name="ui-sync",
+        )
         save_icon = self._offline_icon()
         self._offline_base_icon = save_icon
         if save_icon is not None:
@@ -498,10 +546,20 @@ class CompactCloudBrowser:
             with suppress(Exception):
                 editor.moveCursor(end)
 
-    def _button(self, text: str, callback: Callable[[], None], tooltip: str, *, square: bool = False) -> Any:
+    def _button(
+        self,
+        text: str,
+        callback: Callable[[], None],
+        tooltip: str,
+        *,
+        square: bool = False,
+        icon_name: str = "",
+    ) -> Any:
         button = create_badged_button(self.qt, text)
         if square:
             button.setFixedSize(30, 28)
+            if icon_name:
+                apply_button_icon(self.qt, button, icon_name, fallback_text=text, size=22)
             self._enlarge_button_text(button)
             with suppress(Exception):
                 button.setIconSize(self.qt.QSize(22, 22))
@@ -595,6 +653,9 @@ class CompactCloudBrowser:
         self._layout_changed()
 
     def _offline_icon(self) -> Any | None:
+        icon = mountlet_icon(self.qt, "ui-save-offline", size=22)
+        if icon is not None:
+            return icon
         try:
             return self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
         except Exception:
