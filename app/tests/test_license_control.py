@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from mountlet import license_control
 from mountlet.platform_services.linux import LinuxPlatformServices
@@ -110,12 +111,34 @@ class LicenseControlTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 license_control.verify_license_token(token)
 
-    def _signed_token(self, private_key: ec.EllipticCurvePrivateKey, payload: dict[str, object]) -> str:
-        header = {"alg": "ES256-DER", "typ": "Mountlet-License"}
+    def test_raw_es256_license_token_signature_is_verified(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(private_key, {"licenseId": "lic_1"}, raw_signature=True)
+
+        with mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False):
+            payload = license_control.verify_license_token(token)
+
+        self.assertEqual(payload["licenseId"], "lic_1")
+
+    def _signed_token(
+        self,
+        private_key: ec.EllipticCurvePrivateKey,
+        payload: dict[str, object],
+        *,
+        raw_signature: bool = False,
+    ) -> str:
+        header = {"alg": "ES256" if raw_signature else "ES256-DER", "typ": "Mountlet-License"}
         encoded_header = _b64(json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8"))
         encoded_payload = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
         signed = f"{encoded_header}.{encoded_payload}".encode("ascii")
         signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
+        if raw_signature:
+            r, s = decode_dss_signature(signature)
+            signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
         return f"{encoded_header}.{encoded_payload}.{_b64(signature)}"
 
 

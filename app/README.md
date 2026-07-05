@@ -13,6 +13,9 @@ Source code is available for non-commercial use under `LICENSE`. Installer
 builds are covered by `docs/EULA.md`. New releases are distributed through
 GitHub; PyPI publishing is currently disabled.
 
+Paid installer builds use a 7-day trial and one-time online activation. After
+activation, Mountlet stores a signed local license and keeps working offline.
+
 ## What You Can Do
 
 - Keep many cloud accounts visible in one tray app.

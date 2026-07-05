@@ -13,13 +13,14 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 from . import __version__
 from .config_tools.shared import app_cache_dir, app_config_dir, app_state_dir, apply_permissions, ensure_app_directories
@@ -245,10 +246,15 @@ def verify_license_token(token: str) -> dict[str, Any]:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("Invalid license token data.") from exc
-    if header.get("alg") != "ES256-DER":
+    if header.get("alg") not in {"ES256", "ES256-DER"}:
         raise RuntimeError("Unsupported license token signature.")
     public_key = _load_public_key()
     signed = f"{parts[0]}.{parts[1]}".encode("ascii")
+    if len(signature) == 64:
+        signature = encode_dss_signature(
+            int.from_bytes(signature[:32], "big"),
+            int.from_bytes(signature[32:], "big"),
+        )
     try:
         public_key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
     except InvalidSignature as exc:
