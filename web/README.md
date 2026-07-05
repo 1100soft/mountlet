@@ -49,6 +49,10 @@ control:
 - flexible `max_devices` per license.
 - in-app active-device listing and deactivation.
 
+Paid installers should set `MOUNTLET_REQUIRE_LICENSE=1` and provide the
+matching public signing key to the app through `MOUNTLET_LICENSE_PUBLIC_KEY` or
+`MOUNTLET_LICENSE_PUBLIC_KEY_FILE`.
+
 Create a D1 database and apply `schema.sql`:
 
 ```bash

@@ -15,6 +15,8 @@ GitHub; PyPI publishing is currently disabled.
 
 Paid installer builds use a 7-day trial and one-time online activation. After
 activation, Mountlet stores a signed local license and keeps working offline.
+Source and development runs do not enforce licensing by default; commercial
+installer builds can set `MOUNTLET_REQUIRE_LICENSE=1`.
 
 ## What You Can Do
 

@@ -63,6 +63,7 @@ _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
 _dolphin_tab_target_cache: tuple[str, str] | None = None
 _file_manager_label_cache: str | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
+LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
     ("existing_window", "Any existing file manager window"),
@@ -2111,6 +2112,10 @@ def _rclone_field_tooltip(key: str) -> str:
 
 def _config_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _license_required() -> bool:
+    return os.environ.get(LICENSE_REQUIRE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class _ConfigDialogBase:
@@ -8227,6 +8232,12 @@ class MountletTray:
             print("[!] No system tray is available in this desktop session.", file=sys.stderr)
             print("    Use the terminal menu instead: mountlet menu", file=sys.stderr)
             return 1
+
+        if _license_required() and not license_control.current_status().allowed:
+            self.main_window.show()
+            LicenseDialog(self.qt, self.main_window.window).exec()
+            if not license_control.current_status().allowed:
+                return 1
 
         self.rebuild_menus()
         self.timer.start(self.refresh_interval * 1000)
