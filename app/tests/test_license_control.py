@@ -62,6 +62,8 @@ class LicenseControlTests(unittest.TestCase):
 
         self.assertEqual(status.state, "trial")
         self.assertLessEqual(status.trial_days_remaining, 5)
+        self.assertIn("ends ", status.summary)
+        self.assertRegex(status.expires_at, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 
     def test_expired_trial_is_not_allowed(self):
         start = 1_700_000_000.0
@@ -70,6 +72,7 @@ class LicenseControlTests(unittest.TestCase):
 
         self.assertEqual(status.state, "expired")
         self.assertFalse(status.allowed)
+        self.assertIn("Trial expired ", status.summary)
 
     def test_license_token_signature_is_verified(self):
         private_key = ec.generate_private_key(ec.SECP256R1())
@@ -97,6 +100,31 @@ class LicenseControlTests(unittest.TestCase):
         self.assertEqual(payload["email"], "user@example.com")
         self.assertEqual(status.state, "licensed")
         self.assertEqual(status.max_devices, 4)
+
+    def test_beta_license_kind_is_displayed(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(
+            private_key,
+            {
+                "licenseId": "lic_1",
+                "deviceId": "dev_1",
+                "email": "tester@example.com",
+                "plan": "Beta",
+                "licenseKind": "beta",
+                "maxDevices": 2,
+            },
+        )
+
+        with mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False):
+            license_control.store_license_token(token)
+            status = license_control.current_status()
+
+        self.assertEqual(status.license_kind, "beta")
+        self.assertIn("Beta license", status.summary)
 
     def test_invalid_license_token_is_rejected(self):
         private_key = ec.generate_private_key(ec.SECP256R1())

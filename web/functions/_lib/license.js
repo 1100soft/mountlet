@@ -50,12 +50,12 @@ export function randomId(prefix) {
   return `${prefix}_${base64Url(bytes)}`;
 }
 
-export function generateLicenseKey() {
+export function generateLicenseKey(prefix = "MNT") {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = new Uint8Array(20);
   crypto.getRandomValues(bytes);
   const raw = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
-  return `MNT-${raw.slice(0, 5)}-${raw.slice(5, 10)}-${raw.slice(10, 15)}-${raw.slice(15, 20)}`;
+  return `${prefix}-${raw.slice(0, 5)}-${raw.slice(5, 10)}-${raw.slice(10, 15)}-${raw.slice(15, 20)}`;
 }
 
 export async function licenseKeyHash(env, licenseKey) {
@@ -125,6 +125,7 @@ export function tokenPayload(license, device) {
     deviceId: device.id,
     email: license.email || "",
     plan: license.plan || "Personal",
+    licenseKind: license.license_kind || "paid",
     maxDevices: Number(license.max_devices || 0),
     deviceLabel: device.device_label || "",
     issuedAt: nowIso()

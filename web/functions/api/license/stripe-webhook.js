@@ -33,14 +33,16 @@ export async function onRequestPost({request, env}) {
     const licenseKey = generateLicenseKey();
     const licenseId = randomId("lic");
     const plan = String(metadata.plan || "Personal");
+    const licenseKind = String(metadata.license_kind || "paid");
     const maxDevices = Math.max(1, quantity);
     await env.DB.prepare(
-      "INSERT INTO licenses (id, license_key_hash, email, status, plan, max_devices, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)"
+      "INSERT INTO licenses (id, license_key_hash, email, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)"
     ).bind(
       licenseId,
       await licenseKeyHash(env, licenseKey),
       String(session.customer_details?.email || session.customer_email || ""),
       plan,
+      licenseKind,
       maxDevices,
       now,
       now

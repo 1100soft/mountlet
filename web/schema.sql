@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS licenses (
   email TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'Personal',
+  license_kind TEXT NOT NULL DEFAULT 'paid',
   max_devices INTEGER NOT NULL DEFAULT 3,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

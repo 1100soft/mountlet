@@ -45,6 +45,7 @@ class LicenseStatus:
     trial_days_remaining: int = 0
     licensed_email: str = ""
     plan: str = ""
+    license_kind: str = ""
     max_devices: int = 0
     device_label: str = ""
     expires_at: str = ""
@@ -59,9 +60,10 @@ def current_status(now: float | None = None) -> LicenseStatus:
     if token_payload is not None:
         email = str(token_payload.get("email") or "")
         plan = str(token_payload.get("plan") or "")
+        license_kind = str(token_payload.get("licenseKind") or "paid")
         max_devices = _int_value(token_payload.get("maxDevices"), 0)
         device_label = str(token_payload.get("deviceLabel") or "")
-        parts = ["Licensed"]
+        parts = ["Beta license" if license_kind == "beta" else "Licensed"]
         if plan:
             parts.append(plan)
         if email:
@@ -71,6 +73,7 @@ def current_status(now: float | None = None) -> LicenseStatus:
             summary=" - ".join(parts),
             licensed_email=email,
             plan=plan,
+            license_kind=license_kind,
             max_devices=max_devices,
             device_label=device_label,
         )
@@ -81,13 +84,20 @@ def current_status(now: float | None = None) -> LicenseStatus:
     last_seen = _float_value(trial.get("last_seen_at"), started)
     if now_value + 86_400 < last_seen:
         return LicenseStatus("expired", "Trial needs activation")
-    remaining = int(max(0, started + TRIAL_SECONDS - now_value) // 86_400)
-    if now_value <= started + TRIAL_SECONDS:
+    trial_ends = started + TRIAL_SECONDS
+    remaining = int(max(0, trial_ends - now_value) // 86_400)
+    ends_at = _format_local_timestamp(trial_ends)
+    if now_value <= trial_ends:
         day_text = "1 day" if remaining == 1 else f"{remaining} days"
         if remaining == 0:
             day_text = "less than 1 day"
-        return LicenseStatus("trial", f"Trial: {day_text} remaining", trial_days_remaining=remaining)
-    return LicenseStatus("expired", "Trial expired")
+        return LicenseStatus(
+            "trial",
+            f"Trial: {day_text} remaining; ends {ends_at}",
+            trial_days_remaining=remaining,
+            expires_at=ends_at,
+        )
+    return LicenseStatus("expired", f"Trial expired {ends_at}", expires_at=ends_at)
 
 
 def status_summary() -> str:
@@ -119,6 +129,7 @@ def activate_license(license_key: str, *, device_label: str = "", api_url: str |
         summary="Licensed",
         licensed_email=str(payload.get("email") or ""),
         plan=str(payload.get("plan") or ""),
+        license_kind=str(payload.get("licenseKind") or "paid"),
         max_devices=_int_value(payload.get("maxDevices"), 0),
         device_label=str(payload.get("deviceLabel") or label),
     )
@@ -409,6 +420,10 @@ def _int_value(value: Any, default: int) -> int:
 
 def _parse_timestamp(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+
+
+def _format_local_timestamp(value: float) -> str:
+    return datetime.fromtimestamp(value).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 class _suppress_time_parse_errors:
