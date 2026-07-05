@@ -22,7 +22,7 @@
      showgrid="false"
      inkscape:zoom="20.71875"
      inkscape:cx="31.927602"
-     inkscape:cy="35.861237"
+     inkscape:cy="39.722474"
      inkscape:window-width="2514"
      inkscape:window-height="1536"
      inkscape:window-x="2560"
@@ -93,7 +93,7 @@
        x2="32"
        y2="59"
        gradientUnits="userSpaceOnUse"
-       gradientTransform="matrix(1.24,0,0,1.24,-7.68,-9.16)">
+       gradientTransform="matrix(1.24,0,0,1.2784184,-7.68,-11.426688)">
       <stop
          offset="0"
          stop-color="#38d8ff"
@@ -145,10 +145,10 @@
      id="path3"
      style="fill:url(#linearGradient8);stroke:url(#linearGradient11)" />
   <path
-     d="M 1,64 32,11.92 63,64 Z"
+     d="M 1,64 32,10.306425 63,64 Z"
      fill="url(#mountainGradient)"
      id="path4"
-     style="fill:url(#mountainGradient);stroke-width:1.24" />
+     style="fill:url(#mountainGradient);stroke-width:1.25906" />
   <path
      d="M 24,64 V 51.773587 c 0,-7.698116 16,-7.698116 16,0 V 64 Z"
      fill="#082f49"
