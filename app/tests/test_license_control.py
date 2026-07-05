@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import base64
+import json
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from mountlet import license_control
+from mountlet.platform_services.linux import LinuxPlatformServices
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+class LicenseControlTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        root = Path(self.tempdir.name)
+        env = {
+            "XDG_CONFIG_HOME": str(root / "config"),
+            "XDG_STATE_HOME": str(root / "state"),
+            "XDG_CACHE_HOME": str(root / "cache"),
+        }
+        env_patcher = mock.patch.dict("os.environ", env, clear=False)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+        platform = LinuxPlatformServices()
+        platform_patcher = mock.patch("mountlet.config_tools.shared.get_platform", return_value=platform)
+        platform_patcher.start()
+        self.addCleanup(platform_patcher.stop)
+
+    def test_trial_state_is_replicated_and_not_plain_json(self):
+        now = time.time()
+        record = license_control.load_or_create_trial(now=now)
+
+        self.assertIn("install_id", record)
+        for path in (
+            Path(self.tempdir.name) / "state" / "mountlet" / "license" / "trial.dat",
+            Path(self.tempdir.name) / "config" / "mountlet" / ".license-trial",
+            Path(self.tempdir.name) / "cache" / "mountlet" / ".license-trial",
+        ):
+            self.assertTrue(path.exists())
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("install_id", text)
+
+    def test_trial_uses_earliest_valid_start(self):
+        start = 1_700_000_000.0
+        license_control.load_or_create_trial(now=start)
+        status = license_control.current_status(now=start + 2 * 24 * 60 * 60)
+
+        self.assertEqual(status.state, "trial")
+        self.assertLessEqual(status.trial_days_remaining, 5)
+
+    def test_expired_trial_is_not_allowed(self):
+        start = 1_700_000_000.0
+        license_control.load_or_create_trial(now=start)
+        status = license_control.current_status(now=start + 8 * 24 * 60 * 60)
+
+        self.assertEqual(status.state, "expired")
+        self.assertFalse(status.allowed)
+
+    def test_license_token_signature_is_verified(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(
+            private_key,
+            {
+                "licenseId": "lic_1",
+                "deviceId": "dev_1",
+                "email": "user@example.com",
+                "plan": "Personal",
+                "maxDevices": 4,
+                "deviceLabel": "Laptop",
+            },
+        )
+
+        with mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False):
+            payload = license_control.verify_license_token(token)
+            license_control.store_license_token(token)
+            status = license_control.current_status()
+
+        self.assertEqual(payload["email"], "user@example.com")
+        self.assertEqual(status.state, "licensed")
+        self.assertEqual(status.max_devices, 4)
+
+    def test_invalid_license_token_is_rejected(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        other_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = other_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(private_key, {"licenseId": "lic_1"})
+
+        with mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False):
+            with self.assertRaises(RuntimeError):
+                license_control.verify_license_token(token)
+
+    def _signed_token(self, private_key: ec.EllipticCurvePrivateKey, payload: dict[str, object]) -> str:
+        header = {"alg": "ES256-DER", "typ": "Mountlet-License"}
+        encoded_header = _b64(json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        encoded_payload = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        signed = f"{encoded_header}.{encoded_payload}".encode("ascii")
+        signature = private_key.sign(signed, ec.ECDSA(hashes.SHA256()))
+        return f"{encoded_header}.{encoded_payload}.{_b64(signature)}"
+
+
+if __name__ == "__main__":
+    unittest.main()

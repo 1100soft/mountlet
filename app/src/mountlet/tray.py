@@ -27,7 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import __version__, core, rclone_wizard
+from . import __version__, core, license_control, rclone_wizard
 from .badged_button import create_badged_button, set_badge
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
@@ -946,6 +946,7 @@ def _about_text(qt: SimpleNamespace) -> str:
     return "\n".join(
         [
             f"Mountlet: {__version__}",
+            f"License: {license_control.status_summary()}",
             f"Python: {platform.python_version()}",
             _qt_about_line(qt),
             _rclone_about_line(),
@@ -2568,6 +2569,114 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 shortcuts=current.shortcuts,
             )
         )
+        self.dialog.accept()
+
+
+class LicenseDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("License")
+        self.dialog.resize(520, 420)
+        self.key_field = self.qt.QLineEdit()
+        self.key_field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        self.device_field = self.qt.QLineEdit()
+        self.device_field.setText(license_control.default_device_label())
+        self.status_label = self.qt.QLabel()
+        self.devices_text = self.qt.QPlainTextEdit()
+        self.devices_text.setReadOnly(True)
+        self._build()
+        self._refresh_status()
+        self.key_field.setFocus()
+
+    def _build(self) -> None:
+        layout = self.qt.QVBoxLayout(self.dialog)
+        layout.addWidget(self.status_label)
+
+        frame = self.qt.QGroupBox("Activate")
+        form = self.qt.QFormLayout(frame)
+        form.addRow("License key", self.key_field)
+        form.addRow("Device name", self.device_field)
+        layout.addWidget(frame)
+
+        button_row = self.qt.QHBoxLayout()
+        activate_button = self.qt.QPushButton("Activate")
+        activate_button.clicked.connect(self._activate)
+        refresh_button = self.qt.QPushButton("Refresh devices")
+        refresh_button.clicked.connect(self._refresh_devices)
+        deactivate_button = self.qt.QPushButton("Deactivate this device")
+        deactivate_button.clicked.connect(self._deactivate_this_device)
+        button_row.addWidget(activate_button)
+        button_row.addWidget(refresh_button)
+        button_row.addWidget(deactivate_button)
+        layout.addLayout(button_row)
+
+        layout.addWidget(self.qt.QLabel("Activated devices"))
+        layout.addWidget(self.devices_text)
+
+        buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.dialog.reject)
+        layout.addWidget(buttons)
+
+    def _refresh_status(self) -> None:
+        status = license_control.current_status()
+        self.status_label.setText(status.summary)
+        if status.state == "licensed":
+            self._refresh_devices(show_errors=False)
+        elif status.state == "trial":
+            self.devices_text.setPlainText("Activate Mountlet to manage devices.")
+        else:
+            self.devices_text.setPlainText("Trial expired. Enter a license key to activate this device.")
+
+    def _activate(self) -> None:
+        try:
+            status = license_control.activate_license(
+                self.key_field.text(),
+                device_label=self.device_field.text(),
+            )
+        except RuntimeError as exc:
+            self.qt.QMessageBox.warning(self.dialog, "License activation", str(exc))
+            return
+        self.status_label.setText(status.summary)
+        self.key_field.clear()
+        self._refresh_devices(show_errors=False)
+        self.qt.QMessageBox.information(self.dialog, "License activation", "Mountlet is activated on this device.")
+
+    def _refresh_devices(self, *, show_errors: bool = True) -> None:
+        try:
+            devices = license_control.list_devices()
+        except RuntimeError as exc:
+            if show_errors:
+                self.qt.QMessageBox.warning(self.dialog, "License devices", str(exc))
+            return
+        if not devices:
+            self.devices_text.setPlainText("No activated devices were returned.")
+            return
+        lines = []
+        for device in devices:
+            label = str(device.get("device_label") or device.get("deviceLabel") or "Unnamed device")
+            platform_name = str(device.get("platform") or "")
+            activated = str(device.get("activated_at") or device.get("activatedAt") or "")
+            marker = "current" if device.get("current") else ""
+            details = " - ".join(part for part in (platform_name, activated, marker) if part)
+            lines.append(f"{label}{f' ({details})' if details else ''}")
+        self.devices_text.setPlainText("\n".join(lines))
+
+    def _deactivate_this_device(self) -> None:
+        answer = self.qt.QMessageBox.question(
+            self.dialog,
+            "Deactivate this device?",
+            "Deactivate this Mountlet installation and free one device slot?",
+        )
+        if answer != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            license_control.deactivate_device()
+        except RuntimeError as exc:
+            self.qt.QMessageBox.warning(self.dialog, "Deactivate device", str(exc))
+            return
+        self._refresh_status()
+
+    def _save(self) -> None:
         self.dialog.accept()
 
 
@@ -4883,6 +4992,7 @@ class MountletWindow:
         self.tray_app._add_action(app_menu, "Clear all resolved cache", self._clear_all_cache_files)
         self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
         app_menu.addSeparator()
+        self.tray_app._add_action(app_menu, "License", self._show_license_dialog)
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
@@ -4917,6 +5027,9 @@ class MountletWindow:
 
     def _show_about(self) -> None:
         self.qt.QMessageBox.information(self.window, "About Mountlet", _about_text(self.qt))
+
+    def _show_license_dialog(self) -> None:
+        self._open_child_dialog(LicenseDialog(self.qt, self.window))
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -8168,6 +8281,12 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_about)
 
+    def _show_license_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_license_dialog)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
@@ -8210,6 +8329,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
         self.main_window._add_open_config_files_menu(self.app_menu)
         self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "License", self._show_license_from_tray)
         self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
