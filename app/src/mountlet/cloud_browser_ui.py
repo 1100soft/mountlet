@@ -1328,11 +1328,11 @@ class CompactCloudBrowser:
         file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
         current_target = None
         fallback_target = None
+        items_by_path = {}
         for entry in entries:
             item = self.qt.QTreeWidgetItem([entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
-            if entry.path in selected_paths:
-                item.setSelected(True)
+            items_by_path[entry.path] = item
             if pending_select_path and entry.path == pending_select_path:
                 current_target = item
             if current_target is None and previous_path and entry.path == previous_path:
@@ -1345,11 +1345,14 @@ class CompactCloudBrowser:
         target = current_target or fallback_target
         if target is not None:
             self.tree.setCurrentItem(target)
-            if not selected_paths and target not in self.tree.selectedItems():
-                target.setSelected(True)
             if pending_select_path:
                 with suppress(Exception):
                     self.tree.scrollToItem(target)
+        if selected_paths:
+            for path, item in items_by_path.items():
+                item.setSelected(path in selected_paths)
+        elif target is not None and target not in self.tree.selectedItems():
+            target.setSelected(True)
         if pending_select_path:
             self._pending_select_path = ""
         self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
@@ -1460,10 +1463,10 @@ class CompactCloudBrowser:
         current = self.tree.currentItem() or self.tree.topLevelItem(0)
         if current is None:
             return
-        self.tree.setCurrentItem(current)
         with suppress(Exception):
             if self.tree.selectedItems():
                 return
+        self.tree.setCurrentItem(current)
         selection_model = getattr(self.tree, "selectionModel", None)
         selection = selection_model() if callable(selection_model) else None
         if selection is not None:

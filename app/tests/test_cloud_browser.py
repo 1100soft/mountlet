@@ -1658,6 +1658,9 @@ class CloudBrowserTests(unittest.TestCase):
                 return len(self.items)
 
             def setCurrentItem(self, item: Item) -> None:
+                for candidate in self.items:
+                    candidate.setSelected(False)
+                item.setSelected(True)
                 self.current = item
 
             def verticalScrollBar(self) -> mock.Mock:
