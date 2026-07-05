@@ -1,24 +1,154 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="mountainGradient" x1="32" y1="17" x2="32" y2="59" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#38d8ff" />
-      <stop offset="0.52" stop-color="#0ea5f5" />
-      <stop offset="1" stop-color="#0284d1" />
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 64 64"
+   version="1.1"
+   id="svg5"
+   sodipodi:docname="status-mounted.svg"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview5"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="20.71875"
+     inkscape:cx="31.951735"
+     inkscape:cy="28.138763"
+     inkscape:window-width="2514"
+     inkscape:window-height="1536"
+     inkscape:window-x="2560"
+     inkscape:window-y="1116"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg5">
+    <inkscape:grid
+       id="grid5"
+       units="px"
+       originx="0"
+       originy="0"
+       spacingx="1"
+       spacingy="1"
+       empcolor="#0099e5"
+       empopacity="0.30196078"
+       color="#0099e5"
+       opacity="0.14901961"
+       empspacing="5"
+       enabled="true"
+       visible="false" />
+  </sodipodi:namedview>
+  <defs
+     id="defs3">
+    <linearGradient
+       id="linearGradient9"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#899ba9;stop-opacity:1;"
+         offset="0"
+         id="stop10" />
+      <stop
+         style="stop-color:#414658;stop-opacity:1;"
+         offset="1"
+         id="stop11" />
     </linearGradient>
+    <linearGradient
+       id="linearGradient7"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#ffffff;stop-opacity:1;"
+         offset="0"
+         id="stop7" />
+      <stop
+         style="stop-color:#cce7ff;stop-opacity:1;"
+         offset="0.75"
+         id="stop9" />
+      <stop
+         style="stop-color:#99c7ff;stop-opacity:1;"
+         offset="1"
+         id="stop8" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient5"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#0f0033;stop-opacity:1;"
+         offset="0"
+         id="stop5" />
+      <stop
+         style="stop-color:#0f0033;stop-opacity:0.5;"
+         offset="1"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       id="mountainGradient"
+       x1="32"
+       y1="17"
+       x2="32"
+       y2="59"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(1.28,0,0,1.28,-8.96,-11.52)">
+      <stop
+         offset="0"
+         stop-color="#38d8ff"
+         id="stop1"
+         style="stop-color:#80e6ff;stop-opacity:1;" />
+      <stop
+         offset="1"
+         stop-color="#0284d1"
+         id="stop3"
+         style="stop-color:#0040ff;stop-opacity:1;" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient5"
+       id="linearGradient6"
+       x1="32"
+       y1="47.0625"
+       x2="32"
+       y2="61.0625"
+       gradientUnits="userSpaceOnUse" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient7"
+       id="linearGradient8"
+       x1="31.999998"
+       y1="-8.0000105"
+       x2="31.999998"
+       y2="56.000008"
+       gradientUnits="userSpaceOnUse" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient9"
+       id="linearGradient11"
+       x1="31.999998"
+       y1="-8.0000105"
+       x2="31.999998"
+       y2="56.000008"
+       gradientUnits="userSpaceOnUse" />
   </defs>
   <path
-    d="M17 47C9.2 47 5 41.8 5 35.2c0-6.1 4.3-11 10.6-11.8C18.2 14.7 24.7 9 32 9c9.7 0 17.7 7 19 16.2 6.1 1.1 10 5.9 10 11.5C61 42.8 56.6 47 50 47H17Z"
-    fill="#f8fafc"
-    stroke="#64748b"
-    stroke-width="3"
-    stroke-linejoin="round"
-  />
+     d="m 14.680606,46.308926 c -8.443201,0 -12.9895415,-6.105599 -12.9895415,-13.855016 0,-7.162342 4.6545861,-12.915699 11.4741025,-13.855019 C 15.979569,8.3837494 23.015566,1.6910715 30.91754,1.6910715 c 10.499881,0 19.159575,8.2190762 20.566776,19.0212975 6.603017,1.291569 10.824619,6.927507 10.824619,13.50277 0,7.16234 -4.762829,12.093787 -11.907082,12.093787 z"
+     fill="#f8fafc"
+     stroke="#64748b"
+     stroke-width="3.38215"
+     stroke-linejoin="round"
+     id="path3"
+     style="fill:url(#linearGradient8);stroke:url(#linearGradient11)" />
   <path
-    d="M7 59L32 17l25 42H7Z"
-    fill="url(#mountainGradient)"
-  />
+     d="M 0,64 32,10.24 64,64 Z"
+     fill="url(#mountainGradient)"
+     id="path4"
+     style="fill:url(#mountainGradient);stroke-width:1.28" />
   <path
-    d="M25 59V45.5C25 37 39 37 39 45.5V59H25Z"
-    fill="#082f49"
-  />
+     d="M 25,64 V 50.5 C 25,42 39,42 39,50.5 V 64 Z"
+     fill="#082f49"
+     id="path5"
+     style="fill:url(#linearGradient6);fill-opacity:1" />
 </svg>
