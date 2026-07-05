@@ -5458,7 +5458,7 @@ class MountletWindow:
         return button
 
     def _settings_toolbar_button(self) -> Any:
-        button = self._toolbar_button("ui-app-settings", "⚙", "App settings", self._show_app_config_editor)
+        button = self._toolbar_button("ui-config", "⚙", "App settings", self._show_app_config_editor)
         self._settings_button = button
         return button
 
