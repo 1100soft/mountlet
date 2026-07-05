@@ -466,7 +466,7 @@ def _packaged_icon_path() -> str | None:
             return str(asset)
     except Exception:
         pass
-    fallback = Path(__file__).resolve().parents[2] / "icon.png"
+    fallback = Path(__file__).resolve().parent / "assets" / "icon.png"
     return str(fallback) if fallback.is_file() else None
 
 
