@@ -45,6 +45,30 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(parent_browser_path("Photos/2026"), "Photos")
         self.assertEqual(remote_target(_remote(), "Photos/2026"), "Docs:/Photos/2026")
 
+    def test_mouse_activation_claims_browser_focus(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.main_window = SimpleNamespace(set_mountlet_focus_owner=mock.Mock())
+        browser.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WidgetAttribute=SimpleNamespace(WA_ShowWithoutActivating=1),
+                FocusReason=SimpleNamespace(MouseFocusReason=2),
+            ),
+            QTimer=SimpleNamespace(singleShot=lambda _delay, callback: callback()),
+        )
+        browser._embedded = False
+        browser.window = mock.Mock()
+        browser.tree = mock.Mock()
+        browser._ensure_tree_selection = mock.Mock()
+
+        browser._activate_from_mouse()
+
+        browser.main_window.set_mountlet_focus_owner.assert_called_with("browser")
+        browser.window.setAttribute.assert_called_once_with(1, False)
+        browser.window.raise_.assert_called_once()
+        browser.window.activateWindow.assert_called_once()
+        browser.tree.setFocus.assert_called_once_with(2)
+        browser._ensure_tree_selection.assert_called_once()
+
     def test_current_path_is_persisted_per_remote(self):
         with tempfile.TemporaryDirectory() as tempdir:
             state = Path(tempdir) / "browser.json"

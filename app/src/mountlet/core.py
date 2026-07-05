@@ -521,6 +521,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
             return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
 
         exit_code = proc.poll()
+        process_was_running = exit_code is None
         if exit_code is None:
             with suppress(Exception):
                 proc.terminate()
@@ -538,9 +539,12 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
 
         if exit_code is None:
             message = f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
+        elif process_was_running:
+            message = f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
         else:
             message = f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
-        return False, f"{message}\n{detail}".rstrip()
+        guidance = PLATFORM.mount_timeout_guidance() if process_was_running else ""
+        return False, "\n".join(part for part in (message, detail, guidance) if part).rstrip()
 
 
 def _ensure_mount_dir(path: str) -> Tuple[bool, str | None]:
@@ -574,7 +578,7 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     args = _rclone_command(rclone_bin, "mount", remote_source(remote), remote.mount_path)
     args.extend(remote.flags)
 
-    return _launch_mount_process(remote, args)
+    return _launch_mount_process(remote, args, wait_timeout=PLATFORM.mount_start_timeout_seconds())
 
 
 def reconnect_remote(remote: RemoteInfo, *, auto_confirm: bool = True) -> Tuple[bool, str]:

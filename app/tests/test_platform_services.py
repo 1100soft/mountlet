@@ -208,6 +208,25 @@ class PlatformServicesTests(unittest.TestCase):
             ),
         )
 
+    def test_macos_detects_macfuse_mount_from_mount_output(self):
+        platform = MacOSPlatformServices()
+        path = "/Users/test/Mountlet/mounted/drive/Docs"
+        result = subprocess.CompletedProcess(
+            ["/sbin/mount"],
+            0,
+            stdout=f"Docs: on {path} (macfuse, nodev, nosuid, mounted by test)\n",
+            stderr="",
+        )
+
+        with mock.patch("mountlet.platform_services.macos.subprocess.run", return_value=result):
+            self.assertTrue(platform.is_mounted(path))
+
+    def test_macos_mount_start_timeout_is_more_tolerant(self):
+        platform = MacOSPlatformServices()
+
+        self.assertGreaterEqual(platform.mount_start_timeout_seconds(), 30)
+        self.assertIn("macFUSE", platform.mount_timeout_guidance())
+
     def test_missing_saved_manager_falls_back_to_platform_default(self):
         manager = resolve_file_manager(WindowsPlatformServices(), "removed-manager")
 

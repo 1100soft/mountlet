@@ -52,6 +52,32 @@ class MacOSPlatformServices(PlatformServices):
             commands.extend(([diskutil, "unmount", path], [diskutil, "unmount", "force", path]))
         return tuple(commands)
 
+    def is_mounted(self, path: str) -> bool:
+        if super().is_mounted(path):
+            return True
+        try:
+            result = subprocess.run(
+                ["/sbin/mount"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        mount_path = str(Path(path).expanduser())
+        return any(f" on {mount_path} (" in line for line in result.stdout.splitlines())
+
+    def mount_start_timeout_seconds(self) -> float:
+        return 30.0
+
+    def mount_timeout_guidance(self) -> str:
+        return (
+            "rclone was still running, but macOS did not report the folder as mounted. "
+            "If this is the first macFUSE use after installation, allow macFUSE in "
+            "System Settings, then restart Mountlet and try again."
+        )
+
     def autostart_path(self, app_name: str) -> Path:
         return Path.home() / "Library" / "LaunchAgents" / f"com.mountlet.{app_name}.plist"
 

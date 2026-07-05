@@ -99,6 +99,7 @@ type = dropbox
             self.assertEqual(args[:5], ["/usr/bin/rclone", "--config", core.CONFIG_PATH, "mount", "Docs:"])
             self.assertEqual(args[5], remote.mount_path)
             self.assertIn("--vfs-cache-mode", args)
+            self.assertEqual(launch.call_args.kwargs["wait_timeout"], self.platform.mount_start_timeout_seconds())
 
     def test_mount_remote_can_mount_remote_path(self):
         with tempfile.TemporaryDirectory() as tempdir:

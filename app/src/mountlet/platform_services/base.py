@@ -95,6 +95,12 @@ class PlatformServices:
     def mount_process_options(self) -> dict[str, Any]:
         return {"close_fds": True, "start_new_session": True}
 
+    def mount_start_timeout_seconds(self) -> float:
+        return 10.0
+
+    def mount_timeout_guidance(self) -> str:
+        return ""
+
     def command_process_options(self) -> dict[str, Any]:
         """Options for short-lived, non-interactive child commands."""
         return {}

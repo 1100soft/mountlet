@@ -176,6 +176,10 @@ class CompactCloudBrowser:
         flags = self.qt.Qt.WindowType.Tool | self.qt.Qt.WindowType.FramelessWindowHint
 
         class BrowserWindow(self.qt.QMainWindow):
+            def mousePressEvent(self, event: Any) -> None:
+                outer._activate_from_mouse()
+                super().mousePressEvent(event)
+
             def keyPressEvent(self, event: Any) -> None:
                 if outer._handle_key(event):
                     return
@@ -365,6 +369,10 @@ class CompactCloudBrowser:
         outer = self
 
         class FileTree(qt.QTreeWidget):
+            def mousePressEvent(self, event: Any) -> None:
+                outer._activate_from_mouse()
+                super().mousePressEvent(event)
+
             def startDrag(self, _supported_actions: Any) -> None:
                 if not outer._edits_enabled():
                     return
@@ -1095,6 +1103,24 @@ class CompactCloudBrowser:
         self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
         self._ensure_tree_selection()
         self.qt.QTimer.singleShot(0, lambda: self._set_focus_owner("browser"))
+
+    def _activate_from_mouse(self) -> None:
+        self._set_focus_owner("browser")
+        if self._embedded:
+            with suppress(Exception):
+                self.main_window.raise_()
+                self.main_window.activateWindow()
+        else:
+            with suppress(Exception):
+                self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+                self.window.raise_()
+                self.window.activateWindow()
+        with suppress(Exception):
+            self.tree.setFocus(self.qt.Qt.FocusReason.MouseFocusReason)
+        self._ensure_tree_selection()
+        timer = getattr(self.qt, "QTimer", None)
+        if timer is not None:
+            timer.singleShot(0, lambda: self._set_focus_owner("browser"))
 
     def focus_main_window(self) -> None:
         self._set_focus_owner("main")
