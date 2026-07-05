@@ -121,7 +121,8 @@ Mountlet has three practical install tracks:
   uses a separately installed rclone.
 - **Native bundled-rclone build**: includes Mountlet, its Python runtime, and an
   app-local rclone binary. This does not install rclone globally or replace a
-  user's existing rclone.
+  user's existing rclone. On macOS, this build uses the official rclone binary
+  because Homebrew rclone does not support `rclone mount`.
 
 Both variants keep native folder mounting optional. The Linux package suggests
 FUSE, the Windows installer does not require WinFsp, and the macOS DMG does not
@@ -288,8 +289,11 @@ Actions, remove quarantine from that app only if macOS offers neither option:
 xattr -dr com.apple.quarantine /Applications/Mountlet.app
 ```
 
-Install rclone using its official script. Do not use `brew install rclone` for
-Mountlet: that macOS build does not include mount support.
+Install rclone using its official script if you are using a source install or
+the lean native build and want native folder mounting. Do not use
+`brew install rclone` for that path: Homebrew rclone does not support
+`rclone mount` on macOS. The bundled-rclone native build already includes a
+compatible app-local rclone.
 
 ```bash
 sudo -v

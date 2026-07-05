@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1 - 2026-07-05
+
+- Fixed macOS bundled builds so they stage official rclone binaries instead of
+  Homebrew rclone, restoring native folder mounting with macFUSE.
+- Added a live rclone output window with separate current-operation and raw-log
+  views, copy output support, and background updates that do not steal focus.
+- Improved macOS mount diagnostics, macFUSE-aware mount detection, and mount
+  startup timeout guidance.
+- Fixed macOS file-browser mouse focus behavior.
+- Fixed platform test portability in the macOS mount detection tests.
+
 ## 0.5.0 - 2026-07-03
 
 - Made `mountlet` open the desktop app by default, kept `mountlet tray` as a

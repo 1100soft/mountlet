@@ -129,11 +129,11 @@
           </article>
           <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
             <h3>macOS</h3>
-            <p>The recommended build includes Mountlet and its cloud access engine.</p>
+            <p>The recommended build includes Mountlet and the official cloud access engine needed for optional folder mounting.</p>
             <button class="button full primary download-button" data-download="macos">Download for macOS</button>
             <details>
               <summary>Advanced lean build</summary>
-              <p>Use this if rclone is already installed and managed separately.</p>
+              <p>Use this if rclone is already installed and managed separately. For macOS folder mounting, use the official rclone binary rather than Homebrew rclone.</p>
               <button class="button full secondary download-button" data-download="macosLean">Download lean macOS build</button>
             </details>
           </article>
@@ -237,7 +237,7 @@
         <div class="info-grid">
           <article>
             <h3>Bundled build</h3>
-            <p>Includes an app-local rclone. This is the easiest choice for most people and does not replace a system rclone.</p>
+            <p>Includes an app-local rclone. This is the easiest choice for most people and does not replace a system rclone. On macOS it uses the official rclone binary for folder mounting.</p>
           </article>
           <article>
             <h3>Lean build</h3>
