@@ -22,7 +22,7 @@
      showgrid="false"
      inkscape:zoom="20.71875"
      inkscape:cx="31.927602"
-     inkscape:cy="32"
+     inkscape:cy="35.861237"
      inkscape:window-width="2514"
      inkscape:window-height="1536"
      inkscape:window-x="2560"
@@ -93,7 +93,7 @@
        x2="32"
        y2="59"
        gradientUnits="userSpaceOnUse"
-       gradientTransform="matrix(1.24,0,0,1.1428571,-7.68,-3.4285704)">
+       gradientTransform="matrix(1.28,0,0,1.1428572,-8.9600003,-3.4285702)">
       <stop
          offset="0"
          stop-color="#38d8ff"
@@ -123,8 +123,7 @@
        y1="-8.0000105"
        x2="31.999998"
        y2="56.000008"
-       gradientUnits="userSpaceOnUse"
-       gradientTransform="matrix(0.9965895,0,0,1.1298416,0.10913592,-0.11620289)" />
+       gradientUnits="userSpaceOnUse" />
     <linearGradient
        inkscape:collect="always"
        xlink:href="#linearGradient9"
@@ -133,22 +132,21 @@
        y1="-8.0000105"
        x2="31.999998"
        y2="56.000008"
-       gradientUnits="userSpaceOnUse"
-       gradientTransform="matrix(0.9965895,0,0,1.1298416,0.10913592,-0.11620289)" />
+       gradientUnits="userSpaceOnUse" />
   </defs>
   <path
-     d="m 14.739674,52.205548 c -8.4144057,0 -12.9452409,-6.898359 -12.9452409,-15.653973 0,-8.092312 4.6387115,-14.592694 11.4349709,-15.653978 2.804802,-11.541491 9.816804,-19.1031569 17.691828,-19.1031569 10.464071,0 19.094231,9.2862539 20.496632,21.4910529 6.580498,1.459268 10.787702,7.826986 10.787702,15.255992 0,8.092309 -4.746585,13.664063 -11.866473,13.664063 z"
+     d="m 14.680606,46.308918 c -8.4432012,0 -12.9895417,-6.105597 -12.9895417,-13.855013 0,-7.162341 4.654586,-12.915697 11.4741037,-13.855018 2.8144,-10.2151389 9.850398,-16.9078157 17.752373,-16.9078157 10.49988,0 19.159574,8.2190748 20.566775,19.0212937 6.603016,1.291569 10.824618,6.927506 10.824618,13.502769 0,7.162338 -4.762828,12.093784 -11.907082,12.093784 z"
      fill="#f8fafc"
      stroke="#64748b"
-     stroke-width="3.58889"
+     stroke-width="3.38215"
      stroke-linejoin="round"
      id="path3"
      style="fill:url(#linearGradient8);stroke:url(#linearGradient11)" />
   <path
-     d="M 1,64 32,16 63,64 Z"
+     d="M 0,64 32,16 64,64 Z"
      fill="url(#mountainGradient)"
      id="path4"
-     style="fill:url(#mountainGradient);stroke-width:1.19044" />
+     style="fill:url(#mountainGradient);stroke-width:1.20949" />
   <path
      d="M 24,64 V 51.773587 c 0,-7.698116 16,-7.698116 16,0 V 64 Z"
      fill="#082f49"
