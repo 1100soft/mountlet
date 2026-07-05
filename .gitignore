@@ -10,6 +10,9 @@ __pycache__/
 htmlcov/
 build/
 dist/
+app/build/
+app/dist/
+app/artifacts/
 dist-test/
 *.whl
 *.log
@@ -18,7 +21,13 @@ dist-test/
 cloud_mounts/
 secrets/*
 !secrets/.gitkeep
+app/secrets/*
+!app/secrets/.gitkeep
 vendor/rclone/*
 !vendor/rclone/.gitkeep
+app/vendor/rclone/*
+!app/vendor/rclone/.gitkeep
+web/.wrangler/
+web/node_modules/
 *.json
 .rclone.config*

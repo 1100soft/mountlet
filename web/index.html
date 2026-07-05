@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mountlet — Manage all your cloud drives</title>
+    <meta
+      name="description"
+      content="Mountlet is a desktop app for managing many cloud storage accounts from different providers in one place."
+    />
+    <meta property="og:title" content="Mountlet" />
+    <meta
+      property="og:description"
+      content="Browse, open, sync, and organize many cloud storage accounts from one compact desktop app."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/mountlet-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="config.js"></script>
+    <script defer src="script.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <button class="brand tab-link" type="button" data-tab="home" aria-label="Mountlet home">
+        <img src="assets/mountlet-icon.png" alt="" />
+        <span>Mountlet</span>
+      </button>
+      <nav aria-label="Website sections" class="tab-nav" role="tablist">
+        <button class="tab-link active" type="button" id="tab-home" role="tab" data-tab="home" aria-controls="panel-home" aria-selected="true">
+          Home
+        </button>
+        <button class="tab-link" type="button" id="tab-download" role="tab" data-tab="download" aria-controls="panel-download" aria-selected="false">
+          Download
+        </button>
+        <button class="tab-link" type="button" id="tab-pricing" role="tab" data-tab="pricing" aria-controls="panel-pricing" aria-selected="false">
+          Pricing
+        </button>
+        <button class="tab-link" type="button" id="tab-features" role="tab" data-tab="features" aria-controls="panel-features" aria-selected="false">
+          Features
+        </button>
+        <button class="tab-link" type="button" id="tab-how" role="tab" data-tab="how" aria-controls="panel-how" aria-selected="false">
+          How it works
+        </button>
+        <button class="tab-link" type="button" id="tab-platforms" role="tab" data-tab="platforms" aria-controls="panel-platforms" aria-selected="false">
+          Platforms
+        </button>
+        <button class="tab-link" type="button" id="tab-faq" role="tab" data-tab="faq" aria-controls="panel-faq" aria-selected="false">
+          FAQ
+        </button>
+      </nav>
+    </header>
+
+    <main class="page-frame">
+      <section class="tab-panel active" id="panel-home" role="tabpanel" aria-labelledby="tab-home" data-panel="home">
+        <div class="hero-copy">
+          <p class="eyebrow">Home</p>
+          <h2>Many accounts, one app.</h2>
+          <p class="lede">
+            Mountlet brings Google Drive, Dropbox, OneDrive, iCloud Drive, and other cloud services into one simple desktop app. Browse, open, sync, cache, and organize files without jumping between provider apps and web interfaces.
+          </p>
+          <div class="hero-actions">
+            <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
+            <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
+          </div>
+        </div>
+        <div class="product-shot" aria-label="Mountlet app preview">
+          <div class="tray-card">
+            <div class="window-bar">
+              <span></span>
+              <strong>Mountlet</strong>
+              <span class="pin">⌖</span>
+            </div>
+            <div class="remote-row active">
+              <div>
+                <b>Work</b>
+                <small>Google Drive</small>
+              </div>
+              <span class="usage"><i style="width: 58%"></i></span>
+              <span class="state">Ready</span>
+            </div>
+            <div class="remote-row">
+              <div>
+                <b>Archive</b>
+                <small>Cloudflare R2</small>
+              </div>
+              <span class="usage"><i style="width: 35%"></i></span>
+              <span class="state quiet">Browse</span>
+            </div>
+            <div class="remote-row">
+              <div>
+                <b>Personal</b>
+                <small>Dropbox</small>
+              </div>
+              <span class="usage"><i style="width: 72%"></i></span>
+              <span class="state quiet">Sync</span>
+            </div>
+            <div class="file-panel">
+              <div class="path">Work / Projects / Contracts</div>
+              <div class="file-row"><span class="doc"></span> Agreement.pdf <em>cached</em></div>
+              <div class="file-row"><span class="sheet"></span> Budget.xlsx <em>offline</em></div>
+              <div class="file-row"><span class="folder"></span> Evidence <em>syncing</em></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-download" role="tabpanel" aria-labelledby="tab-download" data-panel="download" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Download</p>
+          <h2>Download Mountlet for your desktop.</h2>
+        </div>
+
+        <div class="platform-picker" role="tablist" aria-label="Choose platform">
+          <button class="platform-choice active" type="button" data-platform="windows" aria-selected="true">Windows</button>
+          <button class="platform-choice" type="button" data-platform="macos" aria-selected="false">macOS</button>
+          <button class="platform-choice" type="button" data-platform="linux" aria-selected="false">Linux</button>
+        </div>
+
+        <div class="download-panels">
+          <article class="download-card emphasized platform-panel active" data-platform-panel="windows">
+            <h3>Windows</h3>
+            <p>The recommended installer includes Mountlet and the cloud access engine it needs.</p>
+            <button class="button full primary download-button" data-download="windows">Download for Windows</button>
+            <details>
+              <summary>Advanced lean build</summary>
+              <p>Use this if rclone is already installed and managed separately.</p>
+              <button class="button full secondary download-button" data-download="windowsLean">Download lean Windows build</button>
+            </details>
+          </article>
+          <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
+            <h3>macOS</h3>
+            <p>The recommended build includes Mountlet and the official cloud access engine needed for optional folder mounting.</p>
+            <button class="button full primary download-button" data-download="macos">Download for macOS</button>
+            <details>
+              <summary>Advanced lean build</summary>
+              <p>Use this if rclone is already installed and managed separately. For macOS folder mounting, use the official rclone binary rather than Homebrew rclone.</p>
+              <button class="button full secondary download-button" data-download="macosLean">Download lean macOS build</button>
+            </details>
+          </article>
+          <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
+            <h3>Linux</h3>
+            <p>The recommended package includes Mountlet and its cloud access engine.</p>
+            <button class="button full primary download-button" data-download="linux">Download for Linux</button>
+            <details>
+              <summary>Advanced lean build</summary>
+              <p>Use this if rclone is already installed through your distribution or admin tools.</p>
+              <button class="button full secondary download-button" data-download="linuxLean">Download lean Linux build</button>
+            </details>
+          </article>
+        </div>
+        <p class="note">
+          Mountlet can browse and open files immediately. Add FUSE, WinFsp, or macFUSE
+          to also mount cloud accounts as folders in the system file manager.
+          Source code is available on
+          <a href="https://github.com/eric-holt/mountlet">GitHub</a>.
+        </p>
+      </section>
+
+      <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Pricing</p>
+          <h2>Simple licensing for a focused desktop utility.</h2>
+        </div>
+        <div class="pricing-grid">
+          <article class="price-card">
+            <h3>Personal</h3>
+            <p class="price">$19</p>
+            <p>For one person using the full app across their own devices.</p>
+            <button class="button primary checkout-button" data-plan="personal">Buy Personal</button>
+          </article>
+          <article class="price-card featured">
+            <h3>Pro</h3>
+            <p class="price">$39</p>
+            <p>For early builds, priority support, and heavier beta use.</p>
+            <button class="button primary checkout-button" data-plan="pro">Buy Pro</button>
+          </article>
+          <article class="price-card">
+            <h3>Team</h3>
+            <p class="price">Contact</p>
+            <p>For shared deployment, internal packaging, and support terms.</p>
+            <a class="button secondary" href="https://github.com/eric-holt/mountlet/issues/new">Contact</a>
+          </article>
+        </div>
+        <p class="note">
+          Personal and Pro use the same core app features during beta. Pricing
+          differs by support level, early-build access, and usage terms.
+        </p>
+      </section>
+
+      <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>
+        <div>
+          <p class="eyebrow">Features</p>
+          <h2>Most daily cloud work, without provider hopping.</h2>
+          <p>
+            Keep many accounts close at hand, open files through your normal apps, and decide
+            which files stay available when the network is not.
+          </p>
+        </div>
+        <div class="feature-list">
+          <details open>
+            <summary>Accounts</summary>
+            <p>Add and switch between many cloud accounts from different providers. Keep work, personal, archive, and project storage visible in one compact place.</p>
+          </details>
+          <details>
+            <summary>Files</summary>
+            <p>Browse cloud folders directly inside Mountlet, open files with the apps already configured on the computer, and drag files into cloud folders without first mounting the remote.</p>
+          </details>
+          <details>
+            <summary>Offline</summary>
+            <p>Keep selected files or folders available locally. Mountlet separates ordinary temporary cache from protected offline copies, so cleanup does not remove files you chose to keep.</p>
+          </details>
+          <details>
+            <summary>Sync</summary>
+            <p>When cached or offline files change locally, Mountlet can upload the edit if the cloud copy has not changed. If both sides changed, it asks which version to keep.</p>
+          </details>
+          <details>
+            <summary>Mount</summary>
+            <p>Mount cloud accounts as ordinary folders for Finder, Explorer, Dolphin, and other file managers when the platform filesystem driver is installed.</p>
+          </details>
+          <details>
+            <summary>Move</summary>
+            <p>Use encrypted config bundles to move cloud account settings between your own devices. Mountlet can also watch a chosen cloud path for newer config bundles.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">How it works</p>
+          <h2>A friendly desktop layer over a proven cloud engine.</h2>
+          <p>
+            Mountlet uses rclone under the hood. rclone is the access layer that knows how
+            to talk to many cloud providers. Mountlet adds the desktop interface, file browser,
+            cache handling, setup helpers, and optional native mounting controls.
+          </p>
+        </div>
+        <div class="info-grid">
+          <article>
+            <h3>Bundled build</h3>
+            <p>Includes an app-local rclone. This is the easiest choice for most people and does not replace a system rclone. On macOS it uses the official rclone binary for folder mounting.</p>
+          </article>
+          <article>
+            <h3>Lean build</h3>
+            <p>Uses rclone already installed on the computer. This is lighter for technical users, admins, and managed machines.</p>
+          </article>
+          <article>
+            <h3>Native mounting</h3>
+            <p>Install FUSE, WinFsp, or macFUSE to make cloud accounts appear as ordinary folders in your system file manager.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-platforms" role="tabpanel" aria-labelledby="tab-platforms" data-panel="platforms" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Platforms</p>
+          <h2>Desktop-first, with honest platform notes.</h2>
+        </div>
+        <div class="platform-grid">
+          <article>
+            <h3>Linux</h3>
+            <p>Primary beta platform. Plasma X11 has the fullest tray behavior; GNOME and Wayland have desktop limits.</p>
+          </article>
+          <article>
+            <h3>Windows</h3>
+            <p>Works with Explorer and WinFsp for optional mounts. Unsigned beta installers can trigger SmartScreen.</p>
+          </article>
+          <article>
+            <h3>macOS</h3>
+            <p>Menu-bar app with Finder support. Public distribution needs Apple Developer ID signing and notarization.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">FAQ</p>
+          <h2>Short answers before you install.</h2>
+        </div>
+        <details>
+          <summary>Can Mountlet replace provider desktop apps?</summary>
+          <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
+        </details>
+        <details>
+          <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
+          <p>Mountlet's integrated file browser works without them. Add the platform filesystem driver when you want Mountlet to mount cloud accounts as ordinary folders too.</p>
+        </details>
+        <details>
+          <summary>What is rclone?</summary>
+          <p>It is the cloud access engine Mountlet uses behind the scenes. The bundled build includes it for convenience.</p>
+        </details>
+        <details>
+          <summary>Is this open source?</summary>
+          <p>The source is available for non-commercial use. Commercial use or redistribution requires separate permission.</p>
+        </details>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>© 2026 Mountlet</span>
+      <a href="https://github.com/eric-holt/mountlet">GitHub</a>
+      <a href="https://github.com/eric-holt/mountlet/issues/new">Support</a>
+    </footer>
+  </body>
+</html>

@@ -5,20 +5,14 @@ on:
   pull_request:
     paths:
       - ".github/workflows/package.yml"
-      - "packaging/**"
-      - "pyproject.toml"
-      - "src/**"
-      - "tests/**"
+      - "app/**"
   push:
     branches: [main, wip]
     tags:
       - "v*.*.*"
     paths:
       - ".github/workflows/package.yml"
-      - "packaging/**"
-      - "pyproject.toml"
-      - "src/**"
-      - "tests/**"
+      - "app/**"
 
 permissions:
   contents: read
@@ -106,6 +100,7 @@ jobs:
           cache: pip
 
       - name: Install package and build tools
+        working-directory: app
         run: python -m pip install --upgrade --editable ".[desktop,packaging]"
 
       - name: Install Windows mount prerequisites
@@ -124,24 +119,29 @@ jobs:
         run: brew install rclone
 
       - name: Run unit tests
+        working-directory: app
         run: python packaging/run_tests.py
 
       - name: Verify Windows directory mounting
         if: runner.os == 'Windows'
+        working-directory: app
         run: python packaging/windows_mount_smoke.py
 
       - name: Stage bundled rclone
         if: matrix.bundle_rclone
+        working-directory: app
         run: python packaging/stage_rclone.py
 
       - name: Build native bundle
+        working-directory: app
         run: python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 
       - name: Ad-hoc sign macOS test bundle
         if: runner.os == 'macOS'
-        run: codesign --force --deep --sign - --timestamp=none dist/Mountlet.app
+        run: codesign --force --deep --sign - --timestamp=none app/dist/Mountlet.app
 
       - name: Verify native bundle
+        working-directory: app
         env:
           MOUNTLET_EXPECT_BUNDLED_RCLONE: ${{ matrix.bundle_rclone }}
         run: python packaging/verify_bundle.py
@@ -156,12 +156,15 @@ jobs:
           }
 
       - name: Archive native bundle
+        working-directory: app
         run: python packaging/archive_bundle.py --name ${{ matrix.artifact }}
 
       - name: Build native installer
+        working-directory: app
         run: python packaging/build_installer.py --name ${{ matrix.installer }}
 
       - name: Verify native installer
+        working-directory: app
         env:
           MOUNTLET_EXPECT_BUNDLED_RCLONE: ${{ matrix.bundle_rclone }}
         run: python packaging/verify_installer.py artifacts/${{ matrix.installer }}
@@ -171,8 +174,8 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            artifacts/${{ matrix.archive }}
-            artifacts/${{ matrix.installer }}
+            app/artifacts/${{ matrix.archive }}
+            app/artifacts/${{ matrix.installer }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
