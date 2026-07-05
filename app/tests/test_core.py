@@ -245,18 +245,20 @@ type = dropbox
                 stderr.flush()
                 return process
 
-            with mock.patch.object(core.subprocess, "Popen", side_effect=failed_process):
-                with mock.patch.object(core, "wait_for", return_value=False):
-                    success, message = core._launch_mount_process(
-                        remote,
-                        ["rclone", "mount"],
-                        wait_timeout=0,
-                    )
+            with mock.patch.object(core.rclone_log, "append_raw") as append_raw:
+                with mock.patch.object(core.subprocess, "Popen", side_effect=failed_process):
+                    with mock.patch.object(core, "wait_for", return_value=False):
+                        success, message = core._launch_mount_process(
+                            remote,
+                            ["rclone", "mount"],
+                            wait_timeout=0,
+                        )
 
             self.assertFalse(success)
             self.assertIn("rclone exited with code 1", message)
             self.assertIn("first diagnostic line", message)
             self.assertIn("final diagnostic line", message)
+            self.assertGreaterEqual(append_raw.call_count, 2)
 
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:

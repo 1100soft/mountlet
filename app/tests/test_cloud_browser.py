@@ -1977,12 +1977,30 @@ class CloudBrowserTests(unittest.TestCase):
         browser._rclone_output_text = Editor()
         browser.qt = SimpleNamespace()
 
-        for index in range(12):
-            browser._append_rclone_output(f"line {index}\n")
+        with mock.patch("mountlet.cloud_browser_ui.rclone_log.append_raw"):
+            with mock.patch("mountlet.cloud_browser_ui.rclone_log.tail_text", return_value=""):
+                for index in range(12):
+                    browser._append_rclone_output(f"line {index}\n")
 
         self.assertEqual(browser._rclone_output_lines[0], "line 2")
         self.assertEqual(browser._rclone_output_lines[-1], "line 11")
         self.assertEqual(browser._rclone_output_text.text, "\n".join(f"line {index}" for index in range(2, 12)))
+
+    def test_rclone_output_includes_raw_log_and_can_copy_displayed_text(self):
+        copied = []
+        browser = object.__new__(CompactCloudBrowser)
+        browser._rclone_output_lines = ["Transferred: 1 MiB / 2 MiB"]
+        browser._rclone_output_text = None
+        browser.qt = SimpleNamespace(QApplication=SimpleNamespace(clipboard=lambda: SimpleNamespace(setText=copied.append)))
+
+        with mock.patch("mountlet.cloud_browser_ui.rclone_log.tail_text", return_value="mount failed\nmacFUSE blocked"):
+            text = browser._rclone_output_text_block()
+            browser._copy_rclone_output()
+
+        self.assertIn("Transferred: 1 MiB / 2 MiB", text)
+        self.assertIn("Recent raw rclone log:", text)
+        self.assertIn("macFUSE blocked", text)
+        self.assertEqual(copied, [text])
 
     def test_rclone_output_keeps_latest_progress_block(self):
         class Editor:
@@ -2010,16 +2028,18 @@ class CloudBrowserTests(unittest.TestCase):
         browser._position_rclone_output = mock.Mock()
         browser.qt = SimpleNamespace()
 
-        browser._append_rclone_output(
-            "Transferred:   \t    2.809 GiB / 3.457 GiB, 81%, 1.100 MiB/s, ETA 10m3s\n"
-            "Checks:                 0 / 0, -, Listed 224\n"
-            "Transferred:          182 / 190, 96%\n"
-            "Elapsed time:       3m1.0s\n"
-            "Transferring:\n"
-            " * file-a.mp4: 48% / 500.336 MiB, 727.522 KiB/s\n"
-            " * file-b.mp4:  1% / 78.786 MiB, 668 B/s\n"
-            "[rclone exited with code 0]\n"
-        )
+        with mock.patch("mountlet.cloud_browser_ui.rclone_log.append_raw"):
+            with mock.patch("mountlet.cloud_browser_ui.rclone_log.tail_text", return_value=""):
+                browser._append_rclone_output(
+                    "Transferred:   \t    2.809 GiB / 3.457 GiB, 81%, 1.100 MiB/s, ETA 10m3s\n"
+                    "Checks:                 0 / 0, -, Listed 224\n"
+                    "Transferred:          182 / 190, 96%\n"
+                    "Elapsed time:       3m1.0s\n"
+                    "Transferring:\n"
+                    " * file-a.mp4: 48% / 500.336 MiB, 727.522 KiB/s\n"
+                    " * file-b.mp4:  1% / 78.786 MiB, 668 B/s\n"
+                    "[rclone exited with code 0]\n"
+                )
 
         self.assertEqual(browser._rclone_output_lines[0], "Transferred:   \t    2.809 GiB / 3.457 GiB, 81%, 1.100 MiB/s, ETA 10m3s")
         self.assertEqual(browser._rclone_output_lines[-1], " * file-b.mp4:  1% / 78.786 MiB, 668 B/s")

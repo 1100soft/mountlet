@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
+from . import rclone_log
 from .config_tools.shared import default_config_path
 from .platform_services import get_platform
 from .settings import default_mounted_root, load_app_settings, load_mount_settings, mounted_root
@@ -504,6 +505,7 @@ def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, inter
 
 
 def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
+    rclone_log.append_raw(f"$ {shlex.join(args)}\n")
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as error_output:
         try:
             proc = subprocess.Popen(
@@ -518,6 +520,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
         PIDS[remote.name] = proc.pid
 
         if wait_for(remote, True, timeout=wait_timeout):
+            rclone_log.append_raw(f"mounted {remote.name} at {remote.mount_path} (pid {proc.pid})\n")
             return True, f"[*] mounted {remote.name} at {remote.mount_path} (pid {proc.pid})."
 
         exit_code = proc.poll()
@@ -536,6 +539,8 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
         PIDS.pop(remote.name, None)
         error_output.seek(0)
         detail = error_output.read().strip()
+        if detail:
+            rclone_log.append_raw(f"{detail}\n")
 
         if exit_code is None:
             message = f"[!] Timed out waiting for {remote.name} to mount at {remote.mount_path}."
@@ -544,6 +549,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
         else:
             message = f"[!] rclone exited with code {exit_code} while mounting {remote.name}."
         guidance = PLATFORM.mount_timeout_guidance() if process_was_running else ""
+        rclone_log.append_raw("\n".join(part for part in (message, guidance) if part) + "\n")
         return False, "\n".join(part for part in (message, detail, guidance) if part).rstrip()
 
 

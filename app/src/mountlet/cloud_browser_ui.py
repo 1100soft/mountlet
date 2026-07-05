@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from . import core
+from . import core, rclone_log
 from .badged_button import create_badged_button, set_badge
 from .cloud_browser import (
     BrowserEntry,
@@ -461,13 +461,17 @@ class CompactCloudBrowser:
             text.setMinimumWidth(520)
             layout.addWidget(text)
             buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+            copy_button = buttons.addButton("Copy output", self.qt.QDialogButtonBox.ButtonRole.ActionRole)
+            copy_button.clicked.connect(self._copy_rclone_output)
             buttons.rejected.connect(dialog.hide)
             layout.addWidget(buttons)
             self._rclone_output_dialog = dialog
             self._rclone_output_text = text
-            text.setPlainText(self._rclone_output_text_block())
+            self._refresh_rclone_output_text()
             self._resize_rclone_output_text()
             self._scroll_rclone_output_to_end()
+        else:
+            self._refresh_rclone_output_text()
         dialog.show()
         self._position_rclone_output()
         dialog.raise_()
@@ -476,6 +480,7 @@ class CompactCloudBrowser:
     def _append_rclone_output(self, text: str) -> None:
         if not text:
             return
+        rclone_log.append_raw(text)
         lines = self._split_rclone_output_lines(text)
         if not lines:
             return
@@ -486,7 +491,7 @@ class CompactCloudBrowser:
         editor = self._rclone_output_text
         if editor is None:
             return
-        editor.setPlainText(self._rclone_output_text_block())
+        self._refresh_rclone_output_text()
         self._resize_rclone_output_text()
         self._scroll_rclone_output_to_end()
         self._position_rclone_output()
@@ -523,7 +528,23 @@ class CompactCloudBrowser:
         return [line for line in normalized.splitlines() if line.strip()]
 
     def _rclone_output_text_block(self) -> str:
-        return "\n".join(self._rclone_output_lines)
+        parsed = "\n".join(self._rclone_output_lines)
+        raw = rclone_log.tail_text()
+        if parsed and raw:
+            return f"{parsed}\n\nRecent raw rclone log:\n{raw}"
+        return parsed or raw
+
+    def _refresh_rclone_output_text(self) -> None:
+        editor = self._rclone_output_text
+        if editor is not None:
+            editor.setPlainText(self._rclone_output_text_block())
+
+    def _copy_rclone_output(self) -> None:
+        text = self._rclone_output_text_block()
+        if not text:
+            return
+        with suppress(Exception):
+            self.qt.QApplication.clipboard().setText(text)
 
     def _resize_rclone_output_text(self) -> None:
         editor = self._rclone_output_text
