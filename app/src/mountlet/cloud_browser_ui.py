@@ -653,7 +653,18 @@ class CompactCloudBrowser:
         self._layout_changed()
 
     def _offline_icon(self) -> Any | None:
-        icon = mountlet_icon(self.qt, "ui-save-offline", size=22)
+        color = None
+        button = getattr(self, "offline_button", None)
+        if button is not None:
+            try:
+                palette = button.palette()
+                role = button.foregroundRole()
+                qt_color = palette.color(role)
+                if qt_color.isValid():
+                    color = qt_color.name()
+            except Exception:
+                color = None
+        icon = mountlet_icon(self.qt, "ui-save-offline", size=22, color=color)
         if icon is not None:
             return icon
         try:

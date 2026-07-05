@@ -60,6 +60,8 @@ def apply_button_icon(
     size: int = 22,
     color: str | None = None,
 ) -> bool:
+    if color is None:
+        color = _button_text_color(button)
     icon = mountlet_icon(qt, name, size=size, color=color)
     if icon is None:
         with suppress(Exception):
@@ -75,6 +77,18 @@ def apply_button_icon(
         with suppress(Exception):
             button.setText(fallback_text)
         return False
+
+
+def _button_text_color(button: Any) -> str | None:
+    try:
+        palette = button.palette()
+        role = button.foregroundRole()
+        color = palette.color(role)
+        if color.isValid():
+            return color.name()
+    except Exception:
+        pass
+    return None
 
 
 __all__ = ["apply_button_icon", "icon_path", "mountlet_icon"]
