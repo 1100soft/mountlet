@@ -1700,6 +1700,108 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertTrue(browser.tree.current.selected)
         browser.tree.scroll.setValue.assert_called_once_with(37)
 
+    def test_display_entries_preserves_multiple_selected_paths_when_focused(self):
+        class Item:
+            def __init__(self, values: list[str]) -> None:
+                self.values = values
+                self.entry = None
+                self.selected = False
+
+            def setData(self, _column: int, _role: object, value: object) -> None:
+                self.entry = value
+
+            def data(self, _column: int, _role: object) -> object:
+                return self.entry
+
+            def setIcon(self, _column: int, _icon: object) -> None:
+                pass
+
+            def setToolTip(self, _column: int, _text: str) -> None:
+                pass
+
+            def setSelected(self, selected: bool) -> None:
+                self.selected = selected
+
+            def setText(self, _column: int, _text: str) -> None:
+                pass
+
+            def setBackground(self, _column: int, _brush: object) -> None:
+                pass
+
+        class Tree:
+            def __init__(self, current: Item, selected: list[Item]) -> None:
+                self.current = current
+                self.items: list[Item] = list(selected)
+                self.scroll = mock.Mock()
+                self.scroll.value.return_value = 12
+
+            def currentItem(self) -> Item:
+                return self.current
+
+            def selectedItems(self) -> list[Item]:
+                return [item for item in self.items if item.selected]
+
+            def indexOfTopLevelItem(self, item: Item) -> int:
+                return self.items.index(item) if item in self.items else 0
+
+            def clear(self) -> None:
+                self.items = []
+
+            def addTopLevelItem(self, item: Item) -> None:
+                self.items.append(item)
+
+            def topLevelItemCount(self) -> int:
+                return len(self.items)
+
+            def topLevelItem(self, index: int) -> Item:
+                return self.items[index]
+
+            def setCurrentItem(self, item: Item) -> None:
+                self.current = item
+
+            def verticalScrollBar(self) -> mock.Mock:
+                return self.scroll
+
+            def columnCount(self) -> int:
+                return 3
+
+        previous_a = Item(["", "a.txt", "", ""])
+        previous_a.setData(0, 1, BrowserEntry("a.txt", "Reports/a.txt", False))
+        previous_a.setSelected(True)
+        previous_b = Item(["", "b.txt", "", ""])
+        previous_b.setData(0, 1, BrowserEntry("b.txt", "Reports/b.txt", False))
+        previous_b.setSelected(True)
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(
+            QTreeWidgetItem=Item,
+            Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole=1)),
+            QStyle=SimpleNamespace(
+                StandardPixmap=SimpleNamespace(SP_DirIcon=1, SP_FileIcon=2, SP_DialogSaveButton=3)
+            ),
+            QTimer=SimpleNamespace(singleShot=lambda *_args: None),
+        )
+        browser.tree = Tree(previous_b, [previous_a, previous_b])
+        browser.window = SimpleNamespace(style=lambda: SimpleNamespace(standardIcon=lambda _icon: object()))
+        browser.backend = mock.Mock()
+        browser.remote = None
+        browser.status = mock.Mock()
+        browser.has_focus = mock.Mock(return_value=True)
+        browser._update_actions = mock.Mock()
+        browser._update_open_folder_button = mock.Mock()
+        browser._item_brush = mock.Mock(return_value=object())
+
+        browser._display_entries(
+            [
+                BrowserEntry("a.txt", "Reports/a.txt", False),
+                BrowserEntry("b.txt", "Reports/b.txt", False),
+                BrowserEntry("c.txt", "Reports/c.txt", False),
+            ]
+        )
+
+        selected_paths = {item.data(0, 1).path for item in browser.tree.selectedItems()}
+        self.assertEqual(selected_paths, {"Reports/a.txt", "Reports/b.txt"})
+        self.assertEqual(browser.tree.current.data(0, 1).path, "Reports/b.txt")
+
     def test_display_entries_selects_folder_returned_from_parent_navigation(self):
         class Item:
             def __init__(self, values: list[str]) -> None:

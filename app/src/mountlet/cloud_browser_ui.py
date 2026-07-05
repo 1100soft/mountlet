@@ -1461,8 +1461,9 @@ class CompactCloudBrowser:
         if current is None:
             return
         self.tree.setCurrentItem(current)
-        if self.tree.selectedItems():
-            return
+        with suppress(Exception):
+            if self.tree.selectedItems():
+                return
         selection_model = getattr(self.tree, "selectionModel", None)
         selection = selection_model() if callable(selection_model) else None
         if selection is not None:
