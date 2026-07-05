@@ -37,7 +37,7 @@
      stroke-linecap="round"
      stroke-linejoin="round"
      id="path1"
-     style="stroke:#0066ff;stroke-opacity:1" />
+     style="stroke:#00ff00;stroke-opacity:1" />
   <path
      d="M5 18h14"
      fill="none"
@@ -45,5 +45,5 @@
      stroke-width="2.4"
      stroke-linecap="round"
      id="path2"
-     style="stroke:#0066ff;stroke-opacity:1" />
+     style="stroke:#00ff00;stroke-opacity:1" />
 </svg>
