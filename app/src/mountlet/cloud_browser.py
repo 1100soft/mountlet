@@ -835,10 +835,22 @@ class CloudBrowserBackend:
     def free_cache(self, remote_name: str, path: str) -> int:
         return self._free_cache_records(remote_name, path)
 
+    def free_remote_cache(self, remote_name: str) -> int:
+        return self._free_cache_records(remote_name, "")
+
     def free_all_resolved_cache(self) -> int:
         removed = 0
         for remote_name in list(self._offline_records):
             removed += self._free_cache_records(remote_name, "")
+        return removed
+
+    def remove_remote_offline(self, remote_name: str) -> int:
+        return self._remove_offline_tree(remote_name)
+
+    def remove_all_offline(self) -> int:
+        removed = 0
+        for remote_name in list(self._offline_records):
+            removed += self._remove_offline_tree(remote_name)
         return removed
 
     def prepare_offline_open(self, remote_name: str, path: str) -> Path:
@@ -1208,6 +1220,19 @@ class CloudBrowserBackend:
                 if not cache_root.exists():
                     self._remove_empty_parents(cache_root, self.cache_root)
             self._save_offline_manifest()
+
+    def _remove_offline_tree(self, remote_name: str) -> int:
+        with self._offline_lock:
+            records = self._offline_records.get(remote_name)
+            removed = sum(1 for record in (records or {}).values() if not bool(record.get("is_dir")))
+            root = self.cache_root / _safe_component(remote_name)
+            if root.exists():
+                self._make_tree_writable(root)
+                shutil.rmtree(root)
+            self._offline_records.pop(remote_name, None)
+            self._remove_empty_parents(root, self.cache_root)
+            self._save_offline_manifest()
+            return removed
 
     def _rclone(self) -> str:
         binary = core.find_rclone()

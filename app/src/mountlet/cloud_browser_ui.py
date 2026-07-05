@@ -243,6 +243,22 @@ class CompactCloudBrowser:
             icon_name="ui-sync",
         )
         header.addWidget(self.remote_sync_button)
+        self.remote_remove_offline_button = self._button(
+            "",
+            self.remove_remote_offline,
+            "Remove offline files for this remote",
+            square=True,
+            icon_name="ui-remove-offline",
+        )
+        header.addWidget(self.remote_remove_offline_button)
+        self.remote_clear_cache_button = self._button(
+            "",
+            self.clear_remote_cache,
+            "Clear resolved cache for this remote",
+            square=True,
+            icon_name="ui-clear-cache",
+        )
+        header.addWidget(self.remote_clear_cache_button)
         self.rclone_output_button = self._button(
             "▤",
             self._show_rclone_output,
@@ -310,6 +326,20 @@ class CompactCloudBrowser:
             square=True,
             icon_name="ui-save-offline",
         )
+        self.selection_remove_offline_button = self._button(
+            "",
+            self.remove_selected_offline,
+            "Remove offline copies for selected items",
+            square=True,
+            icon_name="ui-remove-offline",
+        )
+        self.selection_clear_cache_button = self._button(
+            "",
+            self.clear_selected_cache,
+            "Clear resolved cache for selected items",
+            square=True,
+            icon_name="ui-clear-cache",
+        )
         self.selection_sync_button = self._button(
             "⇄",
             self.sync_selected,
@@ -326,6 +356,8 @@ class CompactCloudBrowser:
         item_actions.addWidget(self.paste_button)
         item_actions.addWidget(self.delete_button)
         item_actions.addWidget(self.offline_button)
+        item_actions.addWidget(self.selection_remove_offline_button)
+        item_actions.addWidget(self.selection_clear_cache_button)
         item_actions.addWidget(self.selection_sync_button)
         item_actions.addStretch(1)
         layout.addLayout(item_actions)
@@ -1603,8 +1635,12 @@ class CompactCloudBrowser:
             lambda selected=entry: self._sync_cached_path(selected.path, selected.is_dir),
             enabled=self._can_sync_cache(entry),
         )
-        if self._can_free_cache(entry):
-            self._menu_action(menu, "Free cached copy", lambda selected=entry: self._free_cache(selected.path))
+        self._menu_action(
+            menu,
+            "Clear resolved cache",
+            lambda selected=entry: self._free_cache(selected.path),
+            enabled=self._can_free_cache(entry),
+        )
         self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
@@ -1626,8 +1662,26 @@ class CompactCloudBrowser:
         self._menu_action(menu, "New folder", self.create_folder, enabled=edits_enabled and not self._operation_pending)
         menu.addSeparator()
         self._menu_action(menu, "Sync now", lambda: self._sync_cached_path(self.path, True), enabled=self._can_sync_folder())
-        self._menu_action(menu, "Free resolved cache in this folder", lambda: self._free_cache(self.path), enabled=bool(self.remote))
-        self._menu_action(menu, "Free all resolved cache", self._free_all_resolved_cache)
+        self._menu_action(
+            menu,
+            "Remove offline files in this folder",
+            lambda: self._remove_offline_copy(self.path),
+            enabled=bool(
+                self.remote
+                and self.backend.has_offline_content(self.remote.name, self.path, is_dir=True)
+                and not self._operation_pending
+            ),
+        )
+        self._menu_action(
+            menu,
+            "Clear resolved cache in this folder",
+            lambda: self._free_cache(self.path),
+            enabled=bool(
+                self.remote
+                and self.backend.has_temporary_cache_content(self.remote.name, self.path, is_dir=True)
+                and not self._operation_pending
+            ),
+        )
         origin = source or self.path_field
         menu.exec(origin.mapToGlobal(point))
 
@@ -1649,10 +1703,8 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         return bool(
             remote
-            and self.backend.is_cached(remote.name, entry.path, is_dir=entry.is_dir)
-            and not self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
-            and not self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir)
-            and not self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir)
+            and self.backend.has_temporary_cache_content(remote.name, entry.path, is_dir=entry.is_dir)
+            and not self._operation_pending
         )
 
     def _can_sync_cache(self, entry: BrowserEntry) -> bool:
@@ -1709,6 +1761,75 @@ class CompactCloudBrowser:
         self._start_working_paths(remote.name, affected, "sync")
         self._sync_paths(remote, [("", True)])
 
+    def remove_selected_offline(self) -> None:
+        remote = getattr(self, "remote", None)
+        entries = self._selected_entries()
+        if remote is None or not entries or self._operation_pending:
+            return
+        for entry in entries:
+            if self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir):
+                self._queue_remove_offline_job(remote.name, entry.path)
+
+    def clear_selected_cache(self) -> None:
+        remote = getattr(self, "remote", None)
+        entries = self._selected_entries()
+        if remote is None or not entries or self._operation_pending:
+            return
+        paths = [entry.path for entry in entries]
+        self._run_operation(
+            "Clearing selected cache…",
+            lambda: sum(self.backend.free_cache(remote.name, path) for path in paths),
+            invalidate_keys={(remote.name, self.path)},
+        )
+
+    def remove_remote_offline(self) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or self._operation_pending:
+            return
+        self.remove_remote_offline_for(remote.name)
+
+    def clear_remote_cache(self) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or self._operation_pending:
+            return
+        self.clear_remote_cache_for(remote.name)
+
+    def remove_remote_offline_for(self, remote_name: str) -> None:
+        if self._operation_pending:
+            return
+        self._run_operation(
+            "Removing offline files…",
+            lambda: self.backend.remove_remote_offline(remote_name),
+            invalidate_keys={key for key in self._folder_cache if key[0] == remote_name},
+        )
+
+    def clear_remote_cache_for(self, remote_name: str) -> None:
+        if self._operation_pending:
+            return
+        self._run_operation(
+            "Clearing remote cache…",
+            lambda: self.backend.free_remote_cache(remote_name),
+            invalidate_keys={key for key in self._folder_cache if key[0] == remote_name},
+        )
+
+    def remove_all_offline(self) -> None:
+        if self._operation_pending:
+            return
+        self._run_operation(
+            "Removing all offline files…",
+            self.backend.remove_all_offline,
+            invalidate_keys=set(self._folder_cache),
+        )
+
+    def clear_all_cache(self) -> None:
+        if self._operation_pending:
+            return
+        self._run_operation(
+            "Clearing all resolved cache…",
+            self.backend.free_all_resolved_cache,
+            invalidate_keys=set(self._folder_cache),
+        )
+
     def _managed_record_paths_for_items(self, remote_name: str, items: list[tuple[str, bool]]) -> list[str]:
         paths: list[str] = []
         seen: set[str] = set()
@@ -1724,7 +1845,6 @@ class CompactCloudBrowser:
         remote = getattr(self, "remote", None)
         if remote is None:
             return
-        partial = self.backend.is_partially_offline(remote.name, entry.path, is_dir=entry.is_dir)
         offline = self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
         downloading = self._entry_has_operation(
             remote.name,
@@ -1735,33 +1855,17 @@ class CompactCloudBrowser:
         remove_pending = self._offline_remove_pending(remote.name, [entry.path])
         available = not self._operation_pending and not downloading
         has_local_content = self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
-        if partial:
-            self._menu_action(
-                menu,
-                "Make available offline",
-                self.toggle_offline,
-                enabled=available,
-            )
-            self._menu_action(
-                menu,
-                "Remove offline copies",
-                lambda selected=entry: self._remove_offline_copy(selected.path),
-                enabled=not self._operation_pending and not remove_pending,
-            )
-            return
-        if downloading:
-            self._menu_action(
-                menu,
-                "Remove offline copies",
-                lambda selected=entry: self._remove_offline_copy(selected.path),
-                enabled=not self._operation_pending and not remove_pending,
-            )
-            return
         self._menu_action(
             menu,
-            "Remove offline copy" if offline else "Make available offline",
+            "Make available offline",
             self.toggle_offline,
-            enabled=(available or (offline and has_local_content and not self._operation_pending)) and not remove_pending,
+            enabled=available and not offline,
+        )
+        self._menu_action(
+            menu,
+            "Remove offline copies",
+            lambda selected=entry: self._remove_offline_copy(selected.path),
+            enabled=has_local_content and not self._operation_pending and not remove_pending,
         )
 
     def _remove_offline_copy(self, path: str) -> None:
@@ -1910,59 +2014,42 @@ class CompactCloudBrowser:
         if not entries or self.remote is None or self._operation_pending:
             return
         remote = self.remote
-        if any(self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download") for entry in entries):
-            for entry in entries:
-                self._queue_remove_offline_job(remote.name, entry.path)
+        entries = [
+            entry
+            for entry in entries
+            if not self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        ]
+        if not entries:
             return
-        all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
-        if all_offline:
-            def action() -> None:
-                for entry in entries:
-                    self.backend.remove_offline(remote.name, entry.path)
+        if any(self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download") for entry in entries):
+            return
 
-            message = "Removing local copies…"
-            working_paths = None
-            working_kind = ""
-        else:
-            def action() -> None:
-                for entry in entries:
-                    self.backend.make_offline(remote, entry)
+        def action() -> None:
+            for entry in entries:
+                self.backend.make_offline(remote, entry)
 
-            def discover_paths() -> list[BrowserEntry]:
-                discovered: list[BrowserEntry] = []
-                seen: set[str] = set()
-                for entry in entries:
-                    path = normalize_browser_path(entry.path)
+        def discover_paths() -> list[BrowserEntry]:
+            discovered: list[BrowserEntry] = []
+            seen: set[str] = set()
+            for entry in entries:
+                path = normalize_browser_path(entry.path)
+                if path and path not in seen:
+                    seen.add(path)
+                    discovered.append(entry)
+                for discovered_entry in self.backend.list_entries_recursive(remote, entry):
+                    path = normalize_browser_path(discovered_entry.path)
                     if path and path not in seen:
                         seen.add(path)
-                        discovered.append(entry)
-                    for discovered_entry in self.backend.list_entries_recursive(remote, entry):
-                        path = normalize_browser_path(discovered_entry.path)
-                        if path and path not in seen:
-                            seen.add(path)
-                            discovered.append(discovered_entry)
-                return discovered
+                        discovered.append(discovered_entry)
+            return discovered
 
-            message = "Downloading for offline use…"
-            working_paths = []
-            working_kind = "download"
         self._queue_offline_job(
-            message,
+            "Downloading for offline use…",
             action,
-            working_paths=working_paths,
-            working_kind=working_kind,
-            discover_paths=discover_paths if not all_offline else None,
+            working_paths=[],
+            working_kind="download",
+            discover_paths=discover_paths,
         )
-
-    def _offline_action_label(self) -> str:
-        entries = self._selected_entries()
-        remote = getattr(self, "remote", None)
-        if not entries or remote is None:
-            return "Make available offline"
-        if any(self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download") for entry in entries):
-            return "Remove offline copy"
-        all_offline = all(self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir) for entry in entries)
-        return "Remove offline copy" if all_offline else "Make available offline"
 
     def _run_operation(
         self,
@@ -2265,6 +2352,30 @@ class CompactCloudBrowser:
                 remote_sync_enabled,
                 "Sync cached files for this remote" if remote_sync_enabled else "No cached or offline files to sync",
             )
+        remote_remove_offline_button = getattr(self, "remote_remove_offline_button", None)
+        if remote_remove_offline_button is not None:
+            remote_remove_enabled = bool(
+                self.remote
+                and not operation_pending
+                and self.backend.has_offline_content(self.remote.name, "", is_dir=True)
+            )
+            self._set_action_button_state(
+                remote_remove_offline_button,
+                remote_remove_enabled,
+                "Remove offline files for this remote" if remote_remove_enabled else "No offline files for this remote",
+            )
+        remote_clear_cache_button = getattr(self, "remote_clear_cache_button", None)
+        if remote_clear_cache_button is not None:
+            remote_clear_enabled = bool(
+                self.remote
+                and not operation_pending
+                and self.backend.has_temporary_cache_content(self.remote.name, "", is_dir=True)
+            )
+            self._set_action_button_state(
+                remote_clear_cache_button,
+                remote_clear_enabled,
+                "Clear resolved cache for this remote" if remote_clear_enabled else "No temporary cache for this remote",
+            )
         selection_sync_button = getattr(self, "selection_sync_button", None)
         if selection_sync_button is not None:
             selected_entries = self._selected_entries()
@@ -2292,6 +2403,9 @@ class CompactCloudBrowser:
         selected_entries = self._selected_entries() if selected and remote is not None else []
         selected_downloading = False
         selected_remove_pending = False
+        selected_has_offline = False
+        selected_has_temporary_cache = False
+        selected_all_offline = False
         if remote is not None:
             selected_downloading = any(
                 self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
@@ -2301,40 +2415,60 @@ class CompactCloudBrowser:
                 self._offline_remove_pending(remote.name, [entry.path])
                 for entry in selected_entries
             )
-        if offline_enabled and selected_remove_pending:
-            offline_enabled = False
-        if offline_enabled and remote is not None and not selected_downloading:
-            offline_enabled = not any(
-                self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
+            selected_has_offline = any(
+                self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir)
                 for entry in selected_entries
             )
+            selected_has_temporary_cache = any(
+                self.backend.has_temporary_cache_content(remote.name, entry.path, is_dir=entry.is_dir)
+                for entry in selected_entries
+            )
+            selected_all_offline = bool(selected_entries) and all(
+                self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+                for entry in selected_entries
+            )
+        if offline_enabled and (selected_remove_pending or selected_all_offline):
+            offline_enabled = False
+        if offline_enabled and remote is not None and selected_downloading:
+            offline_enabled = False
         self._set_action_button_state(
             self.offline_button,
             offline_enabled,
-            "Select files or folders to make them available offline",
+            "Make selected items available offline"
+            if offline_enabled
+            else "Selected items are already available offline"
+            if selected_all_offline
+            else "Select files or folders to make them available offline",
         )
         self._update_snapshot_button_icon(offline_enabled)
-        remove_offline = selected and self._offline_action_label() == "Remove offline copy"
-        selected_changed = self._selected_offline_changed()
         self.offline_button.setText("")
-        set_badge(self.offline_button, remove_offline, OFFLINE_SAVED_BADGE_COLOR)
+        set_badge(self.offline_button, False, OFFLINE_SAVED_BADGE_COLOR)
         if operation_pending:
             self.offline_button.setToolTip("Wait for the current file operation to finish")
-        elif selected_remove_pending:
-            self.offline_button.setToolTip("Removal is already queued")
         elif selected:
-            self.offline_button.setToolTip(
-                "Queue removal after the current download finishes"
-                if selected_downloading
-                else
-                "Saved offline with local changes; click to remove the local snapshot"
-                if selected_changed
-                else "Saved offline; click to remove the local snapshot"
-                if remove_offline
-                else "Save a local snapshot for offline access"
-            )
+            self.offline_button.setToolTip("Already available offline" if selected_all_offline else "Save a local snapshot")
         else:
             self.offline_button.setToolTip("Select files or folders to make them available offline")
+        remove_button = getattr(self, "selection_remove_offline_button", None)
+        if remove_button is not None:
+            remove_enabled = selected and selected_has_offline and not operation_pending and not selected_remove_pending
+            self._set_action_button_state(
+                remove_button,
+                remove_enabled,
+                "Remove offline copies for selected items"
+                if remove_enabled
+                else "Removal is already queued"
+                if selected_remove_pending
+                else "Select offline files or folders first",
+            )
+        clear_button = getattr(self, "selection_clear_cache_button", None)
+        if clear_button is not None:
+            clear_enabled = selected and selected_has_temporary_cache and not operation_pending
+            self._set_action_button_state(
+                clear_button,
+                clear_enabled,
+                "Clear resolved cache for selected items" if clear_enabled else "Select temporarily cached items first",
+            )
         self._update_open_folder_button()
 
     def _set_action_button_state(self, button: Any, enabled: bool, tooltip: str) -> None:

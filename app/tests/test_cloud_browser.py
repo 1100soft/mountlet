@@ -2383,10 +2383,14 @@ class CloudBrowserTests(unittest.TestCase):
         browser._operation_pending = False
         browser.tree = mock.Mock()
         browser.offline_button = mock.Mock()
+        browser.selection_remove_offline_button = mock.Mock()
+        browser.selection_clear_cache_button = mock.Mock()
         browser._edits_enabled = mock.Mock(return_value=False)
         browser._selected_entries = mock.Mock(return_value=[BrowserEntry("a.txt", "a.txt", False)])
         browser.backend = mock.Mock()
         browser.backend.is_offline.return_value = False
+        browser.backend.has_offline_content.return_value = False
+        browser.backend.has_temporary_cache_content.return_value = False
         browser.backend.offline_changed.return_value = False
 
         browser._update_actions()
@@ -2397,13 +2401,14 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertIn("Save", browser.offline_button.setToolTip.call_args.args[0])
 
         browser.backend.is_offline.return_value = True
-        browser.backend.offline_changed.return_value = True
+        browser.backend.has_offline_content.return_value = True
         browser._update_actions()
 
+        browser.offline_button.setEnabled.assert_called_with(False)
         browser.offline_button.setText.assert_called_with("")
-        browser.offline_button.setBadgeColor.assert_called_with("#22c55e")
-        browser.offline_button.setBadgeVisible.assert_called_with(True)
-        self.assertIn("local changes", browser.offline_button.setToolTip.call_args.args[0])
+        browser.offline_button.setBadgeVisible.assert_called_with(False)
+        browser.selection_remove_offline_button.setEnabled.assert_called_with(True)
+        self.assertIn("Already available offline", browser.offline_button.setToolTip.call_args.args[0])
 
     def test_offline_button_uses_standard_disabled_state_without_selection(self):
         browser = object.__new__(CompactCloudBrowser)

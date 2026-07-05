@@ -4433,6 +4433,8 @@ class MountletWindow:
         self._settings_button: Any | None = None
         self._push_sync_button: Any | None = None
         self._pull_sync_button: Any | None = None
+        self._remove_all_offline_button: Any | None = None
+        self._clear_all_cache_button: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
         self._offline_reconcile_running: set[str] = set()
@@ -4474,7 +4476,7 @@ class MountletWindow:
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
             layout_changed=self._browser_layout_changed,
-            local_files_changed=self._refresh_offline_file_watches,
+            local_files_changed=self._local_browser_files_changed,
         )
         self.window.focus_remote_row = self._focus_current_remote_row
         self.window.update_focus_style = self._update_main_focus_style
@@ -4494,6 +4496,10 @@ class MountletWindow:
             desktop = _desktop_services(getattr(self, "qt", None))
             self.desktop = desktop
         return desktop
+
+    def _local_browser_files_changed(self) -> None:
+        self._refresh_offline_file_watches()
+        self._update_app_cache_buttons()
 
     def _make_bridge(self) -> Any:
         qt = self.qt
@@ -4831,6 +4837,14 @@ class MountletWindow:
         if not started:
             self.tray_app._notify("Cache sync", "No cached or offline files need checking.", success=True)
 
+    def _remove_all_offline_files(self) -> None:
+        self.file_browser.remove_all_offline()
+        self._update_app_cache_buttons()
+
+    def _clear_all_cache_files(self) -> None:
+        self.file_browser.clear_all_cache()
+        self._update_app_cache_buttons()
+
     def _sync_cached_paths(self, remote: core.RemoteInfo, items: list[tuple[str, bool]]) -> None:
         if not items:
             return
@@ -4863,8 +4877,12 @@ class MountletWindow:
             pass
         app_menu = menu_bar.addMenu("App")
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
+        app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Sync cached files now", self._sync_all_cached_files)
+        self.tray_app._add_action(app_menu, "Remove all offline files", self._remove_all_offline_files)
+        self.tray_app._add_action(app_menu, "Clear all resolved cache", self._clear_all_cache_files)
         self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
+        app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
@@ -5331,6 +5349,7 @@ class MountletWindow:
         if self._current_remote_names == remote_names and self._row_widgets:
             self._name_column_width = name_width
             self._update_config_sync_buttons()
+            self._update_app_cache_buttons(remotes)
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 self._schedule_storage_load(remote)
@@ -5390,6 +5409,7 @@ class MountletWindow:
         self.file_browser.preload(remotes)
         self._fit_to_content(root, scroll, container)
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
+        self._update_app_cache_buttons(remotes)
 
     def _finish_content_fit(self, root: Any, scroll: Any, container: Any, central: Any | None = None) -> None:
         expected = central or root
@@ -5464,6 +5484,46 @@ class MountletWindow:
 
     def _all_cache_sync_toolbar_button(self) -> Any:
         return self._toolbar_button("ui-sync", "⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
+
+    def _remove_all_offline_toolbar_button(self) -> Any:
+        button = self._toolbar_button(
+            "ui-remove-offline",
+            "",
+            "Remove offline files for all remotes",
+            self._remove_all_offline_files,
+        )
+        self._remove_all_offline_button = button
+        return button
+
+    def _clear_all_cache_toolbar_button(self) -> Any:
+        button = self._toolbar_button(
+            "ui-clear-cache",
+            "",
+            "Clear resolved cache for all remotes",
+            self._clear_all_cache_files,
+        )
+        self._clear_all_cache_button = button
+        return button
+
+    def _update_app_cache_buttons(self, remotes: list[core.RemoteInfo] | None = None) -> None:
+        remotes = remotes if remotes is not None else _load_visible_remotes()
+        remove_button = getattr(self, "_remove_all_offline_button", None)
+        clear_button = getattr(self, "_clear_all_cache_button", None)
+        if remove_button is not None:
+            enabled = any(self.file_browser.backend.has_offline_content(remote.name, "", is_dir=True) for remote in remotes)
+            remove_button.setEnabled(enabled)
+            remove_button.setToolTip(
+                "Remove offline files for all remotes" if enabled else "No offline files are saved"
+            )
+        if clear_button is not None:
+            enabled = any(
+                self.file_browser.backend.has_temporary_cache_content(remote.name, "", is_dir=True)
+                for remote in remotes
+            )
+            clear_button.setEnabled(enabled)
+            clear_button.setToolTip(
+                "Clear resolved cache for all remotes" if enabled else "No resolved temporary cache to clear"
+            )
 
     def _update_config_sync_buttons(self) -> None:
         push_button = getattr(self, "_push_sync_button", None)
@@ -5735,11 +5795,14 @@ class MountletWindow:
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
         layout.addWidget(self._all_cache_sync_toolbar_button())
+        layout.addWidget(self._remove_all_offline_toolbar_button())
+        layout.addWidget(self._clear_all_cache_toolbar_button())
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         layout.addWidget(self._pin_button())
         self._update_config_sync_buttons()
+        self._update_app_cache_buttons()
         return widget
 
     def _event_global_point(self, event: Any) -> Any:
@@ -8125,15 +8188,20 @@ class MountletTray:
         status.setEnabled(False)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
+        self._add_action(self.app_menu, "Update status", self.rebuild_menus)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
         self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
-        self._add_action(self.app_menu, "Update status", self.rebuild_menus)
+        self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Sync cached files now", self.main_window._sync_all_cached_files)
+        self._add_action(self.app_menu, "Remove all offline files", self.main_window._remove_all_offline_files)
+        self._add_action(self.app_menu, "Clear all resolved cache", self.main_window._clear_all_cache_files)
         self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
+        self.app_menu.addSeparator()
         self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
         self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
+        self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
         self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
         self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
@@ -8164,6 +8232,27 @@ class MountletTray:
         browser_url = _remote_browser_url(remote)
         if browser_url:
             self._add_action(submenu, "Open in browser", lambda: self._open_remote_in_browser(remote))
+        submenu.addSeparator()
+        backend = self.main_window.file_browser.backend
+        self._add_action(
+            submenu,
+            "Sync cached files now",
+            lambda selected=remote: self.main_window._sync_cached_paths(selected, [("", True)]),
+            enabled=bool(backend.managed_record_paths(remote.name)),
+        )
+        self._add_action(
+            submenu,
+            "Remove offline files",
+            lambda selected=remote: self.main_window.file_browser.remove_remote_offline_for(selected.name),
+            enabled=backend.has_offline_content(remote.name, "", is_dir=True),
+        )
+        self._add_action(
+            submenu,
+            "Clear resolved cache",
+            lambda selected=remote: self.main_window.file_browser.clear_remote_cache_for(selected.name),
+            enabled=backend.has_temporary_cache_content(remote.name, "", is_dir=True),
+        )
+        submenu.addSeparator()
         self._add_action(submenu, "Settings", lambda: self.main_window._show_mount_config_editor(remote))
 
     def _add_action(self, menu: Any, label: str, callback: Any, *, enabled: bool = True) -> Any:
