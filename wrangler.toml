@@ -1,0 +1,18 @@
+name = "mountlet-site"
+compatibility_date = "2026-07-06"
+pages_build_output_dir = "web"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mountlet-license"
+database_id = "local-mountlet-license"
+preview_database_id = "local-mountlet-license"
+
+[[r2_buckets]]
+binding = "DOWNLOADS"
+bucket_name = "mountlet-downloads"
+preview_bucket_name = "mountlet-downloads-dev"
+
+[vars]
+STRIPE_SUCCESS_URL = "http://127.0.0.1:8788/#download"
+STRIPE_CANCEL_URL = "http://127.0.0.1:8788/#pricing"
