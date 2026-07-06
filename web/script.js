@@ -9,6 +9,41 @@ function openConfiguredLink(group, key) {
   window.location.href = url;
 }
 
+async function startCheckout(button) {
+  const plan = button.dataset.plan;
+  const config = window.MOUNTLET_SITE_CONFIG || {};
+  const configuredUrl = config.checkout && config.checkout[plan];
+  if (configuredUrl && !configuredUrl.includes("replace-")) {
+    window.location.href = configuredUrl;
+    return;
+  }
+
+  const countInput = document.querySelector(`.device-count[data-plan="${plan}"]`);
+  const deviceCount = Number(countInput && countInput.value) || undefined;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "Opening checkout...";
+  try {
+    const response = await fetch("/api/checkout", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({plan, deviceCount}),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error || !data.url) {
+      throw new Error(data.error || "Checkout is not configured yet.");
+    }
+    window.location.href = data.url;
+  } catch (error) {
+    window.alert(error.message || "Checkout is not configured yet.");
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 function normalizeTabName(value) {
   return String(value || "").replace(/^#/, "") || "home";
 }
@@ -78,7 +113,7 @@ document.addEventListener("click", (event) => {
 
   const checkoutButton = event.target.closest(".checkout-button");
   if (checkoutButton) {
-    openConfiguredLink("checkout", checkoutButton.dataset.plan);
+    startCheckout(checkoutButton);
     return;
   }
 

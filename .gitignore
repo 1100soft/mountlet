@@ -28,8 +28,10 @@ vendor/rclone/*
 app/vendor/rclone/*
 !app/vendor/rclone/.gitkeep
 web/.wrangler/
-web/.dev.vars
 web/.local/
+.wrangler/
+.dev.vars
+node_modules/
 web/node_modules/
 *.json
 !package.json

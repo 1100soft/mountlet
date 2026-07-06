@@ -421,6 +421,27 @@ h3 {
   margin-bottom: 8px;
 }
 
+.device-field {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.92rem;
+  font-weight: 720;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 16px 0;
+}
+
+.device-field input {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  max-width: 96px;
+  min-height: 38px;
+  padding: 7px 10px;
+}
+
 .note {
   font-size: 0.94rem;
   margin-top: 18px;

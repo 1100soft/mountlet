@@ -1,4 +1,4 @@
-# Copy this to web/.dev.vars or run:
+# Copy this to .dev.vars or run:
 #   npm run web:env
 #
 # Use Stripe test-mode values locally. The webhook secret comes from:

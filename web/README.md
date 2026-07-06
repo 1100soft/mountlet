@@ -13,21 +13,108 @@ Use these settings:
 The site is plain HTML, CSS, and JavaScript, so no package install step is
 required.
 
+## Local End-to-End Testing
+
+Use Wrangler locally to test the website, license API, D1, R2, and Stripe
+test-mode checkout before deploying.
+
+Install the local tooling once:
+
+```bash
+npm install
+```
+
+Create local license signing keys and a root `.dev.vars` file:
+
+```bash
+npm run web:env
+```
+
+That command prints the public-key path and admin token. Keep both for the app
+activation test below.
+
+Edit `.dev.vars` and replace the Stripe placeholders with test-mode values:
+
+- `STRIPE_SECRET_KEY`: a Stripe `sk_test_...` key.
+- `STRIPE_PRICE_PERSONAL`: a test Price ID for the Personal checkout.
+- `STRIPE_PRICE_PRO`: a test Price ID for the Pro checkout.
+- `STRIPE_WEBHOOK_SECRET`: the `whsec_...` value printed by Stripe CLI.
+
+Initialize local D1 and optionally seed a local R2 object:
+
+```bash
+npm run web:d1:init
+npm run web:r2:seed
+```
+
+Run the local Pages site:
+
+```bash
+npm run web:dev
+```
+
+In another terminal, forward Stripe test webhooks to Wrangler:
+
+```bash
+stripe listen --forward-to http://127.0.0.1:8788/api/license/stripe-webhook
+```
+
+Copy the printed `whsec_...` value into `.dev.vars`, then restart
+`npm run web:dev` so Wrangler reloads it.
+
+Open `http://127.0.0.1:8788/#pricing`, choose a device count, and complete
+checkout with Stripe's test card:
+
+```text
+4242 4242 4242 4242
+```
+
+Retrieve the generated license key:
+
+```bash
+curl -H "Authorization: Bearer <LICENSE_ADMIN_TOKEN>" \
+  http://127.0.0.1:8788/api/license/admin/payments
+```
+
+You can also verify that local R2 is bound:
+
+```bash
+curl http://127.0.0.1:8788/api/download/mountlet-test.txt
+```
+
+To activate a local paid build against the local API:
+
+```bash
+export MOUNTLET_REQUIRE_LICENSE=1
+export MOUNTLET_LICENSE_API_URL=http://127.0.0.1:8788/api/license
+export MOUNTLET_LICENSE_PUBLIC_KEY_FILE=/absolute/path/to/web/.local/license-public.pem
+mountlet
+```
+
+For a fast license API smoke test without Stripe, keep `npm run web:dev`
+running and execute:
+
+```bash
+npm run web:license:smoke
+```
+
 ## Stripe
 
-For the first commercial version, use Stripe Checkout or Payment Links:
+For the first commercial version, use Stripe Checkout through the Pages
+Function or Stripe Payment Links:
 
 1. Create products and prices in Stripe.
 2. Enable adjustable quantity when the quantity should represent the number of
    supported devices.
-3. Create Payment Links for the Personal and Pro plans.
-4. Replace the placeholder URLs in `config.js`.
+3. Set `STRIPE_PRICE_PERSONAL` and `STRIPE_PRICE_PRO` for the Pages Function,
+   or create Payment Links for the Personal and Pro plans.
+4. If using Payment Links instead of the checkout function, replace the
+   placeholder URLs in `config.js`.
 5. Set successful-payment redirects in Stripe to a release/download page or a
    private fulfillment flow.
 
-Do not put Stripe secret keys in this static site. If later fulfillment needs
-license keys, account management, or signed download URLs, add a Cloudflare
-Pages Function or Worker that talks to Stripe server-side.
+Do not put Stripe secret keys in the static site. Keep them as Cloudflare Pages
+secrets or local `.dev.vars` values.
 
 ## Downloads
 
@@ -67,6 +154,8 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `LICENSE_ADMIN_TOKEN`: bearer token for admin-only license creation.
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret.
 - `STRIPE_SECRET_KEY`: optional; used to read Checkout line-item quantities.
+- `STRIPE_PRICE_PERSONAL`: Stripe test/live Price ID for Personal checkout.
+- `STRIPE_PRICE_PRO`: Stripe test/live Price ID for Pro checkout.
 
 Configure Stripe to send `checkout.session.completed` events to:
 
@@ -78,6 +167,13 @@ The webhook stores the generated license key in the `payments.license_key`
 column for early manual fulfillment. Before broader commercial launch, replace
 that with email delivery or a post-payment account/download page and stop
 retaining raw license keys.
+
+For local and early admin use, retrieve recent fulfilled keys with:
+
+```bash
+curl -H "Authorization: Bearer $LICENSE_ADMIN_TOKEN" \
+  https://<site>/api/license/admin/payments
+```
 
 ## Beta Keys
 

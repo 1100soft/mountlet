@@ -166,12 +166,20 @@
             <h3>Personal</h3>
             <p class="price">$19</p>
             <p>For one person using the full app across their own devices. Choose the device count at checkout.</p>
+            <label class="device-field">
+              Devices
+              <input class="device-count" data-plan="personal" type="number" min="1" max="50" value="3" />
+            </label>
             <button class="button primary checkout-button" data-plan="personal">Buy Personal</button>
           </article>
           <article class="price-card featured">
             <h3>Pro</h3>
             <p class="price">$39</p>
             <p>For early builds, priority support, heavier beta use, and flexible device counts.</p>
+            <label class="device-field">
+              Devices
+              <input class="device-count" data-plan="pro" type="number" min="1" max="50" value="5" />
+            </label>
             <button class="button primary checkout-button" data-plan="pro">Buy Pro</button>
           </article>
           <article class="price-card">
