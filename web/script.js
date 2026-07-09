@@ -32,7 +32,7 @@ async function startCheckout(button) {
       },
       body: JSON.stringify({plan, deviceCount}),
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response, "Checkout");
     if (!response.ok || data.error || !data.url) {
       throw new Error(data.error || "Checkout is not configured yet.");
     }
@@ -41,6 +41,19 @@ async function startCheckout(button) {
     window.alert(error.message || "Checkout is not configured yet.");
     button.disabled = false;
     button.textContent = originalText;
+  }
+}
+
+async function readJsonResponse(response, label) {
+  const text = await response.text();
+  if (!text.trim()) {
+    throw new Error(`${label} returned an empty response (${response.status}). Is Wrangler Pages running with Functions enabled?`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    const detail = text.length > 240 ? `${text.slice(0, 240)}...` : text;
+    throw new Error(`${label} returned non-JSON response (${response.status}): ${detail}`);
   }
 }
 

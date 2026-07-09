@@ -47,11 +47,20 @@ npm run web:d1:init
 npm run web:r2:seed
 ```
 
+`web:r2:seed` uploads placeholder release files to local R2. The download
+buttons in `config.js` point to those objects through `/api/download/...`, so
+you can test the same release path before replacing the placeholders with real
+installer artifacts.
+
 Run the local Pages site:
 
 ```bash
 npm run web:dev
 ```
+
+The dev script passes `--functions web/functions` explicitly. If you run
+Wrangler by hand, include that flag or `/api/checkout` and `/api/download/...`
+will be served as missing static paths instead of Pages Functions.
 
 In another terminal, forward Stripe test webhooks to Wrangler:
 

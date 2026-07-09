@@ -65,7 +65,13 @@ async function createCheckoutSession(env, {priceId, planName, deviceCount, succe
     },
     body,
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_error) {
+    throw new HttpError(502, `Stripe returned non-JSON response: ${text.slice(0, 240)}`);
+  }
   if (!response.ok) {
     throw new HttpError(502, String(data.error?.message || "Stripe checkout failed."));
   }
