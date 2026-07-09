@@ -58,9 +58,9 @@ Run the local Pages site:
 npm run web:dev
 ```
 
-Wrangler detects Pages Functions from `web/functions` because the static
-directory is `web`. If `/api/checkout` returns an empty or HTML response, stop
-the dev server and restart it from the repository root with `npm run web:dev`.
+Wrangler detects Pages Functions from the repository-root `functions/`
+directory. If `/api/checkout` returns an empty or HTML response, stop the dev
+server and restart it from the repository root with `npm run web:dev`.
 
 In another terminal, forward Stripe test webhooks to Wrangler:
 
@@ -88,7 +88,7 @@ curl -H "Authorization: Bearer <LICENSE_ADMIN_TOKEN>" \
 You can also verify that local R2 is bound:
 
 ```bash
-curl http://127.0.0.1:8788/api/download/mountlet-test.txt
+curl http://127.0.0.1:8788/api/download/mountlet-linux-bundled.txt
 ```
 
 To activate a local paid build against the local API:
