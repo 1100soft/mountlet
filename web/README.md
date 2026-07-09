@@ -58,9 +58,9 @@ Run the local Pages site:
 npm run web:dev
 ```
 
-The dev script passes `--functions web/functions` explicitly. If you run
-Wrangler by hand, include that flag or `/api/checkout` and `/api/download/...`
-will be served as missing static paths instead of Pages Functions.
+Wrangler detects Pages Functions from `web/functions` because the static
+directory is `web`. If `/api/checkout` returns an empty or HTML response, stop
+the dev server and restart it from the repository root with `npm run web:dev`.
 
 In another terminal, forward Stripe test webhooks to Wrangler:
 
