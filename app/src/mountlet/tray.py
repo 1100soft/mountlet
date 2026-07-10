@@ -2603,7 +2603,8 @@ class LicenseDialog(_ConfigDialogBase):
         layout = self.qt.QVBoxLayout(self.dialog)
         layout.addWidget(self.status_label)
 
-        frame = self.qt.QGroupBox("Activate")
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
         form.addRow("License key", self.key_field)
         form.addRow("Device name", self.device_field)
