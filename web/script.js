@@ -32,6 +32,18 @@ async function startCheckout(button) {
       body: JSON.stringify({kind, plan, deviceCount: checkoutDeviceCount ?? deviceCount, licenseKey}),
     });
     const data = await readJsonResponse(response, "Checkout");
+    if (response.ok && data.ok && !data.url) {
+      showLicenseResult({
+        message: data.message || `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.`,
+        output: "Device slots added",
+      });
+      button.disabled = false;
+      button.textContent = originalText;
+      if (kind === "add_devices" && licenseKey) {
+        validateLicenseKey();
+      }
+      return;
+    }
     if (!response.ok || data.error || !data.url) {
       throw new Error(data.error || "Checkout is not configured yet.");
     }
@@ -106,19 +118,12 @@ async function validateLicenseKey() {
     validatedLicenseDevices = Number(data.maxDevices || 0);
     validatedUsedDevices = Number(data.usedDevices || 0);
     validatedBillingModel = String(data.billingModel || "lifetime");
-    if (validatedBillingModel === "lifetime") {
-      setLicenseStatus(
-        `Valid key; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
-        "valid"
-      );
-      setAddDeviceEnabled(true);
-    } else {
-      setLicenseStatus(
-        `Valid ${validatedBillingModel} key; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
-        "valid"
-      );
-      setAddDeviceEnabled(false);
-    }
+    const billingText = validatedBillingModel === "lifetime" ? "key" : `${validatedBillingModel} key`;
+    setLicenseStatus(
+      `Valid ${billingText}; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
+      "valid"
+    );
+    setAddDeviceEnabled(true);
     updateCart();
   } catch (error) {
     validatedLicenseDevices = 0;
@@ -242,7 +247,8 @@ function updateCart() {
     planPrice.textContent = `$${plan.base}${plan.suffix}`;
   }
   if (addDevicePrice) {
-    addDevicePrice.textContent = `$${action === "new_license" ? plan.extra : LICENSE_PLANS.lifetime.extra}/device`;
+    const existingPlan = LICENSE_PLANS[validatedBillingModel] || LICENSE_PLANS.lifetime;
+    addDevicePrice.textContent = `$${action === "new_license" ? plan.extra : existingPlan.extra}/device`;
   }
   if (action === "new_license") {
     amount += plan.base;
@@ -255,16 +261,22 @@ function updateCart() {
     checkoutButton.disabled = false;
   } else {
     const enabled = !addInput?.disabled;
-    amount = extraDevices * LICENSE_PLANS.lifetime.extra;
+    const existingPlan = LICENSE_PLANS[validatedBillingModel] || LICENSE_PLANS.lifetime;
+    amount = extraDevices * existingPlan.extra;
     totalDevices = validatedLicenseDevices + extraDevices;
-    parts.push([`Lifetime extra devices x ${extraDevices}`, `$${amount}`]);
-    checkoutButton.disabled = !enabled || validatedBillingModel !== "lifetime";
+    parts.push([
+      `${existingPlan.label} extra devices x ${extraDevices}`,
+      validatedBillingModel === "lifetime" ? `$${amount}` : `$${amount}${existingPlan.suffix}`,
+    ]);
+    checkoutButton.disabled = !enabled;
   }
   lines.innerHTML = parts.map(([label, price]) => `<div><dt>${label}</dt><dd>${price}</dd></div>`).join("");
   devices.textContent = totalDevices > 0
     ? `${totalDevices} device${totalDevices === 1 ? "" : "s"} total`
     : "Check a license key to calculate total devices";
-  total.textContent = `$${amount}`;
+  total.textContent = action === "add_devices" && validatedBillingModel && validatedBillingModel !== "lifetime"
+    ? "Prorated by Stripe"
+    : `$${amount}`;
 }
 
 async function loadCheckoutLicense() {
@@ -312,6 +324,22 @@ async function loadCheckoutLicense() {
       output.textContent = error.message || "Could not load the license key.";
     }
     await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+}
+
+function showLicenseResult({message, output}) {
+  setActiveTab("license", {skipHash: true});
+  const result = document.querySelector("#license-result");
+  const outputNode = document.querySelector("#license-key-output");
+  const messageNode = document.querySelector("#license-result-message");
+  if (result) {
+    result.hidden = false;
+  }
+  if (messageNode) {
+    messageNode.textContent = message;
+  }
+  if (outputNode) {
+    outputNode.textContent = output;
   }
 }
 

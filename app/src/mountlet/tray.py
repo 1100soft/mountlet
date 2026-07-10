@@ -2589,6 +2589,7 @@ class LicenseDialog(_ConfigDialogBase):
         self.device_field = self.qt.QLineEdit()
         self.device_field.setText(license_control.default_device_label())
         self.status_label = self.qt.QLabel()
+        self.expiry_label = self.qt.QLabel()
         self.devices_label = self.qt.QLabel("Activated devices")
         self.devices_text = self.qt.QPlainTextEdit()
         self.devices_text.setReadOnly(True)
@@ -2602,6 +2603,7 @@ class LicenseDialog(_ConfigDialogBase):
     def _build(self) -> None:
         layout = self.qt.QVBoxLayout(self.dialog)
         layout.addWidget(self.status_label)
+        layout.addWidget(self.expiry_label)
 
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
@@ -2633,6 +2635,8 @@ class LicenseDialog(_ConfigDialogBase):
     def _refresh_status(self) -> None:
         status = license_control.current_status()
         self.status_label.setText(status.summary)
+        self.expiry_label.setText(f"Expires: {status.expires_at}" if status.expires_at else "")
+        self.expiry_label.setVisible(bool(status.expires_at))
         self._update_button_state(status)
         if status.state == "licensed":
             if status.license_key and self.key_field.text().strip() != status.license_key:
