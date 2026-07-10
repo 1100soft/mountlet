@@ -36,9 +36,6 @@ activation test below.
 Edit `.dev.vars` and replace the Stripe placeholders with test-mode values:
 
 - `STRIPE_SECRET_KEY`: a Stripe `sk_test_...` key.
-- `STRIPE_PRICE_LICENSE`: a test Price ID for the one-device Mountlet License
-  checkout.
-- `STRIPE_PRICE_DEVICE`: a test Price ID for adding one extra device slot.
 - `STRIPE_WEBHOOK_SECRET`: the `whsec_...` value printed by Stripe CLI.
 
 Initialize local D1 and optionally seed a local R2 object:
@@ -60,6 +57,12 @@ If you applied the earlier version of that migration that removed
 
 ```bash
 wrangler d1 execute mountlet-license --local --file web/migrations/0004_add_stripe_customer_id.sql
+```
+
+If you initialized D1 before subscription support, add the subscription fields:
+
+```bash
+wrangler d1 execute mountlet-license --local --file web/migrations/0005_subscription_fields.sql
 ```
 
 `web:r2:seed` uploads placeholder release files to local R2. The download
@@ -133,11 +136,11 @@ npm run web:license:smoke
 For the first commercial version, use Stripe Checkout through the Pages
 Function:
 
-1. Create one product: Mountlet License.
-2. Create one one-time Price for the initial license: `$20`.
-3. Create one one-time Price for one extra device slot: `$5`.
-4. Set `STRIPE_PRICE_LICENSE` and `STRIPE_PRICE_DEVICE` for the Pages Function.
-5. Set successful-payment redirects through the checkout function. The default
+1. Configure the Stripe secret key and webhook signing secret.
+2. Let the checkout function create dynamic Checkout prices for monthly,
+   annual, and lifetime purchases.
+3. Configure the Stripe webhook endpoint for the Pages Function.
+4. Set successful-payment redirects through the checkout function. The default
    success URL returns to the license page and displays the generated license
    key.
 
@@ -157,7 +160,7 @@ The `functions/api/license/*` Pages Functions implement the first licensing
 control:
 
 - 7-day app-side trial.
-- one-time activation with a license key.
+- activation and renewal checks with a license key.
 - signed offline license token returned to the app.
 - flexible `max_devices` per license.
 - in-app active-device listing and deactivation.
@@ -180,13 +183,11 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `LICENSE_ADMIN_TOKEN`: bearer token for admin-only license creation.
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret.
 - `STRIPE_SECRET_KEY`: Stripe secret key used to create Checkout sessions and
-  read Checkout line items.
-- `STRIPE_PRICE_LICENSE`: Stripe test/live Price ID for the initial `$20`
-  license checkout.
-- `STRIPE_PRICE_DEVICE`: Stripe test/live Price ID for the `$5` extra-device
-  checkout.
+  read subscription state.
 
-Configure Stripe to send `checkout.session.completed` events to either endpoint:
+Configure Stripe to send `checkout.session.completed`, `invoice.paid`,
+`customer.subscription.updated`, and `customer.subscription.deleted` events to
+either endpoint:
 
 ```text
 https://<site>/api/license/stripe-webhook

@@ -164,7 +164,7 @@
         <div class="pricing-grid license-grid">
           <article class="price-card featured license-card">
             <h3>License</h3>
-            <p class="price">$20</p>
+            <p class="price" id="license-plan-price">$5/mo</p>
             <p>Start with a new one-device license, or add devices to a license you already have.</p>
             <fieldset class="license-choice">
               <legend>License action</legend>
@@ -178,6 +178,21 @@
               </label>
               <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" maxlength="27" placeholder="MNT-..." disabled />
             </fieldset>
+            <fieldset class="license-choice" id="license-plan-choice">
+              <legend>Plan</legend>
+              <label>
+                <input type="radio" name="license-plan" value="monthly" checked />
+                Monthly
+              </label>
+              <label>
+                <input type="radio" name="license-plan" value="annual" />
+                Annual
+              </label>
+              <label>
+                <input type="radio" name="license-plan" value="lifetime" />
+                Lifetime
+              </label>
+            </fieldset>
             <div class="button-row">
               <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
               <span id="license-key-status" class="inline-status" hidden></span>
@@ -185,7 +200,7 @@
           </article>
           <article class="price-card add-device-card disabled" id="add-device-card">
             <h3>Add devices</h3>
-            <p class="price" id="add-device-price">$5/device</p>
+            <p class="price" id="add-device-price">$1/device</p>
             <p>Add optional extra device slots.</p>
             <label class="device-field">
               Extra devices
@@ -202,7 +217,8 @@
         </div>
         <p class="note">
           Mountlet starts with a 7-day trial, then unlocks with one online
-          activation. Activated copies keep working offline. The license key is
+          activation. Lifetime licenses keep working offline; subscriptions
+          work offline until the current paid period ends. The license key is
           your support identity; keep it somewhere safe.
         </p>
       </section>
@@ -328,7 +344,7 @@
         </details>
         <details>
           <summary>Does Mountlet need to stay online for licensing?</summary>
-          <p>No. Paid builds use a 7-day trial and one-time activation. After activation, Mountlet stores a signed local license and keeps working offline.</p>
+          <p>No. Paid builds use a 7-day trial and online activation. Lifetime licenses keep working offline. Subscriptions store a signed local license through the current paid period.</p>
         </details>
       </section>
     </main>

@@ -109,6 +109,9 @@ export async function loadActiveLicenseByKey(env, licenseKey) {
   if (!license || license.status !== "active") {
     throw new HttpError(404, "License not found or inactive.");
   }
+  if (license.expires_at && Date.parse(license.expires_at) <= Date.now()) {
+    throw new HttpError(404, "License not found or inactive.");
+  }
   return license;
 }
 
@@ -127,7 +130,8 @@ export function tokenPayload(license, device) {
     licenseKind: license.license_kind || "paid",
     maxDevices: Number(license.max_devices || 0),
     deviceLabel: device.device_label || "",
-    issuedAt: nowIso()
+    issuedAt: nowIso(),
+    expiresAt: license.expires_at || ""
   };
 }
 

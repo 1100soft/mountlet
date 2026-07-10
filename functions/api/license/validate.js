@@ -10,6 +10,7 @@ export async function onRequestPost({request, env}) {
       plan: license.plan || "Mountlet License",
       maxDevices: Number(license.max_devices || 0),
       usedDevices,
+      billingModel: license.billing_model || "lifetime",
       licenseKind: license.license_kind || "paid",
     });
   } catch (error) {

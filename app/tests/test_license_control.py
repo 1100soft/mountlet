@@ -126,6 +126,35 @@ class LicenseControlTests(unittest.TestCase):
         self.assertEqual(status.license_kind, "beta")
         self.assertIn("Beta license", status.summary)
 
+    def test_expired_license_resets_trial(self):
+        start = 1_700_000_000.0
+        license_control.load_or_create_trial(now=start - 20 * 24 * 60 * 60)
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(
+            private_key,
+            {
+                "licenseId": "lic_1",
+                "deviceId": "dev_1",
+                "plan": "Monthly",
+                "licenseKind": "paid",
+                "maxDevices": 1,
+                "expiresAt": "2000-01-01T00:00:00Z",
+            },
+        )
+
+        with mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False):
+            license_control.store_license_token(token)
+            license_control.store_license_key("MNT-AAAAA-BBBBB-CCCCC-DDDDD")
+            status = license_control.current_status(now=start)
+
+        self.assertEqual(status.state, "trial")
+        self.assertGreaterEqual(status.trial_days_remaining, 6)
+        self.assertEqual(license_control.load_license_key(), "")
+
     def test_license_key_is_stored_and_cleared(self):
         license_control.store_license_key("MNT-AAAAA-BBBBB-CCCCC-DDDDD")
 

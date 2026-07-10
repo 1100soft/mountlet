@@ -4,7 +4,11 @@ CREATE TABLE IF NOT EXISTS licenses (
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'Mountlet License',
   license_kind TEXT NOT NULL DEFAULT 'paid',
+  billing_model TEXT NOT NULL DEFAULT 'lifetime',
   max_devices INTEGER NOT NULL DEFAULT 3,
+  stripe_subscription_id TEXT NOT NULL DEFAULT '',
+  subscription_status TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

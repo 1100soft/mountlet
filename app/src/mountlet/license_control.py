@@ -57,28 +57,41 @@ class LicenseStatus:
 
 
 def current_status(now: float | None = None) -> LicenseStatus:
-    token_payload = load_license_payload()
-    if token_payload is not None:
-        email = str(token_payload.get("email") or "")
-        plan = str(token_payload.get("plan") or "")
-        license_kind = str(token_payload.get("licenseKind") or "paid")
-        max_devices = _int_value(token_payload.get("maxDevices"), 0)
-        device_label = str(token_payload.get("deviceLabel") or "")
-        parts = ["Beta license" if license_kind == "beta" else "Licensed"]
-        if plan:
-            parts.append(plan)
-        if email:
-            parts.append(email)
-        return LicenseStatus(
-            state="licensed",
-            summary=" - ".join(parts),
-            license_key=load_license_key(),
-            licensed_email=email,
-            plan=plan,
-            license_kind=license_kind,
-            max_devices=max_devices,
-            device_label=device_label,
-        )
+    token = load_license_token()
+    if token:
+        try:
+            token_payload = verify_license_token(token)
+        except RuntimeError as exc:
+            if "expired" in str(exc).lower():
+                clear_license_token()
+                clear_license_key()
+                reset_trial(now=now)
+            token_payload = None
+        if token_payload is not None:
+            email = str(token_payload.get("email") or "")
+            plan = str(token_payload.get("plan") or "")
+            license_kind = str(token_payload.get("licenseKind") or "paid")
+            max_devices = _int_value(token_payload.get("maxDevices"), 0)
+            device_label = str(token_payload.get("deviceLabel") or "")
+            expires_at = _display_timestamp(str(token_payload.get("expiresAt") or ""))
+            parts = ["Beta license" if license_kind == "beta" else "Licensed"]
+            if plan:
+                parts.append(plan)
+            if expires_at:
+                parts.append(f"through {expires_at}")
+            if email:
+                parts.append(email)
+            return LicenseStatus(
+                state="licensed",
+                summary=" - ".join(parts),
+                license_key=load_license_key(),
+                licensed_email=email,
+                plan=plan,
+                license_kind=license_kind,
+                max_devices=max_devices,
+                device_label=device_label,
+                expires_at=expires_at,
+            )
 
     trial = load_or_create_trial(now=now)
     now_value = _now(now)
@@ -136,6 +149,7 @@ def activate_license(license_key: str, *, device_label: str = "", api_url: str |
         license_kind=str(payload.get("licenseKind") or "paid"),
         max_devices=_int_value(payload.get("maxDevices"), 0),
         device_label=str(payload.get("deviceLabel") or label),
+        expires_at=_display_timestamp(str(payload.get("expiresAt") or "")),
     )
 
 
@@ -216,6 +230,19 @@ def load_or_create_trial(now: float | None = None) -> dict[str, Any]:
             "started_at": now_value,
             "last_seen_at": now_value,
         }
+    _write_trial_record(selected)
+    return selected
+
+
+def reset_trial(now: float | None = None) -> dict[str, Any]:
+    now_value = _now(now)
+    selected = {
+        "version": _TRIAL_VERSION,
+        "install_id": secrets.token_urlsafe(24),
+        "machine_hint": machine_hint(),
+        "started_at": now_value,
+        "last_seen_at": now_value,
+    }
     _write_trial_record(selected)
     return selected
 
@@ -479,6 +506,14 @@ def _format_local_timestamp(value: float) -> str:
     return datetime.fromtimestamp(value).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _display_timestamp(value: str) -> str:
+    if not value:
+        return ""
+    with _suppress_time_parse_errors():
+        return _format_local_timestamp(_parse_timestamp(value))
+    return value
+
+
 class _suppress_time_parse_errors:
     def __enter__(self) -> None:
         return None
@@ -504,6 +539,7 @@ __all__ = [
     "load_license_key",
     "load_license_payload",
     "load_or_create_trial",
+    "reset_trial",
     "status_summary",
     "store_license_token",
     "verify_license_token",

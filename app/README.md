@@ -13,8 +13,9 @@ Source code is available for non-commercial use under `LICENSE`. Installer
 builds are covered by `docs/EULA.md`. New releases are distributed through
 GitHub; PyPI publishing is currently disabled.
 
-Paid installer builds use a 7-day trial and one-time online activation. After
-activation, Mountlet stores a signed local license and keeps working offline.
+Paid installer builds use a 7-day trial and online activation. Lifetime
+licenses keep working offline. Subscriptions store a signed local license
+through the current paid period.
 Source and development runs do not enforce licensing by default; commercial
 installer builds can set `MOUNTLET_REQUIRE_LICENSE=1`.
 Beta keys are labeled separately in the License and About windows.

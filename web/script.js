@@ -11,6 +11,7 @@ function openConfiguredLink(group, key) {
 
 async function startCheckout(button) {
   const kind = selectedLicenseAction();
+  const plan = selectedLicensePlan();
   const deviceCount = Number(document.querySelector("#add-device-count")?.value || 0);
   const checkoutDeviceCount = kind === "add_devices"
     ? Number(document.querySelector("#add-device-count")?.value || 1)
@@ -28,7 +29,7 @@ async function startCheckout(button) {
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({kind, deviceCount: checkoutDeviceCount ?? deviceCount, licenseKey}),
+      body: JSON.stringify({kind, plan, deviceCount: checkoutDeviceCount ?? deviceCount, licenseKey}),
     });
     const data = await readJsonResponse(response, "Checkout");
     if (!response.ok || data.error || !data.url) {
@@ -43,9 +44,30 @@ async function startCheckout(button) {
 }
 
 const LICENSE_KEY_PATTERN = /^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/;
+const LICENSE_PLANS = {
+  monthly: {
+    label: "Monthly",
+    base: 5,
+    extra: 1,
+    suffix: "/mo",
+  },
+  annual: {
+    label: "Annual",
+    base: 30,
+    extra: 6,
+    suffix: "/yr",
+  },
+  lifetime: {
+    label: "Lifetime",
+    base: 50,
+    extra: 10,
+    suffix: "",
+  },
+};
 let validateTimer = 0;
 let validatedLicenseDevices = 0;
 let validatedUsedDevices = 0;
+let validatedBillingModel = "";
 
 function updateAddDevicePrice() {
   updateCart();
@@ -83,15 +105,25 @@ async function validateLicenseKey() {
     }
     validatedLicenseDevices = Number(data.maxDevices || 0);
     validatedUsedDevices = Number(data.usedDevices || 0);
-    setLicenseStatus(
-      `Valid key; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
-      "valid"
-    );
-    setAddDeviceEnabled(true);
+    validatedBillingModel = String(data.billingModel || "lifetime");
+    if (validatedBillingModel === "lifetime") {
+      setLicenseStatus(
+        `Valid key; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
+        "valid"
+      );
+      setAddDeviceEnabled(true);
+    } else {
+      setLicenseStatus(
+        `Valid ${validatedBillingModel} key; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
+        "valid"
+      );
+      setAddDeviceEnabled(false);
+    }
     updateCart();
   } catch (error) {
     validatedLicenseDevices = 0;
     validatedUsedDevices = 0;
+    validatedBillingModel = "";
     setLicenseStatus(error.message || "License key is not valid.", "invalid");
     updateCart();
   }
@@ -134,15 +166,25 @@ function selectedLicenseAction() {
   return document.querySelector('input[name="license-action"]:checked')?.value || "new_license";
 }
 
+function selectedLicensePlan() {
+  return document.querySelector('input[name="license-plan"]:checked')?.value || "monthly";
+}
+
 function updatePricingMode() {
   const action = selectedLicenseAction();
   const keyField = document.querySelector("#existing-license-key");
   const validateButton = document.querySelector("#validate-license-key");
+  const planChoice = document.querySelector("#license-plan-choice");
   if (action === "new_license") {
     validatedLicenseDevices = 0;
     validatedUsedDevices = 0;
+    validatedBillingModel = "";
     if (keyField) {
       keyField.disabled = true;
+    }
+    if (planChoice) {
+      planChoice.disabled = false;
+      planChoice.classList.remove("disabled");
     }
     const addInput = document.querySelector("#add-device-count");
     if (addInput) {
@@ -164,6 +206,10 @@ function updatePricingMode() {
     if (keyField) {
       keyField.disabled = false;
     }
+    if (planChoice) {
+      planChoice.disabled = true;
+      planChoice.classList.add("disabled");
+    }
     if (validateButton) {
       validateButton.disabled = true;
     }
@@ -180,30 +226,39 @@ function updateCart() {
   const total = document.querySelector("#cart-total");
   const devices = document.querySelector("#cart-devices");
   const checkoutButton = document.querySelector("#checkout-button");
+  const planPrice = document.querySelector("#license-plan-price");
+  const addDevicePrice = document.querySelector("#add-device-price");
   if (!lines || !total || !devices || !checkoutButton) {
     return;
   }
   const action = selectedLicenseAction();
+  const plan = LICENSE_PLANS[selectedLicensePlan()] || LICENSE_PLANS.monthly;
   const addInput = document.querySelector("#add-device-count");
   const extraDevices = Math.max(0, Math.floor(Number(addInput?.value || 0)));
   let amount = 0;
   let totalDevices = 0;
   const parts = [];
+  if (planPrice) {
+    planPrice.textContent = `$${plan.base}${plan.suffix}`;
+  }
+  if (addDevicePrice) {
+    addDevicePrice.textContent = `$${action === "new_license" ? plan.extra : LICENSE_PLANS.lifetime.extra}/device`;
+  }
   if (action === "new_license") {
-    amount += 20;
+    amount += plan.base;
     totalDevices = 1 + extraDevices;
-    parts.push(["New license", "$20"]);
+    parts.push([`${plan.label} license`, `$${plan.base}${plan.suffix}`]);
     if (extraDevices > 0) {
-      amount += extraDevices * 5;
-      parts.push([`Extra devices x ${extraDevices}`, `$${extraDevices * 5}`]);
+      amount += extraDevices * plan.extra;
+      parts.push([`Extra devices x ${extraDevices}`, `$${extraDevices * plan.extra}${plan.suffix}`]);
     }
     checkoutButton.disabled = false;
   } else {
     const enabled = !addInput?.disabled;
-    amount = extraDevices * 5;
+    amount = extraDevices * LICENSE_PLANS.lifetime.extra;
     totalDevices = validatedLicenseDevices + extraDevices;
-    parts.push([`Extra devices x ${extraDevices}`, `$${amount}`]);
-    checkoutButton.disabled = !enabled;
+    parts.push([`Lifetime extra devices x ${extraDevices}`, `$${amount}`]);
+    checkoutButton.disabled = !enabled || validatedBillingModel !== "lifetime";
   }
   lines.innerHTML = parts.map(([label, price]) => `<div><dt>${label}</dt><dd>${price}</dd></div>`).join("");
   devices.textContent = totalDevices > 0
@@ -383,6 +438,7 @@ document.addEventListener("input", (event) => {
     clearTimeout(validateTimer);
     validatedLicenseDevices = 0;
     validatedUsedDevices = 0;
+    validatedBillingModel = "";
     setLicenseStatus("", "");
     setAddDeviceEnabled(false);
     updateValidateButtonState();
@@ -395,6 +451,9 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="license-action"]')) {
     updatePricingMode();
+  }
+  if (event.target.matches('input[name="license-plan"]')) {
+    updateCart();
   }
 });
 

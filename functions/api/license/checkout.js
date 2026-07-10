@@ -8,7 +8,7 @@ export async function onRequestGet({request, env}) {
       return jsonResponse({error: "Checkout session id is required."}, 400);
     }
     const row = await env.DB.prepare(
-      "SELECT p.license_key, p.quantity, p.created_at, l.plan, l.max_devices, (SELECT COUNT(*) FROM devices d WHERE d.license_id = p.license_id AND d.deactivated_at IS NULL) AS used_devices FROM payments p JOIN licenses l ON l.id = p.license_id WHERE p.stripe_session_id = ?"
+      "SELECT p.license_key, p.quantity, p.created_at, l.plan, l.billing_model, l.expires_at, l.max_devices, (SELECT COUNT(*) FROM devices d WHERE d.license_id = p.license_id AND d.deactivated_at IS NULL) AS used_devices FROM payments p JOIN licenses l ON l.id = p.license_id WHERE p.stripe_session_id = ?"
     ).bind(sessionId).first();
     if (!row || !row.license_key) {
       if (row) {
@@ -18,6 +18,8 @@ export async function onRequestGet({request, env}) {
           usedDevices: Number(row.used_devices || 0),
           addedDevices: Number(row.quantity || 0),
           plan: row.plan || "Mountlet License",
+          billingModel: row.billing_model || "lifetime",
+          expiresAt: row.expires_at || "",
           createdAt: row.created_at || "",
         });
       }
@@ -28,6 +30,8 @@ export async function onRequestGet({request, env}) {
       devices: Number(row.max_devices || row.quantity || 0),
       usedDevices: Number(row.used_devices || 0),
       plan: row.plan || "Mountlet License",
+      billingModel: row.billing_model || "lifetime",
+      expiresAt: row.expires_at || "",
       createdAt: row.created_at || "",
     });
   } catch (error) {

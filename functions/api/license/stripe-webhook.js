@@ -16,6 +16,14 @@ export async function onRequestPost({request, env}) {
       return jsonResponse({error: "Invalid Stripe signature."}, 401);
     }
     const event = JSON.parse(rawBody);
+    if (event.type === "invoice.paid") {
+      await updateSubscriptionFromInvoice(env, event.data.object);
+      return jsonResponse({ok: true, kind: "invoice.paid"});
+    }
+    if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
+      await updateSubscriptionLicense(env, event.data.object);
+      return jsonResponse({ok: true, kind: event.type});
+    }
     if (event.type !== "checkout.session.completed") {
       return jsonResponse({ok: true, ignored: true});
     }
@@ -50,15 +58,25 @@ export async function onRequestPost({request, env}) {
     const licenseId = randomId("lic");
     const plan = String(metadata.plan || "Mountlet License");
     const licenseKind = String(metadata.license_kind || "paid");
+    const billingModel = String(metadata.billing_model || "lifetime");
     const maxDevices = Math.max(1, quantity);
+    const subscription = billingModel === "lifetime"
+      ? null
+      : await fetchStripeSubscription(env, String(session.subscription || ""));
+    const subscriptionStatus = String(subscription?.status || "");
+    const expiresAt = subscriptionPeriodEnd(subscription);
     await env.DB.prepare(
-      "INSERT INTO licenses (id, license_key_hash, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)"
+      "INSERT INTO licenses (id, license_key_hash, status, plan, license_kind, billing_model, max_devices, stripe_subscription_id, subscription_status, expires_at, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(
       licenseId,
       await licenseKeyHash(env, licenseKey),
       plan,
       licenseKind,
+      billingModel,
       maxDevices,
+      String(session.subscription || ""),
+      subscriptionStatus,
+      expiresAt,
       now,
       now
     ).run();
@@ -98,6 +116,56 @@ async function checkoutQuantity(env, session) {
     }
   }
   return 3;
+}
+
+async function updateSubscriptionFromInvoice(env, invoice) {
+  const subscriptionId = String(invoice.subscription || "");
+  if (!subscriptionId) {
+    return;
+  }
+  const periodEnd = invoicePeriodEnd(invoice);
+  const now = nowIso();
+  await env.DB.prepare(
+    "UPDATE licenses SET subscription_status = 'active', expires_at = CASE WHEN ? != '' THEN ? ELSE expires_at END, updated_at = ? WHERE stripe_subscription_id = ?"
+  ).bind(periodEnd, periodEnd, now, subscriptionId).run();
+}
+
+async function updateSubscriptionLicense(env, subscription) {
+  const subscriptionId = String(subscription.id || "");
+  if (!subscriptionId) {
+    return;
+  }
+  const status = String(subscription.status || "");
+  const expiresAt = subscriptionPeriodEnd(subscription);
+  const now = nowIso();
+  await env.DB.prepare(
+    "UPDATE licenses SET subscription_status = ?, expires_at = CASE WHEN ? != '' THEN ? ELSE expires_at END, updated_at = ? WHERE stripe_subscription_id = ?"
+  ).bind(status, expiresAt, expiresAt, now, subscriptionId).run();
+}
+
+async function fetchStripeSubscription(env, subscriptionId) {
+  if (!subscriptionId) {
+    return null;
+  }
+  const response = await fetch(`https://api.stripe.com/v1/subscriptions/${subscriptionId}`, {
+    headers: {authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`},
+  });
+  if (!response.ok) {
+    return null;
+  }
+  return await response.json();
+}
+
+function subscriptionPeriodEnd(subscription) {
+  const value = Number(subscription?.current_period_end || 0);
+  return value > 0 ? new Date(value * 1000).toISOString() : "";
+}
+
+function invoicePeriodEnd(invoice) {
+  const linePeriodEnd = Number(invoice?.lines?.data?.[0]?.period?.end || 0);
+  const invoicePeriodEnd = Number(invoice?.period_end || 0);
+  const value = linePeriodEnd || invoicePeriodEnd;
+  return value > 0 ? new Date(value * 1000).toISOString() : "";
 }
 
 async function verifyStripeSignature(rawBody, header, env) {
