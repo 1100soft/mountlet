@@ -27,6 +27,16 @@ export async function onRequestPost({request, env}) {
       await env.DB.prepare("UPDATE licenses SET max_devices = max_devices + ?, updated_at = ? WHERE id = ?")
         .bind(quantity, now, metadata.license_id)
         .run();
+      await env.DB.prepare(
+        "INSERT INTO payments (id, stripe_session_id, stripe_customer_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, ?, 'add_devices', ?, '', ?)"
+      ).bind(
+        randomId("pay"),
+        session.id,
+        "",
+        metadata.license_id,
+        quantity,
+        now
+      ).run();
       return jsonResponse({ok: true, kind: "add_devices"});
     }
 
@@ -58,6 +68,7 @@ export async function onRequestPost({request, env}) {
       licenseKey,
       now
     ).run();
+    await sendLicenseEmail(env, session, licenseKey, maxDevices);
     return jsonResponse({ok: true});
   } catch (error) {
     return handleError(error);
@@ -83,6 +94,39 @@ async function checkoutQuantity(env, session) {
     }
   }
   return 3;
+}
+
+async function sendLicenseEmail(env, session, licenseKey, maxDevices) {
+  const apiKey = String(env.RESEND_API_KEY || "").trim();
+  const from = String(env.LICENSE_EMAIL_FROM || "").trim();
+  const to = String(session.customer_details?.email || session.customer_email || "").trim();
+  if (!apiKey || !from || !to) {
+    return;
+  }
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to,
+        subject: "Your Mountlet license key",
+        text: [
+          "Thank you for buying Mountlet.",
+          "",
+          `License key: ${licenseKey}`,
+          `Devices: ${maxDevices}`,
+          "",
+          "Save this key. Mountlet does not keep customer records, so lost keys cannot be recovered.",
+        ].join("\n"),
+      }),
+    });
+  } catch (_error) {
+    return;
+  }
 }
 
 async function verifyStripeSignature(rawBody, header, env) {

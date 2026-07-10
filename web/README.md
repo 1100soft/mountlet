@@ -36,10 +36,14 @@ activation test below.
 Edit `.dev.vars` and replace the Stripe placeholders with test-mode values:
 
 - `STRIPE_SECRET_KEY`: a Stripe `sk_test_...` key.
-- `STRIPE_PRICE_LICENSE`: a test Price ID for the Mountlet License checkout.
-  Configure this Stripe Price with graduated tiers: first device $10, devices
-  2-3 $5 each, and devices 4+ $3 each.
+- `STRIPE_PRICE_LICENSE`: a test Price ID for the one-device Mountlet License
+  checkout.
+- `STRIPE_PRICE_DEVICE`: a test Price ID for adding one extra device slot.
 - `STRIPE_WEBHOOK_SECRET`: the `whsec_...` value printed by Stripe CLI.
+- Optional email delivery:
+  - `RESEND_API_KEY`: Resend API key.
+  - `LICENSE_EMAIL_FROM`: verified sender, for example
+    `Mountlet <licenses@example.com>`.
 
 Initialize local D1 and optionally seed a local R2 object:
 
@@ -114,10 +118,10 @@ For the first commercial version, use Stripe Checkout through the Pages
 Function:
 
 1. Create one product: Mountlet License.
-2. Create one one-time graduated Price. Use these tiers: first device $10,
-   devices 2-3 $5 each, and devices 4+ $3 each.
-3. Set `STRIPE_PRICE_LICENSE` for the Pages Function.
-4. Set successful-payment redirects through the checkout function. The default
+2. Create one one-time Price for the initial license: `$20`.
+3. Create one one-time Price for one extra device slot: `$5`.
+4. Set `STRIPE_PRICE_LICENSE` and `STRIPE_PRICE_DEVICE` for the Pages Function.
+5. Set successful-payment redirects through the checkout function. The default
    success URL returns to the pricing tab and displays the generated license
    key.
 
@@ -160,8 +164,12 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `LICENSE_ADMIN_TOKEN`: bearer token for admin-only license creation.
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret.
 - `STRIPE_SECRET_KEY`: optional; used to read Checkout line-item quantities.
-- `STRIPE_PRICE_LICENSE`: Stripe test/live Price ID for the graduated
-  per-device license checkout.
+- `STRIPE_PRICE_LICENSE`: Stripe test/live Price ID for the initial `$20`
+  license checkout.
+- `STRIPE_PRICE_DEVICE`: Stripe test/live Price ID for the `$5` extra-device
+  checkout.
+- `RESEND_API_KEY`: optional; used to email license keys after purchase.
+- `LICENSE_EMAIL_FROM`: optional; verified sender used with Resend.
 
 Configure Stripe to send `checkout.session.completed` events to:
 
@@ -174,6 +182,11 @@ success page can display it after Stripe redirects back. It does not store
 Stripe customer IDs or customer email addresses. Tell buyers to save their
 license key because Mountlet intentionally does not keep customer records for
 key recovery.
+
+If `RESEND_API_KEY` and `LICENSE_EMAIL_FROM` are set, the webhook also sends
+the license key to the Stripe checkout email without storing that email in D1.
+If email delivery fails, the payment still succeeds and the browser success
+page remains the primary key delivery path.
 
 For local and early admin use, retrieve recent fulfilled keys with:
 

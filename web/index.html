@@ -159,31 +159,46 @@
       <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Pricing</p>
-          <h2>Choose how many devices to unlock.</h2>
+          <h2>Buy a license or add devices.</h2>
         </div>
-        <div class="pricing-grid single">
+        <div class="pricing-grid license-grid">
           <article class="price-card featured license-card">
-            <h3>Mountlet License</h3>
-            <p class="price" id="license-price">$20</p>
-            <p>One license key for your own devices. Extra devices get cheaper automatically.</p>
-            <label class="device-field">
-              Devices
-              <input class="device-count" data-plan="license" type="number" min="1" max="50" value="3" />
+            <h3>License</h3>
+            <p class="price">$20</p>
+            <p>Buy a new license for one device, or enter an existing key to add devices.</p>
+            <button class="button primary checkout-button" data-kind="new_license">Buy new license</button>
+            <label class="license-key-field">
+              Existing license key
+              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" />
             </label>
-            <p class="tier-note">1st device $10; devices 2-3 $5 each; devices 4+ $3 each.</p>
-            <button class="button primary checkout-button" data-plan="license">Buy license</button>
+            <div class="button-row">
+              <button class="button secondary" type="button" id="validate-license-key">Check key</button>
+              <span id="license-key-status" class="inline-status">No key checked.</span>
+            </div>
+          </article>
+          <article class="price-card add-device-card disabled" id="add-device-card">
+            <h3>Add devices</h3>
+            <p class="price" id="add-device-price">$5</p>
+            <p>Add device slots to a valid license key.</p>
+            <label class="device-field">
+              Additional devices
+              <input id="add-device-count" type="number" min="1" max="50" value="1" disabled />
+            </label>
+            <button class="button primary checkout-button" data-kind="add_devices" disabled>Add devices</button>
           </article>
         </div>
         <div class="license-result" id="license-result" hidden>
           <h3>Your license key</h3>
-          <p>Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
+          <p id="license-result-message">Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
           <pre id="license-key-output"></pre>
           <button class="button secondary" type="button" id="copy-license-key">Copy key</button>
         </div>
         <p class="note">
           Mountlet starts with a 7-day trial, then unlocks with one online
           activation. Activated copies keep working offline. The license key is
-          your support identity; keep it somewhere safe.
+          your support identity; keep it somewhere safe. If email delivery is
+          enabled, Mountlet uses the Stripe checkout email only to send the key
+          and does not store it.
         </p>
       </section>
 

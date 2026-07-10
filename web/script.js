@@ -10,16 +10,13 @@ function openConfiguredLink(group, key) {
 }
 
 async function startCheckout(button) {
-  const plan = button.dataset.plan;
-  const config = window.MOUNTLET_SITE_CONFIG || {};
-  const configuredUrl = config.checkout && config.checkout[plan];
-  if (configuredUrl && !configuredUrl.includes("replace-")) {
-    window.location.href = configuredUrl;
-    return;
-  }
-
-  const countInput = document.querySelector(`.device-count[data-plan="${plan}"]`);
-  const deviceCount = Number(countInput && countInput.value) || undefined;
+  const kind = button.dataset.kind || "new_license";
+  const deviceCount = kind === "add_devices"
+    ? Number(document.querySelector("#add-device-count")?.value || 1)
+    : undefined;
+  const licenseKey = kind === "add_devices"
+    ? String(document.querySelector("#existing-license-key")?.value || "").trim()
+    : "";
   button.disabled = true;
   const originalText = button.textContent;
   button.textContent = "Opening checkout...";
@@ -30,7 +27,7 @@ async function startCheckout(button) {
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({plan, deviceCount}),
+      body: JSON.stringify({kind, deviceCount, licenseKey}),
     });
     const data = await readJsonResponse(response, "Checkout");
     if (!response.ok || data.error || !data.url) {
@@ -44,24 +41,60 @@ async function startCheckout(button) {
   }
 }
 
-function licenseTotal(deviceCount) {
-  const count = Math.max(1, Math.floor(Number(deviceCount) || 1));
-  if (count === 1) {
-    return 10;
-  }
-  if (count <= 3) {
-    return 10 + (count - 1) * 5;
-  }
-  return 20 + (count - 3) * 3;
-}
-
-function updateLicensePrice() {
-  const input = document.querySelector('.device-count[data-plan="license"]');
-  const output = document.querySelector("#license-price");
+function updateAddDevicePrice() {
+  const input = document.querySelector("#add-device-count");
+  const output = document.querySelector("#add-device-price");
   if (!input || !output) {
     return;
   }
-  output.textContent = `$${licenseTotal(input.value)}`;
+  const count = Math.max(1, Math.floor(Number(input.value) || 1));
+  output.textContent = `$${count * 5}`;
+}
+
+async function validateLicenseKey() {
+  const input = document.querySelector("#existing-license-key");
+  const status = document.querySelector("#license-key-status");
+  if (!input || !status) {
+    return;
+  }
+  const licenseKey = input.value.trim();
+  setAddDeviceEnabled(false);
+  if (!licenseKey) {
+    status.textContent = "Enter a license key.";
+    return;
+  }
+  status.textContent = "Checking key...";
+  try {
+    const response = await fetch("/api/license/validate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({licenseKey}),
+    });
+    const data = await readJsonResponse(response, "License check");
+    if (!response.ok || data.error || !data.ok) {
+      throw new Error(data.error || "License key is not valid.");
+    }
+    status.textContent = `Valid key; covers ${data.maxDevices} device${data.maxDevices === 1 ? "" : "s"}.`;
+    setAddDeviceEnabled(true);
+  } catch (error) {
+    status.textContent = error.message || "License key is not valid.";
+  }
+}
+
+function setAddDeviceEnabled(enabled) {
+  const card = document.querySelector("#add-device-card");
+  const input = document.querySelector("#add-device-count");
+  const button = document.querySelector('.checkout-button[data-kind="add_devices"]');
+  card?.classList.toggle("disabled", !enabled);
+  if (input) {
+    input.disabled = !enabled;
+  }
+  if (button) {
+    button.disabled = !enabled;
+  }
 }
 
 async function loadCheckoutLicense() {
@@ -73,6 +106,7 @@ async function loadCheckoutLicense() {
   setActiveTab("pricing", {skipHash: true});
   const result = document.querySelector("#license-result");
   const output = document.querySelector("#license-key-output");
+  const message = document.querySelector("#license-result-message");
   if (!result || !output) {
     return;
   }
@@ -85,7 +119,22 @@ async function loadCheckoutLicense() {
       });
       const data = await readJsonResponse(response, "License lookup");
       if (response.ok && data.licenseKey) {
+        if (message) {
+          message.textContent = "Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.";
+        }
         output.textContent = data.licenseKey;
+        const input = document.querySelector("#existing-license-key");
+        if (input) {
+          input.value = data.licenseKey;
+          validateLicenseKey();
+        }
+        return;
+      }
+      if (response.ok && data.kind === "add_devices") {
+        if (message) {
+          message.textContent = `Device slots were added. This license now covers ${data.devices} device${data.devices === 1 ? "" : "s"}.`;
+        }
+        output.textContent = "Device slots added.";
         return;
       }
       output.textContent = data.error || "The license key is not ready yet.";
@@ -182,6 +231,12 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const validateButton = event.target.closest("#validate-license-key");
+  if (validateButton) {
+    validateLicenseKey();
+    return;
+  }
+
   const downloadButton = event.target.closest(".download-button");
   if (downloadButton) {
     openConfiguredLink("downloads", downloadButton.dataset.download);
@@ -195,8 +250,12 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.matches('.device-count[data-plan="license"]')) {
-    updateLicensePrice();
+  if (event.target.matches("#add-device-count")) {
+    updateAddDevicePrice();
+  }
+  if (event.target.matches("#existing-license-key")) {
+    document.querySelector("#license-key-status").textContent = "Key changed; check it again.";
+    setAddDeviceEnabled(false);
   }
 });
 
@@ -234,5 +293,6 @@ window.addEventListener("popstate", () => {
 });
 
 setActiveTab(window.location.hash, {skipHash: true});
-updateLicensePrice();
+updateAddDevicePrice();
+setAddDeviceEnabled(false);
 loadCheckoutLicense();

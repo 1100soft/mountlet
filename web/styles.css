@@ -346,8 +346,9 @@ h3 {
   width: 100%;
 }
 
-.pricing-grid.single {
-  grid-template-columns: minmax(280px, 520px);
+.pricing-grid.license-grid {
+  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(280px, 520px));
 }
 
 .platform-picker {
@@ -422,6 +423,10 @@ h3 {
   max-width: 520px;
 }
 
+.add-device-card.disabled {
+  opacity: 0.58;
+}
+
 .price {
   color: var(--accent);
   font-size: 2.5rem;
@@ -440,6 +445,25 @@ h3 {
   margin: 16px 0;
 }
 
+.license-key-field {
+  color: var(--muted);
+  display: grid;
+  font-size: 0.92rem;
+  font-weight: 720;
+  gap: 8px;
+  margin: 18px 0 12px;
+}
+
+.license-key-field input {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  min-height: 38px;
+  padding: 7px 10px;
+  width: 100%;
+}
+
 .device-field input {
   background: var(--panel-soft);
   border: 1px solid var(--line);
@@ -452,6 +476,18 @@ h3 {
 
 .tier-note {
   font-size: 0.92rem;
+}
+
+.button-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.inline-status {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .license-result {
