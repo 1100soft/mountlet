@@ -45,6 +45,7 @@ async function startCheckout(button) {
 const LICENSE_KEY_PATTERN = /^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/;
 let validateTimer = 0;
 let validatedLicenseDevices = 0;
+let validatedUsedDevices = 0;
 
 function updateAddDevicePrice() {
   updateCart();
@@ -81,11 +82,16 @@ async function validateLicenseKey() {
       throw new Error(data.error || "License key is not valid.");
     }
     validatedLicenseDevices = Number(data.maxDevices || 0);
-    setLicenseStatus(`Valid key; covers ${validatedLicenseDevices} device${validatedLicenseDevices === 1 ? "" : "s"}.`, "valid");
+    validatedUsedDevices = Number(data.usedDevices || 0);
+    setLicenseStatus(
+      `Valid key; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
+      "valid"
+    );
     setAddDeviceEnabled(true);
     updateCart();
   } catch (error) {
     validatedLicenseDevices = 0;
+    validatedUsedDevices = 0;
     setLicenseStatus(error.message || "License key is not valid.", "invalid");
     updateCart();
   }
@@ -134,6 +140,7 @@ function updatePricingMode() {
   const validateButton = document.querySelector("#validate-license-key");
   if (action === "new_license") {
     validatedLicenseDevices = 0;
+    validatedUsedDevices = 0;
     if (keyField) {
       keyField.disabled = true;
     }
@@ -228,7 +235,7 @@ async function loadCheckoutLicense() {
       const data = await readJsonResponse(response, "License lookup");
       if (response.ok && data.licenseKey) {
         if (message) {
-          message.textContent = "Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.";
+          message.textContent = `Save this key now. It covers ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} activated devices.`;
         }
         output.textContent = data.licenseKey;
         const input = document.querySelector("#existing-license-key");
@@ -240,7 +247,7 @@ async function loadCheckoutLicense() {
       }
       if (response.ok && data.kind === "add_devices") {
         if (message) {
-          message.textContent = `Device slots were added. This license now covers ${data.devices} device${data.devices === 1 ? "" : "s"}.`;
+          message.textContent = `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.`;
         }
         output.textContent = "Device slots added";
         return;
@@ -375,6 +382,7 @@ document.addEventListener("input", (event) => {
     }
     clearTimeout(validateTimer);
     validatedLicenseDevices = 0;
+    validatedUsedDevices = 0;
     setLicenseStatus("", "");
     setAddDeviceEnabled(false);
     updateValidateButtonState();

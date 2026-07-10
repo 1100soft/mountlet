@@ -43,6 +43,7 @@ class LicenseStatus:
     state: str
     summary: str
     trial_days_remaining: int = 0
+    license_key: str = ""
     licensed_email: str = ""
     plan: str = ""
     license_kind: str = ""
@@ -71,6 +72,7 @@ def current_status(now: float | None = None) -> LicenseStatus:
         return LicenseStatus(
             state="licensed",
             summary=" - ".join(parts),
+            license_key=load_license_key(),
             licensed_email=email,
             plan=plan,
             license_kind=license_kind,
@@ -124,9 +126,11 @@ def activate_license(license_key: str, *, device_label: str = "", api_url: str |
         raise RuntimeError("The license server did not return a license token.")
     payload = verify_license_token(token)
     store_license_token(token)
+    store_license_key(key)
     return LicenseStatus(
         state="licensed",
         summary="Licensed",
+        license_key=key,
         licensed_email=str(payload.get("email") or ""),
         plan=str(payload.get("plan") or ""),
         license_kind=str(payload.get("licenseKind") or "paid"),
@@ -135,15 +139,24 @@ def activate_license(license_key: str, *, device_label: str = "", api_url: str |
     )
 
 
-def list_devices(api_url: str | None = None) -> list[dict[str, Any]]:
+def license_devices(api_url: str | None = None) -> dict[str, Any]:
     token = load_license_token()
     if not token:
         raise RuntimeError("Activate Mountlet before listing devices.")
     response = _post_json(_api_endpoint(api_url, "devices"), {"token": token})
     devices = response.get("devices", [])
     if not isinstance(devices, list):
-        return []
-    return [device for device in devices if isinstance(device, dict)]
+        devices = []
+    normalized = [device for device in devices if isinstance(device, dict)]
+    return {
+        "devices": normalized,
+        "usedDevices": _int_value(response.get("usedDevices"), len(normalized)),
+        "maxDevices": _int_value(response.get("maxDevices"), current_status().max_devices),
+    }
+
+
+def list_devices(api_url: str | None = None) -> list[dict[str, Any]]:
+    return list(license_devices(api_url).get("devices") or [])
 
 
 def deactivate_device(device_id: str | None = None, *, api_url: str | None = None) -> None:
@@ -158,6 +171,7 @@ def deactivate_device(device_id: str | None = None, *, api_url: str | None = Non
     payload = load_license_payload()
     if not device_id or (payload and str(payload.get("deviceId") or "") == device_id):
         clear_license_token()
+        clear_license_key()
 
 
 def default_device_label() -> str:
@@ -225,6 +239,38 @@ def load_license_payload() -> dict[str, Any] | None:
         return verify_license_token(token)
     except RuntimeError:
         return None
+
+
+def load_license_key() -> str:
+    for path in _license_key_paths():
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if text:
+            return text
+    return ""
+
+
+def store_license_key(license_key: str) -> None:
+    value = license_key.strip()
+    if not value:
+        return
+    for path in _license_key_paths():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(value + "\n", encoding="utf-8")
+            apply_permissions(path)
+        except OSError:
+            continue
+
+
+def clear_license_key() -> None:
+    for path in _license_key_paths():
+        try:
+            path.unlink()
+        except OSError:
+            continue
 
 
 def store_license_token(token: str) -> None:
@@ -391,6 +437,13 @@ def _license_token_paths() -> tuple[Path, ...]:
     )
 
 
+def _license_key_paths() -> tuple[Path, ...]:
+    return (
+        app_state_dir() / "license" / "license-key.txt",
+        app_config_dir() / "license-key.txt",
+    )
+
+
 def _b64encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
@@ -440,12 +493,15 @@ __all__ = [
     "LICENSE_PUBLIC_KEY_ENV",
     "LicenseStatus",
     "activate_license",
+    "clear_license_key",
     "clear_license_token",
     "current_status",
     "deactivate_device",
     "default_device_label",
     "device_fingerprint",
     "list_devices",
+    "license_devices",
+    "load_license_key",
     "load_license_payload",
     "load_or_create_trial",
     "status_summary",

@@ -2583,10 +2583,13 @@ class LicenseDialog(_ConfigDialogBase):
         self.dialog.setWindowTitle("License")
         self.dialog.resize(520, 420)
         self.key_field = self.qt.QLineEdit()
-        self.key_field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        self.key_field.setText(license_control.load_license_key())
+        self.key_field.setPlaceholderText("MNT-...")
+        self.key_field.setToolTip("Your Mountlet license key. Keep this key somewhere safe.")
         self.device_field = self.qt.QLineEdit()
         self.device_field.setText(license_control.default_device_label())
         self.status_label = self.qt.QLabel()
+        self.devices_label = self.qt.QLabel("Activated devices")
         self.devices_text = self.qt.QPlainTextEdit()
         self.devices_text.setReadOnly(True)
         self.activate_button = None
@@ -2619,7 +2622,7 @@ class LicenseDialog(_ConfigDialogBase):
         layout.addLayout(button_row)
         self.key_field.textChanged.connect(self._update_button_state)
 
-        layout.addWidget(self.qt.QLabel("Activated devices"))
+        layout.addWidget(self.devices_label)
         layout.addWidget(self.devices_text)
 
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
@@ -2631,10 +2634,14 @@ class LicenseDialog(_ConfigDialogBase):
         self.status_label.setText(status.summary)
         self._update_button_state(status)
         if status.state == "licensed":
+            if status.license_key and not self.key_field.text().strip():
+                self.key_field.setText(status.license_key)
             self._refresh_devices(show_errors=False)
         elif status.state == "trial":
+            self.devices_label.setText("Activated devices")
             self.devices_text.setPlainText("Activate Mountlet to manage devices.")
         else:
+            self.devices_label.setText("Activated devices")
             self.devices_text.setPlainText("Trial expired. Enter a license key to activate this device.")
 
     def _update_button_state(self, status: license_control.LicenseStatus | None = None) -> None:
@@ -2675,18 +2682,25 @@ class LicenseDialog(_ConfigDialogBase):
             self.qt.QMessageBox.warning(self.dialog, "License activation", str(exc))
             return
         self.status_label.setText(status.summary)
-        self.key_field.clear()
+        self.key_field.setText(status.license_key or self.key_field.text().strip())
         self._refresh_devices(show_errors=False)
         self._update_button_state(status)
         self.qt.QMessageBox.information(self.dialog, "License activation", "Mountlet is activated on this device.")
 
     def _refresh_devices(self, *, show_errors: bool = True) -> None:
         try:
-            devices = license_control.list_devices()
+            device_info = license_control.license_devices()
         except RuntimeError as exc:
             if show_errors:
                 self.qt.QMessageBox.warning(self.dialog, "License devices", str(exc))
             return
+        devices = list(device_info.get("devices") or [])
+        used_devices = int(device_info.get("usedDevices") or len(devices))
+        max_devices = int(device_info.get("maxDevices") or 0)
+        if max_devices:
+            self.devices_label.setText(f"Activated devices ({used_devices}/{max_devices})")
+        else:
+            self.devices_label.setText(f"Activated devices ({used_devices})")
         if not devices:
             self.devices_text.setPlainText("No activated devices were returned.")
             return

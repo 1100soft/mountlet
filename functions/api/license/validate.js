@@ -1,13 +1,15 @@
-import {handleError, jsonResponse, loadActiveLicenseByKey, readJson} from "../../_lib/license.js";
+import {activeDeviceCount, handleError, jsonResponse, loadActiveLicenseByKey, readJson} from "../../_lib/license.js";
 
 export async function onRequestPost({request, env}) {
   try {
     const body = await readJson(request);
     const license = await loadActiveLicenseByKey(env, body.licenseKey);
+    const usedDevices = await activeDeviceCount(env, license.id);
     return jsonResponse({
       ok: true,
       plan: license.plan || "Mountlet License",
       maxDevices: Number(license.max_devices || 0),
+      usedDevices,
       licenseKind: license.license_kind || "paid",
     });
   } catch (error) {

@@ -126,6 +126,16 @@ class LicenseControlTests(unittest.TestCase):
         self.assertEqual(status.license_kind, "beta")
         self.assertIn("Beta license", status.summary)
 
+    def test_license_key_is_stored_and_cleared(self):
+        license_control.store_license_key("MNT-AAAAA-BBBBB-CCCCC-DDDDD")
+
+        self.assertEqual(license_control.load_license_key(), "MNT-AAAAA-BBBBB-CCCCC-DDDDD")
+        self.assertTrue((Path(self.tempdir.name) / "state" / "mountlet" / "license" / "license-key.txt").exists())
+
+        license_control.clear_license_key()
+
+        self.assertEqual(license_control.load_license_key(), "")
+
     def test_invalid_license_token_is_rejected(self):
         private_key = ec.generate_private_key(ec.SECP256R1())
         other_key = ec.generate_private_key(ec.SECP256R1())
