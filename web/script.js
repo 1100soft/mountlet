@@ -102,16 +102,24 @@ function setLicenseStatus(message, state) {
   status.classList.toggle("invalid", state === "invalid");
 }
 
+function updateValidateButtonState() {
+  const button = document.querySelector("#validate-license-key");
+  const input = document.querySelector("#existing-license-key");
+  if (!button || !input) {
+    return;
+  }
+  const canCheck = selectedLicenseAction() === "add_devices"
+    && !input.disabled
+    && LICENSE_KEY_PATTERN.test(input.value.trim().toUpperCase());
+  button.disabled = !canCheck;
+}
+
 function setAddDeviceEnabled(enabled) {
   const card = document.querySelector("#add-device-card");
   const input = document.querySelector("#add-device-count");
-  const button = document.querySelector('.checkout-button[data-kind="add_devices"]');
   card?.classList.toggle("disabled", !enabled);
   if (input) {
     input.disabled = !enabled;
-  }
-  if (button) {
-    button.disabled = !enabled;
   }
   updateCart();
 }
@@ -124,7 +132,6 @@ function updatePricingMode() {
   const action = selectedLicenseAction();
   const keyField = document.querySelector("#existing-license-key");
   const validateButton = document.querySelector("#validate-license-key");
-  const status = document.querySelector("#license-key-status");
   if (action === "new_license") {
     validatedLicenseDevices = 0;
     if (keyField) {
@@ -151,12 +158,13 @@ function updatePricingMode() {
       keyField.disabled = false;
     }
     if (validateButton) {
-      validateButton.disabled = false;
+      validateButton.disabled = true;
     }
     setLicenseStatus("", "");
     setAddDeviceEnabled(false);
     keyField?.focus();
   }
+  updateValidateButtonState();
   updateCart();
 }
 
@@ -369,6 +377,7 @@ document.addEventListener("input", (event) => {
     validatedLicenseDevices = 0;
     setLicenseStatus("", "");
     setAddDeviceEnabled(false);
+    updateValidateButtonState();
     if (LICENSE_KEY_PATTERN.test(normalized.trim())) {
       validateTimer = setTimeout(validateLicenseKey, 250);
     }

@@ -40,8 +40,6 @@ writeFileSync(
     "STRIPE_WEBHOOK_SECRET=\"whsec_replace\"",
     "STRIPE_PRICE_LICENSE=\"price_replace_license_test_price\"",
     "STRIPE_PRICE_DEVICE=\"price_replace_extra_device_test_price\"",
-    "RESEND_API_KEY=\"\"",
-    "LICENSE_EMAIL_FROM=\"Mountlet <licenses@example.com>\"",
     "",
   ].join("\n"),
   {encoding: "utf8", mode: 0o600}

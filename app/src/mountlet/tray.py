@@ -2589,6 +2589,9 @@ class LicenseDialog(_ConfigDialogBase):
         self.status_label = self.qt.QLabel()
         self.devices_text = self.qt.QPlainTextEdit()
         self.devices_text.setReadOnly(True)
+        self.activate_button = None
+        self.refresh_devices_button = None
+        self.deactivate_button = None
         self._build()
         self._refresh_status()
         self.key_field.setFocus()
@@ -2604,16 +2607,17 @@ class LicenseDialog(_ConfigDialogBase):
         layout.addWidget(frame)
 
         button_row = self.qt.QHBoxLayout()
-        activate_button = self.qt.QPushButton("Activate")
-        activate_button.clicked.connect(self._activate)
-        refresh_button = self.qt.QPushButton("Refresh devices")
-        refresh_button.clicked.connect(self._refresh_devices)
-        deactivate_button = self.qt.QPushButton("Deactivate this device")
-        deactivate_button.clicked.connect(self._deactivate_this_device)
-        button_row.addWidget(activate_button)
-        button_row.addWidget(refresh_button)
-        button_row.addWidget(deactivate_button)
+        self.activate_button = self.qt.QPushButton("Activate")
+        self.activate_button.clicked.connect(self._activate)
+        self.refresh_devices_button = self.qt.QPushButton("Refresh devices")
+        self.refresh_devices_button.clicked.connect(self._refresh_devices)
+        self.deactivate_button = self.qt.QPushButton("Deactivate this device")
+        self.deactivate_button.clicked.connect(self._deactivate_this_device)
+        button_row.addWidget(self.activate_button)
+        button_row.addWidget(self.refresh_devices_button)
+        button_row.addWidget(self.deactivate_button)
         layout.addLayout(button_row)
+        self.key_field.textChanged.connect(self._update_button_state)
 
         layout.addWidget(self.qt.QLabel("Activated devices"))
         layout.addWidget(self.devices_text)
@@ -2625,12 +2629,41 @@ class LicenseDialog(_ConfigDialogBase):
     def _refresh_status(self) -> None:
         status = license_control.current_status()
         self.status_label.setText(status.summary)
+        self._update_button_state(status)
         if status.state == "licensed":
             self._refresh_devices(show_errors=False)
         elif status.state == "trial":
             self.devices_text.setPlainText("Activate Mountlet to manage devices.")
         else:
             self.devices_text.setPlainText("Trial expired. Enter a license key to activate this device.")
+
+    def _update_button_state(self, status: license_control.LicenseStatus | None = None) -> None:
+        if not isinstance(status, license_control.LicenseStatus):
+            status = None
+        status = status or license_control.current_status()
+        licensed = status.state == "licensed"
+        has_key = bool(self.key_field.text().strip())
+        if self.activate_button is not None:
+            self.activate_button.setEnabled(has_key)
+            self.activate_button.setToolTip(
+                "Activate this device with the entered license key."
+                if has_key
+                else "Enter a license key to activate this device."
+            )
+        if self.refresh_devices_button is not None:
+            self.refresh_devices_button.setEnabled(licensed)
+            self.refresh_devices_button.setToolTip(
+                "Show devices activated with this license."
+                if licensed
+                else "Activate this device before managing license devices."
+            )
+        if self.deactivate_button is not None:
+            self.deactivate_button.setEnabled(licensed)
+            self.deactivate_button.setToolTip(
+                "Deactivate this device and free one device slot."
+                if licensed
+                else "This device is not activated."
+            )
 
     def _activate(self) -> None:
         try:
@@ -2644,6 +2677,7 @@ class LicenseDialog(_ConfigDialogBase):
         self.status_label.setText(status.summary)
         self.key_field.clear()
         self._refresh_devices(show_errors=False)
+        self._update_button_state(status)
         self.qt.QMessageBox.information(self.dialog, "License activation", "Mountlet is activated on this device.")
 
     def _refresh_devices(self, *, show_errors: bool = True) -> None:
@@ -2665,6 +2699,7 @@ class LicenseDialog(_ConfigDialogBase):
             details = " - ".join(part for part in (platform_name, activated, marker) if part)
             lines.append(f"{label}{f' ({details})' if details else ''}")
         self.devices_text.setPlainText("\n".join(lines))
+        self._update_button_state()
 
     def _deactivate_this_device(self) -> None:
         answer = self.qt.QMessageBox.question(

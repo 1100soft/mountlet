@@ -40,10 +40,6 @@ Edit `.dev.vars` and replace the Stripe placeholders with test-mode values:
   checkout.
 - `STRIPE_PRICE_DEVICE`: a test Price ID for adding one extra device slot.
 - `STRIPE_WEBHOOK_SECRET`: the `whsec_...` value printed by Stripe CLI.
-- Optional email delivery:
-  - `RESEND_API_KEY`: Resend API key.
-  - `LICENSE_EMAIL_FROM`: verified sender, for example
-    `Mountlet <licenses@example.com>`.
 
 Initialize local D1 and optionally seed a local R2 object:
 
@@ -119,6 +115,12 @@ export MOUNTLET_LICENSE_PUBLIC_KEY_FILE=/absolute/path/to/web/.local/license-pub
 mountlet
 ```
 
+Mountlet does not connect to D1 directly. It calls the license API URL above;
+Wrangler Pages Functions then read and write the local D1 database. If Mountlet
+reports that it cannot resolve the license server, it is still using the
+default production API URL or another unreachable URL in the environment that
+launched the app.
+
 For a fast license API smoke test without Stripe, keep `npm run web:dev`
 running and execute:
 
@@ -183,8 +185,6 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
   license checkout.
 - `STRIPE_PRICE_DEVICE`: Stripe test/live Price ID for the `$5` extra-device
   checkout.
-- `RESEND_API_KEY`: optional; used to email license keys after purchase.
-- `LICENSE_EMAIL_FROM`: optional; verified sender used with Resend.
 
 Configure Stripe to send `checkout.session.completed` events to either endpoint:
 
@@ -195,14 +195,8 @@ https://<site>/webhook
 
 The webhook stores the generated license key in `payments.license_key` so the
 success page can display it after Stripe redirects back. It stores Stripe
-customer IDs for transaction lookup and refund handling, but does not store
-customer email addresses. Tell buyers to save their license key because
-Mountlet intentionally does not keep customer records for key recovery.
-
-If `RESEND_API_KEY` and `LICENSE_EMAIL_FROM` are set, the webhook also sends
-the license key to the Stripe checkout email without storing that email in D1.
-If email delivery fails, the payment still succeeds and the browser success
-page remains the primary key delivery path.
+customer IDs for transaction lookup and refund handling. Tell buyers to save
+their license key because Mountlet does not recover lost keys.
 
 For local and early admin use, retrieve recent fulfilled keys with:
 
