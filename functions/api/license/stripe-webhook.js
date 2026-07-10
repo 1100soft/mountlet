@@ -34,10 +34,11 @@ export async function onRequestPost({request, env}) {
         .bind(quantity, now, metadata.license_id)
         .run();
       await env.DB.prepare(
-        "INSERT INTO payments (id, stripe_session_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, 'add_devices', ?, '', ?)"
+        "INSERT INTO payments (id, stripe_session_id, stripe_customer_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, ?, 'add_devices', ?, '', ?)"
       ).bind(
         randomId("pay"),
         session.id,
+        String(session.customer || ""),
         metadata.license_id,
         quantity,
         now
@@ -62,10 +63,11 @@ export async function onRequestPost({request, env}) {
       now
     ).run();
     await env.DB.prepare(
-      "INSERT INTO payments (id, stripe_session_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, 'new_license', ?, ?, ?)"
+      "INSERT INTO payments (id, stripe_session_id, stripe_customer_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, ?, 'new_license', ?, ?, ?)"
     ).bind(
       randomId("pay"),
       session.id,
+      String(session.customer || ""),
       licenseId,
       maxDevices,
       licenseKey,

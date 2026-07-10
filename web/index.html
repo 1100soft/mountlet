@@ -165,33 +165,42 @@
           <article class="price-card featured license-card">
             <h3>License</h3>
             <p class="price">$20</p>
-            <p>Buy a new license for one device, or enter an existing key to add devices.</p>
-            <button class="button primary checkout-button" data-kind="new_license">Buy new license</button>
-            <label class="license-key-field">
+            <p>Start with a new one-device license, or add devices to a license you already have.</p>
+            <fieldset class="license-choice">
+              <legend>License action</legend>
+              <label>
+                <input type="radio" name="license-action" value="new_license" checked />
+                Buy new license
+              </label>
+              <label>
+                <input type="radio" name="license-action" value="add_devices" />
+                Enter license key
+              </label>
+            </fieldset>
+            <label class="license-key-field" id="license-key-field">
               Existing license key
-              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" />
+              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" disabled />
             </label>
             <div class="button-row">
-              <button class="button secondary" type="button" id="validate-license-key">Check key</button>
+              <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
               <span id="license-key-status" class="inline-status">No key checked.</span>
             </div>
           </article>
           <article class="price-card add-device-card disabled" id="add-device-card">
             <h3>Add devices</h3>
             <p class="price" id="add-device-price">$5</p>
-            <p>Add device slots to a valid license key.</p>
+            <p>Add optional extra device slots.</p>
             <label class="device-field">
-              Additional devices
-              <input id="add-device-count" type="number" min="1" max="50" value="1" disabled />
+              Extra devices
+              <input id="add-device-count" type="number" min="0" max="50" value="0" disabled />
             </label>
-            <button class="button primary checkout-button" data-kind="add_devices" disabled>Add devices</button>
           </article>
-        </div>
-        <div class="license-result" id="license-result" hidden>
-          <h3>Your license key</h3>
-          <p id="license-result-message">Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
-          <pre id="license-key-output"></pre>
-          <button class="button secondary" type="button" id="copy-license-key">Copy key</button>
+          <article class="price-card cart-card" id="cart-card">
+            <h3>Cart</h3>
+            <dl class="cart-lines" id="cart-lines"></dl>
+            <p class="cart-total" id="cart-total">$20</p>
+            <button class="button primary checkout-button" id="checkout-button">Checkout</button>
+          </article>
         </div>
         <p class="note">
           Mountlet starts with a 7-day trial, then unlocks with one online
@@ -200,6 +209,20 @@
           enabled, Mountlet uses the Stripe checkout email only to send the key
           and does not store it.
         </p>
+      </section>
+
+      <section class="tab-panel license-panel" id="panel-license" role="tabpanel" data-panel="license" hidden>
+        <div class="license-result" id="license-result">
+          <p class="eyebrow">License</p>
+          <h2>Your license key</h2>
+          <p id="license-result-message">Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
+          <pre id="license-key-output"></pre>
+          <div class="button-row">
+            <button class="button primary" type="button" id="copy-license-key">Copy key</button>
+            <button class="button secondary tab-action" type="button" data-tab="download">Go to downloads</button>
+            <span class="inline-status" id="copy-license-status"></span>
+          </div>
+        </div>
       </section>
 
       <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>

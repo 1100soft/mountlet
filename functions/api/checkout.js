@@ -5,7 +5,7 @@ export async function onRequestPost({request, env}) {
     const body = await readJson(request);
     const kind = String(body.kind || "new_license").trim();
     const origin = new URL(request.url).origin;
-    const successUrl = env.STRIPE_SUCCESS_URL || `${origin}/?checkout_session_id={CHECKOUT_SESSION_ID}#pricing`;
+    const successUrl = env.STRIPE_SUCCESS_URL || `${origin}/?checkout_session_id={CHECKOUT_SESSION_ID}#license`;
     const cancelUrl = env.STRIPE_CANCEL_URL || `${origin}/#pricing`;
     let session;
     if (kind === "add_devices") {
@@ -15,8 +15,7 @@ export async function onRequestPost({request, env}) {
         ? Math.min(50, Math.max(1, Math.floor(requestedDevices)))
         : 1;
       session = await createCheckoutSession(env, {
-        priceId: requireEnv(env, "STRIPE_PRICE_DEVICE"),
-        quantity: deviceCount,
+        lineItems: [{priceId: requireEnv(env, "STRIPE_PRICE_DEVICE"), quantity: deviceCount}],
         successUrl,
         cancelUrl,
         metadata: {
@@ -26,16 +25,23 @@ export async function onRequestPost({request, env}) {
         },
       });
     } else {
+      const requestedExtraDevices = Number(body.deviceCount || 0);
+      const extraDevices = Number.isFinite(requestedExtraDevices)
+        ? Math.min(49, Math.max(0, Math.floor(requestedExtraDevices)))
+        : 0;
+      const lineItems = [{priceId: requireEnv(env, "STRIPE_PRICE_LICENSE"), quantity: 1}];
+      if (extraDevices > 0) {
+        lineItems.push({priceId: requireEnv(env, "STRIPE_PRICE_DEVICE"), quantity: extraDevices});
+      }
       session = await createCheckoutSession(env, {
-        priceId: requireEnv(env, "STRIPE_PRICE_LICENSE"),
-        quantity: 1,
+        lineItems,
         successUrl,
         cancelUrl,
         metadata: {
           kind: "new_license",
           plan: "Mountlet License",
           license_kind: "paid",
-          device_count: "1",
+          device_count: String(1 + extraDevices),
         },
       });
     }
@@ -45,11 +51,13 @@ export async function onRequestPost({request, env}) {
   }
 }
 
-async function createCheckoutSession(env, {priceId, quantity, successUrl, cancelUrl, metadata}) {
+async function createCheckoutSession(env, {lineItems, successUrl, cancelUrl, metadata}) {
   const body = new URLSearchParams();
   body.set("mode", "payment");
-  body.set("line_items[0][price]", priceId);
-  body.set("line_items[0][quantity]", String(quantity));
+  lineItems.forEach((item, index) => {
+    body.set(`line_items[${index}][price]`, item.priceId);
+    body.set(`line_items[${index}][quantity]`, String(item.quantity));
+  });
   body.set("success_url", successUrl);
   body.set("cancel_url", cancelUrl);
   for (const [key, value] of Object.entries(metadata)) {

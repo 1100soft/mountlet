@@ -10,8 +10,9 @@ function openConfiguredLink(group, key) {
 }
 
 async function startCheckout(button) {
-  const kind = button.dataset.kind || "new_license";
-  const deviceCount = kind === "add_devices"
+  const kind = selectedLicenseAction();
+  const deviceCount = Number(document.querySelector("#add-device-count")?.value || 0);
+  const checkoutDeviceCount = kind === "add_devices"
     ? Number(document.querySelector("#add-device-count")?.value || 1)
     : undefined;
   const licenseKey = kind === "add_devices"
@@ -27,7 +28,7 @@ async function startCheckout(button) {
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({kind, deviceCount, licenseKey}),
+      body: JSON.stringify({kind, deviceCount: checkoutDeviceCount ?? deviceCount, licenseKey}),
     });
     const data = await readJsonResponse(response, "Checkout");
     if (!response.ok || data.error || !data.url) {
@@ -47,8 +48,10 @@ function updateAddDevicePrice() {
   if (!input || !output) {
     return;
   }
-  const count = Math.max(1, Math.floor(Number(input.value) || 1));
+  const minimum = selectedLicenseAction() === "add_devices" ? 1 : 0;
+  const count = Math.max(minimum, Math.floor(Number(input.value) || 0));
   output.textContent = `$${count * 5}`;
+  updateCart();
 }
 
 async function validateLicenseKey() {
@@ -79,8 +82,10 @@ async function validateLicenseKey() {
     }
     status.textContent = `Valid key; covers ${data.maxDevices} device${data.maxDevices === 1 ? "" : "s"}.`;
     setAddDeviceEnabled(true);
+    updateCart();
   } catch (error) {
     status.textContent = error.message || "License key is not valid.";
+    updateCart();
   }
 }
 
@@ -95,6 +100,84 @@ function setAddDeviceEnabled(enabled) {
   if (button) {
     button.disabled = !enabled;
   }
+  updateCart();
+}
+
+function selectedLicenseAction() {
+  return document.querySelector('input[name="license-action"]:checked')?.value || "new_license";
+}
+
+function updatePricingMode() {
+  const action = selectedLicenseAction();
+  const keyField = document.querySelector("#existing-license-key");
+  const validateButton = document.querySelector("#validate-license-key");
+  const status = document.querySelector("#license-key-status");
+  if (action === "new_license") {
+    if (keyField) {
+      keyField.disabled = true;
+    }
+    const addInput = document.querySelector("#add-device-count");
+    if (addInput) {
+      addInput.min = "0";
+    }
+    if (validateButton) {
+      validateButton.disabled = true;
+    }
+    if (status) {
+      status.textContent = "Buying a new key.";
+    }
+    setAddDeviceEnabled(true);
+  } else {
+    const addInput = document.querySelector("#add-device-count");
+    if (addInput) {
+      addInput.min = "1";
+      if (Number(addInput.value || 0) < 1) {
+        addInput.value = "1";
+      }
+    }
+    if (keyField) {
+      keyField.disabled = false;
+    }
+    if (validateButton) {
+      validateButton.disabled = false;
+    }
+    if (status) {
+      status.textContent = "Enter and check a key.";
+    }
+    setAddDeviceEnabled(false);
+    keyField?.focus();
+  }
+  updateCart();
+}
+
+function updateCart() {
+  const lines = document.querySelector("#cart-lines");
+  const total = document.querySelector("#cart-total");
+  const checkoutButton = document.querySelector("#checkout-button");
+  if (!lines || !total || !checkoutButton) {
+    return;
+  }
+  const action = selectedLicenseAction();
+  const addInput = document.querySelector("#add-device-count");
+  const extraDevices = Math.max(0, Math.floor(Number(addInput?.value || 0)));
+  let amount = 0;
+  const parts = [];
+  if (action === "new_license") {
+    amount += 20;
+    parts.push(["New license", "$20"]);
+    if (extraDevices > 0) {
+      amount += extraDevices * 5;
+      parts.push([`Extra devices x ${extraDevices}`, `$${extraDevices * 5}`]);
+    }
+    checkoutButton.disabled = false;
+  } else {
+    const enabled = !addInput?.disabled;
+    amount = extraDevices * 5;
+    parts.push([`Extra devices x ${extraDevices}`, `$${amount}`]);
+    checkoutButton.disabled = !enabled;
+  }
+  lines.innerHTML = parts.map(([label, price]) => `<div><dt>${label}</dt><dd>${price}</dd></div>`).join("");
+  total.textContent = `$${amount}`;
 }
 
 async function loadCheckoutLicense() {
@@ -103,7 +186,7 @@ async function loadCheckoutLicense() {
   if (!sessionId) {
     return;
   }
-  setActiveTab("pricing", {skipHash: true});
+  setActiveTab("license", {skipHash: true});
   const result = document.querySelector("#license-result");
   const output = document.querySelector("#license-key-output");
   const message = document.querySelector("#license-result-message");
@@ -134,7 +217,7 @@ async function loadCheckoutLicense() {
         if (message) {
           message.textContent = `Device slots were added. This license now covers ${data.devices} device${data.devices === 1 ? "" : "s"}.`;
         }
-        output.textContent = "Device slots added.";
+        output.textContent = "Device slots added";
         return;
       }
       output.textContent = data.error || "The license key is not ready yet.";
@@ -246,6 +329,13 @@ document.addEventListener("click", (event) => {
   if (copyLicenseButton) {
     const key = document.querySelector("#license-key-output")?.textContent || "";
     navigator.clipboard?.writeText(key);
+    const status = document.querySelector("#copy-license-status");
+    if (status) {
+      status.textContent = "Copied.";
+      setTimeout(() => {
+        status.textContent = "";
+      }, 1800);
+    }
   }
 });
 
@@ -256,6 +346,12 @@ document.addEventListener("input", (event) => {
   if (event.target.matches("#existing-license-key")) {
     document.querySelector("#license-key-status").textContent = "Key changed; check it again.";
     setAddDeviceEnabled(false);
+  }
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target.matches('input[name="license-action"]')) {
+    updatePricingMode();
   }
 });
 
@@ -294,5 +390,5 @@ window.addEventListener("popstate", () => {
 
 setActiveTab(window.location.hash, {skipHash: true});
 updateAddDevicePrice();
-setAddDeviceEnabled(false);
+updatePricingMode();
 loadCheckoutLicense();

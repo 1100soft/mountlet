@@ -348,7 +348,7 @@ h3 {
 
 .pricing-grid.license-grid {
   align-items: stretch;
-  grid-template-columns: repeat(2, minmax(280px, 520px));
+  grid-template-columns: minmax(280px, 520px) minmax(280px, 420px) minmax(260px, 360px);
 }
 
 .platform-picker {
@@ -427,6 +427,10 @@ h3 {
   opacity: 0.58;
 }
 
+.cart-card {
+  align-self: start;
+}
+
 .price {
   color: var(--accent);
   font-size: 2.5rem;
@@ -452,6 +456,27 @@ h3 {
   font-weight: 720;
   gap: 8px;
   margin: 18px 0 12px;
+}
+
+.license-choice {
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 14px;
+}
+
+.license-choice legend {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 720;
+  padding: 0 6px;
+}
+
+.license-choice label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
 }
 
 .license-key-field input {
@@ -486,19 +511,51 @@ h3 {
   font-size: 0.9rem;
 }
 
+.cart-lines {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.cart-lines div {
+  display: flex;
+  justify-content: space-between;
+}
+
+.cart-lines dt,
+.cart-lines dd {
+  margin: 0;
+}
+
+.cart-total {
+  border-top: 1px solid var(--line);
+  color: var(--accent);
+  font-size: 2rem;
+  font-weight: 780;
+  margin: 0 0 18px;
+  padding-top: 14px;
+}
+
+.license-panel {
+  align-content: center;
+}
+
 .license-result {
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
   border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line));
+  box-shadow: var(--shadow);
   margin-top: 22px;
-  max-width: 680px;
-  padding: 20px;
+  max-width: 780px;
+  padding: 28px;
 }
 
 .license-result pre {
   background: var(--panel-soft);
   border: 1px solid var(--line);
+  font-size: 1.05rem;
+  font-weight: 720;
   overflow-x: auto;
-  padding: 12px;
+  padding: 16px;
   user-select: all;
 }
 

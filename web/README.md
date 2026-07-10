@@ -77,14 +77,14 @@ server and restart it from the repository root with `npm run web:dev`.
 In another terminal, forward Stripe test webhooks to Wrangler:
 
 ```bash
-stripe listen --forward-to http://127.0.0.1:8788/api/license/stripe-webhook
+stripe listen --forward-to http://127.0.0.1:8788/webhook
 ```
 
 Copy the printed `whsec_...` value into `.dev.vars`, then restart
 `npm run web:dev` so Wrangler reloads it.
 
-Open `http://127.0.0.1:8788/#pricing`, choose a device count, and complete
-checkout with Stripe's test card:
+Open `http://127.0.0.1:8788/#pricing`, buy a new license or validate an
+existing key, then complete checkout with Stripe's test card:
 
 ```text
 4242 4242 4242 4242
@@ -129,7 +129,7 @@ Function:
 3. Create one one-time Price for one extra device slot: `$5`.
 4. Set `STRIPE_PRICE_LICENSE` and `STRIPE_PRICE_DEVICE` for the Pages Function.
 5. Set successful-payment redirects through the checkout function. The default
-   success URL returns to the pricing tab and displays the generated license
+   success URL returns to the license page and displays the generated license
    key.
 
 Do not put Stripe secret keys in the static site. Keep them as Cloudflare Pages
@@ -179,17 +179,18 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `RESEND_API_KEY`: optional; used to email license keys after purchase.
 - `LICENSE_EMAIL_FROM`: optional; verified sender used with Resend.
 
-Configure Stripe to send `checkout.session.completed` events to:
+Configure Stripe to send `checkout.session.completed` events to either endpoint:
 
 ```text
 https://<site>/api/license/stripe-webhook
+https://<site>/webhook
 ```
 
 The webhook stores the generated license key in `payments.license_key` so the
-success page can display it after Stripe redirects back. It does not store
-Stripe customer IDs or customer email addresses. Tell buyers to save their
-license key because Mountlet intentionally does not keep customer records for
-key recovery.
+success page can display it after Stripe redirects back. It stores Stripe
+customer IDs for transaction lookup and refund handling, but does not store
+customer email addresses. Tell buyers to save their license key because
+Mountlet intentionally does not keep customer records for key recovery.
 
 If `RESEND_API_KEY` and `LICENSE_EMAIL_FROM` are set, the webhook also sends
 the license key to the Stripe checkout email without storing that email in D1.
