@@ -514,6 +514,10 @@ def _display_timestamp(value: str) -> str:
     return value
 
 
+def display_timestamp(value: str) -> str:
+    return _display_timestamp(value)
+
+
 class _suppress_time_parse_errors:
     def __enter__(self) -> None:
         return None
@@ -532,6 +536,7 @@ __all__ = [
     "clear_license_token",
     "current_status",
     "deactivate_device",
+    "display_timestamp",
     "default_device_label",
     "device_fingerprint",
     "list_devices",

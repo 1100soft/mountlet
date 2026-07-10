@@ -50,11 +50,13 @@ console.log(JSON.stringify({
   deviceCount: devices.devices?.length || 0,
   usedDevices: devices.usedDevices,
   maxDevicesReturned: devices.maxDevices,
+  expiresAt: devices.expiresAt || "",
   deactivated: true,
   reactivated: Boolean(reactivated.token),
   deviceCountAfterReactivation: devicesAfterReactivation.devices?.length || 0,
   usedDevicesAfterReactivation: devicesAfterReactivation.usedDevices,
   maxDevicesAfterReactivation: devicesAfterReactivation.maxDevices,
+  expiresAtAfterReactivation: devicesAfterReactivation.expiresAt || "",
 }, null, 2));
 
 async function post(url, body, headers = {}) {

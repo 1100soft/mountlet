@@ -2757,6 +2757,10 @@ class LicenseDialog(_ConfigDialogBase):
         devices = list(device_info.get("devices") or [])
         used_devices = int(device_info.get("usedDevices") or len(devices))
         max_devices = int(device_info.get("maxDevices") or 0)
+        expires_at = license_control.display_timestamp(str(device_info.get("expiresAt") or ""))
+        if expires_at:
+            self.expiry_label.setText(f"Renews: {expires_at}")
+            self.expiry_label.setVisible(True)
         if max_devices:
             self.devices_label.setText(f"Activated devices ({used_devices}/{max_devices})")
         else:

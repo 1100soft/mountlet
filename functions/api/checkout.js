@@ -153,6 +153,7 @@ async function addSubscriptionDevices(env, license, deviceCount) {
   if (!item?.id || !productId) {
     throw new HttpError(409, "This subscription cannot be updated automatically.");
   }
+  await ensureStripeProductActive(env, productId);
   const maxDevices = Math.min(50, Number(license.max_devices || 1) + deviceCount);
   const extraDevices = Math.max(0, maxDevices - 1);
   const unitAmount = plan.baseCents + extraDevices * plan.extraDeviceCents;
@@ -220,6 +221,31 @@ async function updateStripeSubscriptionItem(env, itemId, {productId, interval, u
     body,
   });
   return await parseStripeResponse(response, "Stripe subscription update failed.");
+}
+
+async function ensureStripeProductActive(env, productId) {
+  const product = await fetchStripeProduct(env, productId);
+  if (product.active !== false) {
+    return;
+  }
+  const body = new URLSearchParams();
+  body.set("active", "true");
+  const response = await fetch(`https://api.stripe.com/v1/products/${productId}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+  await parseStripeResponse(response, "Stripe product update failed.");
+}
+
+async function fetchStripeProduct(env, productId) {
+  const response = await fetch(`https://api.stripe.com/v1/products/${productId}`, {
+    headers: {authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`},
+  });
+  return await parseStripeResponse(response, "Stripe product lookup failed.");
 }
 
 function subscriptionPeriodEnd(subscription) {
