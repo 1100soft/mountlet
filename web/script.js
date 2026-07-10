@@ -33,8 +33,12 @@ async function startCheckout(button) {
     });
     const data = await readJsonResponse(response, "Checkout");
     if (response.ok && data.ok && !data.url) {
+      const renewalText = data.billingModel && data.billingModel !== "lifetime"
+        ? ` Renews ${formatLicenseDate(data.expiresAt)}.`
+        : "";
+      const baseMessage = data.message || `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.`;
       showLicenseResult({
-        message: data.message || `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.`,
+        message: `${baseMessage}${renewalText}`,
         output: "Device slots added",
       });
       button.disabled = false;
@@ -80,6 +84,7 @@ let validateTimer = 0;
 let validatedLicenseDevices = 0;
 let validatedUsedDevices = 0;
 let validatedBillingModel = "";
+let validatedExpiresAt = "";
 
 function updateAddDevicePrice() {
   updateCart();
@@ -118,9 +123,13 @@ async function validateLicenseKey() {
     validatedLicenseDevices = Number(data.maxDevices || 0);
     validatedUsedDevices = Number(data.usedDevices || 0);
     validatedBillingModel = String(data.billingModel || "lifetime");
+    validatedExpiresAt = String(data.expiresAt || "");
     const billingText = validatedBillingModel === "lifetime" ? "key" : `${validatedBillingModel} key`;
+    const renewalText = validatedBillingModel === "lifetime"
+      ? ""
+      : ` Renews ${formatLicenseDate(validatedExpiresAt)}.`;
     setLicenseStatus(
-      `Valid ${billingText}; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.`,
+      `Valid ${billingText}; ${validatedUsedDevices}/${validatedLicenseDevices} devices used.${renewalText}`,
       "valid"
     );
     setAddDeviceEnabled(true);
@@ -129,6 +138,7 @@ async function validateLicenseKey() {
     validatedLicenseDevices = 0;
     validatedUsedDevices = 0;
     validatedBillingModel = "";
+    validatedExpiresAt = "";
     setLicenseStatus(error.message || "License key is not valid.", "invalid");
     updateCart();
   }
@@ -184,6 +194,7 @@ function updatePricingMode() {
     validatedLicenseDevices = 0;
     validatedUsedDevices = 0;
     validatedBillingModel = "";
+    validatedExpiresAt = "";
     if (keyField) {
       keyField.disabled = true;
     }
@@ -302,7 +313,10 @@ async function loadCheckoutLicense() {
       const data = await readJsonResponse(response, "License lookup");
       if (response.ok && data.licenseKey) {
         if (message) {
-          message.textContent = `Save this key now. It covers ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} activated devices.`;
+          const renewalText = data.billingModel && data.billingModel !== "lifetime"
+            ? ` Renews ${formatLicenseDate(data.expiresAt)}.`
+            : "";
+          message.textContent = `Save this key now. It covers ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} activated devices.${renewalText}`;
         }
         output.textContent = data.licenseKey;
         const input = document.querySelector("#existing-license-key");
@@ -314,7 +328,10 @@ async function loadCheckoutLicense() {
       }
       if (response.ok && data.kind === "add_devices") {
         if (message) {
-          message.textContent = `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.`;
+          const renewalText = data.billingModel && data.billingModel !== "lifetime"
+            ? ` Renews ${formatLicenseDate(data.expiresAt)}.`
+            : "";
+          message.textContent = `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.${renewalText}`;
         }
         output.textContent = "Device slots added";
         return;
@@ -341,6 +358,23 @@ function showLicenseResult({message, output}) {
   if (outputNode) {
     outputNode.textContent = output;
   }
+}
+
+function formatLicenseDate(value) {
+  if (!value) {
+    return "at the end of the current paid period";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 async function readJsonResponse(response, label) {

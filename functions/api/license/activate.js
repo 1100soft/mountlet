@@ -10,11 +10,14 @@ import {
   signLicenseToken,
   tokenPayload
 } from "../../_lib/license.js";
+import {assertLicenseUsable, refreshSubscriptionLicense} from "../../_lib/stripe-subscriptions.js";
 
 export async function onRequestPost({request, env}) {
   try {
     const body = await readJson(request);
-    const license = await loadActiveLicenseByKey(env, body.licenseKey);
+    let license = await loadActiveLicenseByKey(env, body.licenseKey);
+    license = await refreshSubscriptionLicense(env, license);
+    assertLicenseUsable(license);
     const hash = await deviceHash(body.deviceFingerprint);
     const now = nowIso();
     let device = await env.DB.prepare(

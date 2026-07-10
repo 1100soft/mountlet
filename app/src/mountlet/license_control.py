@@ -56,6 +56,15 @@ class LicenseStatus:
         return self.state in {"licensed", "trial"}
 
 
+def _licensed_summary_parts(*, plan: str, license_kind: str, email: str = "") -> list[str]:
+    parts = ["Beta license" if license_kind == "beta" else "Licensed"]
+    if plan:
+        parts.append(plan)
+    if email:
+        parts.append(email)
+    return parts
+
+
 def current_status(now: float | None = None) -> LicenseStatus:
     token = load_license_token()
     if token:
@@ -76,11 +85,7 @@ def current_status(now: float | None = None) -> LicenseStatus:
             max_devices = _int_value(token_payload.get("maxDevices"), 0)
             device_label = str(token_payload.get("deviceLabel") or "")
             expires_at = _display_timestamp(str(token_payload.get("expiresAt") or ""))
-            parts = ["Beta license" if license_kind == "beta" else "Licensed"]
-            if plan:
-                parts.append(plan)
-            if email:
-                parts.append(email)
+            parts = _licensed_summary_parts(plan=plan, license_kind=license_kind, email=email)
             return LicenseStatus(
                 state="licensed",
                 summary=" - ".join(parts),
@@ -140,13 +145,16 @@ def activate_license(license_key: str, *, device_label: str = "", api_url: str |
     payload = verify_license_token(token)
     store_license_token(token)
     store_license_key(key)
+    email = str(payload.get("email") or "")
+    plan = str(payload.get("plan") or "")
+    license_kind = str(payload.get("licenseKind") or "paid")
     return LicenseStatus(
         state="licensed",
-        summary="Licensed",
+        summary=" - ".join(_licensed_summary_parts(plan=plan, license_kind=license_kind, email=email)),
         license_key=key,
-        licensed_email=str(payload.get("email") or ""),
-        plan=str(payload.get("plan") or ""),
-        license_kind=str(payload.get("licenseKind") or "paid"),
+        licensed_email=email,
+        plan=plan,
+        license_kind=license_kind,
         max_devices=_int_value(payload.get("maxDevices"), 0),
         device_label=str(payload.get("deviceLabel") or label),
         expires_at=_display_timestamp(str(payload.get("expiresAt") or "")),
@@ -166,6 +174,9 @@ def license_devices(api_url: str | None = None) -> dict[str, Any]:
         "devices": normalized,
         "usedDevices": _int_value(response.get("usedDevices"), len(normalized)),
         "maxDevices": _int_value(response.get("maxDevices"), current_status().max_devices),
+        "expiresAt": str(response.get("expiresAt") or ""),
+        "billingModel": str(response.get("billingModel") or ""),
+        "plan": str(response.get("plan") or ""),
     }
 
 

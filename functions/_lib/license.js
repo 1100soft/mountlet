@@ -109,7 +109,7 @@ export async function loadActiveLicenseByKey(env, licenseKey) {
   if (!license || license.status !== "active") {
     throw new HttpError(404, "License not found or inactive.");
   }
-  if (license.expires_at && Date.parse(license.expires_at) <= Date.now()) {
+  if (license.expires_at && Date.parse(license.expires_at) <= Date.now() && !license.stripe_subscription_id) {
     throw new HttpError(404, "License not found or inactive.");
   }
   return license;

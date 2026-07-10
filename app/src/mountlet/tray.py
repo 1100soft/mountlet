@@ -28,7 +28,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import __version__, core, license_control, rclone_wizard
-from .badged_button import create_badged_button, set_badge
+from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
@@ -530,6 +530,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QIcon,
             QKeySequence,
             QPainter,
+            QPainterPath,
             QPen,
             QPixmap,
         )
@@ -620,6 +621,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QObject=QObject,
         QPoint=QPoint,
         QPainter=QPainter,
+        QPainterPath=QPainterPath,
         QPen=QPen,
         QPixmap=QPixmap,
         QProgressBar=QProgressBar,
@@ -2598,6 +2600,7 @@ class LicenseDialog(_ConfigDialogBase):
         self.paste_key_button = None
         self.refresh_devices_button = None
         self.deactivate_button = None
+        self._clipboard = None
         self._build()
         self._refresh_status()
         self.key_field.setFocus()
@@ -2614,9 +2617,13 @@ class LicenseDialog(_ConfigDialogBase):
         key_layout = self.qt.QHBoxLayout(key_row)
         key_layout.setContentsMargins(0, 0, 0, 0)
         key_layout.addWidget(self.key_field, 1)
-        self.copy_key_button = self.qt.QPushButton("Copy")
+        self.copy_key_button = create_badged_button(self.qt)
+        self.copy_key_button.setFixedWidth(34)
+        apply_button_icon(self.qt, self.copy_key_button, "ui-copy", fallback_text="Copy", size=22)
         self.copy_key_button.clicked.connect(self._copy_license_key)
-        self.paste_key_button = self.qt.QPushButton("Paste")
+        self.paste_key_button = create_badged_button(self.qt)
+        self.paste_key_button.setFixedWidth(34)
+        apply_button_icon(self.qt, self.paste_key_button, "ui-paste", fallback_text="Paste", size=22)
         self.paste_key_button.clicked.connect(self._paste_license_key)
         key_layout.addWidget(self.copy_key_button)
         key_layout.addWidget(self.paste_key_button)
@@ -2636,6 +2643,9 @@ class LicenseDialog(_ConfigDialogBase):
         button_row.addWidget(self.deactivate_button)
         layout.addLayout(button_row)
         self.key_field.textChanged.connect(self._update_button_state)
+        self._clipboard = self.qt.QApplication.clipboard()
+        with suppress(Exception):
+            self._clipboard.dataChanged.connect(self._update_copy_button_state)
 
         layout.addWidget(self.devices_label)
         layout.addWidget(self.devices_text)
@@ -2685,7 +2695,7 @@ class LicenseDialog(_ConfigDialogBase):
             )
         if self.copy_key_button is not None:
             self.copy_key_button.setEnabled(has_key)
-            self.copy_key_button.setToolTip("Copy the license key.")
+            self._update_copy_button_state()
         if self.paste_key_button is not None:
             self.paste_key_button.setEnabled(not licensed)
             self.paste_key_button.setToolTip(
@@ -2739,6 +2749,7 @@ class LicenseDialog(_ConfigDialogBase):
         text = self.key_field.text().strip()
         if text:
             self.qt.QApplication.clipboard().setText(text)
+            self._update_copy_button_state()
 
     def _paste_license_key(self) -> None:
         if self.key_field.isReadOnly():
@@ -2746,6 +2757,19 @@ class LicenseDialog(_ConfigDialogBase):
         text = self.qt.QApplication.clipboard().text().strip()
         if text:
             self.key_field.setText(text)
+
+    def _update_copy_button_state(self) -> None:
+        if self.copy_key_button is None:
+            return
+        text = self.key_field.text().strip()
+        copied = False
+        if text:
+            with suppress(Exception):
+                copied = self.qt.QApplication.clipboard().text().strip() == text
+        set_checkmark(self.copy_key_button, copied)
+        self.copy_key_button.setToolTip(
+            "Copied to clipboard." if copied else "Copy the license key."
+        )
 
     def _refresh_devices(self, *, show_errors: bool = True) -> None:
         try:
