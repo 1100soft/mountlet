@@ -123,7 +123,6 @@ export function tokenPayload(license, device) {
   return {
     licenseId: license.id,
     deviceId: device.id,
-    email: license.email || "",
     plan: license.plan || "Mountlet License",
     licenseKind: license.license_kind || "paid",
     maxDevices: Number(license.max_devices || 0),

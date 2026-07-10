@@ -24,17 +24,15 @@ export async function onRequestPost({request, env}) {
     const plan = String(body.plan || (licenseKind === "beta" ? "Beta" : "Mountlet License")).trim();
     const requestedDevices = Number(body.maxDevices || 3);
     const maxDevices = Number.isFinite(requestedDevices) && requestedDevices > 0 ? Math.floor(requestedDevices) : 3;
-    const email = String(body.email || "").trim();
     const prefix = licenseKind === "beta" ? "MTB" : "MNT";
     const licenseKey = generateLicenseKey(prefix);
     const licenseId = randomId("lic");
     const now = nowIso();
     await env.DB.prepare(
-      "INSERT INTO licenses (id, license_key_hash, email, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)"
+      "INSERT INTO licenses (id, license_key_hash, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)"
     ).bind(
       licenseId,
       await licenseKeyHash(env, licenseKey),
-      email,
       plan,
       licenseKind,
       maxDevices,

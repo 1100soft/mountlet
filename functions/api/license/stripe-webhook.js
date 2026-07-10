@@ -23,16 +23,21 @@ export async function onRequestPost({request, env}) {
     const quantity = await checkoutQuantity(env, session);
     const now = nowIso();
     const metadata = session.metadata || {};
+    const existingPayment = await env.DB.prepare(
+      "SELECT id FROM payments WHERE stripe_session_id = ?"
+    ).bind(session.id).first();
+    if (existingPayment) {
+      return jsonResponse({ok: true, duplicate: true});
+    }
     if (metadata.kind === "add_devices" && metadata.license_id) {
       await env.DB.prepare("UPDATE licenses SET max_devices = max_devices + ?, updated_at = ? WHERE id = ?")
         .bind(quantity, now, metadata.license_id)
         .run();
       await env.DB.prepare(
-        "INSERT INTO payments (id, stripe_session_id, stripe_customer_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, ?, 'add_devices', ?, '', ?)"
+        "INSERT INTO payments (id, stripe_session_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, 'add_devices', ?, '', ?)"
       ).bind(
         randomId("pay"),
         session.id,
-        "",
         metadata.license_id,
         quantity,
         now
@@ -46,11 +51,10 @@ export async function onRequestPost({request, env}) {
     const licenseKind = String(metadata.license_kind || "paid");
     const maxDevices = Math.max(1, quantity);
     await env.DB.prepare(
-      "INSERT INTO licenses (id, license_key_hash, email, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)"
+      "INSERT INTO licenses (id, license_key_hash, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)"
     ).bind(
       licenseId,
       await licenseKeyHash(env, licenseKey),
-      "",
       plan,
       licenseKind,
       maxDevices,
@@ -58,11 +62,10 @@ export async function onRequestPost({request, env}) {
       now
     ).run();
     await env.DB.prepare(
-      "INSERT INTO payments (id, stripe_session_id, stripe_customer_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, ?, 'new_license', ?, ?, ?)"
+      "INSERT INTO payments (id, stripe_session_id, license_id, kind, quantity, license_key, created_at) VALUES (?, ?, ?, 'new_license', ?, ?, ?)"
     ).bind(
       randomId("pay"),
       session.id,
-      "",
       licenseId,
       maxDevices,
       licenseKey,

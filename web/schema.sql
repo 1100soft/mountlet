@@ -1,7 +1,6 @@
 CREATE TABLE IF NOT EXISTS licenses (
   id TEXT PRIMARY KEY,
   license_key_hash TEXT NOT NULL UNIQUE,
-  email TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'Mountlet License',
   license_kind TEXT NOT NULL DEFAULT 'paid',
@@ -32,7 +31,6 @@ ON devices(license_id, deactivated_at);
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY,
   stripe_session_id TEXT NOT NULL UNIQUE,
-  stripe_customer_id TEXT NOT NULL DEFAULT '',
   license_id TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'new_license',
   quantity INTEGER NOT NULL DEFAULT 1,

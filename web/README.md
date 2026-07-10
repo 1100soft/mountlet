@@ -52,6 +52,13 @@ npm run web:d1:init
 npm run web:r2:seed
 ```
 
+If you initialized D1 before the no-customer-records schema change, recreate
+the local D1 state or apply:
+
+```bash
+wrangler d1 execute mountlet-license --local --file web/migrations/0003_remove_customer_columns.sql
+```
+
 `web:r2:seed` uploads placeholder release files to local R2. The download
 buttons in `config.js` point to those objects through `/api/download/...`, so
 you can test the same release path before replacing the placeholders with real
@@ -163,7 +170,8 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `LICENSE_SIGNING_PUBLIC_KEY`: matching public key in SPKI PEM format.
 - `LICENSE_ADMIN_TOKEN`: bearer token for admin-only license creation.
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret.
-- `STRIPE_SECRET_KEY`: optional; used to read Checkout line-item quantities.
+- `STRIPE_SECRET_KEY`: Stripe secret key used to create Checkout sessions and
+  read Checkout line items.
 - `STRIPE_PRICE_LICENSE`: Stripe test/live Price ID for the initial `$20`
   license checkout.
 - `STRIPE_PRICE_DEVICE`: Stripe test/live Price ID for the `$5` extra-device
