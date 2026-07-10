@@ -526,6 +526,12 @@ h3 {
   margin: 0;
 }
 
+.cart-devices {
+  color: var(--muted);
+  font-size: 0.94rem;
+  margin: 0 0 12px;
+}
+
 .cart-total {
   border-top: 1px solid var(--line);
   color: var(--accent);

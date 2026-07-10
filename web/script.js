@@ -163,18 +163,21 @@ function updatePricingMode() {
 function updateCart() {
   const lines = document.querySelector("#cart-lines");
   const total = document.querySelector("#cart-total");
+  const devices = document.querySelector("#cart-devices");
   const checkoutButton = document.querySelector("#checkout-button");
-  if (!lines || !total || !checkoutButton) {
+  if (!lines || !total || !devices || !checkoutButton) {
     return;
   }
   const action = selectedLicenseAction();
   const addInput = document.querySelector("#add-device-count");
   const extraDevices = Math.max(0, Math.floor(Number(addInput?.value || 0)));
   let amount = 0;
+  let totalDevices = 0;
   const parts = [];
   if (action === "new_license") {
     amount += 20;
-    parts.push([`New license (${1 + extraDevices} device${1 + extraDevices === 1 ? "" : "s"})`, "$20"]);
+    totalDevices = 1 + extraDevices;
+    parts.push(["New license", "$20"]);
     if (extraDevices > 0) {
       amount += extraDevices * 5;
       parts.push([`Extra devices x ${extraDevices}`, `$${extraDevices * 5}`]);
@@ -183,12 +186,14 @@ function updateCart() {
   } else {
     const enabled = !addInput?.disabled;
     amount = extraDevices * 5;
-    const totalDevices = validatedLicenseDevices + extraDevices;
-    const suffix = totalDevices > 0 ? ` (${totalDevices} devices total)` : "";
-    parts.push([`Extra devices x ${extraDevices}${suffix}`, `$${amount}`]);
+    totalDevices = validatedLicenseDevices + extraDevices;
+    parts.push([`Extra devices x ${extraDevices}`, `$${amount}`]);
     checkoutButton.disabled = !enabled;
   }
   lines.innerHTML = parts.map(([label, price]) => `<div><dt>${label}</dt><dd>${price}</dd></div>`).join("");
+  devices.textContent = totalDevices > 0
+    ? `${totalDevices} device${totalDevices === 1 ? "" : "s"} total`
+    : "Check a license key to calculate total devices";
   total.textContent = `$${amount}`;
 }
 
