@@ -159,40 +159,31 @@
       <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Pricing</p>
-          <h2>Simple licensing for a focused desktop utility.</h2>
+          <h2>Choose how many devices to unlock.</h2>
         </div>
-        <div class="pricing-grid">
-          <article class="price-card">
-            <h3>Personal</h3>
-            <p class="price">$19</p>
-            <p>For one person using the full app across their own devices. Choose the device count at checkout.</p>
+        <div class="pricing-grid single">
+          <article class="price-card featured license-card">
+            <h3>Mountlet License</h3>
+            <p class="price" id="license-price">$20</p>
+            <p>One license key for your own devices. Extra devices get cheaper automatically.</p>
             <label class="device-field">
               Devices
-              <input class="device-count" data-plan="personal" type="number" min="1" max="50" value="3" />
+              <input class="device-count" data-plan="license" type="number" min="1" max="50" value="3" />
             </label>
-            <button class="button primary checkout-button" data-plan="personal">Buy Personal</button>
+            <p class="tier-note">1st device $10; devices 2-3 $5 each; devices 4+ $3 each.</p>
+            <button class="button primary checkout-button" data-plan="license">Buy license</button>
           </article>
-          <article class="price-card featured">
-            <h3>Pro</h3>
-            <p class="price">$39</p>
-            <p>For early builds, priority support, heavier beta use, and flexible device counts.</p>
-            <label class="device-field">
-              Devices
-              <input class="device-count" data-plan="pro" type="number" min="1" max="50" value="5" />
-            </label>
-            <button class="button primary checkout-button" data-plan="pro">Buy Pro</button>
-          </article>
-          <article class="price-card">
-            <h3>Team</h3>
-            <p class="price">Contact</p>
-            <p>For shared deployment, internal packaging, and support terms.</p>
-            <a class="button secondary" href="https://github.com/eric-holt/mountlet/issues/new">Contact</a>
-          </article>
+        </div>
+        <div class="license-result" id="license-result" hidden>
+          <h3>Your license key</h3>
+          <p>Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
+          <pre id="license-key-output"></pre>
+          <button class="button secondary" type="button" id="copy-license-key">Copy key</button>
         </div>
         <p class="note">
-          Personal and Pro use the same core app features during beta. Mountlet
-          starts with a 7-day trial, then unlocks with one online activation.
-          Activated copies keep working offline.
+          Mountlet starts with a 7-day trial, then unlocks with one online
+          activation. Activated copies keep working offline. The license key is
+          your support identity; keep it somewhere safe.
         </p>
       </section>
 

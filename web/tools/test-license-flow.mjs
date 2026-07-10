@@ -16,7 +16,6 @@ const deviceFingerprint = `local-smoke-${Date.now()}`;
 const created = await post(
   `${apiBase}/admin/create`,
   {
-    email: "local-smoke@example.com",
     licenseKind: "beta",
     plan: "Local smoke",
     maxDevices: 2,

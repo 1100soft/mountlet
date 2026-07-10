@@ -36,8 +36,9 @@ activation test below.
 Edit `.dev.vars` and replace the Stripe placeholders with test-mode values:
 
 - `STRIPE_SECRET_KEY`: a Stripe `sk_test_...` key.
-- `STRIPE_PRICE_PERSONAL`: a test Price ID for the Personal checkout.
-- `STRIPE_PRICE_PRO`: a test Price ID for the Pro checkout.
+- `STRIPE_PRICE_LICENSE`: a test Price ID for the Mountlet License checkout.
+  Configure this Stripe Price with graduated tiers: first device $10, devices
+  2-3 $5 each, and devices 4+ $3 each.
 - `STRIPE_WEBHOOK_SECRET`: the `whsec_...` value printed by Stripe CLI.
 
 Initialize local D1 and optionally seed a local R2 object:
@@ -110,29 +111,25 @@ npm run web:license:smoke
 ## Stripe
 
 For the first commercial version, use Stripe Checkout through the Pages
-Function or Stripe Payment Links:
+Function:
 
-1. Create products and prices in Stripe.
-2. Enable adjustable quantity when the quantity should represent the number of
-   supported devices.
-3. Set `STRIPE_PRICE_PERSONAL` and `STRIPE_PRICE_PRO` for the Pages Function,
-   or create Payment Links for the Personal and Pro plans.
-4. If using Payment Links instead of the checkout function, replace the
-   placeholder URLs in `config.js`.
-5. Set successful-payment redirects in Stripe to a release/download page or a
-   private fulfillment flow.
+1. Create one product: Mountlet License.
+2. Create one one-time graduated Price. Use these tiers: first device $10,
+   devices 2-3 $5 each, and devices 4+ $3 each.
+3. Set `STRIPE_PRICE_LICENSE` for the Pages Function.
+4. Set successful-payment redirects through the checkout function. The default
+   success URL returns to the pricing tab and displays the generated license
+   key.
 
 Do not put Stripe secret keys in the static site. Keep them as Cloudflare Pages
 secrets or local `.dev.vars` values.
 
 ## Downloads
 
-The default download buttons point to the latest GitHub release. For paid
-downloads, either:
-
-- use Stripe Payment Links with post-payment fulfillment; or
-- replace the platform keys under `downloads` in `config.js` with signed
-  download URLs produced by a backend.
+The default download buttons point to `/api/download/...`, which reads objects
+from the `DOWNLOADS` R2 binding. For local testing, `npm run web:r2:seed`
+uploads placeholder objects. For production, upload the real installer
+artifacts to the bound R2 bucket using the same keys or update `config.js`.
 
 ## License API
 
@@ -163,8 +160,8 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `LICENSE_ADMIN_TOKEN`: bearer token for admin-only license creation.
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret.
 - `STRIPE_SECRET_KEY`: optional; used to read Checkout line-item quantities.
-- `STRIPE_PRICE_PERSONAL`: Stripe test/live Price ID for Personal checkout.
-- `STRIPE_PRICE_PRO`: Stripe test/live Price ID for Pro checkout.
+- `STRIPE_PRICE_LICENSE`: Stripe test/live Price ID for the graduated
+  per-device license checkout.
 
 Configure Stripe to send `checkout.session.completed` events to:
 
@@ -172,10 +169,11 @@ Configure Stripe to send `checkout.session.completed` events to:
 https://<site>/api/license/stripe-webhook
 ```
 
-The webhook stores the generated license key in the `payments.license_key`
-column for early manual fulfillment. Before broader commercial launch, replace
-that with email delivery or a post-payment account/download page and stop
-retaining raw license keys.
+The webhook stores the generated license key in `payments.license_key` so the
+success page can display it after Stripe redirects back. It does not store
+Stripe customer IDs or customer email addresses. Tell buyers to save their
+license key because Mountlet intentionally does not keep customer records for
+key recovery.
 
 For local and early admin use, retrieve recent fulfilled keys with:
 
@@ -199,11 +197,10 @@ Create a beta key through the admin endpoint:
 curl -X POST https://<site>/api/license/admin/create \
   -H "Authorization: Bearer $LICENSE_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"email":"tester@example.com","licenseKind":"beta","plan":"Beta","maxDevices":3}'
+  -d '{"licenseKind":"beta","plan":"Beta","maxDevices":3}'
 ```
 
-The response contains the raw key. Store or send it immediately; broad launch
-should move key delivery to email or an account page.
+The response contains the raw key. Store or send it immediately.
 
 If the database already existed before beta support, apply:
 

@@ -38,8 +38,7 @@ writeFileSync(
     "",
     "STRIPE_SECRET_KEY=\"sk_test_replace\"",
     "STRIPE_WEBHOOK_SECRET=\"whsec_replace\"",
-    "STRIPE_PRICE_PERSONAL=\"price_replace_personal_test_price\"",
-    "STRIPE_PRICE_PRO=\"price_replace_pro_test_price\"",
+    "STRIPE_PRICE_LICENSE=\"price_replace_license_test_price\"",
     "",
   ].join("\n"),
   {encoding: "utf8", mode: 0o600}

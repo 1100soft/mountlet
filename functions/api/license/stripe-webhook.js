@@ -32,7 +32,7 @@ export async function onRequestPost({request, env}) {
 
     const licenseKey = generateLicenseKey();
     const licenseId = randomId("lic");
-    const plan = String(metadata.plan || "Personal");
+    const plan = String(metadata.plan || "Mountlet License");
     const licenseKind = String(metadata.license_kind || "paid");
     const maxDevices = Math.max(1, quantity);
     await env.DB.prepare(
@@ -40,7 +40,7 @@ export async function onRequestPost({request, env}) {
     ).bind(
       licenseId,
       await licenseKeyHash(env, licenseKey),
-      String(session.customer_details?.email || session.customer_email || ""),
+      "",
       plan,
       licenseKind,
       maxDevices,
@@ -52,7 +52,7 @@ export async function onRequestPost({request, env}) {
     ).bind(
       randomId("pay"),
       session.id,
-      String(session.customer || ""),
+      "",
       licenseId,
       maxDevices,
       licenseKey,

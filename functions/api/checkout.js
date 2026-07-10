@@ -1,37 +1,19 @@
 import {handleError, HttpError, jsonResponse, readJson, requireEnv} from "../_lib/license.js";
 
-const PLANS = {
-  personal: {
-    name: "Personal",
-    priceEnv: "STRIPE_PRICE_PERSONAL",
-    defaultDevices: 3,
-  },
-  pro: {
-    name: "Pro",
-    priceEnv: "STRIPE_PRICE_PRO",
-    defaultDevices: 5,
-  },
-};
+const DEFAULT_DEVICES = 3;
 
 export async function onRequestPost({request, env}) {
   try {
     const body = await readJson(request);
-    const planKey = String(body.plan || "personal").trim().toLowerCase();
-    const plan = PLANS[planKey];
-    if (!plan) {
-      return jsonResponse({error: "Unknown checkout plan."}, 400);
-    }
-
-    const requestedDevices = Number(body.deviceCount || plan.defaultDevices);
+    const requestedDevices = Number(body.deviceCount || DEFAULT_DEVICES);
     const deviceCount = Number.isFinite(requestedDevices)
       ? Math.min(50, Math.max(1, Math.floor(requestedDevices)))
-      : plan.defaultDevices;
+      : DEFAULT_DEVICES;
     const origin = new URL(request.url).origin;
-    const successUrl = env.STRIPE_SUCCESS_URL || `${origin}/#download`;
+    const successUrl = env.STRIPE_SUCCESS_URL || `${origin}/?checkout_session_id={CHECKOUT_SESSION_ID}#pricing`;
     const cancelUrl = env.STRIPE_CANCEL_URL || `${origin}/#pricing`;
     const session = await createCheckoutSession(env, {
-      priceId: requireEnv(env, plan.priceEnv),
-      planName: plan.name,
+      priceId: requireEnv(env, "STRIPE_PRICE_LICENSE"),
       deviceCount,
       successUrl,
       cancelUrl,
@@ -42,7 +24,7 @@ export async function onRequestPost({request, env}) {
   }
 }
 
-async function createCheckoutSession(env, {priceId, planName, deviceCount, successUrl, cancelUrl}) {
+async function createCheckoutSession(env, {priceId, deviceCount, successUrl, cancelUrl}) {
   const body = new URLSearchParams();
   body.set("mode", "payment");
   body.set("line_items[0][price]", priceId);
@@ -53,7 +35,7 @@ async function createCheckoutSession(env, {priceId, planName, deviceCount, succe
   body.set("success_url", successUrl);
   body.set("cancel_url", cancelUrl);
   body.set("metadata[kind]", "new_license");
-  body.set("metadata[plan]", planName);
+  body.set("metadata[plan]", "Mountlet License");
   body.set("metadata[license_kind]", "paid");
   body.set("metadata[device_count]", String(deviceCount));
 

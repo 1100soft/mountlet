@@ -21,7 +21,7 @@ export async function onRequestPost({request, env}) {
     if (!["beta", "paid"].includes(licenseKind)) {
       return jsonResponse({error: "licenseKind must be beta or paid."}, 400);
     }
-    const plan = String(body.plan || (licenseKind === "beta" ? "Beta" : "Personal")).trim();
+    const plan = String(body.plan || (licenseKind === "beta" ? "Beta" : "Mountlet License")).trim();
     const requestedDevices = Number(body.maxDevices || 3);
     const maxDevices = Number.isFinite(requestedDevices) && requestedDevices > 0 ? Math.floor(requestedDevices) : 3;
     const email = String(body.email || "").trim();

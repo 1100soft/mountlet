@@ -1,7 +1,6 @@
 window.MOUNTLET_SITE_CONFIG = {
   checkout: {
-    personal: "https://buy.stripe.com/replace-personal-link",
-    pro: "https://buy.stripe.com/replace-pro-link"
+    license: "https://buy.stripe.com/replace-license-link"
   },
   downloads: {
     windows: "/api/download/mountlet-windows-bundled.txt",

@@ -44,6 +44,58 @@ async function startCheckout(button) {
   }
 }
 
+function licenseTotal(deviceCount) {
+  const count = Math.max(1, Math.floor(Number(deviceCount) || 1));
+  if (count === 1) {
+    return 10;
+  }
+  if (count <= 3) {
+    return 10 + (count - 1) * 5;
+  }
+  return 20 + (count - 3) * 3;
+}
+
+function updateLicensePrice() {
+  const input = document.querySelector('.device-count[data-plan="license"]');
+  const output = document.querySelector("#license-price");
+  if (!input || !output) {
+    return;
+  }
+  output.textContent = `$${licenseTotal(input.value)}`;
+}
+
+async function loadCheckoutLicense() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get("checkout_session_id");
+  if (!sessionId) {
+    return;
+  }
+  setActiveTab("pricing", {skipHash: true});
+  const result = document.querySelector("#license-result");
+  const output = document.querySelector("#license-key-output");
+  if (!result || !output) {
+    return;
+  }
+  result.hidden = false;
+  output.textContent = "Preparing your license key...";
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    try {
+      const response = await fetch(`/api/license/checkout?session_id=${encodeURIComponent(sessionId)}`, {
+        headers: {accept: "application/json"},
+      });
+      const data = await readJsonResponse(response, "License lookup");
+      if (response.ok && data.licenseKey) {
+        output.textContent = data.licenseKey;
+        return;
+      }
+      output.textContent = data.error || "The license key is not ready yet.";
+    } catch (error) {
+      output.textContent = error.message || "Could not load the license key.";
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+}
+
 async function readJsonResponse(response, label) {
   const text = await response.text();
   if (!text.trim()) {
@@ -134,6 +186,18 @@ document.addEventListener("click", (event) => {
   if (downloadButton) {
     openConfiguredLink("downloads", downloadButton.dataset.download);
   }
+
+  const copyLicenseButton = event.target.closest("#copy-license-key");
+  if (copyLicenseButton) {
+    const key = document.querySelector("#license-key-output")?.textContent || "";
+    navigator.clipboard?.writeText(key);
+  }
+});
+
+document.addEventListener("input", (event) => {
+  if (event.target.matches('.device-count[data-plan="license"]')) {
+    updateLicensePrice();
+  }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -170,3 +234,5 @@ window.addEventListener("popstate", () => {
 });
 
 setActiveTab(window.location.hash, {skipHash: true});
+updateLicensePrice();
+loadCheckoutLicense();
