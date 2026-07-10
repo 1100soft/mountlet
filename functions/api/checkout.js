@@ -161,7 +161,8 @@ async function addSubscriptionDevices(env, license, deviceCount) {
     interval: plan.interval,
     unitAmount,
   });
-  const expiresAt = subscriptionPeriodEnd(updatedItem);
+  const refreshedSubscription = await fetchStripeSubscription(env, license.stripe_subscription_id);
+  const expiresAt = subscriptionPeriodEnd(refreshedSubscription);
   const now = new Date().toISOString();
   await env.DB.prepare(
     "UPDATE licenses SET max_devices = ?, expires_at = CASE WHEN ? != '' THEN ? ELSE expires_at END, subscription_status = ?, updated_at = ? WHERE id = ?"
@@ -169,7 +170,7 @@ async function addSubscriptionDevices(env, license, deviceCount) {
     maxDevices,
     expiresAt,
     expiresAt,
-    String(updatedItem.subscription?.status || subscription.status || ""),
+    String(refreshedSubscription.status || subscription.status || ""),
     now,
     license.id
   ).run();
@@ -210,7 +211,6 @@ async function updateStripeSubscriptionItem(env, itemId, {productId, interval, u
   body.set("quantity", "1");
   body.set("proration_behavior", "always_invoice");
   body.set("payment_behavior", "error_if_incomplete");
-  body.set("expand[]", "subscription");
   const response = await fetch(`https://api.stripe.com/v1/subscription_items/${itemId}`, {
     method: "POST",
     headers: {
@@ -222,8 +222,7 @@ async function updateStripeSubscriptionItem(env, itemId, {productId, interval, u
   return await parseStripeResponse(response, "Stripe subscription update failed.");
 }
 
-function subscriptionPeriodEnd(subscriptionItem) {
-  const subscription = subscriptionItem?.subscription;
+function subscriptionPeriodEnd(subscription) {
   const value = Number(subscription?.current_period_end || 0);
   return value > 0 ? new Date(value * 1000).toISOString() : "";
 }

@@ -2594,6 +2594,8 @@ class LicenseDialog(_ConfigDialogBase):
         self.devices_text = self.qt.QPlainTextEdit()
         self.devices_text.setReadOnly(True)
         self.activate_button = None
+        self.copy_key_button = None
+        self.paste_key_button = None
         self.refresh_devices_button = None
         self.deactivate_button = None
         self._build()
@@ -2608,7 +2610,17 @@ class LicenseDialog(_ConfigDialogBase):
         frame = self.qt.QFrame()
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         form = self.qt.QFormLayout(frame)
-        form.addRow("License key", self.key_field)
+        key_row = self.qt.QWidget()
+        key_layout = self.qt.QHBoxLayout(key_row)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.addWidget(self.key_field, 1)
+        self.copy_key_button = self.qt.QPushButton("Copy")
+        self.copy_key_button.clicked.connect(self._copy_license_key)
+        self.paste_key_button = self.qt.QPushButton("Paste")
+        self.paste_key_button.clicked.connect(self._paste_license_key)
+        key_layout.addWidget(self.copy_key_button)
+        key_layout.addWidget(self.paste_key_button)
+        form.addRow("License key", key_row)
         form.addRow("Device name", self.device_field)
         layout.addWidget(frame)
 
@@ -2635,8 +2647,7 @@ class LicenseDialog(_ConfigDialogBase):
     def _refresh_status(self) -> None:
         status = license_control.current_status()
         self.status_label.setText(status.summary)
-        self.expiry_label.setText(f"Expires: {status.expires_at}" if status.expires_at else "")
-        self.expiry_label.setVisible(bool(status.expires_at))
+        self._set_expiry_label(status)
         self._update_button_state(status)
         if status.state == "licensed":
             if status.license_key and self.key_field.text().strip() != status.license_key:
@@ -2672,6 +2683,16 @@ class LicenseDialog(_ConfigDialogBase):
                     else "Enter a license key to activate this device."
                 )
             )
+        if self.copy_key_button is not None:
+            self.copy_key_button.setEnabled(has_key)
+            self.copy_key_button.setToolTip("Copy the license key.")
+        if self.paste_key_button is not None:
+            self.paste_key_button.setEnabled(not licensed)
+            self.paste_key_button.setToolTip(
+                "Paste a license key from the clipboard."
+                if not licensed
+                else "Deactivate this device before changing the license key."
+            )
         if self.refresh_devices_button is not None:
             self.refresh_devices_button.setEnabled(licensed)
             self.refresh_devices_button.setToolTip(
@@ -2697,10 +2718,34 @@ class LicenseDialog(_ConfigDialogBase):
             self.qt.QMessageBox.warning(self.dialog, "License activation", str(exc))
             return
         self.status_label.setText(status.summary)
+        self._set_expiry_label(status)
         self.key_field.setText(status.license_key or self.key_field.text().strip())
         self._refresh_devices(show_errors=False)
         self._update_button_state(status)
         self.qt.QMessageBox.information(self.dialog, "License activation", "Mountlet is activated on this device.")
+
+    def _set_expiry_label(self, status: license_control.LicenseStatus) -> None:
+        if status.state == "licensed" and status.expires_at:
+            self.expiry_label.setText(f"Renews: {status.expires_at}")
+        elif status.state == "trial" and status.expires_at:
+            self.expiry_label.setText(f"Trial ends: {status.expires_at}")
+        elif status.state == "expired" and status.expires_at:
+            self.expiry_label.setText(f"Expired: {status.expires_at}")
+        else:
+            self.expiry_label.setText("")
+        self.expiry_label.setVisible(bool(self.expiry_label.text()))
+
+    def _copy_license_key(self) -> None:
+        text = self.key_field.text().strip()
+        if text:
+            self.qt.QApplication.clipboard().setText(text)
+
+    def _paste_license_key(self) -> None:
+        if self.key_field.isReadOnly():
+            return
+        text = self.qt.QApplication.clipboard().text().strip()
+        if text:
+            self.key_field.setText(text)
 
     def _refresh_devices(self, *, show_errors: bool = True) -> None:
         try:

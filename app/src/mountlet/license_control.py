@@ -66,6 +66,8 @@ def current_status(now: float | None = None) -> LicenseStatus:
                 clear_license_token()
                 clear_license_key()
                 reset_trial(now=now)
+            else:
+                return LicenseStatus("expired", f"License cannot be verified: {exc}")
             token_payload = None
         if token_payload is not None:
             email = str(token_payload.get("email") or "")
@@ -77,8 +79,6 @@ def current_status(now: float | None = None) -> LicenseStatus:
             parts = ["Beta license" if license_kind == "beta" else "Licensed"]
             if plan:
                 parts.append(plan)
-            if expires_at:
-                parts.append(f"through {expires_at}")
             if email:
                 parts.append(email)
             return LicenseStatus(

@@ -155,6 +155,26 @@ class LicenseControlTests(unittest.TestCase):
         self.assertGreaterEqual(status.trial_days_remaining, 6)
         self.assertEqual(license_control.load_license_key(), "")
 
+    def test_unverifiable_license_does_not_show_trial(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        token = self._signed_token(
+            private_key,
+            {
+                "licenseId": "lic_1",
+                "deviceId": "dev_1",
+                "plan": "Monthly",
+                "licenseKind": "paid",
+                "maxDevices": 1,
+            },
+        )
+
+        license_control.store_license_token(token)
+        status = license_control.current_status()
+
+        self.assertEqual(status.state, "expired")
+        self.assertIn("License cannot be verified", status.summary)
+        self.assertEqual(status.expires_at, "")
+
     def test_license_key_is_stored_and_cleared(self):
         license_control.store_license_key("MNT-AAAAA-BBBBB-CCCCC-DDDDD")
 
