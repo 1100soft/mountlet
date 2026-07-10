@@ -449,15 +449,6 @@ h3 {
   margin: 16px 0;
 }
 
-.license-key-field {
-  color: var(--muted);
-  display: grid;
-  font-size: 0.92rem;
-  font-weight: 720;
-  gap: 8px;
-  margin: 18px 0 12px;
-}
-
 .license-choice {
   border: 1px solid var(--line);
   display: grid;
@@ -479,7 +470,7 @@ h3 {
   gap: 8px;
 }
 
-.license-key-field input {
+.license-choice input[type="text"] {
   background: var(--panel-soft);
   border: 1px solid var(--line);
   color: var(--text);
@@ -509,6 +500,14 @@ h3 {
 .inline-status {
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.inline-status.valid {
+  color: var(--green);
+}
+
+.inline-status.invalid {
+  color: #c83f45;
 }
 
 .cart-lines {

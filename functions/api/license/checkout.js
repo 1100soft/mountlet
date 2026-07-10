@@ -20,7 +20,7 @@ export async function onRequestGet({request, env}) {
           createdAt: row.created_at || "",
         });
       }
-      return jsonResponse({error: "The purchase is not ready yet. Wait a few seconds, then refresh this page."}, 404);
+      return jsonResponse({error: "The purchase is not ready yet. Wait a few seconds, then refresh this page."}, 202);
     }
     return jsonResponse({
       licenseKey: row.license_key,

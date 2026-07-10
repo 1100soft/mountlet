@@ -59,6 +59,13 @@ the local D1 state or apply:
 wrangler d1 execute mountlet-license --local --file web/migrations/0003_remove_customer_columns.sql
 ```
 
+If you applied the earlier version of that migration that removed
+`payments.stripe_customer_id`, add it back for refund lookup:
+
+```bash
+wrangler d1 execute mountlet-license --local --file web/migrations/0004_add_stripe_customer_id.sql
+```
+
 `web:r2:seed` uploads placeholder release files to local R2. The download
 buttons in `config.js` point to those objects through `/api/download/...`, so
 you can test the same release path before replacing the placeholders with real

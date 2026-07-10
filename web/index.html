@@ -174,21 +174,18 @@
               </label>
               <label>
                 <input type="radio" name="license-action" value="add_devices" />
-                Enter license key
+                I have a license
               </label>
+              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" maxlength="27" placeholder="MNT-..." disabled />
             </fieldset>
-            <label class="license-key-field" id="license-key-field">
-              Existing license key
-              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" disabled />
-            </label>
             <div class="button-row">
               <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
-              <span id="license-key-status" class="inline-status">No key checked.</span>
+              <span id="license-key-status" class="inline-status" hidden></span>
             </div>
           </article>
           <article class="price-card add-device-card disabled" id="add-device-card">
             <h3>Add devices</h3>
-            <p class="price" id="add-device-price">$5</p>
+            <p class="price" id="add-device-price">$5/device</p>
             <p>Add optional extra device slots.</p>
             <label class="device-field">
               Extra devices

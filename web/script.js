@@ -42,15 +42,11 @@ async function startCheckout(button) {
   }
 }
 
+const LICENSE_KEY_PATTERN = /^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/;
+let validateTimer = 0;
+let validatedLicenseDevices = 0;
+
 function updateAddDevicePrice() {
-  const input = document.querySelector("#add-device-count");
-  const output = document.querySelector("#add-device-price");
-  if (!input || !output) {
-    return;
-  }
-  const minimum = selectedLicenseAction() === "add_devices" ? 1 : 0;
-  const count = Math.max(minimum, Math.floor(Number(input.value) || 0));
-  output.textContent = `$${count * 5}`;
   updateCart();
 }
 
@@ -63,10 +59,14 @@ async function validateLicenseKey() {
   const licenseKey = input.value.trim();
   setAddDeviceEnabled(false);
   if (!licenseKey) {
-    status.textContent = "Enter a license key.";
+    setLicenseStatus("", "");
     return;
   }
-  status.textContent = "Checking key...";
+  if (!LICENSE_KEY_PATTERN.test(licenseKey.toUpperCase())) {
+    setLicenseStatus("Invalid key format.", "invalid");
+    return;
+  }
+  setLicenseStatus("Checking key...", "");
   try {
     const response = await fetch("/api/license/validate", {
       method: "POST",
@@ -80,13 +80,26 @@ async function validateLicenseKey() {
     if (!response.ok || data.error || !data.ok) {
       throw new Error(data.error || "License key is not valid.");
     }
-    status.textContent = `Valid key; covers ${data.maxDevices} device${data.maxDevices === 1 ? "" : "s"}.`;
+    validatedLicenseDevices = Number(data.maxDevices || 0);
+    setLicenseStatus(`Valid key; covers ${validatedLicenseDevices} device${validatedLicenseDevices === 1 ? "" : "s"}.`, "valid");
     setAddDeviceEnabled(true);
     updateCart();
   } catch (error) {
-    status.textContent = error.message || "License key is not valid.";
+    validatedLicenseDevices = 0;
+    setLicenseStatus(error.message || "License key is not valid.", "invalid");
     updateCart();
   }
+}
+
+function setLicenseStatus(message, state) {
+  const status = document.querySelector("#license-key-status");
+  if (!status) {
+    return;
+  }
+  status.textContent = message;
+  status.hidden = !message;
+  status.classList.toggle("valid", state === "valid");
+  status.classList.toggle("invalid", state === "invalid");
 }
 
 function setAddDeviceEnabled(enabled) {
@@ -113,6 +126,7 @@ function updatePricingMode() {
   const validateButton = document.querySelector("#validate-license-key");
   const status = document.querySelector("#license-key-status");
   if (action === "new_license") {
+    validatedLicenseDevices = 0;
     if (keyField) {
       keyField.disabled = true;
     }
@@ -123,9 +137,7 @@ function updatePricingMode() {
     if (validateButton) {
       validateButton.disabled = true;
     }
-    if (status) {
-      status.textContent = "Buying a new key.";
-    }
+    setLicenseStatus("", "");
     setAddDeviceEnabled(true);
   } else {
     const addInput = document.querySelector("#add-device-count");
@@ -141,9 +153,7 @@ function updatePricingMode() {
     if (validateButton) {
       validateButton.disabled = false;
     }
-    if (status) {
-      status.textContent = "Enter and check a key.";
-    }
+    setLicenseStatus("", "");
     setAddDeviceEnabled(false);
     keyField?.focus();
   }
@@ -164,7 +174,7 @@ function updateCart() {
   const parts = [];
   if (action === "new_license") {
     amount += 20;
-    parts.push(["New license", "$20"]);
+    parts.push([`New license (${1 + extraDevices} device${1 + extraDevices === 1 ? "" : "s"})`, "$20"]);
     if (extraDevices > 0) {
       amount += extraDevices * 5;
       parts.push([`Extra devices x ${extraDevices}`, `$${extraDevices * 5}`]);
@@ -173,7 +183,9 @@ function updateCart() {
   } else {
     const enabled = !addInput?.disabled;
     amount = extraDevices * 5;
-    parts.push([`Extra devices x ${extraDevices}`, `$${amount}`]);
+    const totalDevices = validatedLicenseDevices + extraDevices;
+    const suffix = totalDevices > 0 ? ` (${totalDevices} devices total)` : "";
+    parts.push([`Extra devices x ${extraDevices}${suffix}`, `$${amount}`]);
     checkoutButton.disabled = !enabled;
   }
   lines.innerHTML = parts.map(([label, price]) => `<div><dt>${label}</dt><dd>${price}</dd></div>`).join("");
@@ -344,8 +356,17 @@ document.addEventListener("input", (event) => {
     updateAddDevicePrice();
   }
   if (event.target.matches("#existing-license-key")) {
-    document.querySelector("#license-key-status").textContent = "Key changed; check it again.";
+    const normalized = event.target.value.toUpperCase();
+    if (event.target.value !== normalized) {
+      event.target.value = normalized;
+    }
+    clearTimeout(validateTimer);
+    validatedLicenseDevices = 0;
+    setLicenseStatus("", "");
     setAddDeviceEnabled(false);
+    if (LICENSE_KEY_PATTERN.test(normalized.trim())) {
+      validateTimer = setTimeout(validateLicenseKey, 250);
+    }
   }
 });
 
