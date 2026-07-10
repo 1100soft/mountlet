@@ -33,6 +33,14 @@ const activated = await post(`${apiBase}/activate`, {
 
 const devices = await post(`${apiBase}/devices`, {token: activated.token});
 await post(`${apiBase}/deactivate`, {token: activated.token});
+const reactivated = await post(`${apiBase}/activate`, {
+  licenseKey: created.licenseKey,
+  deviceFingerprint,
+  deviceLabel: "Local smoke device reactivated",
+  platform: process.platform,
+  appVersion: "local",
+});
+const devicesAfterReactivation = await post(`${apiBase}/devices`, {token: reactivated.token});
 
 console.log(JSON.stringify({
   licenseKey: created.licenseKey,
@@ -41,6 +49,8 @@ console.log(JSON.stringify({
   tokenReturned: Boolean(activated.token),
   deviceCount: devices.devices?.length || 0,
   deactivated: true,
+  reactivated: Boolean(reactivated.token),
+  deviceCountAfterReactivation: devicesAfterReactivation.devices?.length || 0,
 }, null, 2));
 
 async function post(url, body, headers = {}) {
