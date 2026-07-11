@@ -56,7 +56,7 @@ from .settings import (
     set_start_at_login,
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
-from .ui_icons import apply_button_icon
+from .ui_icons import apply_button_icon, mountlet_icon
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -688,6 +688,45 @@ def _shortcut_hint(action: str) -> str:
         if value:
             return f"\nShortcut: {value}"
     return ""
+
+
+def _apply_external_link_button(
+    qt: SimpleNamespace,
+    button: Any,
+    *,
+    text: str,
+    prominent: bool = False,
+    compact: bool = False,
+) -> None:
+    button.setText(text)
+    with suppress(Exception):
+        icon_size = 18 if compact else 20
+        icon = mountlet_icon(qt, "ui-external-link", size=icon_size, color="#ffffff")
+        if icon is not None:
+            button.setIcon(icon)
+            button.setIconSize(qt.QSize(icon_size, icon_size))
+            button.setLayoutDirection(qt.Qt.LayoutDirection.RightToLeft)
+    with suppress(Exception):
+        font = button.font()
+        if prominent:
+            font.setBold(True)
+            font.setPointSize(max(font.pointSize() + 2, 12))
+        button.setFont(font)
+    style = (
+        "QPushButton { background: #16a34a; color: #ffffff; border: 1px solid #15803d; "
+        "border-radius: 5px; padding: 6px 12px; } "
+        "QPushButton:hover { background: #15803d; } "
+        "QPushButton:pressed { background: #166534; }"
+        if prominent
+        else (
+            "QPushButton { background: #2563eb; color: #ffffff; border: 1px solid #1d4ed8; "
+            "border-radius: 5px; padding: 4px 10px; } "
+            "QPushButton:hover { background: #1d4ed8; } "
+            "QPushButton:pressed { background: #1e40af; }"
+        )
+    )
+    with suppress(Exception):
+        button.setStyleSheet(style)
 
 
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
@@ -2619,7 +2658,13 @@ class LicenseDialog(_ConfigDialogBase):
 
     def _build(self) -> None:
         layout = self.qt.QVBoxLayout(self.dialog)
-        layout.addWidget(self.status_label)
+        status_row = self.qt.QHBoxLayout()
+        status_row.addWidget(self.status_label, 1)
+        self.buy_license_button = self.qt.QPushButton()
+        _apply_external_link_button(self.qt, self.buy_license_button, text="Buy license", prominent=True)
+        self.buy_license_button.clicked.connect(self._open_purchase_page)
+        status_row.addWidget(self.buy_license_button)
+        layout.addLayout(status_row)
         layout.addWidget(self.expiry_label)
 
         frame = self.qt.QFrame()
@@ -2650,22 +2695,23 @@ class LicenseDialog(_ConfigDialogBase):
         self.refresh_devices_button.clicked.connect(self._refresh_devices)
         self.deactivate_button = self.qt.QPushButton("Deactivate this device")
         self.deactivate_button.clicked.connect(self._deactivate_this_device)
-        self.buy_license_button = self.qt.QPushButton("Buy license")
-        self.buy_license_button.clicked.connect(self._open_purchase_page)
-        self.add_devices_button = self.qt.QPushButton("Add devices")
-        self.add_devices_button.clicked.connect(self._open_add_devices_page)
         button_row.addWidget(self.activate_button)
         button_row.addWidget(self.refresh_devices_button)
         button_row.addWidget(self.deactivate_button)
-        button_row.addWidget(self.buy_license_button)
-        button_row.addWidget(self.add_devices_button)
+        button_row.addStretch(1)
         layout.addLayout(button_row)
         self.key_field.textChanged.connect(self._update_button_state)
         self._clipboard = self.qt.QApplication.clipboard()
         with suppress(Exception):
             self._clipboard.dataChanged.connect(self._update_copy_button_state)
 
-        layout.addWidget(self.devices_label)
+        devices_header = self.qt.QHBoxLayout()
+        devices_header.addWidget(self.devices_label, 1)
+        self.add_devices_button = self.qt.QPushButton()
+        _apply_external_link_button(self.qt, self.add_devices_button, text="+ Add devices", compact=True)
+        self.add_devices_button.clicked.connect(self._open_add_devices_page)
+        devices_header.addWidget(self.add_devices_button)
+        layout.addLayout(devices_header)
         layout.addWidget(self.devices_text)
 
         buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
@@ -5782,7 +5828,10 @@ class MountletWindow:
         return button
 
     def _purchase_license_toolbar_button(self) -> Any:
-        button = self.qt.QPushButton("Buy license")
+        button = self.qt.QPushButton()
+        _apply_external_link_button(self.qt, button, text="Buy license", prominent=True)
+        with suppress(Exception):
+            button.setMinimumHeight(32)
         button.setToolTip("Open the Mountlet license purchase page.")
         button.clicked.connect(lambda checked=False: self._open_purchase_page())
         self._purchase_license_button = button
@@ -6115,13 +6164,13 @@ class MountletWindow:
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
-        layout.addWidget(self._purchase_license_toolbar_button())
         layout.addWidget(self._all_cache_sync_toolbar_button())
         layout.addWidget(self._remove_all_offline_toolbar_button())
         layout.addWidget(self._clear_all_cache_toolbar_button())
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
+        layout.addWidget(self._purchase_license_toolbar_button())
         layout.addWidget(self._pin_button())
         self._update_config_sync_buttons()
         self._update_app_cache_buttons()
