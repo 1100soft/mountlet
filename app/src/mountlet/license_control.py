@@ -10,6 +10,7 @@ import secrets
 import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -30,7 +31,9 @@ TRIAL_SECONDS = TRIAL_DAYS * 24 * 60 * 60
 HTTP_TIMEOUT_SECONDS = 12
 
 DEFAULT_LICENSE_API_URL = "https://mountlet.app/api/license"
+DEFAULT_LICENSE_SITE_URL = "https://mountlet.app"
 LICENSE_API_URL_ENV = "MOUNTLET_LICENSE_API_URL"
+LICENSE_SITE_URL_ENV = "MOUNTLET_LICENSE_SITE_URL"
 LICENSE_PUBLIC_KEY_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY"
 LICENSE_PUBLIC_KEY_FILE_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY_FILE"
 
@@ -122,6 +125,35 @@ def current_status(now: float | None = None) -> LicenseStatus:
 
 def status_summary() -> str:
     return current_status().summary
+
+
+def license_site_url(*, api_url: str | None = None) -> str:
+    configured = os.environ.get(LICENSE_SITE_URL_ENV, "").strip()
+    if configured:
+        return configured.rstrip("/")
+    api_base = (api_url or os.environ.get(LICENSE_API_URL_ENV) or DEFAULT_LICENSE_API_URL).strip()
+    if api_base:
+        parsed = urllib.parse.urlsplit(api_base)
+        path = parsed.path.rstrip("/")
+        if path.endswith("/api/license"):
+            path = path[: -len("/api/license")]
+        elif path.endswith("/api"):
+            path = path[: -len("/api")]
+        if parsed.scheme and parsed.netloc:
+            return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path or "", "", "")).rstrip("/")
+    return DEFAULT_LICENSE_SITE_URL
+
+
+def license_purchase_url(*, add_devices: bool = False, license_key: str = "", api_url: str | None = None) -> str:
+    base = license_site_url(api_url=api_url).rstrip("/")
+    query: dict[str, str] = {}
+    if add_devices:
+        query["license_action"] = "add_devices"
+    key = license_key.strip()
+    if key:
+        query["license_key"] = key
+    suffix = f"?{urllib.parse.urlencode(query)}" if query else ""
+    return f"{base}/{suffix}#pricing"
 
 
 def activate_license(license_key: str, *, device_label: str = "", api_url: str | None = None) -> LicenseStatus:
@@ -543,7 +575,9 @@ class _suppress_time_parse_errors:
 
 __all__ = [
     "DEFAULT_LICENSE_API_URL",
+    "DEFAULT_LICENSE_SITE_URL",
     "LICENSE_API_URL_ENV",
+    "LICENSE_SITE_URL_ENV",
     "LICENSE_PUBLIC_KEY_ENV",
     "LicenseStatus",
     "activate_license",
@@ -556,6 +590,8 @@ __all__ = [
     "device_fingerprint",
     "list_devices",
     "license_devices",
+    "license_purchase_url",
+    "license_site_url",
     "load_license_key",
     "load_license_payload",
     "load_or_create_trial",

@@ -237,6 +237,26 @@ function updatePricingMode() {
   updateCart();
 }
 
+function applyPricingUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const action = String(params.get("license_action") || params.get("licenseAction") || "").trim();
+  const key = String(params.get("license_key") || params.get("licenseKey") || "").trim().toUpperCase();
+  if (action === "add_devices" || key) {
+    setActiveTab("pricing", {skipHash: Boolean(window.location.hash)});
+    const addDevices = document.querySelector('input[name="license-action"][value="add_devices"]');
+    if (addDevices) {
+      addDevices.checked = true;
+    }
+  }
+  if (key) {
+    const keyField = document.querySelector("#existing-license-key");
+    if (keyField) {
+      keyField.value = key;
+    }
+  }
+  return LICENSE_KEY_PATTERN.test(key);
+}
+
 function updateCart() {
   const lines = document.querySelector("#cart-lines");
   const total = document.querySelector("#cart-total");
@@ -553,6 +573,10 @@ window.addEventListener("popstate", () => {
 });
 
 setActiveTab(window.location.hash, {skipHash: true});
+const shouldValidatePrefilledLicense = applyPricingUrlParams();
 updateAddDevicePrice();
 updatePricingMode();
+if (shouldValidatePrefilledLicense) {
+  validateLicenseKey();
+}
 loadCheckoutLicense();

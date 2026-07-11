@@ -1,6 +1,7 @@
 # Mountlet Website
 
-Static commercial download site for Cloudflare Pages.
+Static commercial download site for Cloudflare Pages. The current production
+domain is `https://mountlet.app`.
 
 ## Cloudflare Pages
 
@@ -9,6 +10,11 @@ Use these settings:
 - Build command: none
 - Build output directory: `web`
 - Root directory: repository root
+
+Production app builds default to `https://mountlet.app/api/license` and derive
+purchase links from the same site. Keep deployments relocatable by overriding
+`MOUNTLET_LICENSE_API_URL` and, when the public site does not share the same
+origin, `MOUNTLET_LICENSE_SITE_URL`.
 
 The site is plain HTML, CSS, and JavaScript, so no package install step is
 required.

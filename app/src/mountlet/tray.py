@@ -2053,6 +2053,16 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
 
+def _open_external_url(qt: SimpleNamespace, parent: Any, url: str, *, title: str = "Open link") -> bool:
+    try:
+        opened = bool(qt.QDesktopServices.openUrl(qt.QUrl(url)))
+    except Exception:
+        opened = False
+    if not opened:
+        qt.QMessageBox.warning(parent, title, f"Could not open:\n{url}")
+    return opened
+
+
 def _open_text_file_focused(path: Path) -> bool:
     if platform.system() != "Linux":
         return False
@@ -2600,6 +2610,8 @@ class LicenseDialog(_ConfigDialogBase):
         self.paste_key_button = None
         self.refresh_devices_button = None
         self.deactivate_button = None
+        self.buy_license_button = None
+        self.add_devices_button = None
         self._clipboard = None
         self._build()
         self._refresh_status()
@@ -2638,9 +2650,15 @@ class LicenseDialog(_ConfigDialogBase):
         self.refresh_devices_button.clicked.connect(self._refresh_devices)
         self.deactivate_button = self.qt.QPushButton("Deactivate this device")
         self.deactivate_button.clicked.connect(self._deactivate_this_device)
+        self.buy_license_button = self.qt.QPushButton("Buy license")
+        self.buy_license_button.clicked.connect(self._open_purchase_page)
+        self.add_devices_button = self.qt.QPushButton("Add devices")
+        self.add_devices_button.clicked.connect(self._open_add_devices_page)
         button_row.addWidget(self.activate_button)
         button_row.addWidget(self.refresh_devices_button)
         button_row.addWidget(self.deactivate_button)
+        button_row.addWidget(self.buy_license_button)
+        button_row.addWidget(self.add_devices_button)
         layout.addLayout(button_row)
         self.key_field.textChanged.connect(self._update_button_state)
         self._clipboard = self.qt.QApplication.clipboard()
@@ -2717,6 +2735,12 @@ class LicenseDialog(_ConfigDialogBase):
                 if licensed
                 else "This device is not activated."
             )
+        if self.buy_license_button is not None:
+            self.buy_license_button.setVisible(not licensed)
+            self.buy_license_button.setToolTip("Open the Mountlet license purchase page.")
+        if self.add_devices_button is not None:
+            self.add_devices_button.setVisible(licensed)
+            self.add_devices_button.setToolTip("Open the purchase page with this license key prefilled.")
 
     def _activate(self) -> None:
         try:
@@ -2769,6 +2793,22 @@ class LicenseDialog(_ConfigDialogBase):
         set_checkmark(self.copy_key_button, copied)
         self.copy_key_button.setToolTip(
             "Copied to clipboard." if copied else "Copy the license key."
+        )
+
+    def _open_purchase_page(self) -> None:
+        _open_external_url(
+            self.qt,
+            self.dialog,
+            license_control.license_purchase_url(),
+            title="Buy license",
+        )
+
+    def _open_add_devices_page(self) -> None:
+        _open_external_url(
+            self.qt,
+            self.dialog,
+            license_control.license_purchase_url(add_devices=True, license_key=self.key_field.text()),
+            title="Add devices",
         )
 
     def _refresh_devices(self, *, show_errors: bool = True) -> None:
@@ -4684,6 +4724,7 @@ class MountletWindow:
         self._settings_button: Any | None = None
         self._push_sync_button: Any | None = None
         self._pull_sync_button: Any | None = None
+        self._purchase_license_button: Any | None = None
         self._remove_all_offline_button: Any | None = None
         self._clear_all_cache_button: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
@@ -5171,7 +5212,9 @@ class MountletWindow:
         self.qt.QMessageBox.information(self.window, "About Mountlet", _about_text(self.qt))
 
     def _show_license_dialog(self) -> None:
-        self._open_child_dialog(LicenseDialog(self.qt, self.window))
+        dialog = LicenseDialog(self.qt, self.window)
+        dialog.dialog.finished.connect(lambda _result=0: self._update_purchase_license_button())
+        self._open_child_dialog(dialog)
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -5605,6 +5648,7 @@ class MountletWindow:
             self._name_column_width = name_width
             self._update_config_sync_buttons()
             self._update_app_cache_buttons(remotes)
+            self._update_purchase_license_button()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 self._schedule_storage_load(remote)
@@ -5737,6 +5781,14 @@ class MountletWindow:
         self._pull_sync_button = button
         return button
 
+    def _purchase_license_toolbar_button(self) -> Any:
+        button = self.qt.QPushButton("Buy license")
+        button.setToolTip("Open the Mountlet license purchase page.")
+        button.clicked.connect(lambda checked=False: self._open_purchase_page())
+        self._purchase_license_button = button
+        self._update_purchase_license_button()
+        return button
+
     def _all_cache_sync_toolbar_button(self) -> Any:
         return self._toolbar_button("ui-sync", "⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
 
@@ -5857,6 +5909,20 @@ class MountletWindow:
 
     def _configuration_changed(self) -> None:
         self._update_config_sync_buttons()
+
+    def _update_purchase_license_button(self) -> None:
+        button = getattr(self, "_purchase_license_button", None)
+        if button is None:
+            return
+        button.setVisible(license_control.current_status().state != "licensed")
+
+    def _open_purchase_page(self) -> None:
+        _open_external_url(
+            self.qt,
+            self.window,
+            license_control.license_purchase_url(),
+            title="Buy license",
+        )
 
     def _apply_button_icon_if_available(
         self,
@@ -6049,6 +6115,7 @@ class MountletWindow:
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
+        layout.addWidget(self._purchase_license_toolbar_button())
         layout.addWidget(self._all_cache_sync_toolbar_button())
         layout.addWidget(self._remove_all_offline_toolbar_button())
         layout.addWidget(self._clear_all_cache_toolbar_button())
@@ -6058,6 +6125,7 @@ class MountletWindow:
         layout.addWidget(self._pin_button())
         self._update_config_sync_buttons()
         self._update_app_cache_buttons()
+        self._update_purchase_license_button()
         return widget
 
     def _event_global_point(self, event: Any) -> Any:
@@ -8374,12 +8442,28 @@ class MountletTray:
             self.main_window.show()
             LicenseDialog(self.qt, self.main_window.window).exec()
             if not license_control.current_status().allowed:
+                self._show_license_required_prompt()
                 return 1
 
         self.rebuild_menus()
         self.timer.start(self.refresh_interval * 1000)
         self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
+
+    def _show_license_required_prompt(self) -> None:
+        message = self.qt.QMessageBox(self.main_window.window)
+        message.setWindowTitle("License required")
+        message.setText("Mountlet needs an active license to continue.")
+        open_button = message.addButton("Open purchase page", self.qt.QMessageBox.ButtonRole.ActionRole)
+        message.addButton(self.qt.QMessageBox.StandardButton.Close)
+        message.exec()
+        if message.clickedButton() is open_button:
+            _open_external_url(
+                self.qt,
+                self.main_window.window,
+                license_control.license_purchase_url(),
+                title="Buy license",
+            )
 
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
