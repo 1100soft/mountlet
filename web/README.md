@@ -218,6 +218,13 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
   `Mountlet <licenses@example.com>`.
 - `RESEND_REPLY_TO`: optional reply-to address for license emails.
 
+Production and preview deployments can use different bindings and secrets.
+Use production D1/R2 plus live Stripe keys for the production environment, and
+preview D1/R2 plus Stripe test keys for the preview environment. If using
+`wrangler.toml` as the source of truth, define those with `[env.production]`
+and `[env.preview]` overrides; otherwise configure the same split in the
+Cloudflare Pages dashboard under each environment.
+
 Configure Stripe to send `checkout.session.completed`, `invoice.paid`,
 `customer.subscription.updated`, and `customer.subscription.deleted` events to
 either endpoint:
