@@ -9,6 +9,7 @@ Use these settings:
 - Build command: none
 - Build output directory: `web`
 - Root directory: repository root
+- Functions directory: `functions`
 
 Production app builds default to the generated license API below and derive
 purchase links from the same site. Keep deployments relocatable with the listed
@@ -224,6 +225,32 @@ preview D1/R2 plus Stripe test keys for the preview environment. If using
 `wrangler.toml` as the source of truth, define those with `[env.production]`
 and `[env.preview]` overrides; otherwise configure the same split in the
 Cloudflare Pages dashboard under each environment.
+
+Recommended Cloudflare Pages environment split:
+
+- Production branch: `main`
+- Preview branch: `wip`
+- Production `DB`: production license D1
+- Preview `DB`: test license D1
+- Production `DOWNLOADS`: production installer R2 bucket
+- Preview `DOWNLOADS`: test installer R2 bucket
+- Production `STRIPE_SECRET_KEY`: Stripe live key, `sk_live_...`
+- Preview `STRIPE_SECRET_KEY`: Stripe test key, `sk_test_...`
+- Production webhook secret: live Stripe webhook endpoint secret
+- Preview webhook secret: test Stripe webhook endpoint secret
+
+After each deployment, verify that Pages Functions and bindings are active:
+
+```bash
+npm run web:deploy:check -- https://mountlet.app
+npm run web:deploy:check -- https://<preview-url>
+```
+
+If a purchase attempt returns `405 Method Not Allowed`, first check
+`/api/health`. If that route is missing or returns HTML, the deployment is not
+serving Pages Functions. Confirm that the Cloudflare Pages root directory is
+the repository root, not `web`, and that the deployed branch contains the
+repository-root `functions/` directory.
 
 Configure Stripe to send `checkout.session.completed`, `invoice.paid`,
 `customer.subscription.updated`, and `customer.subscription.deleted` events to
