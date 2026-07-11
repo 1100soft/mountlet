@@ -9,6 +9,17 @@ function openConfiguredLink(group, key) {
   window.location.href = url;
 }
 
+function applyConfiguredLinks() {
+  const config = window.MOUNTLET_SITE_CONFIG || {};
+  document.querySelectorAll("[data-config-link]").forEach((link) => {
+    const key = link.dataset.configLink || "";
+    const url = config.source && config.source[key];
+    if (url) {
+      link.href = url;
+    }
+  });
+}
+
 async function startCheckout(button) {
   const kind = selectedLicenseAction();
   const plan = selectedLicensePlan();
@@ -632,6 +643,7 @@ window.addEventListener("popstate", () => {
   setActiveTab(window.location.hash, {skipHash: true});
 });
 
+applyConfiguredLinks();
 setActiveTab(window.location.hash, {skipHash: true});
 const shouldValidatePrefilledLicense = applyPricingUrlParams();
 updateAddDevicePrice();

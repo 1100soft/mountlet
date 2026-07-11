@@ -1,15 +1,9 @@
-export const DEFAULT_SITE_URL = "https://mountlet.app";
+import {PUBLIC_VARS} from "./public-vars.js";
+
+export const DEFAULT_SITE_URL = PUBLIC_VARS.productionSiteUrl;
 export const DEFAULT_LICENSE_API_URL = `${DEFAULT_SITE_URL}/api/license`;
 
-export const ENV_NAMES = {
-  licenseApiUrl: "MOUNTLET_LICENSE_API_URL",
-  licenseSiteUrl: "MOUNTLET_LICENSE_SITE_URL",
-  resendApiKey: "RESEND_API_KEY",
-  resendFrom: "RESEND_FROM",
-  resendReplyTo: "RESEND_REPLY_TO",
-  stripeSecretKey: "STRIPE_SECRET_KEY",
-  stripeWebhookSecret: "STRIPE_WEBHOOK_SECRET",
-};
+export const ENV_NAMES = PUBLIC_VARS.env;
 
 export function siteUrl(env, requestUrl = "") {
   const configured = String(env?.[ENV_NAMES.licenseSiteUrl] || "").trim();

@@ -1,10 +1,10 @@
 import {readFileSync, writeFileSync} from "node:fs";
 import {resolve} from "node:path";
 import {fileURLToPath} from "node:url";
+import {PUBLIC_VARS} from "../../functions/_lib/public-vars.js";
 
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const varsPath = resolve(root, "web/site-vars.json");
-const vars = JSON.parse(readFileSync(varsPath, "utf8"));
+const vars = PUBLIC_VARS;
 
 const generated = {
   root: [

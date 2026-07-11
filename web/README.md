@@ -31,7 +31,8 @@ required.
 
 ## Generated Variables
 
-Shared public URLs and environment-variable names live in `web/site-vars.json`.
+Shared public URLs and environment-variable names live in
+`functions/_lib/public-vars.js`.
 After changing them, run:
 
 ```bash
