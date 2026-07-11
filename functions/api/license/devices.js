@@ -1,4 +1,4 @@
-import {handleError, jsonResponse, readJson, verifyLicenseToken} from "../../_lib/license.js";
+import {handleError, jsonResponse, readJson, signLicenseToken, tokenPayload, verifyLicenseToken} from "../../_lib/license.js";
 import {assertLicenseUsable, refreshSubscriptionLicense} from "../../_lib/stripe-subscriptions.js";
 
 export async function onRequestPost({request, env}) {
@@ -17,6 +17,8 @@ export async function onRequestPost({request, env}) {
       ...device,
       current: device.id === payload.deviceId
     }));
+    const currentDevice = (rows.results || []).find((device) => device.id === payload.deviceId);
+    const token = currentDevice ? await signLicenseToken(env, tokenPayload(license, currentDevice)) : "";
     return jsonResponse({
       devices,
       usedDevices: devices.length,
@@ -24,6 +26,7 @@ export async function onRequestPost({request, env}) {
       expiresAt: license?.expires_at || payload.expiresAt || "",
       plan: license?.plan || payload.plan || "Mountlet License",
       billingModel: license?.billing_model || "",
+      token,
     });
   } catch (error) {
     return handleError(error);

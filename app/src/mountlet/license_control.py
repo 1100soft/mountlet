@@ -166,6 +166,10 @@ def license_devices(api_url: str | None = None) -> dict[str, Any]:
     if not token:
         raise RuntimeError("Activate Mountlet before listing devices.")
     response = _post_json(_api_endpoint(api_url, "devices"), {"token": token})
+    refreshed_token = str(response.get("token") or "")
+    if refreshed_token:
+        verify_license_token(refreshed_token)
+        store_license_token(refreshed_token)
     devices = response.get("devices", [])
     if not isinstance(devices, list):
         devices = []

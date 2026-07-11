@@ -157,7 +157,8 @@ async function fetchStripeSubscription(env, subscriptionId) {
 }
 
 function subscriptionPeriodEnd(subscription) {
-  const value = Number(subscription?.current_period_end || 0);
+  const itemPeriodEnd = Number(subscription?.items?.data?.[0]?.current_period_end || 0);
+  const value = Number(subscription?.current_period_end || 0) || itemPeriodEnd;
   return value > 0 ? new Date(value * 1000).toISOString() : "";
 }
 
