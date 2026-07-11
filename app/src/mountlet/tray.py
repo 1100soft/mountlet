@@ -2706,11 +2706,12 @@ class LicenseDialog(_ConfigDialogBase):
             self._clipboard.dataChanged.connect(self._update_copy_button_state)
 
         devices_header = self.qt.QHBoxLayout()
-        devices_header.addWidget(self.devices_label, 1)
+        devices_header.addWidget(self.devices_label)
         self.add_devices_button = self.qt.QPushButton()
         _apply_external_link_button(self.qt, self.add_devices_button, text="+ Add devices", compact=True)
         self.add_devices_button.clicked.connect(self._open_add_devices_page)
         devices_header.addWidget(self.add_devices_button)
+        devices_header.addStretch(1)
         layout.addLayout(devices_header)
         layout.addWidget(self.devices_text)
 
