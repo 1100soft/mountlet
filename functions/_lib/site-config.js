@@ -7,6 +7,8 @@ export const ENV_NAMES = {
   resendApiKey: "RESEND_API_KEY",
   resendFrom: "RESEND_FROM",
   resendReplyTo: "RESEND_REPLY_TO",
+  stripeSecretKey: "STRIPE_SECRET_KEY",
+  stripeWebhookSecret: "STRIPE_WEBHOOK_SECRET",
 };
 
 export function siteUrl(env, requestUrl = "") {

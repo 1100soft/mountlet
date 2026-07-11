@@ -1,4 +1,5 @@
 import {handleError, HttpError, jsonResponse, loadActiveLicenseByKey, readJson, requireEnv} from "../_lib/license.js";
+import {ENV_NAMES} from "../_lib/site-config.js";
 
 const PLANS = {
   monthly: {
@@ -123,7 +124,7 @@ async function createCheckoutSession(env, {mode, lineItems, successUrl, cancelUr
   const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",
     headers: {
-      authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`,
+      authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`,
       "content-type": "application/x-www-form-urlencoded",
     },
     body,
@@ -198,7 +199,7 @@ async function addSubscriptionDevices(env, license, deviceCount) {
 async function fetchStripeSubscription(env, subscriptionId) {
   const response = await fetch(
     `https://api.stripe.com/v1/subscriptions/${subscriptionId}?expand[]=items.data.price&expand[]=items.data.price.product`,
-    {headers: {authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`}}
+    {headers: {authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`}}
   );
   return await parseStripeResponse(response, "Stripe subscription lookup failed.");
 }
@@ -215,7 +216,7 @@ async function updateStripeSubscriptionItem(env, itemId, {productId, interval, u
   const response = await fetch(`https://api.stripe.com/v1/subscription_items/${itemId}`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`,
+      authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`,
       "content-type": "application/x-www-form-urlencoded",
     },
     body,
@@ -233,7 +234,7 @@ async function ensureStripeProductActive(env, productId) {
   const response = await fetch(`https://api.stripe.com/v1/products/${productId}`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`,
+      authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`,
       "content-type": "application/x-www-form-urlencoded",
     },
     body,
@@ -243,7 +244,7 @@ async function ensureStripeProductActive(env, productId) {
 
 async function fetchStripeProduct(env, productId) {
   const response = await fetch(`https://api.stripe.com/v1/products/${productId}`, {
-    headers: {authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`},
+    headers: {authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`},
   });
   return await parseStripeResponse(response, "Stripe product lookup failed.");
 }

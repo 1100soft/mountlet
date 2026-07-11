@@ -8,6 +8,8 @@ import {
   requireEnv,
   sha256Hex
 } from "../../_lib/license.js";
+import {checkoutEmail, sendLicenseEmail} from "../../_lib/email.js";
+import {ENV_NAMES} from "../../_lib/site-config.js";
 
 export async function onRequestPost({request, env}) {
   try {
@@ -91,7 +93,15 @@ export async function onRequestPost({request, env}) {
       licenseKey,
       now
     ).run();
-    return jsonResponse({ok: true});
+    const email = await sendLicenseEmail(env, request.url, {
+      to: checkoutEmail(session),
+      licenseKey,
+      plan,
+      billingModel,
+      maxDevices,
+      expiresAt,
+    });
+    return jsonResponse({ok: true, email});
   } catch (error) {
     return handleError(error);
   }
@@ -102,7 +112,7 @@ async function checkoutQuantity(env, session) {
   if (Number.isFinite(metadataQuantity) && metadataQuantity > 0) {
     return Math.floor(metadataQuantity);
   }
-  const secret = env.STRIPE_SECRET_KEY;
+  const secret = env[ENV_NAMES.stripeSecretKey];
   if (secret && session.id) {
     const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${session.id}/line_items?limit=10`, {
       headers: {authorization: `Bearer ${secret}`}
@@ -148,7 +158,7 @@ async function fetchStripeSubscription(env, subscriptionId) {
     return null;
   }
   const response = await fetch(`https://api.stripe.com/v1/subscriptions/${subscriptionId}`, {
-    headers: {authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`},
+    headers: {authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`},
   });
   if (!response.ok) {
     return null;
@@ -170,7 +180,7 @@ function invoicePeriodEnd(invoice) {
 }
 
 async function verifyStripeSignature(rawBody, header, env) {
-  const secret = requireEnv(env, "STRIPE_WEBHOOK_SECRET");
+  const secret = requireEnv(env, ENV_NAMES.stripeWebhookSecret);
   const values = Object.fromEntries(
     header.split(",").map((part) => {
       const [key, value] = part.split("=", 2);

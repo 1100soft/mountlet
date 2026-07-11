@@ -1,4 +1,5 @@
 import {HttpError, nowIso, requireEnv} from "./license.js";
+import {ENV_NAMES} from "./site-config.js";
 
 const ALLOWED_SUBSCRIPTION_STATUSES = new Set(["active", "trialing", "past_due"]);
 
@@ -43,7 +44,7 @@ export async function fetchStripeSubscription(env, subscriptionId) {
   }
   const response = await fetch(
     `https://api.stripe.com/v1/subscriptions/${subscriptionId}?expand[]=items.data.price&expand[]=items.data.price.product`,
-    {headers: {authorization: `Bearer ${requireEnv(env, "STRIPE_SECRET_KEY")}`}}
+    {headers: {authorization: `Bearer ${requireEnv(env, ENV_NAMES.stripeSecretKey)}`}}
   );
   const text = await response.text();
   let data = {};

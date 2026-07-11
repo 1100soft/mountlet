@@ -85,6 +85,7 @@ let validatedLicenseDevices = 0;
 let validatedUsedDevices = 0;
 let validatedBillingModel = "";
 let validatedExpiresAt = "";
+let currentCheckoutSessionId = "";
 
 function updateAddDevicePrice() {
   updateCart();
@@ -316,6 +317,7 @@ async function loadCheckoutLicense() {
   if (!sessionId) {
     return;
   }
+  currentCheckoutSessionId = sessionId;
   setActiveTab("license", {skipHash: true});
   const result = document.querySelector("#license-result");
   const output = document.querySelector("#license-key-output");
@@ -339,6 +341,11 @@ async function loadCheckoutLicense() {
           message.textContent = `Save this key now. It covers ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} activated devices.${renewalText}`;
         }
         output.textContent = data.licenseKey;
+        const emailButton = document.querySelector("#email-license-key");
+        if (emailButton) {
+          emailButton.hidden = false;
+          emailButton.disabled = false;
+        }
         const input = document.querySelector("#existing-license-key");
         if (input) {
           input.value = data.licenseKey;
@@ -354,6 +361,10 @@ async function loadCheckoutLicense() {
           message.textContent = `Device slots were added. This license now has ${Number(data.usedDevices || 0)}/${Number(data.devices || 0)} devices used.${renewalText}`;
         }
         output.textContent = "Device slots added";
+        const emailButton = document.querySelector("#email-license-key");
+        if (emailButton) {
+          emailButton.hidden = true;
+        }
         return;
       }
       output.textContent = data.error || "The license key is not ready yet.";
@@ -506,7 +517,56 @@ document.addEventListener("click", (event) => {
       }, 1800);
     }
   }
+
+  const emailLicenseButton = event.target.closest("#email-license-key");
+  if (emailLicenseButton) {
+    emailLicenseKey(emailLicenseButton);
+  }
 });
+
+async function emailLicenseKey(button) {
+  const status = document.querySelector("#email-license-status");
+  if (!currentCheckoutSessionId) {
+    if (status) {
+      status.textContent = "Checkout session is missing.";
+      status.classList.add("invalid");
+    }
+    return;
+  }
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Sending...";
+  if (status) {
+    status.textContent = "";
+    status.classList.remove("valid", "invalid");
+  }
+  try {
+    const response = await fetch("/api/license/email", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({sessionId: currentCheckoutSessionId}),
+    });
+    const data = await readJsonResponse(response, "License email");
+    if (!response.ok || data.error || !data.ok) {
+      throw new Error(data.error || "Could not send the license email.");
+    }
+    if (status) {
+      status.textContent = "Sent.";
+      status.classList.add("valid");
+    }
+  } catch (error) {
+    if (status) {
+      status.textContent = error.message || "Could not send the license email.";
+      status.classList.add("invalid");
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
 
 document.addEventListener("input", (event) => {
   if (event.target.matches("#add-device-count")) {

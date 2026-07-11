@@ -1,8 +1,9 @@
 import {existsSync, mkdirSync, writeFileSync} from "node:fs";
 import {dirname, resolve} from "node:path";
 import {generateKeyPairSync, randomBytes} from "node:crypto";
+import {fileURLToPath} from "node:url";
 
-const webRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "..");
 const localDir = resolve(webRoot, ".local");
 const envPath = resolve(repoRoot, ".dev.vars");
@@ -38,6 +39,11 @@ writeFileSync(
     "",
     "STRIPE_SECRET_KEY=\"sk_test_replace\"",
     "STRIPE_WEBHOOK_SECRET=\"whsec_replace\"",
+    "",
+    "# Optional license email delivery through Resend.",
+    "# RESEND_API_KEY=\"re_replace\"",
+    "# RESEND_FROM=\"Mountlet <licenses@example.com>\"",
+    "# RESEND_REPLY_TO=\"support@example.com\"",
     "",
   ].join("\n"),
   {encoding: "utf8", mode: 0o600}

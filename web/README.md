@@ -1,7 +1,6 @@
 # Mountlet Website
 
-Static commercial download site for Cloudflare Pages. The current production
-domain is `https://mountlet.app`.
+Static commercial download site for Cloudflare Pages.
 
 ## Cloudflare Pages
 
@@ -11,13 +10,36 @@ Use these settings:
 - Build output directory: `web`
 - Root directory: repository root
 
-Production app builds default to `https://mountlet.app/api/license` and derive
-purchase links from the same site. Keep deployments relocatable by overriding
-`MOUNTLET_LICENSE_API_URL` and, when the public site does not share the same
-origin, `MOUNTLET_LICENSE_SITE_URL`.
+Production app builds default to the generated license API below and derive
+purchase links from the same site. Keep deployments relocatable with the listed
+environment overrides.
+
+<!-- mountlet-vars:start -->
+- Production website: https://mountlet.app
+- Production license API: https://mountlet.app/api/license
+- Relocated app API override: `MOUNTLET_LICENSE_API_URL`
+- Relocated purchase-site override: `MOUNTLET_LICENSE_SITE_URL`
+- Resend API key: `RESEND_API_KEY`
+- Resend sender: `RESEND_FROM`
+- Optional Resend reply-to: `RESEND_REPLY_TO`
+- Stripe secret key: `STRIPE_SECRET_KEY`
+- Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
+<!-- mountlet-vars:end -->
 
 The site is plain HTML, CSS, and JavaScript, so no package install step is
 required.
+
+## Generated Variables
+
+Shared public URLs and environment-variable names live in `web/site-vars.json`.
+After changing them, run:
+
+```bash
+npm run docs:vars
+```
+
+The script rewrites only the marked generated blocks in the root, app, and web
+READMEs.
 
 ## Local End-to-End Testing
 
@@ -190,6 +212,10 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `STRIPE_WEBHOOK_SECRET`: Stripe webhook signing secret.
 - `STRIPE_SECRET_KEY`: Stripe secret key used to create Checkout sessions and
   read subscription state.
+- `RESEND_API_KEY`: optional Resend API key for sending license-key emails.
+- `RESEND_FROM`: optional verified sender, for example
+  `Mountlet <licenses@example.com>`.
+- `RESEND_REPLY_TO`: optional reply-to address for license emails.
 
 Configure Stripe to send `checkout.session.completed`, `invoice.paid`,
 `customer.subscription.updated`, and `customer.subscription.deleted` events to
@@ -204,6 +230,11 @@ The webhook stores the generated license key in `payments.license_key` so the
 success page can display it after Stripe redirects back. It stores Stripe
 customer IDs for transaction lookup and refund handling. Tell buyers to save
 their license key because Mountlet does not recover lost keys.
+
+If Resend is configured, the webhook also sends the license key to the checkout
+email reported by Stripe. The license result page includes an "Email key"
+button that can resend the same message from the checkout session without
+storing the email address in D1.
 
 For local and early admin use, retrieve recent fulfilled keys with:
 

@@ -8,7 +8,12 @@ This repository is organized as a small monorepo:
 - `app/`: the Python desktop app, packaging scripts, tests, and app
   documentation.
 - `web/`: the public website for commercial downloads, hosted on Cloudflare
-  Pages at `https://mountlet.app`.
+  Pages.
+
+<!-- mountlet-vars:start -->
+- Production website: https://mountlet.app
+- Source repository: https://github.com/eric-holt/mountlet
+<!-- mountlet-vars:end -->
 
 Start with:
 
