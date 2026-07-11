@@ -6,7 +6,7 @@ export async function onRequestGet({env}) {
     downloadsBound: Boolean(env.DOWNLOADS),
     stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),
-    resendConfigured: Boolean(env.RESEND_API_KEY && env.RESEND_FROM),
+    resendConfigured: Boolean(env.RESEND_API_KEY && (env.RESEND_FROM || env.EMAIL_FROM)),
   };
   return Response.json(body, {
     headers: {

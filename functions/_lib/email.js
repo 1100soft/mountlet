@@ -4,7 +4,7 @@ const RESEND_EMAIL_ENDPOINT = "https://api.resend.com/emails";
 
 export async function sendLicenseEmail(env, requestUrl, options) {
   const apiKey = String(env?.[ENV_NAMES.resendApiKey] || "").trim();
-  const from = String(env?.[ENV_NAMES.resendFrom] || "").trim();
+  const from = String(env?.[ENV_NAMES.resendFrom] || env?.[ENV_NAMES.emailFrom] || "").trim();
   const to = String(options?.to || "").trim();
   if (!apiKey || !from || !to) {
     return {sent: false, skipped: true};
@@ -59,7 +59,7 @@ export async function sendLicenseEmail(env, requestUrl, options) {
     html,
     text,
   };
-  const replyTo = String(env?.[ENV_NAMES.resendReplyTo] || "").trim();
+  const replyTo = String(env?.[ENV_NAMES.resendReplyTo] || env?.[ENV_NAMES.emailReplyTo] || "").trim();
   if (replyTo) {
     payload.reply_to = replyTo;
   }

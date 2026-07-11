@@ -9,6 +9,8 @@ export const PUBLIC_VARS = {
     resendApiKey: "RESEND_API_KEY",
     resendFrom: "RESEND_FROM",
     resendReplyTo: "RESEND_REPLY_TO",
+    emailFrom: "EMAIL_FROM",
+    emailReplyTo: "EMAIL_REPLY_TO",
     stripeSecretKey: "STRIPE_SECRET_KEY",
     stripeWebhookSecret: "STRIPE_WEBHOOK_SECRET",
   },

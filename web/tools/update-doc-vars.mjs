@@ -25,6 +25,8 @@ const generated = {
     `- Resend API key: \`${vars.env.resendApiKey}\``,
     `- Resend sender: \`${vars.env.resendFrom}\``,
     `- Optional Resend reply-to: \`${vars.env.resendReplyTo}\``,
+    `- Resend sender alias: \`${vars.env.emailFrom}\``,
+    `- Optional Resend reply-to alias: \`${vars.env.emailReplyTo}\``,
     `- Stripe secret key: \`${vars.env.stripeSecretKey}\``,
     `- Stripe webhook secret: \`${vars.env.stripeWebhookSecret}\``,
   ].join("\n"),

@@ -1,6 +1,9 @@
 name = "mountlet-site"
 compatibility_date = "2026-07-06"
-pages_build_output_dir = "web"
+
+# This file is intentionally kept for local `wrangler pages dev web --local`.
+# Production and preview Pages deployments are configured in the Cloudflare
+# dashboard so their D1/R2 bindings and secrets can differ safely.
 
 [[d1_databases]]
 binding = "DB"

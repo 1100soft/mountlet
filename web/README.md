@@ -23,6 +23,8 @@ environment overrides.
 - Resend API key: `RESEND_API_KEY`
 - Resend sender: `RESEND_FROM`
 - Optional Resend reply-to: `RESEND_REPLY_TO`
+- Resend sender alias: `EMAIL_FROM`
+- Optional Resend reply-to alias: `EMAIL_REPLY_TO`
 - Stripe secret key: `STRIPE_SECRET_KEY`
 - Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
 <!-- mountlet-vars:end -->
@@ -215,16 +217,16 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `STRIPE_SECRET_KEY`: Stripe secret key used to create Checkout sessions and
   read subscription state.
 - `RESEND_API_KEY`: optional Resend API key for sending license-key emails.
-- `RESEND_FROM`: optional verified sender, for example
+- `EMAIL_FROM` or `RESEND_FROM`: optional verified sender, for example
   `Mountlet <licenses@example.com>`.
-- `RESEND_REPLY_TO`: optional reply-to address for license emails.
+- `EMAIL_REPLY_TO` or `RESEND_REPLY_TO`: optional reply-to address for license
+  emails.
 
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and
-preview D1/R2 plus Stripe test keys for the preview environment. If using
-`wrangler.toml` as the source of truth, define those with `[env.production]`
-and `[env.preview]` overrides; otherwise configure the same split in the
-Cloudflare Pages dashboard under each environment.
+preview D1/R2 plus Stripe test keys for the preview environment. This project
+keeps `wrangler.toml` for local development only; configure the production and
+preview split in the Cloudflare Pages dashboard.
 
 Recommended Cloudflare Pages environment split:
 
@@ -266,10 +268,11 @@ success page can display it after Stripe redirects back. It stores Stripe
 customer IDs for transaction lookup and refund handling. Tell buyers to save
 their license key because Mountlet does not recover lost keys.
 
-If Resend is configured, the webhook also sends the license key to the checkout
-email reported by Stripe. The license result page includes an "Email key"
-button that can resend the same message from the checkout session without
-storing the email address in D1.
+If Resend is configured with `RESEND_API_KEY` and either `EMAIL_FROM` or
+`RESEND_FROM`, the webhook also sends the license key to the checkout email
+reported by Stripe. The license result page includes an "Email key" button that
+can resend the same message from the checkout session without storing the email
+address in D1.
 
 For local and early admin use, retrieve recent fulfilled keys with:
 
