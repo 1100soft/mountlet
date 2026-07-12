@@ -1,10 +1,11 @@
 const baseUrl = String(process.argv[2] || process.env.MOUNTLET_SITE_URL || "http://127.0.0.1:8788").replace(/\/+$/, "");
+const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || "mountlet-linux-bundled.txt";
 
 let health;
 let download;
 try {
   health = await readJson(`${baseUrl}/api/health`);
-  download = await fetch(`${baseUrl}/api/download/mountlet-linux-bundled.txt`, {redirect: "manual"});
+  download = await fetch(`${baseUrl}/api/download/${encodeURIComponent(downloadKey)}`, {redirect: "manual"});
 } catch (error) {
   console.error(error.message || String(error));
   process.exit(1);
@@ -14,6 +15,7 @@ const result = {
   site: baseUrl,
   health,
   download: {
+    key: downloadKey,
     status: download.status,
     contentType: download.headers.get("content-type") || "",
   },
@@ -33,8 +35,11 @@ if (!health.downloadsBound) {
 if (!health.stripeConfigured) {
   fail("STRIPE_SECRET_KEY is missing.");
 }
+if (download.status === 404) {
+  fail(`Download object is missing from the bound R2 bucket: ${downloadKey}`);
+}
 if (download.status >= 400 || (download.headers.get("content-type") || "").includes("text/html")) {
-  fail("Download route is not returning an R2 object.");
+  fail(`Download route is not returning an R2 object for ${downloadKey}.`);
 }
 
 async function readJson(url) {

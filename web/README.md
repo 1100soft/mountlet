@@ -102,6 +102,16 @@ buttons in `config.js` point to those objects through `/api/download/...`, so
 you can test the same release path before replacing the placeholders with real
 installer artifacts.
 
+To seed a non-local preview or production R2 bucket with the current placeholder
+release files:
+
+```bash
+npm run web:r2:seed:remote -- <bucket-name>
+```
+
+For example, seed the preview bucket that is bound as `DOWNLOADS` before running
+the preview deployment check.
+
 Run the local Pages site:
 
 ```bash
@@ -185,6 +195,15 @@ The default download buttons point to `/api/download/...`, which reads objects
 from the `DOWNLOADS` R2 binding. For local testing, `npm run web:r2:seed`
 uploads placeholder objects. For production, upload the real installer
 artifacts to the bound R2 bucket using the same keys or update `config.js`.
+
+The expected default keys are:
+
+- `mountlet-windows-bundled.txt`
+- `mountlet-macos-bundled.txt`
+- `mountlet-linux-bundled.txt`
+- `mountlet-windows-lean.txt`
+- `mountlet-macos-lean.txt`
+- `mountlet-linux-lean.txt`
 
 ## License API
 

@@ -8,6 +8,7 @@
     "web:d1:init": "wrangler d1 execute mountlet-license --local --file web/schema.sql",
     "web:d1:list": "wrangler d1 execute mountlet-license --local --command \"SELECT l.id, l.plan, l.license_kind, l.max_devices, p.license_key, p.created_at FROM licenses l LEFT JOIN payments p ON p.license_id = l.id ORDER BY l.created_at DESC LIMIT 10\"",
     "web:r2:seed": "node web/tools/seed-local-r2.mjs",
+    "web:r2:seed:remote": "node web/tools/seed-r2-release.mjs",
     "web:deploy:check": "node web/tools/check-deployment.mjs",
     "web:license:smoke": "node web/tools/test-license-flow.mjs",
     "docs:vars": "node web/tools/update-doc-vars.mjs"
