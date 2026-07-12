@@ -102,19 +102,22 @@ buttons in `config.js` point to those objects through `/api/download/...`, so
 you can test the same release path before replacing the placeholders with real
 installer artifacts.
 
-To upload real preview or production installer artifacts to R2, create a
-manifest using `web/release-manifest.example.json` as a template, then run:
+To upload real preview or production installer artifacts to Cloudflare R2,
+create a manifest using `web/release-manifest.example.json` as a template, then
+run with `--remote`:
 
 ```bash
-npm run web:r2:upload -- <bucket-name> <manifest.json>
+npm run web:r2:upload -- <bucket-name> <manifest.json> --remote
 ```
 
 For example, upload preview installers to the bucket bound as preview
 `DOWNLOADS`:
 
 ```bash
-npm run web:r2:upload -- mountlet-preview ./release-manifest.preview.json
+npm run web:r2:upload -- mountlet-preview ./release-manifest.preview.json --remote
 ```
+
+Omit `--remote` only when intentionally seeding Wrangler's local R2 simulator.
 
 Run the local Pages site:
 
@@ -202,12 +205,12 @@ artifacts to the bound R2 bucket using the same keys or update `config.js`.
 
 The expected default keys are:
 
-- `mountlet-windows-bundled.exe`
-- `mountlet-macos-bundled.pkg`
-- `mountlet-linux-bundled.AppImage`
-- `mountlet-windows-lean.exe`
-- `mountlet-macos-lean.pkg`
-- `mountlet-linux-lean.AppImage`
+- `mountlet-windows-x64-bundled-rclone-setup.exe`
+- `mountlet-macos-arm64-bundled-rclone.dmg`
+- `mountlet-linux-x64-bundled-rclone.deb`
+- `mountlet-windows-x64-system-rclone-setup.exe`
+- `mountlet-macos-arm64-system-rclone.dmg`
+- `mountlet-linux-x64-system-rclone.deb`
 
 These keys are the public download API names. They do not need to match the
 local installer filenames; use the release manifest to map each key to the

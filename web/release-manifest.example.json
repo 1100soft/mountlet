@@ -1,10 +1,10 @@
 {
   "files": {
-    "mountlet-windows-bundled.exe": "path/to/windows-bundled-installer.exe",
-    "mountlet-macos-bundled.pkg": "path/to/macos-bundled-installer.pkg",
-    "mountlet-linux-bundled.AppImage": "path/to/linux-bundled-installer.AppImage",
-    "mountlet-windows-lean.exe": "path/to/windows-lean-installer.exe",
-    "mountlet-macos-lean.pkg": "path/to/macos-lean-installer.pkg",
-    "mountlet-linux-lean.AppImage": "path/to/linux-lean-installer.AppImage"
+    "mountlet-windows-x64-bundled-rclone-setup.exe": "path/to/mountlet-windows-x64-bundled-rclone-setup.exe",
+    "mountlet-macos-arm64-bundled-rclone.dmg": "path/to/mountlet-macos-arm64-bundled-rclone.dmg",
+    "mountlet-linux-x64-bundled-rclone.deb": "path/to/mountlet-linux-x64-bundled-rclone.deb",
+    "mountlet-windows-x64-system-rclone-setup.exe": "path/to/mountlet-windows-x64-system-rclone-setup.exe",
+    "mountlet-macos-arm64-system-rclone.dmg": "path/to/mountlet-macos-arm64-system-rclone.dmg",
+    "mountlet-linux-x64-system-rclone.deb": "path/to/mountlet-linux-x64-system-rclone.deb"
   }
 }
