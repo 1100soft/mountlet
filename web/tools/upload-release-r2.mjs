@@ -1,4 +1,5 @@
 import {spawnSync} from "node:child_process";
+import {createHmac, createHash} from "node:crypto";
 import {existsSync, readdirSync, readFileSync, statSync} from "node:fs";
 import {basename, join, resolve} from "node:path";
 
@@ -43,17 +44,10 @@ for (const [key, sourcePath] of entries) {
     console.log(`Would upload ${filePath} to ${bucket}/${key}${useRemote ? " remote" : " local"} R2.`);
     continue;
   }
-  const result = spawnSync(
-    "wrangler",
-    ["r2", "object", "put", `${bucket}/${key}`, "--file", filePath, ...(useRemote ? ["--remote"] : [])],
-    {stdio: "inherit"}
-  );
-  if (result.error) {
-    console.error(`Could not run wrangler: ${result.error.message}`);
-    process.exit(1);
-  }
-  if (result.status !== 0) {
-    process.exit(result.status || 1);
+  if (useRemote && hasS3Credentials()) {
+    await uploadWithS3Api(bucket, key, filePath);
+  } else {
+    uploadWithWrangler(bucket, key, filePath, useRemote);
   }
 }
 
@@ -95,4 +89,114 @@ function listFilesRecursive(directory) {
     }
   }
   return result;
+}
+
+function hasS3Credentials() {
+  return Boolean(process.env.CLOUDFLARE_R2_ACCESS_KEY_ID && process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY);
+}
+
+function uploadWithWrangler(bucket, key, filePath, remote) {
+  const result = spawnSync(
+    "wrangler",
+    ["r2", "object", "put", `${bucket}/${key}`, "--file", filePath, ...(remote ? ["--remote"] : [])],
+    {stdio: "inherit"}
+  );
+  if (result.error) {
+    console.error(`Could not run wrangler: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    process.exit(result.status || 1);
+  }
+}
+
+async function uploadWithS3Api(bucket, key, filePath) {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || "";
+  const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || "";
+  const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || "";
+  if (!accountId) {
+    console.error("CLOUDFLARE_ACCOUNT_ID is required for R2 S3 uploads.");
+    process.exit(1);
+  }
+  const body = readFileSync(filePath);
+  const host = `${accountId}.r2.cloudflarestorage.com`;
+  const path = `/${encodeURIComponent(bucket)}/${encodeR2Key(key)}`;
+  const url = `https://${host}${path}`;
+  const now = new Date();
+  const amzDate = toAmzDate(now);
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = sha256Hex(body);
+  const headers = {
+    "content-length": String(body.byteLength),
+    "host": host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+  };
+  const signedHeaders = Object.keys(headers).sort().join(";");
+  const canonicalHeaders = Object.keys(headers)
+    .sort()
+    .map((name) => `${name}:${headers[name]}\n`)
+    .join("");
+  const canonicalRequest = [
+    "PUT",
+    path,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const credentialScope = `${dateStamp}/auto/s3/aws4_request`;
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    sha256Hex(canonicalRequest),
+  ].join("\n");
+  const signature = hmacHex(signingKey(secretAccessKey, dateStamp), stringToSign);
+  const authorization = [
+    `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}`,
+    `SignedHeaders=${signedHeaders}`,
+    `Signature=${signature}`,
+  ].join(", ");
+  console.log(`Uploading ${filePath} to ${bucket}/${key} via R2 S3 API.`);
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {...headers, authorization},
+    body,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`R2 S3 upload failed for ${bucket}/${key}: ${response.status} ${response.statusText}`);
+    if (text) {
+      console.error(text);
+    }
+    process.exit(1);
+  }
+}
+
+function encodeR2Key(key) {
+  return key.split("/").map(encodeURIComponent).join("/");
+}
+
+function toAmzDate(date) {
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function hmac(key, value) {
+  return createHmac("sha256", key).update(value).digest();
+}
+
+function hmacHex(key, value) {
+  return createHmac("sha256", key).update(value).digest("hex");
+}
+
+function signingKey(secretAccessKey, dateStamp) {
+  const dateKey = hmac(`AWS4${secretAccessKey}`, dateStamp);
+  const regionKey = hmac(dateKey, "auto");
+  const serviceKey = hmac(regionKey, "s3");
+  return hmac(serviceKey, "aws4_request");
 }

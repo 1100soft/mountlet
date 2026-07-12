@@ -196,6 +196,8 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
       MOUNTLET_R2_BUCKET: ${{ github.ref_name == 'wip' && vars.MOUNTLET_PREVIEW_R2_BUCKET || vars.MOUNTLET_PRODUCTION_R2_BUCKET }}
     steps:
       - name: Check out source
@@ -218,7 +220,9 @@ jobs:
       - name: Check upload configuration
         shell: bash
         run: |
-          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_R2_ACCESS_KEY_ID"
+          test -n "$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
           test -n "$MOUNTLET_R2_BUCKET"
 
       - name: Check release file list

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 - 2026-07-12
+
+- Added paid-license enforcement for expired trials: Mountlet now opens the
+  license window, disables cloud controls, blocks rclone operations, and keeps
+  Buy License, About, License, and Quit available.
+- Added license purchase, activation, deactivation, device-count, expiry, and
+  renewal UI backed by the Mountlet website license API.
+- Added a commercial website under `web/` with Stripe checkout, license
+  management, Cloudflare Pages Functions, D1 license storage, and R2 download
+  routes.
+- Centralized website URLs, license API paths, and release filenames so the app,
+  website, docs, and deployment checks share the same values.
+- Added automated installer uploads from the native package workflow to preview
+  or production R2 buckets after all platform package checks pass.
+- Updated bundled-rclone packaging to stage official current rclone binaries on
+  Linux, Windows, and macOS, avoiding stale package-manager backends for newer
+  providers such as Proton Drive and iCloud Drive.
+
 ## 0.5.1 - 2026-07-05
 
 - Fixed macOS bundled builds so they stage official rclone binaries instead of
