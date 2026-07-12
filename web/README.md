@@ -207,9 +207,11 @@ The expected default keys are:
 
 - `mountlet-windows-x64-bundled-rclone-setup.exe`
 - `mountlet-macos-arm64-bundled-rclone.dmg`
+- `mountlet-macos-x64-bundled-rclone.dmg`
 - `mountlet-linux-x64-bundled-rclone.deb`
 - `mountlet-windows-x64-system-rclone-setup.exe`
 - `mountlet-macos-arm64-system-rclone.dmg`
+- `mountlet-macos-x64-system-rclone.dmg`
 - `mountlet-linux-x64-system-rclone.deb`
 
 These keys are the public download API names. They do not need to match the

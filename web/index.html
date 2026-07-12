@@ -130,11 +130,13 @@
           <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
             <h3>macOS</h3>
             <p>The recommended build includes Mountlet and the official cloud access engine needed for optional folder mounting.</p>
-            <button class="button full primary download-button" data-download="macos">Download for macOS</button>
+            <button class="button full primary download-button" data-download="macos">Download for Apple silicon Mac</button>
+            <button class="button full secondary download-button" data-download="macosX64">Download for Intel Mac</button>
             <details>
               <summary>Advanced lean build</summary>
               <p>Use this if rclone is already installed and managed separately. For macOS folder mounting, use the official rclone binary rather than Homebrew rclone.</p>
-              <button class="button full secondary download-button" data-download="macosLean">Download lean macOS build</button>
+              <button class="button full secondary download-button" data-download="macosLean">Download lean Apple silicon build</button>
+              <button class="button full secondary download-button" data-download="macosLeanX64">Download lean Intel build</button>
             </details>
           </article>
           <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
