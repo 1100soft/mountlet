@@ -280,6 +280,11 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `REPORT_FROM`: optional verified sender for in-app crash and bug reports. If
   unset, reports fall back to the license email sender.
 
+If in-app reports return Cloudflare error 1010 or another 403 before reaching
+the Function, add a Cloudflare security/WAF skip or allow rule for `/api/report`
+or for the `Mountlet/...` user agent. The report Function still validates JSON
+and sends only through the configured Resend account.
+
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and
 preview D1/R2 plus Stripe test keys for the preview environment. This project

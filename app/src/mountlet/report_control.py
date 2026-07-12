@@ -22,6 +22,7 @@ REPORT_API_URL_ENV = "MOUNTLET_REPORT_API_URL"
 HTTP_TIMEOUT_SECONDS = 15
 MAX_LOG_CHARS = 18_000
 MAX_MESSAGE_CHARS = 8_000
+REPORT_USER_AGENT = f"Mountlet/{__version__} (+https://mountlet.app)"
 LICENSE_KEY_RE = re.compile(r"\bMNT-[A-Z0-9-]{8,}\b", re.IGNORECASE)
 SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(token|secret|password|pass|access_key|secret_key|client_secret)\b([\"'\s:=]+)([^\"'\s,;]+)"
@@ -136,7 +137,11 @@ def submit_report(payload: dict[str, Any], *, api_url: str | None = None) -> dic
     request = urllib.request.Request(
         api_url or report_api_url(),
         data=data,
-        headers={"content-type": "application/json", "accept": "application/json"},
+        headers={
+            "content-type": "application/json",
+            "accept": "application/json",
+            "user-agent": REPORT_USER_AGENT,
+        },
         method="POST",
     )
     try:

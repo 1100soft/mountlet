@@ -7734,23 +7734,63 @@ class MountletWindow:
         crash_log = report_control.unreported_crash_log()
         if not crash_log:
             return
-        box = self.qt.QMessageBox(self.window)
-        box.setWindowTitle("Mountlet closed unexpectedly")
-        box.setText("Mountlet found a crash log from the previous run.")
-        box.setInformativeText("Review and send a crash report?")
-        review_button = box.addButton("Review report", self.qt.QMessageBox.ButtonRole.ActionRole)
-        ignore_button = box.addButton("Ignore this crash", self.qt.QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton("Not now", self.qt.QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is review_button:
+        self._pending_crash_log = crash_log
+        dialog = _create_child_dialog(self.qt, self.window)
+        dialog.setWindowTitle("Mountlet closed unexpectedly")
+        try:
+            dialog.setModal(False)
+            dialog.setWindowModality(self.qt.Qt.WindowModality.NonModal)
+        except Exception:
+            pass
+        layout = self.qt.QVBoxLayout(dialog)
+        label = self.qt.QLabel("Mountlet found a crash log from the previous run.")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        hint = self.qt.QLabel("You can keep using the app, or review and send the report.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(_muted_text_style(hint))
+        layout.addWidget(hint)
+        buttons = self.qt.QDialogButtonBox()
+        review_button = buttons.addButton("Review report", self.qt.QDialogButtonBox.ButtonRole.ActionRole)
+        ignore_button = buttons.addButton("Ignore this crash", self.qt.QDialogButtonBox.ButtonRole.DestructiveRole)
+        close_button = buttons.addButton(self.qt.QDialogButtonBox.StandardButton.Close)
+        layout.addWidget(buttons)
+        review_button.clicked.connect(lambda: self._open_pending_crash_report(dialog))
+        ignore_button.clicked.connect(lambda: self._ignore_pending_crash_report(dialog))
+        close_button.clicked.connect(dialog.reject)
+        dialog.finished.connect(lambda _result=0, child=dialog: self._untrack_child_dialog(child))
+        self._track_child_dialog(dialog, SimpleNamespace(dialog=dialog))
+        try:
+            dialog.resize(460, 160)
+        except Exception:
+            pass
+        dialog.show()
+        self._fit_child_dialog_to_screen(dialog)
+        self._raise_child_windows()
+
+    def _open_pending_crash_report(self, dialog: Any | None = None) -> None:
+        crash_log = getattr(self, "_pending_crash_log", "")
+        if dialog is not None:
+            with suppress(Exception):
+                dialog.accept()
+        if crash_log:
             self._show_bug_report_dialog(kind="crash", crash_log=crash_log)
-        elif clicked is ignore_button:
+
+    def _ignore_pending_crash_report(self, dialog: Any | None = None) -> None:
+        crash_log = getattr(self, "_pending_crash_log", "")
+        if crash_log:
             report_control.mark_crash_reported(crash_log)
+            self._pending_crash_log = ""
+        if dialog is not None:
+            with suppress(Exception):
+                dialog.accept()
 
     def _show_bug_report_dialog(self, *, kind: str = "bug", crash_log: str = "") -> None:
         if self._tray_is_quitting():
             return
+        if kind == "bug" and not crash_log and getattr(self, "_pending_crash_log", ""):
+            kind = "crash"
+            crash_log = getattr(self, "_pending_crash_log", "")
         if kind != "crash":
             kind = "bug"
             crash_log = ""

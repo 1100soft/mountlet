@@ -66,6 +66,8 @@ class DesktopTests(unittest.TestCase):
                         desktop._prepare_frozen_linux_qt_environment()
 
                     self.assertEqual(desktop.os.environ["QT_IM_MODULE"], "compose")
+                    self.assertEqual(desktop.os.environ["QT_STYLE_OVERRIDE"], "Fusion")
+                    self.assertNotIn("QT_QPA_PLATFORMTHEME", desktop.os.environ)
 
     def test_frozen_linux_input_method_override_is_respected(self):
         with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):
@@ -75,6 +77,20 @@ class DesktopTests(unittest.TestCase):
                         desktop._prepare_frozen_linux_qt_environment()
 
                     self.assertEqual(desktop.os.environ["QT_IM_MODULE"], "ibus")
+
+    def test_frozen_linux_platform_theme_override_is_respected(self):
+        with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):
+            with mock.patch.object(sys, "frozen", True, create=True):
+                with mock.patch.dict(
+                    "os.environ",
+                    {"MOUNTLET_QT_PLATFORMTHEME": "kde", "QT_PLUGIN_PATH": "/tmp/host-qt"},
+                    clear=True,
+                ):
+                    with mock.patch.object(desktop, "_append_runtime_log"):
+                        desktop._prepare_frozen_linux_qt_environment()
+
+                    self.assertEqual(desktop.os.environ["QT_QPA_PLATFORMTHEME"], "kde")
+                    self.assertNotIn("QT_PLUGIN_PATH", desktop.os.environ)
 
 
 if __name__ == "__main__":

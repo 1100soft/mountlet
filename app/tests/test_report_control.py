@@ -65,6 +65,10 @@ class ReportControlTests(unittest.TestCase):
         self.assertNotIn("runtime-secret", payload_json)
         self.assertNotIn("rclone-secret", payload_json)
 
+    def test_report_user_agent_identifies_mountlet(self):
+        self.assertIn("Mountlet/", report_control.REPORT_USER_AGENT)
+        self.assertIn("mountlet.app", report_control.REPORT_USER_AGENT)
+
 
 if __name__ == "__main__":
     unittest.main()
