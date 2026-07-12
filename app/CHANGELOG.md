@@ -17,6 +17,9 @@
 - Updated bundled-rclone packaging to stage official current rclone binaries on
   Linux, Windows, and macOS, avoiding stale package-manager backends for newer
   providers such as Proton Drive and iCloud Drive.
+- Fixed a packaged Linux/X11 focus-change crash by removing an accidental
+  close-event call from the main-window activation handler, and added persistent
+  runtime crash logging for frozen desktop builds.
 
 ## 0.5.1 - 2026-07-05
 

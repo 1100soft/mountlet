@@ -4929,10 +4929,6 @@ class MountletWindow:
                         outer._handle_main_window_activation(active=True)
                     elif event.type() == qt.QEvent.Type.WindowDeactivate:
                         outer._handle_main_window_activation(active=False)
-                try:
-                    super().closeEvent(event)
-                except Exception:
-                    pass
 
         return MainWindow()
 
