@@ -1,0 +1,17 @@
+name = "mountlet-site"
+compatibility_date = "2026-07-06"
+
+# This file is intentionally kept for local `wrangler pages dev web --local`.
+# Production and preview Pages deployments are configured in the Cloudflare
+# dashboard so their D1/R2 bindings and secrets can differ safely.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mountlet-license"
+database_id = "local-mountlet-license"
+preview_database_id = "local-mountlet-license"
+
+[[r2_buckets]]
+binding = "DOWNLOADS"
+bucket_name = "mountlet-downloads"
+preview_bucket_name = "mountlet-downloads-dev"

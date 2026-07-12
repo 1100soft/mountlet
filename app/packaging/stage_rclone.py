@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 WINDOWS_SHIM_MAX_BYTES = 1_000_000
-RCLONE_DOWNLOAD_BASE = "https://downloads.rclone.org/rclone-current-osx-{arch}.zip"
+RCLONE_DOWNLOAD_BASE = "https://downloads.rclone.org/rclone-current-{os_name}-{arch}.zip"
 
 
 def _binary_name(system: str) -> str:
@@ -86,28 +86,40 @@ def _windows_real_rclone_candidates() -> list[Path]:
     return [*direct, *discovered]
 
 
-def _macos_download_arch(machine: str | None = None) -> str:
+def _download_os_name(system: str) -> str:
+    if system == "Darwin":
+        return "osx"
+    if system == "Windows":
+        return "windows"
+    if system == "Linux":
+        return "linux"
+    raise RuntimeError(f"Official rclone download is not configured for {system}.")
+
+
+def _download_arch(machine: str | None = None) -> str:
     value = (machine or platform.machine()).casefold()
     if value in {"arm64", "aarch64"}:
         return "arm64"
     return "amd64"
 
 
-def download_official_macos_rclone(destination: Path, *, arch: str | None = None) -> Path:
-    resolved_arch = arch or _macos_download_arch()
-    url = RCLONE_DOWNLOAD_BASE.format(arch=resolved_arch)
+def download_official_rclone(destination: Path, system: str, *, arch: str | None = None) -> Path:
+    resolved_arch = arch or _download_arch()
+    binary_name = _binary_name(system)
+    url = RCLONE_DOWNLOAD_BASE.format(os_name=_download_os_name(system), arch=resolved_arch)
     destination.mkdir(parents=True, exist_ok=True)
-    archive = destination / f"rclone-current-osx-{resolved_arch}.zip"
+    archive = destination / f"rclone-current-{_download_os_name(system)}-{resolved_arch}.zip"
     urllib.request.urlretrieve(url, archive)
     with zipfile.ZipFile(archive) as handle:
-        members = [name for name in handle.namelist() if name.endswith("/rclone")]
+        members = [name for name in handle.namelist() if name.endswith(f"/{binary_name}")]
         if not members:
-            raise RuntimeError(f"The downloaded rclone archive did not contain a macOS rclone binary: {url}")
+            raise RuntimeError(f"The downloaded rclone archive did not contain {binary_name}: {url}")
         member = members[0]
-        target = destination / "rclone"
+        target = destination / binary_name
         with handle.open(member) as source, target.open("wb") as output:
             shutil.copyfileobj(source, output)
-    target.chmod(target.stat().st_mode | 0o755)
+    if system != "Windows":
+        target.chmod(target.stat().st_mode | 0o755)
     return target
 
 
@@ -148,9 +160,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     system = platform.system()
-    if system == "Darwin" and args.rclone is None:
+    if args.rclone is None:
         with tempfile.TemporaryDirectory(prefix="mountlet-rclone-") as tempdir:
-            source = download_official_macos_rclone(Path(tempdir))
+            source = download_official_rclone(Path(tempdir), system)
             target = stage_rclone(source.resolve(), args.destination.resolve(), system)
     else:
         source = resolve_rclone_source(args.rclone, system)

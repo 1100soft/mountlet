@@ -97,7 +97,7 @@ class StageRcloneTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "usable rclone"):
                     stage_rclone.resolve_rclone_source(fake, "Linux")
 
-    def test_macos_bundled_rclone_uses_official_download_archive(self):
+    def test_bundled_rclone_uses_official_download_archive(self):
         stage_rclone = _load_stage_rclone()
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -107,7 +107,7 @@ class StageRcloneTests(unittest.TestCase):
                     handle.writestr("rclone-v1.74.3-osx-amd64/rclone", b"official")
 
             with mock.patch.object(stage_rclone.urllib.request, "urlretrieve", side_effect=fake_download) as download:
-                binary = stage_rclone.download_official_macos_rclone(root, arch="amd64")
+                binary = stage_rclone.download_official_rclone(root, "Darwin", arch="amd64")
 
             self.assertEqual(binary.read_bytes(), b"official")
             self.assertTrue(binary.stat().st_mode & 0o755)

@@ -213,6 +213,12 @@ class TrayTests(unittest.TestCase):
 
         self.assertNotIn("--allow-non-empty", tokens)
 
+    def test_license_requirement_is_opt_in_for_paid_builds(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(tray._license_required())
+        with mock.patch.dict("os.environ", {tray.LICENSE_REQUIRE_ENV: "1"}, clear=True):
+            self.assertTrue(tray._license_required())
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

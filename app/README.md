@@ -10,8 +10,26 @@ an optional native folder mounter. For many daily file tasks, it can replace
 opening each provider's desktop app separately.
 
 Source code is available for non-commercial use under `LICENSE`. Installer
-builds are covered by `docs/EULA.md`. New releases are distributed through
-GitHub; PyPI publishing is currently disabled.
+builds are covered by `docs/EULA.md`. Paid installer downloads and license
+purchases are distributed through the production site listed below; source
+releases remain available on GitHub. PyPI publishing is currently disabled.
+
+Paid installer builds use a 7-day trial and online activation. Lifetime
+licenses keep working offline. Subscriptions store a signed local license
+through the current paid period.
+Source and development runs do not enforce licensing by default; commercial
+installer builds can set `MOUNTLET_REQUIRE_LICENSE=1`.
+Beta keys are labeled separately in the License and About windows.
+Commercial builds use the generated license endpoints below by default. Test
+or relocated deployments can override them with the listed environment
+variables.
+
+<!-- mountlet-vars:start -->
+- Paid downloads and license purchases: https://mountlet.app
+- Default license API: https://mountlet.app/api/license
+- Override license API: `MOUNTLET_LICENSE_API_URL`
+- Override public purchase site: `MOUNTLET_LICENSE_SITE_URL`
+<!-- mountlet-vars:end -->
 
 ## What You Can Do
 

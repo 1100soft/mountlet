@@ -1,0 +1,12 @@
+{
+  "downloads": {
+    "windows": "mountlet-windows-x64-bundled-rclone-setup.exe",
+    "macos": "mountlet-macos-arm64-bundled-rclone.dmg",
+    "macosX64": "mountlet-macos-x64-bundled-rclone.dmg",
+    "linux": "mountlet-linux-x64-bundled-rclone.deb",
+    "windowsLean": "mountlet-windows-x64-system-rclone-setup.exe",
+    "macosLean": "mountlet-macos-arm64-system-rclone.dmg",
+    "macosLeanX64": "mountlet-macos-x64-system-rclone.dmg",
+    "linuxLean": "mountlet-linux-x64-system-rclone.deb"
+  }
+}

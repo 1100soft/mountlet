@@ -130,11 +130,13 @@
           <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
             <h3>macOS</h3>
             <p>The recommended build includes Mountlet and the official cloud access engine needed for optional folder mounting.</p>
-            <button class="button full primary download-button" data-download="macos">Download for macOS</button>
+            <button class="button full primary download-button" data-download="macos">Download for Apple silicon Mac</button>
+            <button class="button full secondary download-button" data-download="macosX64">Download for Intel Mac</button>
             <details>
               <summary>Advanced lean build</summary>
               <p>Use this if rclone is already installed and managed separately. For macOS folder mounting, use the official rclone binary rather than Homebrew rclone.</p>
-              <button class="button full secondary download-button" data-download="macosLean">Download lean macOS build</button>
+              <button class="button full secondary download-button" data-download="macosLean">Download lean Apple silicon build</button>
+              <button class="button full secondary download-button" data-download="macosLeanX64">Download lean Intel build</button>
             </details>
           </article>
           <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
@@ -152,39 +154,97 @@
           Mountlet can browse and open files immediately. Add FUSE, WinFsp, or macFUSE
           to also mount cloud accounts as folders in the system file manager.
           Source code is available on
-          <a href="https://github.com/eric-holt/mountlet">GitHub</a>.
+          <a href="#" data-config-link="repository">GitHub</a>.
         </p>
       </section>
 
       <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Pricing</p>
-          <h2>Simple licensing for a focused desktop utility.</h2>
+          <h2>Buy a license or add devices.</h2>
         </div>
-        <div class="pricing-grid">
-          <article class="price-card">
-            <h3>Personal</h3>
-            <p class="price">$19</p>
-            <p>For one person using the full app across their own devices.</p>
-            <button class="button primary checkout-button" data-plan="personal">Buy Personal</button>
+        <div class="pricing-grid license-grid">
+          <article class="price-card plan-card" id="plan-card">
+            <div>
+              <h3>Choose a plan</h3>
+              <p class="price" id="license-plan-price">$5/mo</p>
+              <p>Start with one device. Add more devices in the next box.</p>
+            </div>
+            <fieldset class="license-choice plan-choice" id="license-plan-choice">
+              <legend>Plan</legend>
+              <label>
+                <input type="radio" name="license-plan" value="monthly" checked />
+                Monthly
+              </label>
+              <label>
+                <input type="radio" name="license-plan" value="annual" />
+                Annual
+              </label>
+              <label>
+                <input type="radio" name="license-plan" value="lifetime" />
+                Lifetime
+              </label>
+            </fieldset>
           </article>
-          <article class="price-card featured">
-            <h3>Pro</h3>
-            <p class="price">$39</p>
-            <p>For early builds, priority support, and heavier beta use.</p>
-            <button class="button primary checkout-button" data-plan="pro">Buy Pro</button>
+          <article class="price-card featured license-card">
+            <h3>License</h3>
+            <p>Start with a new one-device license, or add devices to a license you already have.</p>
+            <fieldset class="license-choice">
+              <legend>License action</legend>
+              <label>
+                <input type="radio" name="license-action" value="new_license" checked />
+                Buy new license
+              </label>
+              <label>
+                <input type="radio" name="license-action" value="add_devices" />
+                I have a license
+              </label>
+              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" maxlength="27" placeholder="MNT-..." disabled />
+            </fieldset>
+            <div class="button-row">
+              <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
+              <span id="license-key-status" class="inline-status" hidden></span>
+            </div>
           </article>
-          <article class="price-card">
-            <h3>Team</h3>
-            <p class="price">Contact</p>
-            <p>For shared deployment, internal packaging, and support terms.</p>
-            <a class="button secondary" href="https://github.com/eric-holt/mountlet/issues/new">Contact</a>
+          <article class="price-card add-device-card disabled" id="add-device-card">
+            <h3>Add devices</h3>
+            <p class="price" id="add-device-price">$1/device</p>
+            <p>Add optional extra device slots.</p>
+            <label class="device-field">
+              Extra devices
+              <input id="add-device-count" type="number" min="0" max="50" value="0" disabled />
+            </label>
+          </article>
+          <article class="price-card cart-card" id="cart-card">
+            <h3>Cart</h3>
+            <dl class="cart-lines" id="cart-lines"></dl>
+            <p class="cart-devices" id="cart-devices">1 device total</p>
+            <p class="cart-total" id="cart-total">$5</p>
+            <button class="button primary checkout-button" id="checkout-button">Checkout</button>
           </article>
         </div>
         <p class="note">
-          Personal and Pro use the same core app features during beta. Pricing
-          differs by support level, early-build access, and usage terms.
+          Mountlet starts with a 7-day trial, then unlocks with one online
+          activation. Lifetime licenses keep working offline; subscriptions
+          work offline until the current paid period ends. The license key is
+          your support identity; keep it somewhere safe.
         </p>
+      </section>
+
+      <section class="tab-panel license-panel" id="panel-license" role="tabpanel" data-panel="license" hidden>
+        <div class="license-result" id="license-result">
+          <p class="eyebrow">License</p>
+          <h2>Your license key</h2>
+          <p id="license-result-message">Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
+          <pre id="license-key-output"></pre>
+          <div class="button-row">
+            <button class="button primary" type="button" id="copy-license-key">Copy key</button>
+            <button class="button secondary" type="button" id="email-license-key" hidden>Email key</button>
+            <button class="button secondary tab-action" type="button" data-tab="download">Go to downloads</button>
+            <span class="inline-status" id="copy-license-status"></span>
+            <span class="inline-status" id="email-license-status"></span>
+          </div>
+        </div>
       </section>
 
       <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>
@@ -292,13 +352,17 @@
           <summary>Is this open source?</summary>
           <p>The source is available for non-commercial use. Commercial use or redistribution requires separate permission.</p>
         </details>
+        <details>
+          <summary>Does Mountlet need to stay online for licensing?</summary>
+          <p>No. Paid builds use a 7-day trial and online activation. Lifetime licenses keep working offline. Subscriptions store a signed local license through the current paid period.</p>
+        </details>
       </section>
     </main>
 
     <footer class="site-footer">
       <span>© 2026 Mountlet</span>
-      <a href="https://github.com/eric-holt/mountlet">GitHub</a>
-      <a href="https://github.com/eric-holt/mountlet/issues/new">Support</a>
+      <a href="#" data-config-link="repository">GitHub</a>
+      <a href="#" data-config-link="support">Support</a>
     </footer>
   </body>
 </html>

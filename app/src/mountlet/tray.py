@@ -27,8 +27,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import __version__, core, rclone_wizard
-from .badged_button import create_badged_button, set_badge
+from . import __version__, core, license_control, rclone_wizard
+from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
@@ -56,13 +56,14 @@ from .settings import (
     set_start_at_login,
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
-from .ui_icons import apply_button_icon
+from .ui_icons import apply_button_icon, mountlet_icon
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
 _dolphin_tab_target_cache: tuple[str, str] | None = None
 _file_manager_label_cache: str | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
+LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
     ("existing_window", "Any existing file manager window"),
@@ -529,6 +530,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QIcon,
             QKeySequence,
             QPainter,
+            QPainterPath,
             QPen,
             QPixmap,
         )
@@ -619,6 +621,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QObject=QObject,
         QPoint=QPoint,
         QPainter=QPainter,
+        QPainterPath=QPainterPath,
         QPen=QPen,
         QPixmap=QPixmap,
         QProgressBar=QProgressBar,
@@ -685,6 +688,45 @@ def _shortcut_hint(action: str) -> str:
         if value:
             return f"\nShortcut: {value}"
     return ""
+
+
+def _apply_external_link_button(
+    qt: SimpleNamespace,
+    button: Any,
+    *,
+    text: str,
+    prominent: bool = False,
+    compact: bool = False,
+) -> None:
+    button.setText(text)
+    with suppress(Exception):
+        icon_size = 18 if compact else 20
+        icon = mountlet_icon(qt, "ui-external-link", size=icon_size, color="#ffffff")
+        if icon is not None:
+            button.setIcon(icon)
+            button.setIconSize(qt.QSize(icon_size, icon_size))
+            button.setLayoutDirection(qt.Qt.LayoutDirection.RightToLeft)
+    with suppress(Exception):
+        font = button.font()
+        if prominent:
+            font.setBold(True)
+            font.setPointSize(max(font.pointSize() + 2, 12))
+        button.setFont(font)
+    style = (
+        "QPushButton { background: #16a34a; color: #ffffff; border: 1px solid #15803d; "
+        "border-radius: 5px; padding: 6px 12px; } "
+        "QPushButton:hover { background: #15803d; } "
+        "QPushButton:pressed { background: #166534; }"
+        if prominent
+        else (
+            "QPushButton { background: #2563eb; color: #ffffff; border: 1px solid #1d4ed8; "
+            "border-radius: 5px; padding: 4px 10px; } "
+            "QPushButton:hover { background: #1d4ed8; } "
+            "QPushButton:pressed { background: #1e40af; }"
+        )
+    )
+    with suppress(Exception):
+        button.setStyleSheet(style)
 
 
 def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) -> str:
@@ -946,6 +988,7 @@ def _about_text(qt: SimpleNamespace) -> str:
     return "\n".join(
         [
             f"Mountlet: {__version__}",
+            f"License: {license_control.status_summary()}",
             f"Python: {platform.python_version()}",
             _qt_about_line(qt),
             _rclone_about_line(),
@@ -2049,6 +2092,16 @@ def _open_folder_default(qt: SimpleNamespace, path: str, strategy: str = "defaul
     return bool(qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(path)))
 
 
+def _open_external_url(qt: SimpleNamespace, parent: Any, url: str, *, title: str = "Open link") -> bool:
+    try:
+        opened = bool(qt.QDesktopServices.openUrl(qt.QUrl(url)))
+    except Exception:
+        opened = False
+    if not opened:
+        qt.QMessageBox.warning(parent, title, f"Could not open:\n{url}")
+    return opened
+
+
 def _open_text_file_focused(path: Path) -> bool:
     if platform.system() != "Linux":
         return False
@@ -2110,6 +2163,18 @@ def _rclone_field_tooltip(key: str) -> str:
 
 def _config_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _license_required() -> bool:
+    return os.environ.get(LICENSE_REQUIRE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _license_locked() -> bool:
+    return _license_required() and not license_control.current_status().allowed
+
+
+def _license_lock_message() -> str:
+    return "Mountlet is not activated, and the trial has ended."
 
 
 class _ConfigDialogBase:
@@ -2568,6 +2633,293 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 shortcuts=current.shortcuts,
             )
         )
+        self.dialog.accept()
+
+
+class LicenseDialog(_ConfigDialogBase):
+    def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
+        super().__init__(qt, parent)
+        self.dialog.setWindowTitle("License")
+        self.dialog.resize(520, 420)
+        self.key_field = self.qt.QLineEdit()
+        self.key_field.setText(license_control.load_license_key())
+        self.key_field.setPlaceholderText("MNT-...")
+        self.key_field.setToolTip("Your Mountlet license key. Keep this key somewhere safe.")
+        self.device_field = self.qt.QLineEdit()
+        self.device_field.setText(license_control.default_device_label())
+        self.status_label = self.qt.QLabel()
+        self.expiry_label = self.qt.QLabel()
+        self.devices_label = self.qt.QLabel("Activated devices")
+        self.devices_text = self.qt.QPlainTextEdit()
+        self.devices_text.setReadOnly(True)
+        self.activate_button = None
+        self.copy_key_button = None
+        self.paste_key_button = None
+        self.refresh_devices_button = None
+        self.deactivate_button = None
+        self.buy_license_button = None
+        self.add_devices_button = None
+        self._clipboard = None
+        self._build()
+        self._refresh_status()
+        self.key_field.setFocus()
+
+    def _build(self) -> None:
+        layout = self.qt.QVBoxLayout(self.dialog)
+        status_row = self.qt.QHBoxLayout()
+        status_row.addWidget(self.status_label, 1)
+        self.buy_license_button = self.qt.QPushButton()
+        _apply_external_link_button(self.qt, self.buy_license_button, text="Buy license", prominent=True)
+        self.buy_license_button.clicked.connect(self._open_purchase_page)
+        status_row.addWidget(self.buy_license_button)
+        layout.addLayout(status_row)
+        layout.addWidget(self.expiry_label)
+
+        frame = self.qt.QFrame()
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        form = self.qt.QFormLayout(frame)
+        key_row = self.qt.QWidget()
+        key_layout = self.qt.QHBoxLayout(key_row)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.addWidget(self.key_field, 1)
+        self.copy_key_button = create_badged_button(self.qt)
+        self.copy_key_button.setFixedWidth(34)
+        apply_button_icon(self.qt, self.copy_key_button, "ui-copy", fallback_text="Copy", size=22)
+        self.copy_key_button.clicked.connect(self._copy_license_key)
+        self.paste_key_button = create_badged_button(self.qt)
+        self.paste_key_button.setFixedWidth(34)
+        apply_button_icon(self.qt, self.paste_key_button, "ui-paste", fallback_text="Paste", size=22)
+        self.paste_key_button.clicked.connect(self._paste_license_key)
+        key_layout.addWidget(self.copy_key_button)
+        key_layout.addWidget(self.paste_key_button)
+        form.addRow("License key", key_row)
+        form.addRow("Device name", self.device_field)
+        layout.addWidget(frame)
+
+        button_row = self.qt.QHBoxLayout()
+        self.activate_button = self.qt.QPushButton("Activate")
+        self.activate_button.clicked.connect(self._activate)
+        self.refresh_devices_button = self.qt.QPushButton("Refresh devices")
+        self.refresh_devices_button.clicked.connect(self._refresh_devices)
+        self.deactivate_button = self.qt.QPushButton("Deactivate this device")
+        self.deactivate_button.clicked.connect(self._deactivate_this_device)
+        button_row.addWidget(self.activate_button)
+        button_row.addWidget(self.refresh_devices_button)
+        button_row.addWidget(self.deactivate_button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+        self.key_field.textChanged.connect(self._update_button_state)
+        self._clipboard = self.qt.QApplication.clipboard()
+        with suppress(Exception):
+            self._clipboard.dataChanged.connect(self._update_copy_button_state)
+
+        devices_header = self.qt.QHBoxLayout()
+        devices_header.addWidget(self.devices_label)
+        self.add_devices_button = self.qt.QPushButton()
+        _apply_external_link_button(self.qt, self.add_devices_button, text="+ Add devices", compact=True)
+        self.add_devices_button.clicked.connect(self._open_add_devices_page)
+        devices_header.addWidget(self.add_devices_button)
+        devices_header.addStretch(1)
+        layout.addLayout(devices_header)
+        layout.addWidget(self.devices_text)
+
+        buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.dialog.reject)
+        layout.addWidget(buttons)
+
+    def _refresh_status(self) -> None:
+        status = license_control.current_status()
+        if _license_required() and not status.allowed:
+            self.status_label.setText(_license_lock_message())
+            self.status_label.setStyleSheet("color: #ef4444; font-weight: 700;")
+        else:
+            self.status_label.setText(status.summary)
+            self.status_label.setStyleSheet("")
+        self._set_expiry_label(status)
+        self._update_button_state(status)
+        if status.state == "licensed":
+            if status.license_key and self.key_field.text().strip() != status.license_key:
+                self.key_field.setText(status.license_key)
+            self._refresh_devices(show_errors=False)
+        elif status.state == "trial":
+            self.devices_label.setText("Activated devices")
+            self.devices_text.setPlainText("Activate Mountlet to manage devices.")
+        else:
+            self.devices_label.setText("Activated devices")
+            self.devices_text.setPlainText(f"{_license_lock_message()} Enter a license key to activate this device.")
+
+    def _update_button_state(self, status: license_control.LicenseStatus | None = None) -> None:
+        if not isinstance(status, license_control.LicenseStatus):
+            status = None
+        status = status or license_control.current_status()
+        licensed = status.state == "licensed"
+        has_key = bool(self.key_field.text().strip())
+        self.key_field.setReadOnly(licensed)
+        self.key_field.setToolTip(
+            "This device is activated with this license key."
+            if licensed
+            else "Enter your Mountlet license key."
+        )
+        if self.activate_button is not None:
+            self.activate_button.setEnabled(has_key and not licensed)
+            self.activate_button.setToolTip(
+                "This device is already activated."
+                if licensed
+                else (
+                    "Activate this device with the entered license key."
+                    if has_key
+                    else "Enter a license key to activate this device."
+                )
+            )
+        if self.copy_key_button is not None:
+            self.copy_key_button.setEnabled(has_key)
+            self._update_copy_button_state()
+        if self.paste_key_button is not None:
+            self.paste_key_button.setEnabled(not licensed)
+            self.paste_key_button.setToolTip(
+                "Paste a license key from the clipboard."
+                if not licensed
+                else "Deactivate this device before changing the license key."
+            )
+        if self.refresh_devices_button is not None:
+            self.refresh_devices_button.setEnabled(licensed)
+            self.refresh_devices_button.setToolTip(
+                "Show devices activated with this license."
+                if licensed
+                else "Activate this device before managing license devices."
+            )
+        if self.deactivate_button is not None:
+            self.deactivate_button.setEnabled(licensed)
+            self.deactivate_button.setToolTip(
+                "Deactivate this device and free one device slot."
+                if licensed
+                else "This device is not activated."
+            )
+        if self.buy_license_button is not None:
+            self.buy_license_button.setVisible(not licensed)
+            self.buy_license_button.setToolTip("Open the Mountlet license purchase page.")
+        if self.add_devices_button is not None:
+            self.add_devices_button.setVisible(licensed)
+            self.add_devices_button.setToolTip("Open the purchase page with this license key prefilled.")
+
+    def _activate(self) -> None:
+        try:
+            status = license_control.activate_license(
+                self.key_field.text(),
+                device_label=self.device_field.text(),
+            )
+        except RuntimeError as exc:
+            self.qt.QMessageBox.warning(self.dialog, "License activation", str(exc))
+            return
+        self.status_label.setText(status.summary)
+        self.status_label.setStyleSheet("")
+        self._set_expiry_label(status)
+        self.key_field.setText(status.license_key or self.key_field.text().strip())
+        self._refresh_devices(show_errors=False)
+        self._update_button_state(status)
+        self.qt.QMessageBox.information(self.dialog, "License activation", "Mountlet is activated on this device.")
+
+    def _set_expiry_label(self, status: license_control.LicenseStatus) -> None:
+        if status.state == "licensed" and status.expires_at:
+            self.expiry_label.setText(f"Renews: {status.expires_at}")
+        elif status.state == "trial" and status.expires_at:
+            self.expiry_label.setText(f"Trial ends: {status.expires_at}")
+        elif status.state == "expired" and status.expires_at:
+            self.expiry_label.setText(f"Expired: {status.expires_at}")
+        else:
+            self.expiry_label.setText("")
+        self.expiry_label.setVisible(bool(self.expiry_label.text()))
+
+    def _copy_license_key(self) -> None:
+        text = self.key_field.text().strip()
+        if text:
+            self.qt.QApplication.clipboard().setText(text)
+            self._update_copy_button_state()
+
+    def _paste_license_key(self) -> None:
+        if self.key_field.isReadOnly():
+            return
+        text = self.qt.QApplication.clipboard().text().strip()
+        if text:
+            self.key_field.setText(text)
+
+    def _update_copy_button_state(self) -> None:
+        if self.copy_key_button is None:
+            return
+        text = self.key_field.text().strip()
+        copied = False
+        if text:
+            with suppress(Exception):
+                copied = self.qt.QApplication.clipboard().text().strip() == text
+        set_checkmark(self.copy_key_button, copied)
+        self.copy_key_button.setToolTip(
+            "Copied to clipboard." if copied else "Copy the license key."
+        )
+
+    def _open_purchase_page(self) -> None:
+        _open_external_url(
+            self.qt,
+            self.dialog,
+            license_control.license_purchase_url(),
+            title="Buy license",
+        )
+
+    def _open_add_devices_page(self) -> None:
+        _open_external_url(
+            self.qt,
+            self.dialog,
+            license_control.license_purchase_url(add_devices=True, license_key=self.key_field.text()),
+            title="Add devices",
+        )
+
+    def _refresh_devices(self, *, show_errors: bool = True) -> None:
+        try:
+            device_info = license_control.license_devices()
+        except RuntimeError as exc:
+            if show_errors:
+                self.qt.QMessageBox.warning(self.dialog, "License devices", str(exc))
+            return
+        devices = list(device_info.get("devices") or [])
+        used_devices = int(device_info.get("usedDevices") or len(devices))
+        max_devices = int(device_info.get("maxDevices") or 0)
+        expires_at = license_control.display_timestamp(str(device_info.get("expiresAt") or ""))
+        if expires_at:
+            self.expiry_label.setText(f"Renews: {expires_at}")
+            self.expiry_label.setVisible(True)
+        if max_devices:
+            self.devices_label.setText(f"Activated devices ({used_devices}/{max_devices})")
+        else:
+            self.devices_label.setText(f"Activated devices ({used_devices})")
+        if not devices:
+            self.devices_text.setPlainText("No activated devices were returned.")
+            return
+        lines = []
+        for device in devices:
+            label = str(device.get("device_label") or device.get("deviceLabel") or "Unnamed device")
+            platform_name = str(device.get("platform") or "")
+            activated = str(device.get("activated_at") or device.get("activatedAt") or "")
+            marker = "current" if device.get("current") else ""
+            details = " - ".join(part for part in (platform_name, activated, marker) if part)
+            lines.append(f"{label}{f' ({details})' if details else ''}")
+        self.devices_text.setPlainText("\n".join(lines))
+        self._update_button_state()
+
+    def _deactivate_this_device(self) -> None:
+        answer = self.qt.QMessageBox.question(
+            self.dialog,
+            "Deactivate this device?",
+            "Deactivate this Mountlet installation and free one device slot?",
+        )
+        if answer != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            license_control.deactivate_device()
+        except RuntimeError as exc:
+            self.qt.QMessageBox.warning(self.dialog, "Deactivate device", str(exc))
+            return
+        self._refresh_status()
+
+    def _save(self) -> None:
         self.dialog.accept()
 
 
@@ -4433,8 +4785,17 @@ class MountletWindow:
         self._settings_button: Any | None = None
         self._push_sync_button: Any | None = None
         self._pull_sync_button: Any | None = None
+        self._purchase_license_button: Any | None = None
+        self._license_lock_banner: Any | None = None
+        self._license_prompted_for_lock = False
+        self._sort_button: Any | None = None
+        self._reverse_button: Any | None = None
+        self._all_cache_sync_button: Any | None = None
         self._remove_all_offline_button: Any | None = None
         self._clear_all_cache_button: Any | None = None
+        self._app_menu: Any | None = None
+        self._mount_menu: Any | None = None
+        self._config_menu: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
         self._offline_reconcile_running: set[str] = set()
@@ -4568,10 +4929,6 @@ class MountletWindow:
                         outer._handle_main_window_activation(active=True)
                     elif event.type() == qt.QEvent.Type.WindowDeactivate:
                         outer._handle_main_window_activation(active=False)
-                try:
-                    super().closeEvent(event)
-                except Exception:
-                    pass
 
         return MainWindow()
 
@@ -4731,7 +5088,7 @@ class MountletWindow:
         self._offline_change_poll_timer = timer
 
     def _scan_local_cache_changes(self) -> None:
-        if self._tray_is_quitting():
+        if self._tray_is_quitting() or self._license_locked():
             return
         self._refresh_offline_file_watches()
         try:
@@ -4777,7 +5134,7 @@ class MountletWindow:
         self._remote_change_poll_timer = timer
 
     def _scan_remote_cache_changes(self) -> None:
-        if self._tray_is_quitting():
+        if self._tray_is_quitting() or self._license_locked():
             return
         pending = set(getattr(self, "_action_pending", set()))
         scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
@@ -4818,6 +5175,9 @@ class MountletWindow:
         return [paths[(start + index) % len(paths)] for index in range(limit)]
 
     def _sync_all_cached_files(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         remotes = _load_visible_remotes()
         started = 0
         for remote in remotes:
@@ -4838,14 +5198,23 @@ class MountletWindow:
             self.tray_app._notify("Cache sync", "No cached or offline files need checking.", success=True)
 
     def _remove_all_offline_files(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self.file_browser.remove_all_offline()
         self._update_app_cache_buttons()
 
     def _clear_all_cache_files(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self.file_browser.clear_all_cache()
         self._update_app_cache_buttons()
 
     def _sync_cached_paths(self, remote: core.RemoteInfo, items: list[tuple[str, bool]]) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         if not items:
             return
         record_paths: list[str] = []
@@ -4876,6 +5245,7 @@ class MountletWindow:
         except Exception:
             pass
         app_menu = menu_bar.addMenu("App")
+        self._app_menu = app_menu
         self.tray_app._add_action(app_menu, "Update status", self.refresh)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Sync cached files now", self._sync_all_cached_files)
@@ -4883,17 +5253,20 @@ class MountletWindow:
         self.tray_app._add_action(app_menu, "Clear all resolved cache", self._clear_all_cache_files)
         self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
         app_menu.addSeparator()
+        self.tray_app._add_action(app_menu, "License", self._show_license_dialog)
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "Quit", self.tray_app.request_quit)
 
         mount_menu = menu_bar.addMenu("Mount")
+        self._mount_menu = mount_menu
         self.tray_app._add_action(mount_menu, "Mount all", lambda: self._mount_all())
         self.tray_app._add_action(mount_menu, "Unmount all", lambda: self._unmount_all())
         mount_menu.addSeparator()
         self.tray_app._add_action(mount_menu, "Add remote", self._show_new_remote_wizard)
 
         config_menu = menu_bar.addMenu("Config")
+        self._config_menu = config_menu
         self.tray_app._add_action(config_menu, "Keyboard shortcuts", self._show_shortcut_config_editor)
         config_menu.addSeparator()
         self.tray_app._add_action(config_menu, "Export config bundle", self._export_config_bundle)
@@ -4905,6 +5278,7 @@ class MountletWindow:
         self.tray_app._add_action(config_menu, "Pull config from sync location", self._pull_config_sync_bundle)
         config_menu.addSeparator()
         self._add_open_config_files_menu(config_menu)
+        self._update_license_lock_state()
 
     def _add_open_config_files_menu(self, parent_menu: Any) -> Any:
         files_menu = parent_menu.addMenu("Open config file")
@@ -4917,6 +5291,16 @@ class MountletWindow:
 
     def _show_about(self) -> None:
         self.qt.QMessageBox.information(self.window, "About Mountlet", _about_text(self.qt))
+
+    def _show_license_dialog(self) -> None:
+        dialog = LicenseDialog(self.qt, self.window)
+        dialog.dialog.finished.connect(lambda _result=0: self._license_dialog_closed())
+        self._open_child_dialog(dialog)
+
+    def _license_dialog_closed(self) -> None:
+        self.tray_app.rebuild_menus()
+        self.refresh()
+        self._update_purchase_license_button()
 
     def is_visible(self) -> bool:
         return bool(self.window.isVisible())
@@ -5341,18 +5725,23 @@ class MountletWindow:
         if self._tray_is_quitting():
             return
         self._refresh_pending = False
+        locked = self._license_locked()
+        if locked:
+            self._hide_locked_file_browser()
         remotes = _load_visible_remotes()
-        self._request_config_sync_metadata_check(remotes)
+        if not locked:
+            self._request_config_sync_metadata_check(remotes)
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
             self._name_column_width = name_width
-            self._update_config_sync_buttons()
-            self._update_app_cache_buttons(remotes)
+            self._update_purchase_license_button()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
-                self._schedule_storage_load(remote)
+                if not locked:
+                    self._schedule_storage_load(remote)
+            self._update_license_lock_state()
             self._browser_layout_changed()
             return
 
@@ -5361,6 +5750,8 @@ class MountletWindow:
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
         outer.addWidget(self._sort_toolbar())
+        if locked:
+            outer.addWidget(self._license_locked_banner())
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -5379,7 +5770,8 @@ class MountletWindow:
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                self._schedule_storage_load(remote)
+                if not locked:
+                    self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
         scroll.setWidget(container)
@@ -5407,9 +5799,11 @@ class MountletWindow:
         self._update_main_focus_style()
         self._content_fit_widgets = (root, scroll, container)
         self.file_browser.preload(remotes)
+        self._update_license_lock_state()
         self._fit_to_content(root, scroll, container)
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
         self._update_app_cache_buttons(remotes)
+        self._update_license_lock_state()
 
     def _finish_content_fit(self, root: Any, scroll: Any, container: Any, central: Any | None = None) -> None:
         expected = central or root
@@ -5482,8 +5876,21 @@ class MountletWindow:
         self._pull_sync_button = button
         return button
 
+    def _purchase_license_toolbar_button(self) -> Any:
+        button = self.qt.QPushButton()
+        _apply_external_link_button(self.qt, button, text="Buy license", prominent=True)
+        with suppress(Exception):
+            button.setMinimumHeight(32)
+        button.setToolTip("Open the Mountlet license purchase page.")
+        button.clicked.connect(lambda checked=False: self._open_purchase_page())
+        self._purchase_license_button = button
+        self._update_purchase_license_button()
+        return button
+
     def _all_cache_sync_toolbar_button(self) -> Any:
-        return self._toolbar_button("ui-sync", "⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
+        button = self._toolbar_button("ui-sync", "⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
+        self._all_cache_sync_button = button
+        return button
 
     def _remove_all_offline_toolbar_button(self) -> Any:
         button = self._toolbar_button(
@@ -5509,6 +5916,12 @@ class MountletWindow:
         remotes = remotes if remotes is not None else _load_visible_remotes()
         remove_button = getattr(self, "_remove_all_offline_button", None)
         clear_button = getattr(self, "_clear_all_cache_button", None)
+        if self._license_locked():
+            for button in (remove_button, clear_button):
+                if button is not None:
+                    button.setEnabled(False)
+                    button.setToolTip(_license_lock_message())
+            return
         if remove_button is not None:
             enabled = any(self.file_browser.backend.has_offline_content(remote.name, "", is_dir=True) for remote in remotes)
             remove_button.setEnabled(enabled)
@@ -5529,6 +5942,12 @@ class MountletWindow:
         push_button = getattr(self, "_push_sync_button", None)
         pull_button = getattr(self, "_pull_sync_button", None)
         if push_button is None and pull_button is None:
+            return
+        if self._license_locked():
+            for button in (push_button, pull_button):
+                if button is not None:
+                    button.setEnabled(False)
+                    button.setToolTip(_license_lock_message())
             return
         settings = load_app_settings()
         sync_configured = bool(settings.config_sync_remote)
@@ -5602,6 +6021,20 @@ class MountletWindow:
 
     def _configuration_changed(self) -> None:
         self._update_config_sync_buttons()
+
+    def _update_purchase_license_button(self) -> None:
+        button = getattr(self, "_purchase_license_button", None)
+        if button is None:
+            return
+        button.setVisible(license_control.current_status().state != "licensed")
+
+    def _open_purchase_page(self) -> None:
+        _open_external_url(
+            self.qt,
+            self.window,
+            license_control.license_purchase_url(),
+            title="Buy license",
+        )
 
     def _apply_button_icon_if_available(
         self,
@@ -5756,6 +6189,103 @@ class MountletWindow:
         self._refresh_pending = True
         self.qt.QTimer.singleShot(25, self.refresh)
 
+    def _license_locked(self) -> bool:
+        return _license_locked()
+
+    def _license_locked_banner(self) -> Any:
+        label = self.qt.QLabel(_license_lock_message())
+        label.setObjectName("licenseLockBanner")
+        label.setWordWrap(True)
+        label.setStyleSheet(
+            "QLabel#licenseLockBanner {"
+            "color: #ef4444;"
+            "font-weight: 700;"
+            "padding: 4px 2px;"
+            "}"
+        )
+        self._license_lock_banner = label
+        return label
+
+    def _hide_locked_file_browser(self) -> None:
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is None:
+            return
+        try:
+            file_browser.close()
+        except Exception:
+            pass
+
+    def _update_license_lock_state(self) -> None:
+        locked = self._license_locked()
+        banner = getattr(self, "_license_lock_banner", None)
+        if banner is not None:
+            banner.setVisible(locked)
+        if locked:
+            self._hide_locked_file_browser()
+            if self.is_visible() and not getattr(self, "_license_prompted_for_lock", False):
+                self._license_prompted_for_lock = True
+                self.qt.QTimer.singleShot(0, self._show_license_dialog)
+        else:
+            self._license_prompted_for_lock = False
+        self._update_locked_menus(locked)
+        self._update_locked_toolbar(locked)
+        self._update_locked_remote_rows(locked)
+        self._update_config_sync_buttons()
+        self._update_app_cache_buttons()
+
+    def _update_locked_menus(self, locked: bool) -> None:
+        mount_menu = getattr(self, "_mount_menu", None)
+        config_menu = getattr(self, "_config_menu", None)
+        if mount_menu is not None:
+            mount_menu.setEnabled(not locked)
+            with suppress(Exception):
+                mount_menu.menuAction().setEnabled(not locked)
+        if config_menu is not None:
+            config_menu.setEnabled(not locked)
+            with suppress(Exception):
+                config_menu.menuAction().setEnabled(not locked)
+        app_menu = getattr(self, "_app_menu", None)
+        if app_menu is None:
+            return
+        allowed = {"License", "About Mountlet", "Quit"}
+        for action in app_menu.actions():
+            text = action.text().replace("&", "")
+            if action.isSeparator():
+                continue
+            action.setEnabled(not locked or text in allowed)
+
+    def _update_locked_toolbar(self, locked: bool) -> None:
+        for button in (
+            getattr(self, "_settings_button", None),
+            getattr(self, "_push_sync_button", None),
+            getattr(self, "_pull_sync_button", None),
+            getattr(self, "_sort_button", None),
+            getattr(self, "_reverse_button", None),
+            getattr(self, "_all_cache_sync_button", None),
+            getattr(self, "_remove_all_offline_button", None),
+            getattr(self, "_clear_all_cache_button", None),
+            getattr(self, "_keep_above_button", None),
+        ):
+            if button is not None:
+                button.setEnabled(not locked)
+
+    def _update_locked_remote_rows(self, locked: bool) -> None:
+        for widgets in getattr(self, "_row_widgets", {}).values():
+            widgets.frame.setEnabled(not locked)
+            widgets.frame.setCursor(
+                self.qt.QCursor(
+                    self.qt.Qt.CursorShape.ArrowCursor
+                    if locked
+                    else self.qt.Qt.CursorShape.PointingHandCursor
+                )
+            )
+            widgets.frame.setToolTip(_license_lock_message() if locked else widgets.frame.toolTip())
+            if locked:
+                for name in ("config_button", "browser_button", "up_button", "down_button"):
+                    button = getattr(widgets, name, None)
+                    if button is not None:
+                        button.setEnabled(False)
+
     def _sort_toolbar(self) -> Any:
         widget = self.qt.QWidget()
         layout = self.qt.QHBoxLayout(widget)
@@ -5777,6 +6307,7 @@ class MountletWindow:
             self.tray_app._add_action(sort_menu, label, lambda selected=mode: self._sort_remote_order(selected))
         sort_button.setMenu(sort_menu)
         sort_button.setToolTip("Sort remotes and save the new order.")
+        self._sort_button = sort_button
 
         reverse_button = self.qt.QPushButton("↕")
         reverse_button.setFixedSize(34, 30)
@@ -5789,6 +6320,7 @@ class MountletWindow:
         except Exception:
             pass
         reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
+        self._reverse_button = reverse_button
 
         layout.addWidget(drag_handle)
         layout.addWidget(self._settings_toolbar_button())
@@ -5800,9 +6332,11 @@ class MountletWindow:
         layout.addWidget(sort_button)
         layout.addWidget(reverse_button)
         layout.addStretch(1)
+        layout.addWidget(self._purchase_license_toolbar_button())
         layout.addWidget(self._pin_button())
         self._update_config_sync_buttons()
         self._update_app_cache_buttons()
+        self._update_purchase_license_button()
         return widget
 
     def _event_global_point(self, event: Any) -> Any:
@@ -6004,20 +6538,23 @@ class MountletWindow:
         return frame
 
     def _add_remote_row(self) -> Any:
+        locked = self._license_locked()
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
         frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
         frame.setFixedHeight(REMOTE_ROW_HEIGHT)
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
-        tooltip = "Add a new remote"
+        tooltip = _license_lock_message() if locked else "Add a new remote"
         frame.setToolTip(tooltip)
-        frame.mouseReleaseEvent = lambda event: self._show_new_remote_wizard()
+        frame.setEnabled(not locked)
+        frame.mouseReleaseEvent = lambda event: self._show_license_dialog() if locked else self._show_new_remote_wizard()
         frame.enterEvent = lambda event, widget=frame: self._show_immediate_tooltip(widget, tooltip)
 
         layout = self.qt.QHBoxLayout(frame)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(8)
         add_button = self._icon_button("ui-add", self._show_new_remote_wizard, fallback_text="+")
+        add_button.setEnabled(not locked)
         add_button.setProperty("rowControl", True)
         add_button.setToolTip(tooltip)
         add_button.enterEvent = lambda event, widget=add_button: self._show_immediate_tooltip(widget, tooltip)
@@ -6431,6 +6968,12 @@ class MountletWindow:
         tooltip: str | None = None,
         remote: core.RemoteInfo | None = None,
     ) -> None:
+        if self._license_locked():
+            row.setProperty("hovered", False)
+            row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+            if highlighted:
+                self.qt.QToolTip.showText(self.qt.QCursor.pos(), _license_lock_message(), row)
+            return
         row.setProperty("hovered", highlighted)
         row.setStyleSheet(self._remote_row_style(row, highlighted=False))
         if highlighted and tooltip:
@@ -6443,12 +6986,20 @@ class MountletWindow:
             self._select_browser_remote(remote, row)
 
     def _browse_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self._show_file_browser_for_remote(remote, row, focus_browser=True)
 
     def _select_browser_remote(self, remote: core.RemoteInfo, row: Any) -> None:
+        if self._license_locked():
+            return
         self._show_file_browser_for_remote(remote, row, focus_browser=False)
 
     def _show_file_browser_for_remote_name(self, remote_name: str, *, focus_browser: bool) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         remote = self._remote_by_name(remote_name)
         row = self._row_widgets.get(remote_name)
         if remote is None or row is None:
@@ -6456,6 +7007,9 @@ class MountletWindow:
         self._show_file_browser_for_remote(remote, row.frame, focus_browser=focus_browser)
 
     def _show_file_browser_for_remote(self, remote: core.RemoteInfo, row: Any, *, focus_browser: bool) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self._set_browser_selected(remote.name)
         self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=focus_browser)
 
@@ -6490,6 +7044,10 @@ class MountletWindow:
             pass
 
     def _handle_remote_row_key(self, event: Any, remote: core.RemoteInfo, row: Any) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            event.accept()
+            return
         key = event.key()
         if matches_shortcut(self.qt, event, "remote_move_up"):
             self._move_focused_remote(remote.name, -1)
@@ -6525,6 +7083,10 @@ class MountletWindow:
         event.accept()
 
     def _handle_main_key(self, event: Any) -> bool:
+        if self._license_locked():
+            self._show_license_dialog()
+            event.accept()
+            return True
         key = event.key()
         focused_remote_name = self._focused_remote_name()
         if matches_shortcut(self.qt, event, "remote_move_up"):
@@ -6631,6 +7193,9 @@ class MountletWindow:
         self._focus_remote_row(name)
 
     def _focus_current_browser(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         name = self._focused_remote_name()
         row = self._row_widgets.get(name)
         remote = self._remote_by_name(name)
@@ -6641,10 +7206,16 @@ class MountletWindow:
         return next((item for item in _load_visible_remotes() if item.name == name), None)
 
     def _toggle_remote_mount(self, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         action = core.unmount_remote if core.is_mounted(remote) else core.mount_remote
         self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            event.ignore()
+            return
         if not event.mimeData().hasFormat(MIME_TYPE):
             event.ignore()
             return
@@ -6652,10 +7223,16 @@ class MountletWindow:
         event.acceptProposedAction()
 
     def _remote_drag_move(self, event: Any) -> None:
+        if self._license_locked():
+            event.ignore()
+            return
         if event.mimeData().hasFormat(MIME_TYPE):
             event.acceptProposedAction()
 
     def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            event.ignore()
+            return
         if not event.mimeData().hasFormat(MIME_TYPE):
             event.ignore()
             return
@@ -6831,6 +7408,9 @@ class MountletWindow:
         return button
 
     def _run_switch_action(self, remote_name: str, want_mounted: bool) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
             self.tray_app._notify("Mountlet", f"{remote_name} is no longer available.", success=False)
@@ -6839,6 +7419,9 @@ class MountletWindow:
         self._run_remote_action(remote, core.mount_remote if want_mounted else core.unmount_remote)
 
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         if remote.name in self._action_pending:
             return
         self._action_pending.add(remote.name)
@@ -6885,6 +7468,9 @@ class MountletWindow:
         self._run_remote_reauthentication(remote, remount=True)
 
     def _run_remote_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         if remote.name in self._action_pending:
             return
         self._action_pending.add(remote.name)
@@ -6902,9 +7488,15 @@ class MountletWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _mount_all(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self._run_bulk_action("Mount all", core.mount_all)
 
     def _unmount_all(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self._run_bulk_action("Unmount all", core.unmount_all)
 
     def _run_bulk_action(self, title: str, action: Any) -> None:
@@ -6912,6 +7504,9 @@ class MountletWindow:
         self._run_bulk_action_for_remotes(title, remotes, action)
 
     def _run_bulk_action_for_remotes(self, title: str, remotes: list[core.RemoteInfo], action: Any) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         if not remotes:
             return
         for remote in remotes:
@@ -6968,7 +7563,7 @@ class MountletWindow:
             return
 
     def _schedule_offline_reconcile(self, remote_name: str, *, delay_ms: int = 0) -> None:
-        if self._tray_is_quitting() or not remote_name:
+        if self._tray_is_quitting() or self._license_locked() or not remote_name:
             return
         scheduled = getattr(self, "_offline_reconcile_scheduled", None)
         if scheduled is None:
@@ -6989,7 +7584,7 @@ class MountletWindow:
         if running is None:
             running = set()
             self._offline_reconcile_running = running
-        if self._tray_is_quitting():
+        if self._tray_is_quitting() or self._license_locked():
             return
         if remote_name in running:
             scheduled.add(remote_name)
@@ -7011,7 +7606,7 @@ class MountletWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _start_remote_cache_check(self, remote: core.RemoteInfo, paths: list[str]) -> bool:
-        if self._tray_is_quitting() or not paths:
+        if self._tray_is_quitting() or self._license_locked() or not paths:
             return False
         running = getattr(self, "_offline_reconcile_running", None)
         if running is None:
@@ -7364,9 +7959,15 @@ class MountletWindow:
         self.tray_app._notify("Open file", f"Could not open {path.name}.", success=False)
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self._open_remote_path(remote, "")
 
     def _open_remote_path(self, remote: core.RemoteInfo, relative_path: str) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         if not core.is_mounted(remote):
             self.tray_app._notify("Open folder", "Mount the remote before opening its folder.", success=False)
             return
@@ -7385,6 +7986,9 @@ class MountletWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self.tray_app._open_remote_in_browser(remote)
 
     def _handle_folder_opened(self, success: bool) -> None:
@@ -7394,6 +7998,9 @@ class MountletWindow:
             self.tray_app._notify("Open folder", "Could not open the mount folder.", success=False)
 
     def _show_app_config_editor(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
@@ -7414,9 +8021,15 @@ class MountletWindow:
         self._open_child_dialog(dialog, on_accepted)
 
     def _show_shortcut_config_editor(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         self._open_child_dialog(ShortcutConfigDialog(self.qt, self.window), self._configuration_changed)
 
     def _show_config_sync_editor(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         def on_accepted() -> None:
             self._remote_sync_metadata = None
             self.tray_app.rebuild_menus()
@@ -7426,6 +8039,9 @@ class MountletWindow:
         self._open_child_dialog(ConfigSyncDialog(self.qt, self.window), on_accepted)
 
     def _show_mount_config_editor(self, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         dialog = MountConfigDialog(self.qt, remote, self.window)
@@ -7470,6 +8086,9 @@ class MountletWindow:
         self._open_child_dialog(dialog, on_accepted)
 
     def _show_new_remote_wizard(self) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            return
         dialog = NewRemoteWizard(self.qt, self.window)
 
         def on_accepted() -> None:
@@ -7916,6 +8535,8 @@ class MountletWindow:
         return None
 
     def _copy_remote_file_to_local(self, remote: core.RemoteInfo, relative_path: str, destination: Path) -> None:
+        if self._license_locked():
+            raise RuntimeError(_license_lock_message())
         binary = core.find_rclone()
         if not binary:
             raise RuntimeError("rclone was not found.")
@@ -7931,6 +8552,8 @@ class MountletWindow:
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}.")
 
     def _copy_local_file_to_remote(self, source: Path, remote: core.RemoteInfo, relative_path: str) -> None:
+        if self._license_locked():
+            raise RuntimeError(_license_lock_message())
         binary = core.find_rclone()
         if not binary:
             raise RuntimeError("rclone was not found.")
@@ -8001,7 +8624,7 @@ class MountletWindow:
             self.tray_app._notify("Open config", f"Could not open {path}.", success=False)
 
     def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
-        if self._tray_is_quitting():
+        if self._tray_is_quitting() or self._license_locked():
             return
         if remote.name in self._usage_cache and remote.name in self._connection_cache:
             return
@@ -8115,10 +8738,30 @@ class MountletTray:
             print("    Use the terminal menu instead: mountlet menu", file=sys.stderr)
             return 1
 
+        locked = _license_locked()
+        if locked:
+            self.main_window.show()
+
         self.rebuild_menus()
         self.timer.start(self.refresh_interval * 1000)
-        self._schedule_auto_mounts()
+        if not locked:
+            self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
+
+    def _show_license_required_prompt(self) -> None:
+        message = self.qt.QMessageBox(self.main_window.window)
+        message.setWindowTitle("License required")
+        message.setText("Mountlet needs an active license to continue.")
+        open_button = message.addButton("Open purchase page", self.qt.QMessageBox.ButtonRole.ActionRole)
+        message.addButton(self.qt.QMessageBox.StandardButton.Close)
+        message.exec()
+        if message.clickedButton() is open_button:
+            _open_external_url(
+                self.qt,
+                self.main_window.window,
+                license_control.license_purchase_url(),
+                title="Buy license",
+            )
 
     def _handle_activation(self, reason: Any) -> None:
         if getattr(self, "_quitting", False):
@@ -8168,48 +8811,62 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_about)
 
+    def _show_license_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_license_dialog)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
         self.remote_menu.clear()
         self.app_menu.clear()
+        locked = _license_locked()
         remotes = _load_visible_remotes()
         mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
-        if remotes:
+        if locked:
+            action = self.remote_menu.addAction(_license_lock_message())
+            action.setEnabled(False)
+        elif remotes:
             for remote in remotes:
                 self._add_remote_menu(remote, self.remote_menu)
         else:
             action = self.remote_menu.addAction("No rclone remotes found")
             action.setEnabled(False)
 
-        status = self.app_menu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
+        status = self.app_menu.addAction(
+            _license_lock_message() if locked else _status_tooltip(remotes, mounted_names).replace("Mountlet - ", "")
+        )
         status.setEnabled(False)
         self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
-        self._add_action(self.app_menu, "Update status", self.rebuild_menus)
-        self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
-        self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
-        self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
-        self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "Sync cached files now", self.main_window._sync_all_cached_files)
-        self._add_action(self.app_menu, "Remove all offline files", self.main_window._remove_all_offline_files)
-        self._add_action(self.app_menu, "Clear all resolved cache", self.main_window._clear_all_cache_files)
-        self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
-        self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
-        self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
-        self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
-        self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
-        self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
-        self._add_action(self.app_menu, "Set config sync location", self._show_config_sync_from_tray)
-        self._add_action(self.app_menu, "Push config to sync location", self._push_config_sync_from_tray)
-        self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
-        self.main_window._add_open_config_files_menu(self.app_menu)
-        self.app_menu.addSeparator()
+        if not locked:
+            self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
+            self._add_action(self.app_menu, "Update status", self.rebuild_menus)
+            self.app_menu.addSeparator()
+            self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
+            self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
+            self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
+            self.app_menu.addSeparator()
+            self._add_action(self.app_menu, "Sync cached files now", self.main_window._sync_all_cached_files)
+            self._add_action(self.app_menu, "Remove all offline files", self.main_window._remove_all_offline_files)
+            self._add_action(self.app_menu, "Clear all resolved cache", self.main_window._clear_all_cache_files)
+            self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
+            self.app_menu.addSeparator()
+            self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
+            self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
+            self.app_menu.addSeparator()
+            self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
+            self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
+            self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
+            self._add_action(self.app_menu, "Set config sync location", self._show_config_sync_from_tray)
+            self._add_action(self.app_menu, "Push config to sync location", self._push_config_sync_from_tray)
+            self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
+            self.main_window._add_open_config_files_menu(self.app_menu)
+            self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "License", self._show_license_from_tray)
         self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
@@ -8265,15 +8922,21 @@ class MountletTray:
     def _run_remote_action(self, remote: core.RemoteInfo, action: Any) -> None:
         if getattr(self, "_quitting", False):
             return
+        if _license_locked():
+            self._show_license_from_tray()
+            return
         self.main_window._run_remote_action(remote, action)
 
     def _mount_all(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
+        if _license_locked():
+            self._show_license_from_tray()
+            return
         self.main_window._mount_all()
 
     def _schedule_auto_mounts(self) -> None:
-        if getattr(self, "_quitting", False):
+        if getattr(self, "_quitting", False) or _license_locked():
             return
         remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount and not core.is_mounted(remote)]
         if not remotes:
@@ -8282,7 +8945,7 @@ class MountletTray:
         self.qt.QTimer.singleShot(delay_ms, lambda: self._auto_mount(remotes))
 
     def _auto_mount(self, remotes: list[core.RemoteInfo]) -> None:
-        if getattr(self, "_quitting", False):
+        if getattr(self, "_quitting", False) or _license_locked():
             return
         self.main_window._run_bulk_action_for_remotes("Auto-mount", remotes, core.mount_all)
 
@@ -8297,14 +8960,23 @@ class MountletTray:
     def _unmount_all(self, remotes: list[core.RemoteInfo]) -> None:
         if getattr(self, "_quitting", False):
             return
+        if _license_locked():
+            self._show_license_from_tray()
+            return
         self.main_window._unmount_all()
 
     def _open_folder(self, remote: core.RemoteInfo) -> None:
         if getattr(self, "_quitting", False):
             return
+        if _license_locked():
+            self._show_license_from_tray()
+            return
         self.main_window._open_folder(remote)
 
     def _open_remote_in_browser(self, remote: core.RemoteInfo) -> None:
+        if _license_locked():
+            self._show_license_from_tray()
+            return
         url = _remote_browser_url(remote)
         if not url:
             self._notify("Open in browser", "This remote does not have a known browser view.", success=False)

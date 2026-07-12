@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` inside `app/` first:
 
 ```bash
-VERSION=0.5.1
+VERSION=0.6.0
 python packaging/run_tests.py
 python -m unittest tests.test_tray
 python -m compileall -q src tests packaging
@@ -34,6 +34,10 @@ Confirm:
 - Built distributions do not include `secrets/`, `rclone.conf`, or `client_secret*.json`.
 - The native package workflow passes for Linux, Windows, macOS arm64, and macOS x64.
 - Bundled-rclone workflow jobs pass the packaged-rclone smoke test before artifacts are uploaded.
+- The `Upload installers to R2` job uploads every installer listed in
+  `web/release-files.json`. The upload uses R2's S3-compatible API, so GitHub
+  needs `CLOUDFLARE_R2_ACCESS_KEY_ID` and
+  `CLOUDFLARE_R2_SECRET_ACCESS_KEY` secrets with bucket-item read/write access.
 
 ## Local Native Package Smoke Test
 
@@ -80,9 +84,10 @@ git tag -a "v$VERSION" -m "Release v$VERSION"
 git push origin main --tags
 ```
 
-Pushing a version tag starts the native package workflow. Download the generated
-artifacts from **Actions > Native package CI** and attach the tested installers
-to the release.
+Pushing a version tag starts the native package workflow. The workflow builds
+the installers, verifies them, and uploads the files listed in
+`web/release-files.json` to the production R2 bucket. Confirm the release
+download routes after the workflow completes.
 
 ## Python Package Publishing
 

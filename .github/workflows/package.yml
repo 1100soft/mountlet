@@ -6,6 +6,10 @@ on:
     paths:
       - ".github/workflows/package.yml"
       - "app/**"
+      - "package.json"
+      - "package-lock.json"
+      - "web/release-files.json"
+      - "web/tools/upload-release-r2.mjs"
   push:
     branches: [main, wip]
     tags:
@@ -13,6 +17,10 @@ on:
     paths:
       - ".github/workflows/package.yml"
       - "app/**"
+      - "package.json"
+      - "package-lock.json"
+      - "web/release-files.json"
+      - "web/tools/upload-release-r2.mjs"
 
 permissions:
   contents: read
@@ -179,3 +187,45 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  upload-installers:
+    name: Upload installers to R2
+    needs: package
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'wip' || github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v')
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      MOUNTLET_R2_BUCKET: ${{ github.ref_name == 'wip' && vars.MOUNTLET_PREVIEW_R2_BUCKET || vars.MOUNTLET_PRODUCTION_R2_BUCKET }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install website tools
+        run: npm ci
+
+      - name: Check upload configuration
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_R2_ACCESS_KEY_ID"
+          test -n "$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
+          test -n "$MOUNTLET_R2_BUCKET"
+
+      - name: Check release file list
+        run: npm run web:release:check
+
+      - name: Upload installers
+        run: npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --remote

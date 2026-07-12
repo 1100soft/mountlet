@@ -1,0 +1,13 @@
+# Copy this to .dev.vars or run:
+#   npm run web:env
+#
+# Use Stripe test-mode values locally. The webhook secret comes from:
+#   stripe listen --forward-to http://127.0.0.1:8788/webhook
+
+LICENSE_KEY_PEPPER="replace-with-random-local-pepper"
+LICENSE_ADMIN_TOKEN="replace-with-random-local-admin-token"
+LICENSE_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+LICENSE_SIGNING_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+
+STRIPE_SECRET_KEY="sk_test_replace"
+STRIPE_WEBHOOK_SECRET="whsec_replace"
