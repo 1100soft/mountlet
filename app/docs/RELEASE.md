@@ -35,9 +35,9 @@ Confirm:
 - The native package workflow passes for Linux, Windows, macOS arm64, and macOS x64.
 - Bundled-rclone workflow jobs pass the packaged-rclone smoke test before artifacts are uploaded.
 - The `Upload installers to R2` job uploads every installer listed in
-  `web/release-files.json`. The `CLOUDFLARE_API_TOKEN` secret must be a
-  Cloudflare API token with R2 object write access for the target account and
-  buckets; R2 S3 access keys are not used by the Wrangler upload path.
+  `web/release-files.json`. The upload uses R2's S3-compatible API, so GitHub
+  needs `CLOUDFLARE_R2_ACCESS_KEY_ID` and
+  `CLOUDFLARE_R2_SECRET_ACCESS_KEY` secrets with bucket-item read/write access.
 
 ## Local Native Package Smoke Test
 

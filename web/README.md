@@ -211,10 +211,16 @@ from the `DOWNLOADS` R2 binding. The public object keys live in
 The native package workflow uploads installers automatically after successful
 builds when these GitHub settings are present:
 
-- Secret: `CLOUDFLARE_API_TOKEN`
+- Secret: `CLOUDFLARE_R2_ACCESS_KEY_ID`
+- Secret: `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
 - Variable: `CLOUDFLARE_ACCOUNT_ID`
 - Variable: `MOUNTLET_PREVIEW_R2_BUCKET`
 - Variable: `MOUNTLET_PRODUCTION_R2_BUCKET`
+
+Use R2 S3 credentials generated from an R2 token with bucket-item read/write
+access. Wrangler's Cloudflare REST upload path requires broader account-level
+R2 permissions, so Mountlet uploads release artifacts through the
+S3-compatible API instead.
 
 The `wip` branch uploads to the preview bucket. `main` and version tags upload
 to the production bucket.
