@@ -97,27 +97,33 @@ If you initialized D1 before subscription support, add the subscription fields:
 wrangler d1 execute mountlet-license --local --file web/migrations/0005_subscription_fields.sql
 ```
 
-`web:r2:seed` uploads placeholder release files to local R2. The download
-buttons in `config.js` point to those objects through `/api/download/...`, so
-you can test the same release path before replacing the placeholders with real
-installer artifacts.
+`web:r2:seed` uploads local test release files to local R2. The download
+buttons read `web/release-files.json` and route through `/api/download/...`, so
+you can test the same release path before publishing real installer artifacts.
 
-To upload real preview or production installer artifacts to Cloudflare R2,
-create a manifest using `web/release-manifest.example.json` as a template, then
-run with `--remote`:
+To upload real installer artifacts from a GitHub Actions artifact directory to
+Cloudflare R2, run with `--remote`:
 
 ```bash
-npm run web:r2:upload -- <bucket-name> <manifest.json> --remote
+npm run web:r2:upload -- <bucket-name> <artifact-directory> --remote
 ```
 
-For example, upload preview installers to the bucket bound as preview
-`DOWNLOADS`:
+For example, after `gh run download ... -D /tmp/mountlet-artifacts`, upload
+preview installers to the bucket bound as preview `DOWNLOADS`:
 
 ```bash
-npm run web:r2:upload -- mountlet-preview ./release-manifest.preview.json --remote
+npm run web:r2:upload -- mountlet-preview /tmp/mountlet-artifacts --remote
 ```
 
+The upload tool reads the expected public file names from
+`web/release-files.json` and finds those files recursively in the artifact
+directory. It still accepts an explicit manifest file for one-off overrides.
 Omit `--remote` only when intentionally seeding Wrangler's local R2 simulator.
+Use `--dry-run` to verify artifact discovery without uploading:
+
+```bash
+npm run web:r2:upload -- mountlet-preview /tmp/mountlet-artifacts --dry-run
+```
 
 Run the local Pages site:
 
@@ -155,7 +161,7 @@ curl -H "Authorization: Bearer <LICENSE_ADMIN_TOKEN>" \
 You can also verify that local R2 is bound:
 
 ```bash
-curl http://127.0.0.1:8788/api/download/mountlet-linux-bundled.txt
+curl "http://127.0.0.1:8788/api/download/$(node -p 'require("./web/release-files.json").downloads.linux')"
 ```
 
 To activate a local paid build against the local API:
@@ -199,24 +205,30 @@ secrets or local `.dev.vars` values.
 ## Downloads
 
 The default download buttons point to `/api/download/...`, which reads objects
-from the `DOWNLOADS` R2 binding. For local testing, `npm run web:r2:seed`
-uploads placeholder objects. For production, upload the real installer
-artifacts to the bound R2 bucket using the same keys or update `config.js`.
+from the `DOWNLOADS` R2 binding. The public object keys live in
+`web/release-files.json`.
 
-The expected default keys are:
+The native package workflow uploads installers automatically after successful
+builds when these GitHub settings are present:
 
-- `mountlet-windows-x64-bundled-rclone-setup.exe`
-- `mountlet-macos-arm64-bundled-rclone.dmg`
-- `mountlet-macos-x64-bundled-rclone.dmg`
-- `mountlet-linux-x64-bundled-rclone.deb`
-- `mountlet-windows-x64-system-rclone-setup.exe`
-- `mountlet-macos-arm64-system-rclone.dmg`
-- `mountlet-macos-x64-system-rclone.dmg`
-- `mountlet-linux-x64-system-rclone.deb`
+- Secret: `CLOUDFLARE_API_TOKEN`
+- Variable: `CLOUDFLARE_ACCOUNT_ID`
+- Variable: `MOUNTLET_PREVIEW_R2_BUCKET`
+- Variable: `MOUNTLET_PRODUCTION_R2_BUCKET`
 
-These keys are the public download API names. They do not need to match the
-local installer filenames; use the release manifest to map each key to the
-actual artifact path.
+The `wip` branch uploads to the preview bucket. `main` and version tags upload
+to the production bucket.
+
+These keys are the public download API names. Keep them in
+`web/release-files.json` so the website, deployment check, and R2 upload tool
+use the same list.
+
+Before uploading, verify that the site release list matches the package
+workflow outputs:
+
+```bash
+npm run web:release:check
+```
 
 ## License API
 

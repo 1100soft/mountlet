@@ -1,31 +1,31 @@
 import {spawnSync} from "node:child_process";
-import {existsSync, readFileSync} from "node:fs";
-import {resolve} from "node:path";
+import {existsSync, readdirSync, readFileSync, statSync} from "node:fs";
+import {basename, join, resolve} from "node:path";
 
 const cliArgs = process.argv.slice(2);
 const useRemote = cliArgs.includes("--remote") || process.env.MOUNTLET_R2_REMOTE === "1";
-const positionalArgs = cliArgs.filter((arg) => arg !== "--remote");
+const dryRun = cliArgs.includes("--dry-run");
+const positionalArgs = cliArgs.filter((arg) => arg !== "--remote" && arg !== "--dry-run");
 const bucket = positionalArgs[0] || process.env.MOUNTLET_R2_BUCKET || "";
-const manifestPath = positionalArgs[1] || process.env.MOUNTLET_RELEASE_MANIFEST || resolve("web", "release-manifest.example.json");
+const sourcePath = positionalArgs[1] || process.env.MOUNTLET_RELEASE_SOURCE || resolve("release-artifacts");
 
 if (!bucket) {
-  console.error("Usage: node web/tools/upload-release-r2.mjs <bucket-name> <manifest.json> [--remote]");
+  console.error("Usage: node web/tools/upload-release-r2.mjs <bucket-name> <manifest.json|artifact-directory> [--remote] [--dry-run]");
   process.exit(1);
 }
 
-if (!existsSync(manifestPath)) {
-  console.error(`Release manifest not found: ${manifestPath}`);
+if (!existsSync(sourcePath)) {
+  console.error(`Release source not found: ${sourcePath}`);
   process.exit(1);
 }
 
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-const files = manifest.files || {};
-const entries = Object.entries(files)
-  .map(([key, path]) => [String(key).trim(), String(path).trim()])
-  .filter(([key, path]) => key && path);
+const sourceStats = statSync(sourcePath);
+const entries = sourceStats.isDirectory()
+  ? entriesFromArtifactDirectory(sourcePath)
+  : entriesFromManifest(sourcePath);
 
 if (!entries.length) {
-  console.error(`Release manifest has no files: ${manifestPath}`);
+  console.error(`Release source has no files: ${sourcePath}`);
   process.exit(1);
 }
 
@@ -38,6 +38,10 @@ for (const [key, sourcePath] of entries) {
   if (!existsSync(filePath)) {
     console.error(`Release artifact not found for ${key}: ${filePath}`);
     process.exit(1);
+  }
+  if (dryRun) {
+    console.log(`Would upload ${filePath} to ${bucket}/${key}${useRemote ? " remote" : " local"} R2.`);
+    continue;
   }
   const result = spawnSync(
     "wrangler",
@@ -53,4 +57,42 @@ for (const [key, sourcePath] of entries) {
   }
 }
 
-console.log(`Uploaded ${entries.length} release object(s) to ${bucket}${useRemote ? " remote" : " local"} R2.`);
+console.log(`${dryRun ? "Checked" : "Uploaded"} ${entries.length} release object(s) ${dryRun ? "for" : "to"} ${bucket}${useRemote ? " remote" : " local"} R2.`);
+
+function entriesFromManifest(manifestPath) {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const files = manifest.files || {};
+  return Object.entries(files)
+    .map(([key, path]) => [String(key).trim(), String(path).trim()])
+    .filter(([key, path]) => key && path);
+}
+
+function entriesFromArtifactDirectory(artifactDirectory) {
+  const releaseFilePath = resolve("web", "release-files.json");
+  const releaseFiles = JSON.parse(readFileSync(releaseFilePath, "utf8"));
+  const expectedFiles = Object.values(releaseFiles.downloads || {})
+    .map((fileName) => String(fileName).trim())
+    .filter(Boolean);
+  const availableFiles = listFilesRecursive(resolve(artifactDirectory));
+  return expectedFiles.map((fileName) => {
+    const match = availableFiles.find((candidate) => basename(candidate) === fileName);
+    if (!match) {
+      console.error(`Release artifact not found in ${artifactDirectory}: ${fileName}`);
+      process.exit(1);
+    }
+    return [fileName, match];
+  });
+}
+
+function listFilesRecursive(directory) {
+  const result = [];
+  for (const entry of readdirSync(directory, {withFileTypes: true})) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      result.push(...listFilesRecursive(entryPath));
+    } else if (entry.isFile()) {
+      result.push(entryPath);
+    }
+  }
+  return result;
+}

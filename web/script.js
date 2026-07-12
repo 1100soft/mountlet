@@ -1,4 +1,15 @@
-function openConfiguredLink(group, key) {
+let releaseFilesPromise = null;
+
+async function openConfiguredLink(group, key) {
+  if (group === "downloads") {
+    const fileName = await getReleaseDownloadFile(key);
+    if (!fileName) {
+      window.alert(`No release file is configured for "${key}".`);
+      return;
+    }
+    window.location.href = `/api/download/${encodeURIComponent(fileName)}`;
+    return;
+  }
   const config = window.MOUNTLET_SITE_CONFIG || {};
   const url = config[group] && config[group][key];
   if (!url || url.includes("replace-")) {
@@ -7,6 +18,24 @@ function openConfiguredLink(group, key) {
     return;
   }
   window.location.href = url;
+}
+
+async function getReleaseDownloadFile(key) {
+  const releases = await loadReleaseFiles();
+  return releases.downloads && releases.downloads[key];
+}
+
+async function loadReleaseFiles() {
+  if (!releaseFilesPromise) {
+    releaseFilesPromise = fetch("release-files.json", {headers: {accept: "application/json"}})
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Release file list returned ${response.status}.`);
+        }
+        return response.json();
+      });
+  }
+  return releaseFilesPromise;
 }
 
 function applyConfiguredLinks() {
@@ -513,7 +542,8 @@ document.addEventListener("click", (event) => {
 
   const downloadButton = event.target.closest(".download-button");
   if (downloadButton) {
-    openConfiguredLink("downloads", downloadButton.dataset.download);
+    openConfiguredLink("downloads", downloadButton.dataset.download)
+      .catch((error) => window.alert(error.message || "Could not load the release file list."));
   }
 
   const copyLicenseButton = event.target.closest("#copy-license-key");

@@ -1,5 +1,8 @@
+import {readFileSync} from "node:fs";
+
 const baseUrl = String(process.argv[2] || process.env.MOUNTLET_SITE_URL || "http://127.0.0.1:8788").replace(/\/+$/, "");
-const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || "mountlet-linux-x64-bundled-rclone.deb";
+const releaseFiles = JSON.parse(readFileSync("web/release-files.json", "utf8"));
+const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || releaseFiles.downloads?.linux;
 
 let health;
 let download;
