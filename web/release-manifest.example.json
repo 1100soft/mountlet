@@ -1,0 +1,10 @@
+{
+  "files": {
+    "mountlet-windows-bundled.exe": "path/to/windows-bundled-installer.exe",
+    "mountlet-macos-bundled.pkg": "path/to/macos-bundled-installer.pkg",
+    "mountlet-linux-bundled.AppImage": "path/to/linux-bundled-installer.AppImage",
+    "mountlet-windows-lean.exe": "path/to/windows-lean-installer.exe",
+    "mountlet-macos-lean.pkg": "path/to/macos-lean-installer.pkg",
+    "mountlet-linux-lean.AppImage": "path/to/linux-lean-installer.AppImage"
+  }
+}

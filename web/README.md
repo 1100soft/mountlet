@@ -102,15 +102,19 @@ buttons in `config.js` point to those objects through `/api/download/...`, so
 you can test the same release path before replacing the placeholders with real
 installer artifacts.
 
-To seed a non-local preview or production R2 bucket with the current placeholder
-release files:
+To upload real preview or production installer artifacts to R2, create a
+manifest using `web/release-manifest.example.json` as a template, then run:
 
 ```bash
-npm run web:r2:seed:remote -- <bucket-name>
+npm run web:r2:upload -- <bucket-name> <manifest.json>
 ```
 
-For example, seed the preview bucket that is bound as `DOWNLOADS` before running
-the preview deployment check.
+For example, upload preview installers to the bucket bound as preview
+`DOWNLOADS`:
+
+```bash
+npm run web:r2:upload -- mountlet-preview ./release-manifest.preview.json
+```
 
 Run the local Pages site:
 
@@ -198,12 +202,16 @@ artifacts to the bound R2 bucket using the same keys or update `config.js`.
 
 The expected default keys are:
 
-- `mountlet-windows-bundled.txt`
-- `mountlet-macos-bundled.txt`
-- `mountlet-linux-bundled.txt`
-- `mountlet-windows-lean.txt`
-- `mountlet-macos-lean.txt`
-- `mountlet-linux-lean.txt`
+- `mountlet-windows-bundled.exe`
+- `mountlet-macos-bundled.pkg`
+- `mountlet-linux-bundled.AppImage`
+- `mountlet-windows-lean.exe`
+- `mountlet-macos-lean.pkg`
+- `mountlet-linux-lean.AppImage`
+
+These keys are the public download API names. They do not need to match the
+local installer filenames; use the release manifest to map each key to the
+actual artifact path.
 
 ## License API
 
@@ -253,8 +261,8 @@ Recommended Cloudflare Pages environment split:
 - Preview branch: `wip`
 - Production `DB`: production license D1
 - Preview `DB`: test license D1
-- Production `DOWNLOADS`: production installer R2 bucket
-- Preview `DOWNLOADS`: test installer R2 bucket
+- Production `DOWNLOADS`: `mountlet-production`
+- Preview `DOWNLOADS`: `mountlet-preview`
 - Production `STRIPE_SECRET_KEY`: Stripe live key, `sk_live_...`
 - Preview `STRIPE_SECRET_KEY`: Stripe test key, `sk_test_...`
 - Production webhook secret: live Stripe webhook endpoint secret

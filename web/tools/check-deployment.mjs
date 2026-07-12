@@ -1,5 +1,5 @@
 const baseUrl = String(process.argv[2] || process.env.MOUNTLET_SITE_URL || "http://127.0.0.1:8788").replace(/\/+$/, "");
-const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || "mountlet-linux-bundled.txt";
+const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || "mountlet-linux-bundled.AppImage";
 
 let health;
 let download;

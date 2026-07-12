@@ -7,11 +7,11 @@ window.MOUNTLET_SITE_CONFIG = {
     license: "https://buy.stripe.com/replace-license-link"
   },
   downloads: {
-    windows: "/api/download/mountlet-windows-bundled.txt",
-    macos: "/api/download/mountlet-macos-bundled.txt",
-    linux: "/api/download/mountlet-linux-bundled.txt",
-    windowsLean: "/api/download/mountlet-windows-lean.txt",
-    macosLean: "/api/download/mountlet-macos-lean.txt",
-    linuxLean: "/api/download/mountlet-linux-lean.txt"
+    windows: "/api/download/mountlet-windows-bundled.exe",
+    macos: "/api/download/mountlet-macos-bundled.pkg",
+    linux: "/api/download/mountlet-linux-bundled.AppImage",
+    windowsLean: "/api/download/mountlet-windows-lean.exe",
+    macosLean: "/api/download/mountlet-macos-lean.pkg",
+    linuxLean: "/api/download/mountlet-linux-lean.AppImage"
   }
 };

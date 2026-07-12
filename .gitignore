@@ -38,4 +38,5 @@ web/node_modules/
 !package-lock.json
 !web/package.json
 !web/package-lock.json
+!web/release-manifest.example.json
 .rclone.config*
