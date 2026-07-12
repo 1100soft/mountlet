@@ -18,13 +18,17 @@ environment overrides.
 <!-- mountlet-vars:start -->
 - Production website: https://mountlet.app
 - Production license API: https://mountlet.app/api/license
+- Production report API: https://mountlet.app/api/report
 - Relocated app API override: `MOUNTLET_LICENSE_API_URL`
 - Relocated purchase-site override: `MOUNTLET_LICENSE_SITE_URL`
+- Relocated report API override: `MOUNTLET_REPORT_API_URL`
 - Resend API key: `RESEND_API_KEY`
 - Resend sender: `RESEND_FROM`
 - Optional Resend reply-to: `RESEND_REPLY_TO`
 - Resend sender alias: `EMAIL_FROM`
 - Optional Resend reply-to alias: `EMAIL_REPLY_TO`
+- Optional report sender: `REPORT_FROM`
+- Optional report recipient: `REPORT_TO`
 - Stripe secret key: `STRIPE_SECRET_KEY`
 - Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
 <!-- mountlet-vars:end -->
@@ -271,6 +275,10 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
   `Mountlet <licenses@example.com>`.
 - `EMAIL_REPLY_TO` or `RESEND_REPLY_TO`: optional reply-to address for license
   emails.
+- `REPORT_TO`: optional recipient for in-app crash and bug reports. If unset,
+  reports fall back to the reply-to or sender address.
+- `REPORT_FROM`: optional verified sender for in-app crash and bug reports. If
+  unset, reports fall back to the license email sender.
 
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and

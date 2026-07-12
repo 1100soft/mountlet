@@ -29,6 +29,7 @@ variables.
 - Default license API: https://mountlet.app/api/license
 - Override license API: `MOUNTLET_LICENSE_API_URL`
 - Override public purchase site: `MOUNTLET_LICENSE_SITE_URL`
+- Override crash/bug report API: `MOUNTLET_REPORT_API_URL`
 <!-- mountlet-vars:end -->
 
 ## What You Can Do
@@ -41,6 +42,7 @@ variables.
 - Move settings between computers with encrypted config bundles.
 - Optionally expose cloud accounts as folders in Finder, Explorer, Dolphin, or
   another file manager.
+- Review and send optional crash or bug reports from inside the app.
 
 ## How It Works
 
@@ -59,6 +61,15 @@ The bundled build includes an app-local rclone for convenience. The lean build
 uses a separately installed rclone, which is useful for technical users,
 administrators, and managed machines. Mountlet does not store cloud credentials
 inside the application install directory.
+
+## Bug Reports
+
+If Mountlet closes unexpectedly, it can ask on the next launch whether to review
+and send a crash report. The App menu also includes **Report bug** for voluntary
+reports. Nothing is sent automatically: the report window shows the message,
+system details, recent runtime log, and recent rclone log before you send it.
+Mountlet redacts license keys and obvious secrets, but logs can still include
+file paths, remote names, and filenames.
 
 ## Requirements
 

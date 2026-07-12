@@ -27,7 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import __version__, core, license_control, rclone_wizard
+from . import __version__, core, license_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
@@ -4821,6 +4821,7 @@ class MountletWindow:
         self._bridge.sync_metadata_ready.connect(self._handle_sync_metadata_ready)
         self._bridge.offline_reconcile_ready.connect(self._handle_offline_reconcile_ready)
         self._bridge.cache_sync_debug_ready.connect(self._handle_cache_sync_debug_ready)
+        self._bridge.bug_report_ready.connect(self._handle_bug_report_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -4873,6 +4874,7 @@ class MountletWindow:
             sync_metadata_ready = qt.Signal(object, object)
             offline_reconcile_ready = qt.Signal(str, object, object)
             cache_sync_debug_ready = qt.Signal(str)
+            bug_report_ready = qt.Signal(bool, str, str)
 
         return Bridge()
 
@@ -5252,6 +5254,7 @@ class MountletWindow:
         self.tray_app._add_action(app_menu, "Remove all offline files", self._remove_all_offline_files)
         self.tray_app._add_action(app_menu, "Clear all resolved cache", self._clear_all_cache_files)
         self.tray_app._add_action(app_menu, "Debug cache sync", self._show_cache_sync_debug_report)
+        self.tray_app._add_action(app_menu, "Report bug", self._show_bug_report_dialog)
         app_menu.addSeparator()
         self.tray_app._add_action(app_menu, "License", self._show_license_dialog)
         self.tray_app._add_action(app_menu, "About Mountlet", self._show_about)
@@ -7725,6 +7728,133 @@ class MountletWindow:
         for remote_name in changed if isinstance(changed, (list, tuple, set)) else []:
             self._refresh_file_browser_mount_state(str(remote_name))
 
+    def _maybe_prompt_crash_report(self) -> None:
+        if self._tray_is_quitting() or self._license_locked():
+            return
+        crash_log = report_control.unreported_crash_log()
+        if not crash_log:
+            return
+        box = self.qt.QMessageBox(self.window)
+        box.setWindowTitle("Mountlet closed unexpectedly")
+        box.setText("Mountlet found a crash log from the previous run.")
+        box.setInformativeText("Review and send a crash report?")
+        review_button = box.addButton("Review report", self.qt.QMessageBox.ButtonRole.ActionRole)
+        ignore_button = box.addButton("Ignore this crash", self.qt.QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Not now", self.qt.QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is review_button:
+            self._show_bug_report_dialog(kind="crash", crash_log=crash_log)
+        elif clicked is ignore_button:
+            report_control.mark_crash_reported(crash_log)
+
+    def _show_bug_report_dialog(self, *, kind: str = "bug", crash_log: str = "") -> None:
+        if self._tray_is_quitting():
+            return
+        if kind != "crash":
+            kind = "bug"
+            crash_log = ""
+        dialog = _create_child_dialog(self.qt, self.window)
+        title = "Crash report" if kind == "crash" else "Report bug"
+        dialog.setWindowTitle(title)
+        layout = self.qt.QVBoxLayout(dialog)
+
+        intro = self.qt.QLabel(
+            "Review the report before sending. Diagnostic logs are redacted, but can still include file paths, "
+            "remote names, and filenames."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        contact = self.qt.QLineEdit()
+        contact.setPlaceholderText("Optional contact email")
+        layout.addWidget(contact)
+
+        message = self.qt.QPlainTextEdit()
+        message.setPlainText(
+            "Mountlet closed unexpectedly. Please describe what you were doing."
+            if kind == "crash"
+            else ""
+        )
+        layout.addWidget(message)
+
+        include_logs = self.qt.QCheckBox("Include recent runtime and rclone logs")
+        include_logs.setChecked(True)
+        layout.addWidget(include_logs)
+
+        preview = self.qt.QPlainTextEdit()
+        preview.setReadOnly(True)
+        layout.addWidget(preview)
+
+        status = self.qt.QLabel("")
+        status.setWordWrap(True)
+        layout.addWidget(status)
+
+        buttons = self.qt.QDialogButtonBox()
+        send_button = buttons.addButton("Send", self.qt.QDialogButtonBox.ButtonRole.AcceptRole)
+        close_button = buttons.addButton(self.qt.QDialogButtonBox.StandardButton.Close)
+        close_button.clicked.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        def payload() -> dict[str, Any]:
+            return report_control.report_payload(
+                kind=kind,
+                message=message.toPlainText(),
+                contact=contact.text(),
+                include_logs=include_logs.isChecked(),
+                crash_log=crash_log,
+            )
+
+        def update_preview() -> None:
+            try:
+                preview.setPlainText(json.dumps(payload(), indent=2, sort_keys=True))
+            except Exception as exc:
+                preview.setPlainText(f"Could not prepare report preview: {exc}")
+
+        def send_report() -> None:
+            send_button.setEnabled(False)
+            status.setText("Sending report…")
+            prepared = payload()
+
+            def worker() -> None:
+                try:
+                    report_control.submit_report(prepared)
+                except Exception as exc:
+                    self._bridge.bug_report_ready.emit(False, str(exc), kind)
+                    return
+                if kind == "crash":
+                    report_control.mark_crash_reported(crash_log)
+                self._bridge.bug_report_ready.emit(True, "Report sent. Thank you.", kind)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        message.textChanged.connect(update_preview)
+        contact.textChanged.connect(update_preview)
+        include_logs.toggled.connect(update_preview)
+        send_button.clicked.connect(send_report)
+        try:
+            dialog.resize(760, 620)
+        except Exception:
+            pass
+        self._bug_report_dialog = dialog
+        self._bug_report_status = status
+        self._bug_report_send_button = send_button
+        update_preview()
+        self._open_child_dialog(SimpleNamespace(dialog=dialog))
+        self.qt.QTimer.singleShot(0, lambda: message.setFocus(self.qt.Qt.FocusReason.OtherFocusReason))
+
+    def _handle_bug_report_ready(self, success: bool, message: str, _kind: str) -> None:
+        status = getattr(self, "_bug_report_status", None)
+        send_button = getattr(self, "_bug_report_send_button", None)
+        if status is not None:
+            with suppress(Exception):
+                status.setText(message)
+                status.setStyleSheet("color: #16a34a;" if success else "color: #dc2626;")
+        if send_button is not None:
+            with suppress(Exception):
+                send_button.setEnabled(not success)
+        self.tray_app._notify("Report bug", message, success=success)
+
     def _cache_sync_debug_report(self) -> str:
         lines = [
             "Mountlet cache sync debug",
@@ -8744,6 +8874,7 @@ class MountletTray:
 
         self.rebuild_menus()
         self.timer.start(self.refresh_interval * 1000)
+        self.qt.QTimer.singleShot(1200, self.main_window._maybe_prompt_crash_report)
         if not locked:
             self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
@@ -8817,6 +8948,12 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_license_dialog)
 
+    def _show_bug_report_from_tray(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window.show()
+        self.qt.QTimer.singleShot(0, self.main_window._show_bug_report_dialog)
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
@@ -8854,6 +8991,7 @@ class MountletTray:
             self._add_action(self.app_menu, "Remove all offline files", self.main_window._remove_all_offline_files)
             self._add_action(self.app_menu, "Clear all resolved cache", self.main_window._clear_all_cache_files)
             self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
+            self._add_action(self.app_menu, "Report bug", self._show_bug_report_from_tray)
             self.app_menu.addSeparator()
             self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
             self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)

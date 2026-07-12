@@ -58,6 +58,24 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("failed during desktop startup", write_log.call_args.args[0])
         self.assertIn("RuntimeError: boom", write_log.call_args.args[0])
 
+    def test_frozen_linux_defaults_to_compose_input_method(self):
+        with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):
+            with mock.patch.object(sys, "frozen", True, create=True):
+                with mock.patch.dict("os.environ", {}, clear=True):
+                    with mock.patch.object(desktop, "_append_runtime_log"):
+                        desktop._prepare_frozen_linux_qt_environment()
+
+                    self.assertEqual(desktop.os.environ["QT_IM_MODULE"], "compose")
+
+    def test_frozen_linux_input_method_override_is_respected(self):
+        with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):
+            with mock.patch.object(sys, "frozen", True, create=True):
+                with mock.patch.dict("os.environ", {"MOUNTLET_QT_IM_MODULE": "ibus"}, clear=True):
+                    with mock.patch.object(desktop, "_append_runtime_log"):
+                        desktop._prepare_frozen_linux_qt_environment()
+
+                    self.assertEqual(desktop.os.environ["QT_IM_MODULE"], "ibus")
+
 
 if __name__ == "__main__":
     unittest.main()
