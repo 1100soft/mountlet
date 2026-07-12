@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import faulthandler
+import os
+import platform
 import sys
 import threading
 import time
@@ -12,6 +14,10 @@ from . import __version__
 
 FAST_EXIT_SECONDS = 5.0
 _RUNTIME_LOG_HANDLE = None
+_FROZEN_LINUX_QT_NOTE = (
+    "Frozen Linux build: defaulting QT_IM_MODULE=compose to avoid host input-method plugin crashes. "
+    "Set MOUNTLET_QT_IM_MODULE to override."
+)
 
 
 def _write_startup_log(message: str) -> None:
@@ -79,6 +85,20 @@ def _install_runtime_logging() -> None:
         threading.excepthook = threading_excepthook
 
 
+def _prepare_frozen_linux_qt_environment() -> None:
+    if platform.system() != "Linux" or not getattr(sys, "frozen", False):
+        return
+    if "MOUNTLET_QT_IM_MODULE" in os.environ:
+        value = os.environ.get("MOUNTLET_QT_IM_MODULE", "")
+        if value:
+            os.environ["QT_IM_MODULE"] = value
+        else:
+            os.environ.pop("QT_IM_MODULE", None)
+    else:
+        os.environ.setdefault("QT_IM_MODULE", "compose")
+    _append_runtime_log(_FROZEN_LINUX_QT_NOTE)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args == ["--packaging-smoke-test"]:
@@ -97,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if version.startswith("rclone v") else 1
 
     _install_runtime_logging()
+    _prepare_frozen_linux_qt_environment()
     started = time.monotonic()
     try:
         from . import tray

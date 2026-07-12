@@ -7,6 +7,11 @@ export async function onRequestGet({env}) {
     stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),
     resendConfigured: Boolean(env.RESEND_API_KEY && (env.RESEND_FROM || env.EMAIL_FROM)),
+    reportsConfigured: Boolean(
+      env.RESEND_API_KEY
+      && (env.REPORT_FROM || env.RESEND_FROM || env.EMAIL_FROM)
+      && (env.REPORT_TO || env.EMAIL_REPLY_TO || env.RESEND_REPLY_TO || env.RESEND_FROM || env.EMAIL_FROM)
+    ),
   };
   return Response.json(body, {
     headers: {
