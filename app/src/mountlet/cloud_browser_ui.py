@@ -353,6 +353,8 @@ class CompactCloudBrowser:
         self.search_results.setRootIsDecorated(False)
         self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
         self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        with suppress(Exception):
+            self.search_results.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.search_results.setMaximumHeight(0)
         self.search_results.setMinimumHeight(0)
         self.search_results.setVisible(False)
@@ -1330,7 +1332,9 @@ class CompactCloudBrowser:
         key = event.key()
         modifiers = event.modifiers()
         control = bool(modifiers & self.qt.Qt.KeyboardModifier.ControlModifier)
-        if control and key == self.qt.Qt.Key.Key_C:
+        if self._matches_shortcut(event, "common_search"):
+            self.focus_search()
+        elif control and key == self.qt.Qt.Key.Key_C:
             if not self._edits_enabled():
                 return self._edit_disabled()
             self.copy_selected()
@@ -1413,6 +1417,11 @@ class CompactCloudBrowser:
 
     def _is_fixed_zoom_out(self, key: Any, control: bool) -> bool:
         return bool(control and key == getattr(self.qt.Qt.Key, "Key_Minus", None))
+
+    def _matches_shortcut(self, event: Any, action: str) -> bool:
+        with suppress(Exception):
+            return matches_shortcut(self.qt, event, action)
+        return False
 
     def _direction_points_to_main(self, key: Any) -> bool:
         if self._side == "left":
@@ -1504,6 +1513,10 @@ class CompactCloudBrowser:
                 try:
                     if event.type() != outer.qt.QEvent.Type.KeyPress:
                         return False
+                    if watched is not outer.search_field and outer._matches_shortcut(event, "common_search"):
+                        outer.focus_search()
+                        event.accept()
+                        return True
                     key = event.key()
                     if key == outer.qt.Qt.Key.Key_Down:
                         outer._move_search_selection(1)
@@ -1599,10 +1612,7 @@ class CompactCloudBrowser:
         if target is not None:
             tree.setCurrentItem(target)
             target.setSelected(True)
-        for column in range(3):
-            with suppress(Exception):
-                tree.resizeColumnToContents(column)
-        visible_rows = min(max(len(results), 1), 5)
+        visible_rows = min(max(len(results), 1), 8)
         try:
             row_height = tree.sizeHintForRow(0)
             if row_height <= 0:
@@ -1615,6 +1625,7 @@ class CompactCloudBrowser:
         tree.setMaximumHeight(height)
         tree.setMinimumHeight(height)
         tree.setVisible(bool(results))
+        self._fit_search_result_columns()
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
         self._layout_changed()
@@ -1629,22 +1640,19 @@ class CompactCloudBrowser:
         if remote is None:
             self.status.setText("That remote is no longer configured")
             return
-        self.remote = remote
-        self.path = result.parent_path
-        self._pending_select_path = result.path
-        self.backend.remember_path(remote.name, result.parent_path)
-        if self._embedded:
-            self.root.show()
-            self._layout_changed()
-        else:
-            self.window.show()
-            self.window.raise_()
-        self.refresh(force=False)
+        self.show_search_result(remote, None, result, show_browser=True, focus_browser=False)
 
     def _open_search_result(self, item: Any, _column: int | None = None) -> None:
-        self._preview_search_result(item)
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole) if item is not None else None
+        if isinstance(result, IndexedEntry):
+            remote = next((candidate for candidate in self._remotes() if candidate.name == result.remote_name), None)
+            if remote is not None:
+                self.show_search_result(remote, None, result, show_browser=True, focus_browser=True)
+            else:
+                self._preview_search_result(item)
+        else:
+            self._preview_search_result(item)
         self._release_main_hover_suppression()
-        self.focus()
 
     def _open_current_search_result(self) -> None:
         tree = getattr(self, "search_results", None)
@@ -1675,6 +1683,90 @@ class CompactCloudBrowser:
             tree.setMinimumHeight(0)
             tree.setVisible(False)
         self._layout_changed()
+
+    def focus_search(self) -> None:
+        field = getattr(self, "search_field", None)
+        if field is None:
+            return
+        with suppress(Exception):
+            field.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            field.selectAll()
+
+    def show_search_result(
+        self,
+        remote: core.RemoteInfo,
+        row: Any | None,
+        result: IndexedEntry,
+        *,
+        show_browser: bool,
+        focus_browser: bool,
+    ) -> None:
+        previous_remote_name = self.remote.name if self.remote is not None else ""
+        previous_path = self.path
+        self.remote = remote
+        self.path = result.parent_path
+        self._pending_select_path = result.path
+        self.backend.remember_path(remote.name, result.parent_path)
+        if not self._embedded and row is not None:
+            self._position(row)
+        if show_browser:
+            if self._embedded:
+                was_visible = self.root.isVisible()
+                self.root.show()
+                if not was_visible:
+                    self._layout_changed()
+            else:
+                with suppress(Exception):
+                    self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
+                self.window.show()
+                self.window.raise_()
+        if previous_remote_name == remote.name and previous_path == result.parent_path and self._select_visible_entry(result.path):
+            self._pending_select_path = ""
+            if focus_browser:
+                self.focus()
+            return
+        self.refresh(force=False)
+        if focus_browser:
+            self.focus()
+
+    def _select_visible_entry(self, path: str) -> bool:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return False
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(entry, BrowserEntry) and entry.path == path:
+                with suppress(Exception):
+                    tree.clearSelection()
+                tree.setCurrentItem(item)
+                item.setSelected(True)
+                with suppress(Exception):
+                    tree.scrollToItem(item)
+                self._ensure_tree_selection()
+                self._refresh_selection_backgrounds()
+                self._update_actions()
+                return True
+        return False
+
+    def _fit_search_result_columns(self) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None:
+            return
+        with suppress(Exception):
+            tree.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        try:
+            width = tree.viewport().width()
+            if width <= 0:
+                width = tree.width()
+        except Exception:
+            width = 0
+        if width <= 0:
+            return
+        widths = (0.46, 0.38, 0.16)
+        for column, fraction in enumerate(widths):
+            with suppress(Exception):
+                tree.setColumnWidth(column, max(56, int(width * fraction)))
 
     def _verify_visible_search_results(self) -> None:
         if not self._search_results or self.remote is None:

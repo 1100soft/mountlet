@@ -112,6 +112,7 @@ FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 COMMON_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("common_previous", "Previous item"),
     ("common_next", "Next item"),
+    ("common_search", "Search"),
 )
 REMOTE_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("remote_enter_browser", "Enter file browser"),
@@ -6380,11 +6381,13 @@ class MountletWindow:
         layout.addLayout(row)
 
         results = self.qt.QTreeWidget()
-        results.setColumnCount(4)
-        results.setHeaderLabels(["Name", "Remote", "Path", "Modified"])
+        results.setColumnCount(2)
+        results.setHeaderLabels(["Name", "Remote"])
         results.setRootIsDecorated(False)
         results.setSelectionBehavior(self.qt.QAbstractItemView.SelectionBehavior.SelectRows)
         results.setEditTriggers(self.qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        with suppress(Exception):
+            results.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         results.setMaximumHeight(0)
         results.setMinimumHeight(0)
         results.setVisible(False)
@@ -6429,6 +6432,11 @@ class MountletWindow:
                 try:
                     if event.type() != outer.qt.QEvent.Type.KeyPress:
                         return False
+                    field = getattr(outer, "_global_search_field", None)
+                    if watched is not field and matches_shortcut(outer.qt, event, "common_search"):
+                        outer._focus_global_search()
+                        event.accept()
+                        return True
                     key = event.key()
                     if key == outer.qt.Qt.Key.Key_Down:
                         outer._move_global_search_selection(1)
@@ -6496,13 +6504,13 @@ class MountletWindow:
         if tree is None:
             return
         previous_index = 0
-        previous_path = ""
+        previous_key: tuple[str, str] | None = None
         previous_scroll = 0
         current = tree.currentItem()
         if current is not None:
             previous = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
             if isinstance(previous, IndexedEntry):
-                previous_path = previous.path
+                previous_key = (previous.remote_name, previous.path)
             with suppress(Exception):
                 previous_index = max(tree.indexOfTopLevelItem(current), 0)
         with suppress(Exception):
@@ -6510,16 +6518,16 @@ class MountletWindow:
         tree.clear()
         selected_item = None
         fallback_item = None
+        remotes_by_name = {remote.name: remote for remote in _load_visible_remotes()}
         for result in results:
-            item = self.qt.QTreeWidgetItem([
-                result.name,
-                result.remote_display,
-                result.parent_path or "Remote root",
-                result.modified,
-            ])
+            item = self.qt.QTreeWidgetItem([result.name, result.remote_display])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
+            remote = remotes_by_name.get(result.remote_name)
+            if remote is not None:
+                with suppress(Exception):
+                    item.setForeground(1, self.qt.QBrush(self.qt.QColor(_provider_color(remote))))
             tree.addTopLevelItem(item)
-            if previous_path and result.path == previous_path:
+            if previous_key and (result.remote_name, result.path) == previous_key:
                 selected_item = item
             if fallback_item is None and tree.topLevelItemCount() - 1 >= previous_index:
                 fallback_item = item
@@ -6527,10 +6535,7 @@ class MountletWindow:
         if target is not None:
             tree.setCurrentItem(target)
             target.setSelected(True)
-        for column in range(4):
-            with suppress(Exception):
-                tree.resizeColumnToContents(column)
-        visible_rows = min(max(len(results), 1), 6)
+        visible_rows = min(max(len(results), 1), 8)
         try:
             row_height = tree.sizeHintForRow(0)
             if row_height <= 0:
@@ -6543,6 +6548,7 @@ class MountletWindow:
         tree.setMaximumHeight(height)
         tree.setMinimumHeight(height)
         tree.setVisible(bool(results))
+        self._fit_global_search_columns()
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
         self._browser_layout_changed()
@@ -6561,11 +6567,7 @@ class MountletWindow:
         self._set_browser_selected(remote.name)
         self._selected_remote_name = remote.name
         self._ensure_remote_row_visible(row.frame)
-        self.file_browser.remote = remote
-        self.file_browser.path = result.parent_path
-        self.file_browser._pending_select_path = result.path
-        self.file_browser.backend.remember_path(remote.name, result.parent_path)
-        self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=False)
+        self.file_browser.show_search_result(remote, row.frame, result, show_browser=True, focus_browser=False)
 
     def _open_global_search_result(self, item: Any, _column: int | None = None) -> None:
         self._suppress_remote_hover_until_browser_interaction()
@@ -6580,6 +6582,14 @@ class MountletWindow:
         if item is not None:
             self._open_global_search_result(item)
 
+    def _focus_global_search(self) -> None:
+        field = getattr(self, "_global_search_field", None)
+        if field is None:
+            return
+        with suppress(Exception):
+            field.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            field.selectAll()
+
     def _move_global_search_selection(self, delta: int) -> None:
         tree = getattr(self, "_global_search_results", None)
         if tree is None or not tree.isVisible() or tree.topLevelItemCount() <= 0:
@@ -6591,6 +6601,22 @@ class MountletWindow:
         tree.setCurrentItem(target)
         with suppress(Exception):
             tree.scrollToItem(target)
+
+    def _fit_global_search_columns(self) -> None:
+        tree = getattr(self, "_global_search_results", None)
+        if tree is None:
+            return
+        try:
+            width = tree.viewport().width()
+            if width <= 0:
+                width = tree.width()
+        except Exception:
+            width = 0
+        if width <= 0:
+            return
+        with suppress(Exception):
+            tree.setColumnWidth(0, max(120, int(width * 0.70)))
+            tree.setColumnWidth(1, max(90, width - tree.columnWidth(0) - 4))
 
     def _clear_global_search_results(self) -> None:
         self._global_search_items = []
@@ -7439,7 +7465,9 @@ class MountletWindow:
             event.accept()
             return
         key = event.key()
-        if matches_shortcut(self.qt, event, "remote_move_up"):
+        if matches_shortcut(self.qt, event, "common_search"):
+            self._focus_global_search()
+        elif matches_shortcut(self.qt, event, "remote_move_up"):
             self._move_focused_remote(remote.name, -1)
         elif matches_shortcut(self.qt, event, "remote_move_down"):
             self._move_focused_remote(remote.name, 1)
@@ -7481,7 +7509,9 @@ class MountletWindow:
             return True
         key = event.key()
         focused_remote_name = self._focused_remote_name()
-        if matches_shortcut(self.qt, event, "remote_move_up"):
+        if matches_shortcut(self.qt, event, "common_search"):
+            self._focus_global_search()
+        elif matches_shortcut(self.qt, event, "remote_move_up"):
             self._move_focused_remote(focused_remote_name, -1)
         elif matches_shortcut(self.qt, event, "remote_move_down"):
             self._move_focused_remote(focused_remote_name, 1)

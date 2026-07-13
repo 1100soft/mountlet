@@ -19,6 +19,7 @@ OFFLINE_FOLDER_NAME = "offline"
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "common_previous": (),
     "common_next": (),
+    "common_search": ("F",),
     "remote_enter_browser": ("Space",),
     "remote_move_up": ("Shift+Up",),
     "remote_move_down": ("Shift+Down",),
