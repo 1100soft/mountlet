@@ -1725,9 +1725,26 @@ class CompactCloudBrowser:
             if focus_browser:
                 self.focus()
             return
+        if self._display_cached_search_parent(remote, result):
+            if focus_browser:
+                self.focus()
+            return
         self.refresh(force=False)
         if focus_browser:
             self.focus()
+
+    def _display_cached_search_parent(self, remote: core.RemoteInfo, result: IndexedEntry) -> bool:
+        key = (remote.name, result.parent_path)
+        entries = self._folder_cache.get(key)
+        if entries is None:
+            with suppress(Exception):
+                entries = self.backend.cached_entries(remote, result.parent_path)
+            if entries:
+                self._folder_cache[key] = entries
+        if not entries or not any(entry.path == result.path for entry in entries):
+            return False
+        self._display_entries(entries)
+        return self._select_visible_entry(result.path)
 
     def _select_visible_entry(self, path: str) -> bool:
         tree = getattr(self, "tree", None)

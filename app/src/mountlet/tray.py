@@ -5878,6 +5878,7 @@ class MountletWindow:
         widgets = getattr(self, "_content_fit_widgets", None)
         if widgets is None or self._tray_is_quitting():
             return
+        self._fit_to_content(*widgets)
         self.qt.QTimer.singleShot(0, lambda: self._fit_to_content(*widgets))
 
     def _update_main_focus_style(self) -> None:
