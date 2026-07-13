@@ -142,6 +142,11 @@ class CompactCloudBrowser:
         self._rclone_raw_output_text: Any | None = None
         self._search_dialog: Any | None = None
         self._search_tree: Any | None = None
+        self._search_results: list[IndexedEntry] = []
+        self._search_pending = False
+        self._search_verify_pending = False
+        self._search_timer: Any | None = None
+        self._search_filters: list[Any] = []
         self._rclone_output_lines: list[str] = []
         self._rclone_progress_block: list[str] = []
         self._offline_jobs_running = 0
@@ -170,6 +175,7 @@ class CompactCloudBrowser:
         self.window = self._make_window()
         self._file_icon_provider = self._make_file_icon_provider()
         self._build()
+        self._setup_search_timer()
         self._setup_working_animation()
 
     def _make_bridge(self) -> Any:
@@ -242,6 +248,7 @@ class CompactCloudBrowser:
         root = qt.QWidget()
         root.setObjectName("fileBrowserSurface")
         root.setMinimumSize(EMBEDDED_BROWSER_MIN_WIDTH, EMBEDDED_BROWSER_MIN_HEIGHT)
+        root.enterEvent = lambda event: self._release_main_hover_suppression()
         self.root = root
         layout = qt.QVBoxLayout(root)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -331,8 +338,10 @@ class CompactCloudBrowser:
 
         index_search = qt.QHBoxLayout()
         self.search_field = qt.QLineEdit()
-        self.search_field.setPlaceholderText("Search indexed files")
-        self.search_field.returnPressed.connect(self.search_index)
+        self.search_field.setPlaceholderText("Search this remote")
+        self.search_field.textChanged.connect(self._search_text_changed)
+        self.search_field.returnPressed.connect(self._open_current_search_result)
+        self.search_field.installEventFilter(self._make_search_key_filter())
         index_search.addWidget(self.search_field, 1)
         self.search_button = self._button(
             "⌕",
@@ -359,6 +368,19 @@ class CompactCloudBrowser:
         index_search.addWidget(self.index_remote_button)
         index_search.addWidget(self.index_all_button)
         layout.addLayout(index_search)
+
+        self.search_results = qt.QTreeWidget()
+        self.search_results.setColumnCount(3)
+        self.search_results.setHeaderLabels(["Name", "Path", "Modified"])
+        self.search_results.setRootIsDecorated(False)
+        self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.search_results.setMaximumHeight(0)
+        self.search_results.setVisible(False)
+        self.search_results.itemClicked.connect(self._open_search_result)
+        self.search_results.itemDoubleClicked.connect(self._open_search_result)
+        self.search_results.installEventFilter(self._make_search_key_filter())
+        layout.addWidget(self.search_results)
 
         item_actions = qt.QHBoxLayout()
         self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True, icon_name="ui-copy")
@@ -1206,6 +1228,7 @@ class CompactCloudBrowser:
             self.refresh(force=False)
 
     def focus(self) -> None:
+        self._release_main_hover_suppression()
         self._set_focus_owner("browser")
         if self._embedded:
             self.root.show()
@@ -1225,6 +1248,7 @@ class CompactCloudBrowser:
         self.qt.QTimer.singleShot(0, lambda: self._set_focus_owner("browser"))
 
     def _activate_from_mouse(self) -> None:
+        self._release_main_hover_suppression()
         self._set_focus_owner("browser")
         if self._embedded:
             with suppress(Exception):
@@ -1241,6 +1265,11 @@ class CompactCloudBrowser:
         timer = getattr(self.qt, "QTimer", None)
         if timer is not None:
             timer.singleShot(0, lambda: self._set_focus_owner("browser"))
+
+    def _release_main_hover_suppression(self) -> None:
+        callback = getattr(self.main_window, "release_remote_hover_suppression", None)
+        if callable(callback):
+            callback()
 
     def focus_main_window(self) -> None:
         self._set_focus_owner("main")
@@ -1456,17 +1485,67 @@ class CompactCloudBrowser:
             return
         self._display_entries(entries)
 
+    def _setup_search_timer(self) -> None:
+        timer = self.qt.QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        timer.timeout.connect(self._verify_visible_search_results)
+        self._search_timer = timer
+
+    def _make_search_key_filter(self) -> Any:
+        outer = self
+
+        class SearchKeyFilter(self.qt.QObject):
+            def eventFilter(self, watched: object, event: object) -> bool:
+                try:
+                    if event.type() != outer.qt.QEvent.Type.KeyPress:
+                        return False
+                    key = event.key()
+                    if key == outer.qt.Qt.Key.Key_Down:
+                        outer._move_search_selection(1)
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Up:
+                        outer._move_search_selection(-1)
+                        event.accept()
+                        return True
+                    if key in {outer.qt.Qt.Key.Key_Return, outer.qt.Qt.Key.Key_Enter}:
+                        outer._open_current_search_result()
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Escape:
+                        outer._clear_search_results()
+                        event.accept()
+                        return True
+                except Exception:
+                    return False
+                return False
+
+        event_filter = SearchKeyFilter()
+        self._search_filters.append(event_filter)
+        return event_filter
+
+    def _search_text_changed(self, _text: str) -> None:
+        self.search_index()
+        timer = getattr(self, "_search_timer", None)
+        if timer is not None:
+            timer.start()
+
     def search_index(self) -> None:
         query = self.search_field.text().strip()
         if not query:
-            self.status.setText("Enter a search term")
+            self._clear_search_results()
             return
-        remotes = list(self._remotes())
-        self.status.setText("Searching indexed metadata…")
+        remote = self.remote
+        if remote is None:
+            self._clear_search_results()
+            return
+        self._search_pending = True
+        self.status.setText("Searching index…")
 
         def worker() -> None:
             try:
-                results = self.backend.search_index(query, remotes=remotes, limit=200)
+                results = self.backend.search_index(query, remotes=[remote], limit=50)
             except Exception as exc:
                 self._bridge.search_ready.emit(query, None, str(exc))
                 return
@@ -1475,53 +1554,49 @@ class CompactCloudBrowser:
         threading.Thread(target=worker, daemon=True).start()
 
     def _search_ready(self, query: str, results: object, error: str) -> None:
+        if query != self.search_field.text().strip():
+            return
+        self._search_pending = False
         if error or not isinstance(results, list):
             self.status.setText(error or "Search failed")
             return
-        self.status.setText(f"{len(results)} indexed result{'s' if len(results) != 1 else ''}")
-        self._show_search_results(query, results)
+        self._search_results = results
+        self._display_search_results(results)
+        suffix = "Checking…" if self._search_verify_pending else ""
+        self.status.setText(
+            f"{len(results)} indexed result{'s' if len(results) != 1 else ''} {suffix}".strip()
+        )
 
-    def _show_search_results(self, query: str, results: list[IndexedEntry]) -> None:
-        dialog = self._search_dialog
-        if dialog is None:
-            dialog = self.qt.QDialog(self.window)
-            dialog.setWindowTitle("Indexed search")
-            layout = self.qt.QVBoxLayout(dialog)
-            self._search_title = self.qt.QLabel("")
-            layout.addWidget(self._search_title)
-            tree = self.qt.QTreeWidget()
-            tree.setColumnCount(4)
-            tree.setHeaderLabels(["Name", "Remote", "Path", "Modified"])
-            tree.setRootIsDecorated(False)
-            tree.setSelectionBehavior(self.qt.QAbstractItemView.SelectionBehavior.SelectRows)
-            tree.setEditTriggers(self.qt.QAbstractItemView.EditTrigger.NoEditTriggers)
-            tree.itemDoubleClicked.connect(self._open_search_result)
-            layout.addWidget(tree)
-            buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
-            buttons.rejected.connect(dialog.hide)
-            layout.addWidget(buttons)
-            dialog.resize(720, 420)
-            self._search_dialog = dialog
-            self._search_tree = tree
-        title = getattr(self, "_search_title", None)
-        if title is not None:
-            title.setText(f'Results for "{query}"')
-        tree = self._search_tree
+    def _display_search_results(self, results: list[IndexedEntry]) -> None:
+        tree = getattr(self, "search_results", None)
         if tree is None:
             return
         tree.clear()
         for result in results:
             path_text = result.parent_path or "Remote root"
-            item = self.qt.QTreeWidgetItem([result.name, result.remote_display, path_text, result.modified])
+            item = self.qt.QTreeWidgetItem([result.name, path_text, result.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
             tree.addTopLevelItem(item)
-        for column in range(4):
+        if results:
+            tree.setCurrentItem(tree.topLevelItem(0))
+        for column in range(3):
             with suppress(Exception):
                 tree.resizeColumnToContents(column)
-        dialog.show()
-        dialog.raise_()
+        visible_rows = min(max(len(results), 1), 5)
+        try:
+            row_height = tree.sizeHintForRow(0)
+            if row_height <= 0:
+                row_height = tree.fontMetrics().height() + 8
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            row_height = 24
+            header_height = 28
+        height = int(header_height + row_height * visible_rows + 8) if results else 0
+        tree.setMaximumHeight(height)
+        tree.setVisible(bool(results))
+        self._layout_changed()
 
-    def _open_search_result(self, item: Any) -> None:
+    def _open_search_result(self, item: Any, _column: int | None = None) -> None:
         result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
         if not isinstance(result, IndexedEntry):
             return
@@ -1540,8 +1615,76 @@ class CompactCloudBrowser:
             self.window.show()
             self.window.raise_()
         self.refresh(force=True)
+
+    def _open_current_search_result(self) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None or not tree.isVisible():
+            return
+        item = tree.currentItem() or tree.topLevelItem(0)
+        if item is not None:
+            self._open_search_result(item)
+
+    def _move_search_selection(self, delta: int) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None or not tree.isVisible() or tree.topLevelItemCount() <= 0:
+            return
+        current = tree.currentItem() or tree.topLevelItem(0)
+        index = tree.indexOfTopLevelItem(current) if current is not None else 0
+        index = min(max(index + delta, 0), tree.topLevelItemCount() - 1)
+        target = tree.topLevelItem(index)
+        tree.setCurrentItem(target)
         with suppress(Exception):
-            self._search_dialog.hide()
+            tree.scrollToItem(target)
+
+    def _clear_search_results(self) -> None:
+        self._search_results = []
+        tree = getattr(self, "search_results", None)
+        if tree is not None:
+            tree.clear()
+            tree.setMaximumHeight(0)
+            tree.setVisible(False)
+        self._layout_changed()
+
+    def _verify_visible_search_results(self) -> None:
+        if not self._search_results or self.remote is None:
+            self._search_verify_pending = False
+            return
+        query = self.search_field.text().strip()
+        remote = self.remote
+        parents: list[str] = []
+        seen: set[str] = set()
+        for result in self._search_results:
+            parent = result.parent_path
+            if parent in seen:
+                continue
+            seen.add(parent)
+            parents.append(parent)
+            if len(parents) >= 5:
+                break
+        self._search_verify_pending = True
+        self.status.setText("Checking search results…")
+
+        def worker() -> None:
+            for parent in parents:
+                try:
+                    self.backend.list_entries(remote, parent)
+                except Exception:
+                    continue
+            try:
+                results = self.backend.search_index(query, remotes=[remote], limit=50)
+            except Exception as exc:
+                self._search_verify_pending = False
+                self._bridge.search_ready.emit(query, None, str(exc))
+                return
+            self._search_verify_pending = False
+            self._bridge.search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_search_verification(self) -> None:
+        self._search_verify_pending = False
+        if self._search_results:
+            self.status.setText(f"{len(self._search_results)} indexed result{'s' if len(self._search_results) != 1 else ''}")
 
     def index_current_remote(self) -> None:
         if self.remote is None:

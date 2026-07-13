@@ -34,6 +34,7 @@ from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, app_state_dir, ensure_app_directories
+from .metadata_index import IndexedEntry
 from .platform_services import get_platform
 from .platform_services.desktop import DesktopServices
 from .platform_services.file_managers import (
@@ -4814,6 +4815,13 @@ class MountletWindow:
         self._all_cache_sync_button: Any | None = None
         self._remove_all_offline_button: Any | None = None
         self._clear_all_cache_button: Any | None = None
+        self._global_search_field: Any | None = None
+        self._global_search_results: Any | None = None
+        self._global_search_timer: Any | None = None
+        self._global_search_filters: list[Any] = []
+        self._global_search_items: list[IndexedEntry] = []
+        self._global_search_verify_pending = False
+        self._remote_hover_suppressed = False
         self._app_menu: Any | None = None
         self._mount_menu: Any | None = None
         self._config_menu: Any | None = None
@@ -4843,6 +4851,7 @@ class MountletWindow:
         self._bridge.offline_reconcile_ready.connect(self._handle_offline_reconcile_ready)
         self._bridge.cache_sync_debug_ready.connect(self._handle_cache_sync_debug_ready)
         self._bridge.bug_report_ready.connect(self._handle_bug_report_ready)
+        self._bridge.global_search_ready.connect(self._handle_global_search_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -4866,8 +4875,10 @@ class MountletWindow:
         self.window.update_focus_style = self._update_main_focus_style
         self.window.set_mountlet_focus_owner = self._set_focus_owner
         self.window.mountlet_focus_owner = lambda: getattr(self, "_focus_owner", "main")
+        self.window.release_remote_hover_suppression = self._release_remote_hover_suppression
         self.file_browser.window.setWindowIcon(self.tray_app.icon)
         self.file_browser.preload(_load_visible_remotes())
+        self._setup_global_search_timer()
         self._setup_offline_change_tracking()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
@@ -4897,6 +4908,7 @@ class MountletWindow:
             offline_reconcile_ready = qt.Signal(str, object, object)
             cache_sync_debug_ready = qt.Signal(str)
             bug_report_ready = qt.Signal(bool, str, str)
+            global_search_ready = qt.Signal(str, object, str)
 
         return Bridge()
 
@@ -5793,6 +5805,7 @@ class MountletWindow:
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
         outer.addWidget(self._sort_toolbar())
+        outer.addWidget(self._global_search_panel())
         if locked:
             outer.addWidget(self._license_locked_banner())
 
@@ -6332,6 +6345,255 @@ class MountletWindow:
                     button = getattr(widgets, name, None)
                     if button is not None:
                         button.setEnabled(False)
+
+    def _setup_global_search_timer(self) -> None:
+        timer = self.qt.QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        timer.timeout.connect(self._verify_global_search_results)
+        self._global_search_timer = timer
+
+    def _global_search_panel(self) -> Any:
+        widget = self.qt.QWidget()
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        row = self.qt.QHBoxLayout()
+        field = self.qt.QLineEdit()
+        field.setPlaceholderText("Search all remotes")
+        field.textChanged.connect(self._global_search_text_changed)
+        field.returnPressed.connect(self._open_current_global_search_result)
+        field.installEventFilter(self._make_global_search_key_filter())
+        self._global_search_field = field
+        button = self._toolbar_button("ui-search", "⌕", "Search all indexed remotes", self._run_global_search)
+        row.addWidget(field, 1)
+        row.addWidget(button)
+        status = self.qt.QLabel("")
+        status.setStyleSheet(_muted_text_style(status))
+        self._global_search_status = status
+        row.addWidget(status)
+        layout.addLayout(row)
+
+        results = self.qt.QTreeWidget()
+        results.setColumnCount(4)
+        results.setHeaderLabels(["Name", "Remote", "Path", "Modified"])
+        results.setRootIsDecorated(False)
+        results.setSelectionBehavior(self.qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        results.setEditTriggers(self.qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        results.setMaximumHeight(0)
+        results.setVisible(False)
+        results.itemClicked.connect(self._open_global_search_result)
+        results.itemDoubleClicked.connect(self._open_global_search_result)
+        results.installEventFilter(self._make_global_search_key_filter())
+        self._global_search_results = results
+        layout.addWidget(results)
+        return widget
+
+    def _make_global_search_key_filter(self) -> Any:
+        outer = self
+
+        class SearchKeyFilter(self.qt.QObject):
+            def eventFilter(self, watched: object, event: object) -> bool:
+                try:
+                    if event.type() != outer.qt.QEvent.Type.KeyPress:
+                        return False
+                    key = event.key()
+                    if key == outer.qt.Qt.Key.Key_Down:
+                        outer._move_global_search_selection(1)
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Up:
+                        outer._move_global_search_selection(-1)
+                        event.accept()
+                        return True
+                    if key in {outer.qt.Qt.Key.Key_Return, outer.qt.Qt.Key.Key_Enter}:
+                        outer._open_current_global_search_result()
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Escape:
+                        outer._clear_global_search_results()
+                        event.accept()
+                        return True
+                except Exception:
+                    return False
+                return False
+
+        event_filter = SearchKeyFilter()
+        self._global_search_filters.append(event_filter)
+        return event_filter
+
+    def _global_search_text_changed(self, _text: str) -> None:
+        self._run_global_search()
+        timer = getattr(self, "_global_search_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def _run_global_search(self) -> None:
+        field = getattr(self, "_global_search_field", None)
+        query = field.text().strip() if field is not None else ""
+        if not query:
+            self._clear_global_search_results()
+            return
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            status.setText("Searching…")
+        remotes = list(_load_visible_remotes())
+
+        def worker() -> None:
+            try:
+                results = self.file_browser.backend.search_index(query, remotes=remotes, limit=80)
+            except Exception as exc:
+                self._bridge.global_search_ready.emit(query, None, str(exc))
+                return
+            self._bridge.global_search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_global_search_ready(self, query: str, results: object, error: str) -> None:
+        field = getattr(self, "_global_search_field", None)
+        if field is None or query != field.text().strip():
+            return
+        if error or not isinstance(results, list):
+            self.tray_app._notify("Search", error or "Search failed", success=False)
+            return
+        self._global_search_items = results
+        self._display_global_search_results(results)
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            suffix = " Checking…" if self._global_search_verify_pending else ""
+            status.setText(f"{len(results)} result{'s' if len(results) != 1 else ''}{suffix}")
+
+    def _display_global_search_results(self, results: list[IndexedEntry]) -> None:
+        tree = getattr(self, "_global_search_results", None)
+        if tree is None:
+            return
+        tree.clear()
+        for result in results:
+            item = self.qt.QTreeWidgetItem([
+                result.name,
+                result.remote_display,
+                result.parent_path or "Remote root",
+                result.modified,
+            ])
+            item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
+            tree.addTopLevelItem(item)
+        if results:
+            tree.setCurrentItem(tree.topLevelItem(0))
+        for column in range(4):
+            with suppress(Exception):
+                tree.resizeColumnToContents(column)
+        visible_rows = min(max(len(results), 1), 6)
+        try:
+            row_height = tree.sizeHintForRow(0)
+            if row_height <= 0:
+                row_height = tree.fontMetrics().height() + 8
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            row_height = 24
+            header_height = 28
+        height = int(header_height + row_height * visible_rows + 8) if results else 0
+        tree.setMaximumHeight(height)
+        tree.setVisible(bool(results))
+        self._browser_layout_changed()
+
+    def _open_global_search_result(self, item: Any, _column: int | None = None) -> None:
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(result, IndexedEntry):
+            return
+        remote = self._remote_by_name(result.remote_name)
+        row = self._row_widgets.get(result.remote_name)
+        if remote is None or row is None:
+            self.tray_app._notify("Search", "That remote is no longer configured.", success=False)
+            return
+        self._suppress_remote_hover_until_browser_interaction()
+        self._set_browser_selected(remote.name)
+        self._focus_remote_row(remote.name)
+        self.file_browser.remote = remote
+        self.file_browser.path = result.parent_path
+        self.file_browser._pending_select_path = result.path
+        self.file_browser.backend.remember_path(remote.name, result.parent_path)
+        self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=True)
+        self.file_browser.refresh(force=True)
+
+    def _open_current_global_search_result(self) -> None:
+        tree = getattr(self, "_global_search_results", None)
+        if tree is None or not tree.isVisible():
+            return
+        item = tree.currentItem() or tree.topLevelItem(0)
+        if item is not None:
+            self._open_global_search_result(item)
+
+    def _move_global_search_selection(self, delta: int) -> None:
+        tree = getattr(self, "_global_search_results", None)
+        if tree is None or not tree.isVisible() or tree.topLevelItemCount() <= 0:
+            return
+        current = tree.currentItem() or tree.topLevelItem(0)
+        index = tree.indexOfTopLevelItem(current) if current is not None else 0
+        index = min(max(index + delta, 0), tree.topLevelItemCount() - 1)
+        target = tree.topLevelItem(index)
+        tree.setCurrentItem(target)
+        with suppress(Exception):
+            tree.scrollToItem(target)
+
+    def _clear_global_search_results(self) -> None:
+        self._global_search_items = []
+        tree = getattr(self, "_global_search_results", None)
+        if tree is not None:
+            tree.clear()
+            tree.setMaximumHeight(0)
+            tree.setVisible(False)
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            status.setText("")
+        self._browser_layout_changed()
+
+    def _verify_global_search_results(self) -> None:
+        if not self._global_search_items:
+            self._global_search_verify_pending = False
+            return
+        field = getattr(self, "_global_search_field", None)
+        query = field.text().strip() if field is not None else ""
+        if not query:
+            return
+        remotes_by_name = {remote.name: remote for remote in _load_visible_remotes()}
+        targets: list[tuple[core.RemoteInfo, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for result in self._global_search_items:
+            remote = remotes_by_name.get(result.remote_name)
+            if remote is None:
+                continue
+            key = (remote.name, result.parent_path)
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append((remote, result.parent_path))
+            if len(targets) >= 6:
+                break
+        self._global_search_verify_pending = True
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            status.setText("Checking…")
+
+        def worker() -> None:
+            for remote, parent in targets:
+                try:
+                    self.file_browser.backend.list_entries(remote, parent)
+                except Exception:
+                    continue
+            try:
+                results = self.file_browser.backend.search_index(query, remotes=remotes_by_name.values(), limit=80)
+            except Exception as exc:
+                self._global_search_verify_pending = False
+                self._bridge.global_search_ready.emit(query, None, str(exc))
+                return
+            self._global_search_verify_pending = False
+            self._bridge.global_search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_global_search_verification(self) -> None:
+        self._global_search_verify_pending = False
 
     def _sort_toolbar(self) -> Any:
         widget = self.qt.QWidget()
@@ -6974,7 +7236,14 @@ class MountletWindow:
             if child.property("rowControl"):
                 return
             child = child.parentWidget()
+        self._suppress_remote_hover_until_browser_interaction()
         self._browse_remote(remote, row)
+
+    def _suppress_remote_hover_until_browser_interaction(self) -> None:
+        self._remote_hover_suppressed = True
+
+    def _release_remote_hover_suppression(self) -> None:
+        self._remote_hover_suppressed = False
 
     def _remote_row_style(self, row: Any, *, highlighted: bool) -> str:
         mounted = bool(row.property("mounted"))
@@ -7020,6 +7289,12 @@ class MountletWindow:
             row.setStyleSheet(self._remote_row_style(row, highlighted=False))
             if highlighted:
                 self.qt.QToolTip.showText(self.qt.QCursor.pos(), _license_lock_message(), row)
+            return
+        if highlighted and getattr(self, "_remote_hover_suppressed", False):
+            row.setProperty("hovered", False)
+            row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+            if tooltip:
+                self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, row)
             return
         row.setProperty("hovered", highlighted)
         row.setStyleSheet(self._remote_row_style(row, highlighted=False))
