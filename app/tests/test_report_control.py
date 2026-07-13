@@ -90,6 +90,15 @@ class ReportControlTests(unittest.TestCase):
                 )
         self.assertEqual(encodings, ["utf-8"])
 
+    def test_http_error_detail_extracts_nested_resend_message(self):
+        detail = report_control._http_error_detail(
+            '{"ok":false,"error":"{\\"statusCode\\":403,'
+            '\\"message\\":\\"The mountlet.app domain is not verified.\\",'
+            '\\"name\\":\\"validation_error\\"}"}'
+        )
+
+        self.assertEqual(detail, "The mountlet.app domain is not verified.")
+
 
 if __name__ == "__main__":
     unittest.main()

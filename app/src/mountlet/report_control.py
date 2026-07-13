@@ -165,7 +165,7 @@ def submit_report(payload: dict[str, Any], *, api_url: str | None = None) -> dic
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             body = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
+        detail = _http_error_detail(exc.read().decode("utf-8", errors="replace"))
         raise RuntimeError(f"Report server returned {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Could not reach report server: {exc.reason}") from exc
@@ -176,3 +176,21 @@ def submit_report(payload: dict[str, Any], *, api_url: str | None = None) -> dic
     if not parsed.get("ok"):
         raise RuntimeError(str(parsed.get("error") or "Report was not accepted."))
     return parsed
+
+
+def _http_error_detail(body: str) -> str:
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return body[:500]
+    detail = parsed.get("error") if isinstance(parsed, dict) else ""
+    if not isinstance(detail, str) or not detail:
+        return body[:500]
+    try:
+        nested = json.loads(detail)
+    except json.JSONDecodeError:
+        return detail[:500]
+    if isinstance(nested, dict):
+        message = nested.get("message") or nested.get("error") or detail
+        return str(message)[:500]
+    return detail[:500]

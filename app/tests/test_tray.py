@@ -1512,6 +1512,35 @@ class TrayTests(unittest.TestCase):
         timer.timeout.connect.assert_called_once_with(mountlet_window._scan_remote_cache_changes)
         timer.start.assert_called_once_with()
 
+    def test_mountlet_window_disables_background_storage_checks_for_frozen_linux_x11_by_default(self):
+        remote = SimpleNamespace(name="Docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._usage_cache = {}
+        mountlet_window._connection_cache = {}
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                    mountlet_window._schedule_storage_load(remote)
+
+        self.assertEqual(mountlet_window._usage_cache["Docs"].text, "?")
+        self.assertFalse(mountlet_window._connection_cache["Docs"])
+
+    def test_mountlet_window_disables_config_sync_metadata_check_for_frozen_linux_x11_by_default(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._remote_sync_check_pending = False
+        mountlet_window._remote_sync_metadata = {"config_hash": "old"}
+        mountlet_window._update_config_sync_buttons = mock.Mock()
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                mountlet_window._request_config_sync_metadata_check([])
+
+        self.assertIsNone(mountlet_window._remote_sync_metadata)
+        mountlet_window._update_config_sync_buttons.assert_called_once_with()
+
     def test_mountlet_window_local_cache_change_schedules_remote_reconcile(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.file_browser = SimpleNamespace(

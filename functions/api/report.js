@@ -53,7 +53,7 @@ export async function onRequestPost({request, env}) {
   });
   const body = await response.text();
   if (!response.ok) {
-    return json({ok: false, error: body.slice(0, 500)}, 502);
+    return json({ok: false, error: resendErrorMessage(body)}, 502);
   }
   let parsed = {};
   try {
@@ -66,6 +66,15 @@ export async function onRequestPost({request, env}) {
 
 function clean(value, limit) {
   return String(value || "").replace(/\r\n/g, "\n").slice(0, limit);
+}
+
+function resendErrorMessage(body) {
+  try {
+    const parsed = JSON.parse(body || "{}");
+    return clean(parsed.message || parsed.error || body, 500);
+  } catch (_error) {
+    return clean(body, 500);
+  }
 }
 
 function json(body, status = 200) {

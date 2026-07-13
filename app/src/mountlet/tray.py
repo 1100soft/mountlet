@@ -65,6 +65,7 @@ _file_manager_label_cache: str | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
 LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
 REMOTE_CHANGE_POLLING_ENV = "MOUNTLET_REMOTE_CHANGE_POLLING"
+BACKGROUND_RCLONE_CHECKS_ENV = "MOUNTLET_BACKGROUND_RCLONE_CHECKS"
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
     ("existing_window", "Any existing file manager window"),
@@ -5153,6 +5154,14 @@ class MountletWindow:
             return True
         if override in {"0", "false", "no", "off"}:
             return False
+        return self._background_rclone_checks_enabled()
+
+    def _background_rclone_checks_enabled(self) -> bool:
+        override = os.environ.get(BACKGROUND_RCLONE_CHECKS_ENV, "").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            return True
+        if override in {"0", "false", "no", "off"}:
+            return False
         return not _frozen_linux_x11()
 
     def _scan_remote_cache_changes(self) -> None:
@@ -6077,6 +6086,10 @@ class MountletWindow:
 
     def _request_config_sync_metadata_check(self, remotes: list[core.RemoteInfo]) -> None:
         if self._remote_sync_check_pending or self._tray_is_quitting():
+            return
+        if not self._background_rclone_checks_enabled():
+            self._remote_sync_metadata = None
+            self._update_config_sync_buttons()
             return
         settings = load_app_settings()
         if not settings.config_sync_remote:
@@ -8815,6 +8828,10 @@ class MountletWindow:
 
     def _schedule_storage_load(self, remote: core.RemoteInfo) -> None:
         if self._tray_is_quitting() or self._license_locked():
+            return
+        if not self._background_rclone_checks_enabled():
+            self._usage_cache.setdefault(remote.name, core.StorageUsage("?"))
+            self._connection_cache.setdefault(remote.name, core.is_mounted(remote))
             return
         if remote.name in self._usage_cache and remote.name in self._connection_cache:
             return
