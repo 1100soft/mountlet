@@ -24,6 +24,8 @@ from mountlet.cloud_browser import (
 )
 from mountlet.cloud_browser_ui import (
     CHILD_FOLDER_PREFETCH_LIMIT,
+    EMBEDDED_BROWSER_MAX_HEIGHT,
+    EMBEDDED_BROWSER_MIN_HEIGHT,
     OFFLINE_JOB_CONCURRENCY,
     CompactCloudBrowser,
     cascade_position,
@@ -1457,12 +1459,16 @@ class CloudBrowserTests(unittest.TestCase):
         class Root:
             def __init__(self) -> None:
                 self.minimum_height = None
+                self.maximum_height = None
 
             def sizeHint(self) -> object:
                 return SimpleNamespace(width=lambda: 540, height=lambda: 260)
 
             def setMinimumHeight(self, height: int) -> None:
                 self.minimum_height = height
+
+            def setMaximumHeight(self, height: int) -> None:
+                self.maximum_height = height
 
         browser = object.__new__(CompactCloudBrowser)
         browser.tree = Tree()
@@ -1475,7 +1481,8 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser.tree.minimum_height, 98)
         self.assertEqual(browser.tree.maximum_height, 98)
-        self.assertEqual(browser.root.minimum_height, 260)
+        self.assertEqual(browser.root.minimum_height, EMBEDDED_BROWSER_MIN_HEIGHT)
+        self.assertEqual(browser.root.maximum_height, EMBEDDED_BROWSER_MAX_HEIGHT)
 
     def test_file_browser_resize_can_shrink_window(self):
         class Tree:

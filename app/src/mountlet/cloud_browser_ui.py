@@ -24,6 +24,8 @@ from .ui_icons import apply_button_icon, mountlet_icon
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+EMBEDDED_BROWSER_MAX_HEIGHT = 460
+EMBEDDED_BROWSER_MAX_VISIBLE_ROWS = 8
 FILE_BROWSER_MIN_HEIGHT = 240
 FILE_BROWSER_MAX_VISIBLE_ROWS = 14
 FILE_BROWSER_CONTEXT_ROWS = 1
@@ -1165,6 +1167,49 @@ class CompactCloudBrowser:
         layout.addWidget(self.root)
         self.root.hide()
 
+    def owns_focus_widget(self, widget: Any | None = None) -> bool:
+        if widget is None:
+            application = getattr(self.qt, "QApplication", None)
+            widget = application.focusWidget() if application is not None else None
+        current = widget
+        while current is not None:
+            if current is getattr(self, "root", None) or current is getattr(self, "window", None):
+                return True
+            try:
+                current = current.parentWidget()
+            except Exception:
+                return False
+        return False
+
+    def focus_snapshot(self) -> str:
+        application = getattr(self.qt, "QApplication", None)
+        widget = application.focusWidget() if application is not None else None
+        if widget is getattr(self, "search_field", None):
+            return "search"
+        if widget is getattr(self, "search_results", None):
+            return "search_results"
+        return "tree"
+
+    def restore_focus_snapshot(self, target: str) -> None:
+        if not self.is_visible():
+            return
+        self._set_focus_owner("browser")
+        if target == "search" and getattr(self, "search_field", None) is not None:
+            with suppress(Exception):
+                self.search_field.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        if (
+            target == "search_results"
+            and getattr(self, "search_results", None) is not None
+            and self.search_results.isVisible()
+        ):
+            with suppress(Exception):
+                self.search_results.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        with suppress(Exception):
+            self.tree.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            self._ensure_tree_selection()
+
     def preload(self, remotes: list[core.RemoteInfo]) -> None:
         for remote in remotes:
             path = self.backend.current_path(remote.name)
@@ -1954,7 +1999,8 @@ class CompactCloudBrowser:
         entries = getattr(self, "entries", [])
         count = len(entries) if entries else tree.topLevelItemCount()
         count = max(1, int(count))
-        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, FILE_BROWSER_MAX_VISIBLE_ROWS + FILE_BROWSER_CONTEXT_ROWS)
+        max_visible_rows = EMBEDDED_BROWSER_MAX_VISIBLE_ROWS if self._embedded else FILE_BROWSER_MAX_VISIBLE_ROWS
+        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, max_visible_rows + FILE_BROWSER_CONTEXT_ROWS)
         try:
             row_height = tree.sizeHintForRow(0)
         except Exception:
@@ -1973,12 +2019,17 @@ class CompactCloudBrowser:
             tree.setMinimumHeight(tree_height)
             tree.setMaximumHeight(tree_height)
         try:
-            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
-            if not self._embedded:
+            if self._embedded:
+                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
+                root.setMaximumHeight(EMBEDDED_BROWSER_MAX_HEIGHT)
+            else:
+                root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
                 with suppress(Exception):
                     self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
             hint = root.sizeHint()
             desired_height = max(FILE_BROWSER_MIN_HEIGHT, hint.height())
+            if self._embedded:
+                desired_height = min(max(EMBEDDED_BROWSER_MIN_HEIGHT, desired_height), EMBEDDED_BROWSER_MAX_HEIGHT)
             root.setMinimumHeight(desired_height)
             if not self._embedded:
                 self.window.resize(max(self.window.width(), hint.width()), desired_height)

@@ -88,6 +88,7 @@ REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+EMBEDDED_BROWSER_MAX_HEIGHT = 460
 REMOTE_CACHE_CHECK_BATCH_SIZE = 20
 FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
@@ -4964,7 +4965,8 @@ class MountletWindow:
                     qt.QEvent.Type.WindowDeactivate,
                 }:
                     if event.type() == qt.QEvent.Type.WindowActivate:
-                        outer._set_focus_owner("main")
+                        if not outer._restore_embedded_browser_focus_on_activation():
+                            outer._set_focus_owner("main")
                         outer._handle_main_window_activation(active=True)
                     elif event.type() == qt.QEvent.Type.WindowDeactivate:
                         outer._handle_main_window_activation(active=False)
@@ -4984,7 +4986,8 @@ class MountletWindow:
                             return outer._handle_window_close(event)
                         if event_type == qt.QEvent.Type.WindowActivate:
                             outer._deactivated_for_tray = False
-                            outer._set_focus_owner("main")
+                            if not outer._restore_embedded_browser_focus_on_activation():
+                                outer._set_focus_owner("main")
                             outer._handle_main_window_activation(active=True)
                         elif event_type == qt.QEvent.Type.WindowDeactivate:
                             outer._deactivated_for_tray = _windows_foreground_is_tray()
@@ -5782,6 +5785,7 @@ class MountletWindow:
     def refresh(self) -> None:
         if self._tray_is_quitting():
             return
+        focus_snapshot = self._focus_snapshot()
         self._refresh_pending = False
         locked = self._license_locked()
         if locked:
@@ -5801,6 +5805,7 @@ class MountletWindow:
                     self._schedule_storage_load(remote)
             self._update_license_lock_state()
             self._browser_layout_changed()
+            self._restore_focus_snapshot(focus_snapshot)
             return
 
         root = self.qt.QWidget()
@@ -5865,6 +5870,57 @@ class MountletWindow:
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
         self._update_app_cache_buttons(remotes)
         self._update_license_lock_state()
+        self._restore_focus_snapshot(focus_snapshot)
+        self.qt.QTimer.singleShot(0, lambda snapshot=focus_snapshot: self._restore_focus_snapshot(snapshot))
+
+    def _focus_snapshot(self) -> tuple[str, str]:
+        application = getattr(self.qt, "QApplication", None)
+        widget = application.focusWidget() if application is not None else None
+        if getattr(self.file_browser, "owns_focus_widget", lambda _widget=None: False)(widget):
+            return "browser", self.file_browser.focus_snapshot()
+        if widget is getattr(self, "_global_search_field", None):
+            return "global_search", ""
+        if widget is getattr(self, "_global_search_results", None):
+            return "global_results", ""
+        for name, row in getattr(self, "_row_widgets", {}).items():
+            if widget is row.frame:
+                return "remote", name
+        return getattr(self, "_focus_owner", "main"), getattr(self, "_selected_remote_name", "")
+
+    def _restore_focus_snapshot(self, snapshot: tuple[str, str]) -> None:
+        kind, value = snapshot
+        if kind == "browser":
+            self.file_browser.restore_focus_snapshot(value)
+            return
+        if kind == "global_search":
+            field = getattr(self, "_global_search_field", None)
+            if field is not None:
+                with suppress(Exception):
+                    field.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        if kind == "global_results":
+            results = getattr(self, "_global_search_results", None)
+            if results is not None and results.isVisible():
+                with suppress(Exception):
+                    results.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        if kind == "remote" and value in getattr(self, "_row_widgets", {}):
+            with suppress(Exception):
+                self._row_widgets[value].frame.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        if kind == "main" and getattr(self, "_focus_owner", "main") == "browser":
+            self.file_browser.restore_focus_snapshot("tree")
+
+    def _restore_embedded_browser_focus_on_activation(self) -> bool:
+        if not getattr(getattr(self, "tray_app", None), "_is_wayland", False):
+            return False
+        if getattr(self, "_focus_owner", "main") != "browser":
+            return False
+        if not getattr(self.file_browser, "is_visible", lambda: False)():
+            return False
+        target = self.file_browser.focus_snapshot()
+        self.qt.QTimer.singleShot(0, lambda: self.file_browser.restore_focus_snapshot(target))
+        return True
 
     def _finish_content_fit(self, root: Any, scroll: Any, container: Any, central: Any | None = None) -> None:
         expected = central or root
@@ -7745,7 +7801,10 @@ class MountletWindow:
         ):
             browser_size = file_browser.root.sizeHint()
             browser_width = max(browser_size.width(), EMBEDDED_BROWSER_MIN_WIDTH)
-            browser_height = max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT)
+            browser_height = min(
+                max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT),
+                EMBEDDED_BROWSER_MAX_HEIGHT,
+            )
             width += browser_width + 6
             height = max(height, menu_height + browser_height + 16)
 
