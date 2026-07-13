@@ -1482,7 +1482,7 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser.tree.minimum_height, 98)
         self.assertEqual(browser.tree.maximum_height, 98)
         self.assertEqual(browser.root.minimum_height, EMBEDDED_BROWSER_MIN_HEIGHT)
-        self.assertEqual(browser.root.maximum_height, EMBEDDED_BROWSER_MAX_HEIGHT)
+        self.assertGreaterEqual(browser.root.maximum_height, EMBEDDED_BROWSER_MAX_HEIGHT)
 
     def test_file_browser_resize_can_shrink_window(self):
         class Tree:

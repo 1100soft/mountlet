@@ -1090,12 +1090,12 @@ def _native_dialog_flags(qt: SimpleNamespace) -> Any | None:
     return flags
 
 
-def _main_window_type_name(is_macos: bool, is_wayland: bool = False) -> str:
-    return "Window" if is_macos or is_wayland else "Tool"
+def _main_window_type_name(is_macos: bool, is_wayland: bool = False, single_window: bool = False) -> str:
+    return "Window" if is_macos or is_wayland or single_window else "Tool"
 
 
-def _main_window_uses_native_frame(is_wayland: bool) -> bool:
-    return bool(is_wayland)
+def _main_window_uses_native_frame(is_wayland: bool, single_window: bool = False) -> bool:
+    return bool(is_wayland or single_window)
 
 
 def _windows_foreground_is_tray() -> bool:
@@ -2481,7 +2481,7 @@ class AppConfigDialog(_ConfigDialogBase):
             button.setCheckable(True)
             button.setToolTip(tooltip)
             button.setMinimumHeight(74)
-            button.setIcon(mountlet_icon(self.qt, icon_name, size=28) or self.qt.QIcon())
+            button.setIcon(mountlet_icon(self.qt, icon_name, size=28, color=_palette_text_color(button)) or self.qt.QIcon())
             button.setIconSize(self.qt.QSize(28, 28))
             button.setStyleSheet(
                 "QPushButton { text-align: left; padding: 8px; border-radius: 6px; } "
@@ -5066,11 +5066,16 @@ class MountletWindow:
         class MainWindow(qt.QMainWindow):
             def __init__(self) -> None:
                 tray_app = getattr(outer, "tray_app", None)
+                single_window = _effective_window_mode(
+                    load_app_settings(),
+                    is_wayland=bool(getattr(tray_app, "_is_wayland", False)),
+                ) == WINDOW_MODE_SINGLE
                 base_name = _main_window_type_name(
                     bool(getattr(tray_app, "_is_macos", False)),
                     bool(getattr(tray_app, "_is_wayland", False)),
+                    single_window,
                 )
-                if _main_window_uses_native_frame(bool(getattr(tray_app, "_is_wayland", False))):
+                if _main_window_uses_native_frame(bool(getattr(tray_app, "_is_wayland", False)), single_window):
                     try:
                         super().__init__(None, getattr(qt.Qt.WindowType, base_name))
                         return
@@ -5999,7 +6004,7 @@ class MountletWindow:
                 )
             except Exception:
                 pass
-            shell.addWidget(root, 0)
+            shell.addWidget(root, 0, self.qt.Qt.AlignmentFlag.AlignTop)
             self.file_browser.embed_into(shell)
         central.setObjectName("mountletMainSurface")
         self._main_surface = central
@@ -6610,7 +6615,7 @@ class MountletWindow:
         with suppress(Exception):
             field.setFixedHeight(28)
             field.setClearButtonEnabled(True)
-        icon = mountlet_icon(self.qt, "ui-search", size=16)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=_palette_text_color(field))
         action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
         leading_position = getattr(action_position, "LeadingPosition", None)
         if icon is not None and leading_position is not None:
@@ -7980,10 +7985,39 @@ class MountletWindow:
 
         target_width = min(max(width, 360), max_width)
         target_height = min(max(height, 120), max_height)
+        if self._single_window_size_managed(screen):
+            return
         if preserve_position:
             self._resize_in_place(target_width, target_height, screen)
         else:
             self._resize_anchored(target_width, target_height, screen)
+
+    def _single_window_size_managed(self, screen: Any | None = None) -> bool:
+        if not bool(getattr(getattr(self, "file_browser", None), "_embedded", False)):
+            return False
+        try:
+            if self.window.isMaximized() or self.window.isFullScreen():
+                return True
+        except Exception:
+            pass
+        try:
+            state = self.window.windowState()
+            window_state = self.qt.Qt.WindowState
+            if state & getattr(window_state, "WindowMaximized", 0):
+                return True
+            if state & getattr(window_state, "WindowFullScreen", 0):
+                return True
+        except Exception:
+            pass
+        try:
+            target_screen = screen or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if target_screen is None:
+                return False
+            available = target_screen.availableGeometry()
+            frame = self.window.frameGeometry()
+            return frame.height() >= available.height() - 6 or frame.width() >= available.width() - 6
+        except Exception:
+            return False
 
     def _invalidate_widget_tree(self, widget: Any | None) -> None:
         if widget is None:
@@ -8888,6 +8922,7 @@ class MountletWindow:
     def _rebuild_file_browser_if_layout_changed(self, old_embedded: bool) -> None:
         if self._file_browser_embedded() == old_embedded:
             return
+        self._apply_main_window_frame_for_current_mode()
         old_browser = self.file_browser
         old_remote = old_browser.remote
         old_path = old_browser.path
@@ -8913,6 +8948,29 @@ class MountletWindow:
                     focus_browser=getattr(self, "_focus_owner", "main") == "browser",
                 )
                 self.file_browser.restore_focus_snapshot(focus_snapshot)
+
+    def _apply_main_window_frame_for_current_mode(self) -> None:
+        single_window = self._file_browser_embedded()
+        native = _main_window_uses_native_frame(bool(getattr(self.tray_app, "_is_wayland", False)), single_window)
+        was_visible = self.is_visible()
+        position = self._window_position(self.window)
+        try:
+            if native:
+                self.window.setWindowFlag(self.qt.Qt.WindowType.FramelessWindowHint, False)
+                for name in ("WindowTitleHint", "WindowSystemMenuHint", "WindowMinMaxButtonsHint", "WindowCloseButtonHint"):
+                    flag = getattr(self.qt.Qt.WindowType, name, None)
+                    if flag is not None:
+                        self.window.setWindowFlag(flag, True)
+            else:
+                _apply_frameless_window_flags(self.qt, self.window, base_name="Tool")
+        except Exception:
+            return
+        if position is not None:
+            with suppress(Exception):
+                self.window.move(*position)
+        if was_visible:
+            with suppress(Exception):
+                self.window.show()
 
     def _show_shortcut_config_editor(self) -> None:
         if self._license_locked():

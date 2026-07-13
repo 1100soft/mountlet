@@ -5,7 +5,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-NEUTRAL_ICON_COLOR = "#334155"
+NEUTRAL_ICON_COLORS = ("#334155", "#333333", "#000000")
 
 
 def icon_path(name: str) -> str | None:
@@ -49,7 +49,8 @@ def _recolored_svg_icon(qt: Any, path: str, *, size: int, color: str) -> Any | N
         from PySide6.QtSvg import QSvgRenderer
 
         svg = Path(path).read_text(encoding="utf-8")
-        svg = svg.replace(NEUTRAL_ICON_COLOR, color).replace(NEUTRAL_ICON_COLOR.upper(), color)
+        for neutral in NEUTRAL_ICON_COLORS:
+            svg = svg.replace(neutral, color).replace(neutral.upper(), color)
         renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
         if not renderer.isValid():
             return None

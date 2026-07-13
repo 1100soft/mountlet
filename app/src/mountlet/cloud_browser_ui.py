@@ -29,6 +29,7 @@ EMBEDDED_BROWSER_MAX_VISIBLE_ROWS = 8
 FILE_BROWSER_MIN_HEIGHT = 240
 FILE_BROWSER_MAX_VISIBLE_ROWS = 14
 FILE_BROWSER_CONTEXT_ROWS = 1
+FILE_BROWSER_STATUS_MAX_CHARS = 140
 RCLONE_OUTPUT_TAIL_LINES = 10
 RCLONE_OUTPUT_MIN_LINES = 8
 RCLONE_OUTPUT_MAX_LINES = 16
@@ -251,6 +252,7 @@ class CompactCloudBrowser:
         root = qt.QWidget()
         root.setObjectName("fileBrowserSurface")
         root.setMinimumSize(EMBEDDED_BROWSER_MIN_WIDTH, EMBEDDED_BROWSER_MIN_HEIGHT)
+        root.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
         root.enterEvent = lambda event: self._release_main_hover_suppression()
         self.root = root
         layout = qt.QVBoxLayout(root)
@@ -498,7 +500,20 @@ class CompactCloudBrowser:
         self.tree.setColumnWidth(1, 72)
         self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
         layout.addWidget(self.tree, 1)
-        self.status = qt.QLabel("")
+        class StatusLabel(qt.QLabel):
+            def setText(self, text: str) -> None:
+                full_text = str(text or "").replace("\n", " ").strip()
+                display_text = full_text
+                if len(display_text) > FILE_BROWSER_STATUS_MAX_CHARS:
+                    display_text = f"{display_text[: FILE_BROWSER_STATUS_MAX_CHARS - 1].rstrip()}…"
+                super().setText(display_text)
+                self.setToolTip(full_text)
+
+        self.status = StatusLabel("")
+        self.status.setMinimumWidth(0)
+        self.status.setSizePolicy(qt.QSizePolicy.Policy.Ignored, qt.QSizePolicy.Policy.Fixed)
+        with suppress(Exception):
+            self.status.setFixedHeight(self.status.fontMetrics().height() + 8)
         layout.addWidget(self.status)
         self.window.setCentralWidget(root)
         self._update_actions()
@@ -722,7 +737,7 @@ class CompactCloudBrowser:
         with suppress(Exception):
             field.setFixedHeight(28)
             field.setClearButtonEnabled(True)
-        icon = mountlet_icon(self.qt, "ui-search", size=16)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=self._widget_text_color(field))
         action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
         leading_position = getattr(action_position, "LeadingPosition", None)
         if icon is not None and leading_position is not None:
@@ -742,6 +757,17 @@ class CompactCloudBrowser:
             }
             """
         )
+
+    def _widget_text_color(self, widget: Any) -> str | None:
+        try:
+            palette = widget.palette()
+            role = widget.foregroundRole()
+            color = palette.color(role)
+            if color.isValid():
+                return color.name()
+        except Exception:
+            return None
+        return None
 
     def _mount_switch(self) -> Any:
         qt = self.qt
@@ -1178,7 +1204,7 @@ class CompactCloudBrowser:
         if self.window.centralWidget() is self.root:
             self.window.takeCentralWidget()
         self.root.setParent(layout.parentWidget())
-        layout.addWidget(self.root)
+        layout.addWidget(self.root, 1)
         self.root.hide()
 
     def owns_focus_widget(self, widget: Any | None = None) -> bool:
@@ -2035,7 +2061,7 @@ class CompactCloudBrowser:
         try:
             if self._embedded:
                 root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
-                root.setMaximumHeight(EMBEDDED_BROWSER_MAX_HEIGHT)
+                root.setMaximumHeight(16_777_215)
             else:
                 root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
                 with suppress(Exception):

@@ -247,6 +247,31 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._effective_window_mode(config, is_wayland=False), settings.WINDOW_MODE_SINGLE)
 
+    def test_single_window_managed_size_detects_full_height_docking(self):
+        class Rect:
+            def __init__(self, width: int, height: int) -> None:
+                self._width = width
+                self._height = height
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = SimpleNamespace(_embedded=True)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowState=SimpleNamespace()))
+        window.window = SimpleNamespace(
+            isMaximized=lambda: False,
+            isFullScreen=lambda: False,
+            windowState=lambda: 0,
+            frameGeometry=lambda: Rect(760, 800),
+        )
+        screen = SimpleNamespace(availableGeometry=lambda: Rect(1200, 804))
+
+        self.assertTrue(window._single_window_size_managed(screen))
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -380,11 +405,13 @@ class TrayTests(unittest.TestCase):
     def test_macos_main_window_uses_normal_window_type(self):
         self.assertEqual(tray._main_window_type_name(True), "Window")
         self.assertEqual(tray._main_window_type_name(False), "Tool")
+        self.assertEqual(tray._main_window_type_name(False, False, True), "Window")
 
     def test_wayland_main_window_uses_normal_window_type(self):
         self.assertEqual(tray._main_window_type_name(False, True), "Window")
         self.assertTrue(tray._main_window_uses_native_frame(True))
         self.assertFalse(tray._main_window_uses_native_frame(False))
+        self.assertTrue(tray._main_window_uses_native_frame(False, True))
 
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
