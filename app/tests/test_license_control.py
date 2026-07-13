@@ -92,6 +92,16 @@ class LicenseControlTests(unittest.TestCase):
         self.assertFalse(status.allowed)
         self.assertIn("Trial expired ", status.summary)
 
+    def test_expire_trial_for_debug_ends_trial_immediately(self):
+        now = 1_700_000_000.0
+        license_control.load_or_create_trial(now=now)
+
+        license_control.expire_trial_for_debug(now=now)
+        status = license_control.current_status(now=now)
+
+        self.assertEqual(status.state, "expired")
+        self.assertFalse(status.allowed)
+
     def test_license_token_signature_is_verified(self):
         private_key = ec.generate_private_key(ec.SECP256R1())
         public_pem = private_key.public_key().public_bytes(

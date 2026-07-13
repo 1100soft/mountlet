@@ -295,6 +295,19 @@ def reset_trial(now: float | None = None) -> dict[str, Any]:
     return selected
 
 
+def expire_trial_for_debug(now: float | None = None) -> dict[str, Any]:
+    now_value = _now(now)
+    selected = {
+        "version": _TRIAL_VERSION,
+        "install_id": secrets.token_urlsafe(24),
+        "machine_hint": machine_hint(),
+        "started_at": now_value - TRIAL_SECONDS - 60,
+        "last_seen_at": now_value,
+    }
+    _write_trial_record(selected)
+    return selected
+
+
 def load_license_token() -> str:
     for path in _license_token_paths():
         try:
@@ -614,6 +627,7 @@ __all__ = [
     "display_timestamp",
     "default_device_label",
     "device_fingerprint",
+    "expire_trial_for_debug",
     "list_devices",
     "license_devices",
     "license_purchase_url",

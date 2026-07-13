@@ -69,6 +69,20 @@ class CliTests(unittest.TestCase):
 
         path.assert_called_once_with(["--ensure"])
 
+    def test_debug_expire_trial_dispatches_to_license_control(self):
+        from mountlet import license_control
+
+        status = license_control.LicenseStatus("trial", "Trial: 7 days remaining")
+        expired = license_control.LicenseStatus("expired", "Trial expired")
+        with mock.patch.object(license_control, "current_status", side_effect=[status, expired]):
+            with mock.patch.object(license_control, "expire_trial_for_debug") as expire:
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(cli.main(["debug", "expire-trial"]), 0)
+
+        expire.assert_called_once_with()
+        self.assertIn("Before: Trial: 7 days remaining", output.getvalue())
+        self.assertIn("After:  Trial expired", output.getvalue())
+
     def test_unknown_command_returns_error(self):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(cli.main(["missing"]), 2)
