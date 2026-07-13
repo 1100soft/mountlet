@@ -5878,8 +5878,8 @@ class MountletWindow:
         widgets = getattr(self, "_content_fit_widgets", None)
         if widgets is None or self._tray_is_quitting():
             return
-        self._fit_to_content(*widgets)
-        self.qt.QTimer.singleShot(0, lambda: self._fit_to_content(*widgets))
+        self._fit_to_content(*widgets, preserve_position=True)
+        self.qt.QTimer.singleShot(0, lambda: self._fit_to_content(*widgets, preserve_position=True))
 
     def _update_main_focus_style(self) -> None:
         root = getattr(self, "_main_surface", None)
@@ -7692,7 +7692,7 @@ class MountletWindow:
         metrics = self.window.fontMetrics()
         return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 28) + 10)
 
-    def _fit_to_content(self, root: Any, scroll: Any, container: Any) -> None:
+    def _fit_to_content(self, root: Any, scroll: Any, container: Any, *, preserve_position: bool = False) -> None:
         layout = root.layout()
         layout.activate()
         container.layout().activate()
@@ -7770,7 +7770,10 @@ class MountletWindow:
 
         target_width = min(max(width, 360), max_width)
         target_height = min(max(height, 120), max_height)
-        self._resize_anchored(target_width, target_height, screen)
+        if preserve_position:
+            self._resize_in_place(target_width, target_height, screen)
+        else:
+            self._resize_anchored(target_width, target_height, screen)
 
     def _fixed_layout_item_sizes(self, layout: Any, *, exclude_widget: Any) -> list[Any]:
         sizes: list[Any] = []
@@ -7810,6 +7813,16 @@ class MountletWindow:
             x = available.right() - right_gap - width + 1 if preserve_right else available.left() + left_gap
             y = available.bottom() - bottom_gap - height + 1 if preserve_bottom else available.top() + top_gap
             self.window.move(x, y)
+        except Exception:
+            self.window.resize(width, height)
+        self._clamp_to_screen(screen)
+
+    def _resize_in_place(self, width: int, height: int, screen: Any | None) -> None:
+        """Resize routine content changes without recalculating the tray popup anchor."""
+        try:
+            position = self.window.frameGeometry().topLeft()
+            self.window.resize(width, height)
+            self.window.move(position)
         except Exception:
             self.window.resize(width, height)
         self._clamp_to_screen(screen)

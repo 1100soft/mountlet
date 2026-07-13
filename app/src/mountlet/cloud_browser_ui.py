@@ -1628,6 +1628,7 @@ class CompactCloudBrowser:
         self._fit_search_result_columns()
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
+        self._resize_to_rendered_items()
         self._layout_changed()
 
     def _preview_search_result(self, item: Any, _previous: Any | None = None) -> None:
@@ -1682,6 +1683,7 @@ class CompactCloudBrowser:
             tree.setMaximumHeight(0)
             tree.setMinimumHeight(0)
             tree.setVisible(False)
+        self._resize_to_rendered_items()
         self._layout_changed()
 
     def focus_search(self) -> None:
