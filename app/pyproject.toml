@@ -35,11 +35,11 @@ classifiers = [
 
 [project.optional-dependencies]
 desktop = [
-  "PySide6>=6.7",
+  "PySide6-Essentials>=6.7",
   "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
 ]
 tray = [
-  "PySide6>=6.7",
+  "PySide6-Essentials>=6.7",
   "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
 ]
 dev = [

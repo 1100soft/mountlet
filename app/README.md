@@ -394,17 +394,17 @@ to unmount everything.
 
 ## Desktop App
 
-The desktop app uses PySide6. Start it with:
+The desktop app uses PySide6 Essentials. Start it with:
 
 ```bash
 mountlet
 ```
 
 If you installed the terminal-only package and later want the desktop app, add
-PySide6 with:
+PySide6 Essentials with:
 
 ```bash
-pipx inject mountlet PySide6
+pipx inject mountlet PySide6-Essentials
 ```
 
 The tray app uses the tray icon this way:
