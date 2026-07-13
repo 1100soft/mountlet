@@ -219,6 +219,24 @@ class TrayTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {tray.LICENSE_REQUIRE_ENV: "1"}, clear=True):
             self.assertTrue(tray._license_required())
 
+    def test_license_lock_allows_trial_without_paid_build_flag(self):
+        status = tray.license_control.LicenseStatus("trial", "Trial: 1 day remaining")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(tray.license_control, "current_status", return_value=status):
+                self.assertFalse(tray._license_locked())
+
+    def test_license_lock_blocks_expired_trial_without_paid_build_flag(self):
+        status = tray.license_control.LicenseStatus("expired", "Trial expired")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(tray.license_control, "current_status", return_value=status):
+                self.assertTrue(tray._license_locked())
+
+    def test_license_lock_blocks_required_unlicensed_build(self):
+        status = tray.license_control.LicenseStatus("missing", "No license")
+        with mock.patch.dict("os.environ", {tray.LICENSE_REQUIRE_ENV: "1"}, clear=True):
+            with mock.patch.object(tray.license_control, "current_status", return_value=status):
+                self.assertTrue(tray._license_locked())
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2896,10 +2914,12 @@ class TrayTests(unittest.TestCase):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
+        active_status = tray.license_control.LicenseStatus("trial", "Trial active")
 
-        with mock.patch.object(core, "is_mounted", return_value=False):
-            with mock.patch.object(tray.os.path, "isdir", return_value=True) as isdir:
-                window._open_folder(remote)
+        with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
+            with mock.patch.object(core, "is_mounted", return_value=False):
+                with mock.patch.object(tray.os.path, "isdir", return_value=True) as isdir:
+                    window._open_folder(remote)
 
         isdir.assert_not_called()
         window.tray_app._notify.assert_called_once_with(
@@ -2913,11 +2933,13 @@ class TrayTests(unittest.TestCase):
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
         window.desktop = mock.Mock()
+        active_status = tray.license_control.LicenseStatus("trial", "Trial active")
 
-        with mock.patch.object(core, "is_mounted", return_value=True):
-            with mock.patch.object(tray.platform, "system", return_value="Linux"):
-                with mock.patch.object(tray.Path, "is_dir", return_value=False):
-                    window._open_folder(remote)
+        with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
+            with mock.patch.object(core, "is_mounted", return_value=True):
+                with mock.patch.object(tray.platform, "system", return_value="Linux"):
+                    with mock.patch.object(tray.Path, "is_dir", return_value=False):
+                        window._open_folder(remote)
 
         window.desktop.open_folder.assert_not_called()
         window.tray_app._notify.assert_called_once_with(
@@ -2939,13 +2961,15 @@ class TrayTests(unittest.TestCase):
         window.tray_app = mock.Mock()
         window.desktop = mock.Mock()
         window._bridge = SimpleNamespace(folder_opened=SimpleNamespace(emit=mock.Mock()))
+        active_status = tray.license_control.LicenseStatus("trial", "Trial active")
 
-        with mock.patch.object(core, "is_mounted", return_value=True):
-            with mock.patch.object(tray.platform, "system", return_value="Windows"):
-                with mock.patch.object(tray.Path, "is_dir", return_value=False) as is_dir:
-                    with mock.patch.object(tray.threading, "Thread", ImmediateThread):
-                        window.desktop.open_folder.return_value = True
-                        window._open_folder(remote)
+        with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
+            with mock.patch.object(core, "is_mounted", return_value=True):
+                with mock.patch.object(tray.platform, "system", return_value="Windows"):
+                    with mock.patch.object(tray.Path, "is_dir", return_value=False) as is_dir:
+                        with mock.patch.object(tray.threading, "Thread", ImmediateThread):
+                            window.desktop.open_folder.return_value = True
+                            window._open_folder(remote)
 
         is_dir.assert_not_called()
         window.desktop.open_folder.assert_called_once_with(r"C:\Mountlet\Docs")

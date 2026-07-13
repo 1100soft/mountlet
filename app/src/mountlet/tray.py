@@ -2193,7 +2193,8 @@ def _license_required() -> bool:
 
 
 def _license_locked() -> bool:
-    return _license_required() and not license_control.current_status().allowed
+    status = license_control.current_status()
+    return not status.allowed and (_license_required() or status.state == "expired")
 
 
 def _license_lock_message() -> str:
@@ -5857,7 +5858,8 @@ class MountletWindow:
         self.window.setCentralWidget(central)
         self._update_main_focus_style()
         self._content_fit_widgets = (root, scroll, container)
-        self.file_browser.preload(remotes)
+        if not locked:
+            self.file_browser.preload(remotes)
         self._update_license_lock_state()
         self._fit_to_content(root, scroll, container)
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
