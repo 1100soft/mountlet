@@ -5878,8 +5878,13 @@ class MountletWindow:
         widgets = getattr(self, "_content_fit_widgets", None)
         if widgets is None or self._tray_is_quitting():
             return
+        self._invalidate_widget_tree(widgets[0])
         self._fit_to_content(*widgets, preserve_position=True)
-        self.qt.QTimer.singleShot(0, lambda: self._fit_to_content(*widgets, preserve_position=True))
+        self.qt.QTimer.singleShot(0, lambda: self._fit_after_layout_settles(*widgets))
+
+    def _fit_after_layout_settles(self, root: Any, scroll: Any, container: Any) -> None:
+        self._invalidate_widget_tree(root)
+        self._fit_to_content(root, scroll, container, preserve_position=True)
 
     def _update_main_focus_style(self) -> None:
         root = getattr(self, "_main_surface", None)
@@ -7693,6 +7698,7 @@ class MountletWindow:
         return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 28) + 10)
 
     def _fit_to_content(self, root: Any, scroll: Any, container: Any, *, preserve_position: bool = False) -> None:
+        self._invalidate_widget_tree(root)
         layout = root.layout()
         layout.activate()
         container.layout().activate()
@@ -7774,6 +7780,24 @@ class MountletWindow:
             self._resize_in_place(target_width, target_height, screen)
         else:
             self._resize_anchored(target_width, target_height, screen)
+
+    def _invalidate_widget_tree(self, widget: Any | None) -> None:
+        if widget is None:
+            return
+        with suppress(Exception):
+            widget.updateGeometry()
+        layout = None
+        with suppress(Exception):
+            layout = widget.layout()
+        if layout is not None:
+            with suppress(Exception):
+                layout.invalidate()
+            with suppress(Exception):
+                layout.activate()
+        for child in getattr(widget, "children", lambda: [])():
+            with suppress(Exception):
+                if hasattr(child, "updateGeometry"):
+                    self._invalidate_widget_tree(child)
 
     def _fixed_layout_item_sizes(self, layout: Any, *, exclude_widget: Any) -> list[Any]:
         sizes: list[Any] = []
