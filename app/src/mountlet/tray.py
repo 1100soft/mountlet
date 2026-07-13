@@ -5803,7 +5803,7 @@ class MountletWindow:
         root = self.qt.QWidget()
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(6)
+        outer.setSpacing(4)
         outer.addWidget(self._sort_toolbar())
         outer.addWidget(self._global_search_panel())
         if locked:
@@ -5816,7 +5816,8 @@ class MountletWindow:
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
-        rows.setSpacing(6)
+        rows.setSpacing(2)
+        rows.setAlignment(self.qt.Qt.AlignmentFlag.AlignTop)
         self._row_widgets = {}
         self._current_remote_names = remote_names
         self._remote_scroll = scroll
@@ -6357,20 +6358,29 @@ class MountletWindow:
         widget = self.qt.QWidget()
         layout = self.qt.QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
 
         row = self.qt.QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
         field = self.qt.QLineEdit()
         field.setPlaceholderText("Search all remotes")
+        with suppress(Exception):
+            field.setFixedHeight(26)
         field.textChanged.connect(self._global_search_text_changed)
         field.returnPressed.connect(self._open_current_global_search_result)
         field.installEventFilter(self._make_global_search_key_filter())
         self._global_search_field = field
-        button = self._toolbar_button("ui-search", "⌕", "Search all indexed remotes", self._run_global_search)
+        button = self.qt.QPushButton("⌕")
+        button.setFixedSize(28, 26)
+        button.setToolTip("Search all indexed remotes")
+        apply_button_icon(self.qt, button, "ui-search", fallback_text="⌕", size=18)
+        button.clicked.connect(lambda checked=False: self._run_global_search())
         row.addWidget(field, 1)
         row.addWidget(button)
         status = self.qt.QLabel("")
         status.setStyleSheet(_muted_text_style(status))
+        status.setFixedWidth(86)
         self._global_search_status = status
         row.addWidget(status)
         layout.addLayout(row)
@@ -6439,16 +6449,12 @@ class MountletWindow:
         if status is not None:
             status.setText("Searching…")
         remotes = list(_load_visible_remotes())
-
-        def worker() -> None:
-            try:
-                results = self.file_browser.backend.search_index(query, remotes=remotes, limit=80)
-            except Exception as exc:
-                self._bridge.global_search_ready.emit(query, None, str(exc))
-                return
-            self._bridge.global_search_ready.emit(query, results, "")
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            results = self.file_browser.backend.search_index(query, remotes=remotes, limit=80)
+        except Exception as exc:
+            self._handle_global_search_ready(query, None, str(exc))
+            return
+        self._handle_global_search_ready(query, results, "")
 
     def _handle_global_search_ready(self, query: str, results: object, error: str) -> None:
         field = getattr(self, "_global_search_field", None)
@@ -6468,7 +6474,21 @@ class MountletWindow:
         tree = getattr(self, "_global_search_results", None)
         if tree is None:
             return
+        previous_index = 0
+        previous_path = ""
+        previous_scroll = 0
+        current = tree.currentItem()
+        if current is not None:
+            previous = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(previous, IndexedEntry):
+                previous_path = previous.path
+            with suppress(Exception):
+                previous_index = max(tree.indexOfTopLevelItem(current), 0)
+        with suppress(Exception):
+            previous_scroll = int(tree.verticalScrollBar().value())
         tree.clear()
+        selected_item = None
+        fallback_item = None
         for result in results:
             item = self.qt.QTreeWidgetItem([
                 result.name,
@@ -6478,8 +6498,14 @@ class MountletWindow:
             ])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
             tree.addTopLevelItem(item)
-        if results:
-            tree.setCurrentItem(tree.topLevelItem(0))
+            if previous_path and result.path == previous_path:
+                selected_item = item
+            if fallback_item is None and tree.topLevelItemCount() - 1 >= previous_index:
+                fallback_item = item
+        target = selected_item or fallback_item or (tree.topLevelItem(0) if results else None)
+        if target is not None:
+            tree.setCurrentItem(target)
+            target.setSelected(True)
         for column in range(4):
             with suppress(Exception):
                 tree.resizeColumnToContents(column)
@@ -6495,6 +6521,8 @@ class MountletWindow:
         height = int(header_height + row_height * visible_rows + 8) if results else 0
         tree.setMaximumHeight(height)
         tree.setVisible(bool(results))
+        with suppress(Exception):
+            tree.verticalScrollBar().setValue(previous_scroll)
         self._browser_layout_changed()
 
     def _open_global_search_result(self, item: Any, _column: int | None = None) -> None:

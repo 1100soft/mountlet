@@ -1228,7 +1228,6 @@ class CompactCloudBrowser:
             self.refresh(force=False)
 
     def focus(self) -> None:
-        self._release_main_hover_suppression()
         self._set_focus_owner("browser")
         if self._embedded:
             self.root.show()
@@ -1542,16 +1541,12 @@ class CompactCloudBrowser:
             return
         self._search_pending = True
         self.status.setText("Searching index…")
-
-        def worker() -> None:
-            try:
-                results = self.backend.search_index(query, remotes=[remote], limit=50)
-            except Exception as exc:
-                self._bridge.search_ready.emit(query, None, str(exc))
-                return
-            self._bridge.search_ready.emit(query, results, "")
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            results = self.backend.search_index(query, remotes=[remote], limit=50)
+        except Exception as exc:
+            self._search_ready(query, None, str(exc))
+            return
+        self._search_ready(query, results, "")
 
     def _search_ready(self, query: str, results: object, error: str) -> None:
         if query != self.search_field.text().strip():
@@ -1571,14 +1566,34 @@ class CompactCloudBrowser:
         tree = getattr(self, "search_results", None)
         if tree is None:
             return
+        previous_index = 0
+        previous_path = ""
+        previous_scroll = 0
+        current = tree.currentItem()
+        if current is not None:
+            previous = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(previous, IndexedEntry):
+                previous_path = previous.path
+            with suppress(Exception):
+                previous_index = max(tree.indexOfTopLevelItem(current), 0)
+        with suppress(Exception):
+            previous_scroll = int(tree.verticalScrollBar().value())
         tree.clear()
+        selected_item = None
+        fallback_item = None
         for result in results:
             path_text = result.parent_path or "Remote root"
             item = self.qt.QTreeWidgetItem([result.name, path_text, result.modified])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
             tree.addTopLevelItem(item)
-        if results:
-            tree.setCurrentItem(tree.topLevelItem(0))
+            if previous_path and result.path == previous_path:
+                selected_item = item
+            if fallback_item is None and tree.topLevelItemCount() - 1 >= previous_index:
+                fallback_item = item
+        target = selected_item or fallback_item or (tree.topLevelItem(0) if results else None)
+        if target is not None:
+            tree.setCurrentItem(target)
+            target.setSelected(True)
         for column in range(3):
             with suppress(Exception):
                 tree.resizeColumnToContents(column)
@@ -1594,6 +1609,8 @@ class CompactCloudBrowser:
         height = int(header_height + row_height * visible_rows + 8) if results else 0
         tree.setMaximumHeight(height)
         tree.setVisible(bool(results))
+        with suppress(Exception):
+            tree.verticalScrollBar().setValue(previous_scroll)
         self._layout_changed()
 
     def _open_search_result(self, item: Any, _column: int | None = None) -> None:
