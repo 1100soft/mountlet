@@ -36,6 +36,7 @@ LICENSE_API_URL_ENV = "MOUNTLET_LICENSE_API_URL"
 LICENSE_SITE_URL_ENV = "MOUNTLET_LICENSE_SITE_URL"
 LICENSE_PUBLIC_KEY_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY"
 LICENSE_PUBLIC_KEY_FILE_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY_FILE"
+TRIAL_DURABLE_DIR_ENV = "MOUNTLET_TRIAL_DURABLE_DIR"
 
 _TRIAL_SALT = b"mountlet trial state v1"
 _TRIAL_VERSION = 1
@@ -501,7 +502,31 @@ def _trial_paths() -> tuple[Path, ...]:
         app_state_dir() / "license" / "trial.dat",
         app_config_dir() / ".license-trial",
         app_cache_dir() / ".license-trial",
+        *_durable_trial_paths(),
     )
+
+
+def _durable_trial_paths() -> tuple[Path, ...]:
+    override = os.environ.get(TRIAL_DURABLE_DIR_ENV, "").strip()
+    if override:
+        root = Path(override).expanduser()
+        return (root / ".mountlet-trial", root / ".mountlet-trial-backup")
+
+    paths = [Path.home() / ".mountlet-license-trial"]
+    system = platform.system()
+    if system == "Windows":
+        for value in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA")):
+            if value:
+                paths.append(Path(value) / "Microsoft" / "MountletTrial.dat")
+    elif system == "Darwin":
+        paths.append(Path.home() / "Library" / "Preferences" / ".mountlet-license-trial")
+        paths.append(Path.home() / "Library" / "Application Support" / ".mountlet-license-trial")
+    else:
+        state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        paths.append(state_home / ".mountlet-license-trial")
+        paths.append(config_home / ".mountlet-license-trial")
+    return tuple(dict.fromkeys(paths))
 
 
 def _license_token_paths() -> tuple[Path, ...]:
@@ -579,6 +604,7 @@ __all__ = [
     "LICENSE_API_URL_ENV",
     "LICENSE_SITE_URL_ENV",
     "LICENSE_PUBLIC_KEY_ENV",
+    "TRIAL_DURABLE_DIR_ENV",
     "LicenseStatus",
     "activate_license",
     "clear_license_key",

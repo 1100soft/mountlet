@@ -32,6 +32,7 @@ class LicenseControlTests(unittest.TestCase):
             "XDG_CONFIG_HOME": str(root / "config"),
             "XDG_STATE_HOME": str(root / "state"),
             "XDG_CACHE_HOME": str(root / "cache"),
+            license_control.TRIAL_DURABLE_DIR_ENV: str(root / "durable"),
         }
         env_patcher = mock.patch.dict("os.environ", env, clear=False)
         env_patcher.start()
@@ -50,10 +51,27 @@ class LicenseControlTests(unittest.TestCase):
             Path(self.tempdir.name) / "state" / "mountlet" / "license" / "trial.dat",
             Path(self.tempdir.name) / "config" / "mountlet" / ".license-trial",
             Path(self.tempdir.name) / "cache" / "mountlet" / ".license-trial",
+            Path(self.tempdir.name) / "durable" / ".mountlet-trial",
+            Path(self.tempdir.name) / "durable" / ".mountlet-trial-backup",
         ):
             self.assertTrue(path.exists())
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("install_id", text)
+
+    def test_trial_survives_app_state_removal_when_durable_marker_exists(self):
+        start = 1_700_000_000.0
+        license_control.load_or_create_trial(now=start)
+        for path in (
+            Path(self.tempdir.name) / "state" / "mountlet" / "license" / "trial.dat",
+            Path(self.tempdir.name) / "config" / "mountlet" / ".license-trial",
+            Path(self.tempdir.name) / "cache" / "mountlet" / ".license-trial",
+        ):
+            path.unlink()
+
+        status = license_control.current_status(now=start + 3 * 24 * 60 * 60)
+
+        self.assertEqual(status.state, "trial")
+        self.assertLessEqual(status.trial_days_remaining, 4)
 
     def test_trial_uses_earliest_valid_start(self):
         start = 1_700_000_000.0
