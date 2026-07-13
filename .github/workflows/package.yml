@@ -140,7 +140,13 @@ jobs:
         working-directory: app
         run: python packaging/stage_rclone.py
 
-      - name: Build native bundle
+      - name: Build Linux venv bundle
+        if: runner.os == 'Linux'
+        working-directory: app
+        run: python packaging/build_linux_bundle.py
+
+      - name: Build frozen native bundle
+        if: runner.os != 'Linux'
         working-directory: app
         run: python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 

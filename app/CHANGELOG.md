@@ -20,6 +20,9 @@
 - Fixed a packaged Linux/X11 focus-change crash by removing an accidental
   close-event call from the main-window activation handler, and added persistent
   runtime crash logging for frozen desktop builds.
+- Switched Linux `.deb` packaging from a PyInstaller-frozen Qt app to a
+  system-Python bundle with app-local Python libraries, avoiding the bundled
+  Qt/X11 key-input crash seen on Plasma.
 
 ## 0.5.1 - 2026-07-05
 

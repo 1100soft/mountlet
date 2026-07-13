@@ -73,10 +73,12 @@ file paths, remote names, and filenames.
 
 ## Requirements
 
-- **Bundled native build**: includes Mountlet's Python runtime and app-local
-  rclone.
-- **Lean native build**: includes Mountlet's Python runtime and uses a separate
-  rclone already installed on the computer.
+- **Bundled native build**: includes an app-local rclone. Linux uses system
+  Python with app-local Python libraries; Windows and macOS include their own
+  Python runtime.
+- **Lean native build**: uses a separate rclone already installed on the
+  computer. Linux uses system Python with app-local Python libraries; Windows
+  and macOS include their own Python runtime.
 - **Source install**: requires Python 3.10 or newer and rclone.
 - **Native folder mounting**: requires FUSE on Linux, WinFsp on Windows, or
   macFUSE on macOS.
@@ -146,12 +148,12 @@ Mountlet has three practical install tracks:
 
 - **Source-based Python install**: uses your Python environment through `pipx`
   or a source checkout. This is the lightest path for technical users.
-- **Native system-rclone build**: includes Mountlet and its Python runtime, but
-  uses a separately installed rclone.
-- **Native bundled-rclone build**: includes Mountlet, its Python runtime, and an
-  app-local rclone binary. This does not install rclone globally or replace a
-  user's existing rclone. On macOS, this build uses the official rclone binary
-  because Homebrew rclone does not support `rclone mount`.
+- **Native system-rclone build**: includes Mountlet and uses a separately
+  installed rclone.
+- **Native bundled-rclone build**: includes Mountlet and an app-local rclone
+  binary. This does not install rclone globally or replace a user's existing
+  rclone. On macOS, this build uses the official rclone binary because Homebrew
+  rclone does not support `rclone mount`.
 
 Both variants keep native folder mounting optional. The Linux package suggests
 FUSE, the Windows installer does not require WinFsp, and the macOS DMG does not
