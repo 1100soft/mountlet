@@ -16,7 +16,7 @@ FAST_EXIT_SECONDS = 5.0
 _RUNTIME_LOG_HANDLE = None
 _FROZEN_LINUX_QT_NOTE = (
     "Frozen Linux build: using bundled-Qt-safe defaults "
-    "(QT_IM_MODULE=compose, QT_STYLE_OVERRIDE=Fusion, no host QT_QPA_PLATFORMTHEME/QT_PLUGIN_PATH). "
+    "(QT_IM_MODULE=xim on X11, QT_STYLE_OVERRIDE=Fusion, no host QT_QPA_PLATFORMTHEME/QT_PLUGIN_PATH). "
     "Set MOUNTLET_QT_IM_MODULE, MOUNTLET_QT_STYLE_OVERRIDE, or MOUNTLET_QT_PLATFORMTHEME to override."
 )
 
@@ -89,7 +89,7 @@ def _install_runtime_logging() -> None:
 def _prepare_frozen_linux_qt_environment() -> None:
     if platform.system() != "Linux" or not getattr(sys, "frozen", False):
         return
-    _set_qt_env("QT_IM_MODULE", "MOUNTLET_QT_IM_MODULE", "compose", replace=False)
+    _set_qt_env("QT_IM_MODULE", "MOUNTLET_QT_IM_MODULE", _default_frozen_linux_input_method(), replace=True)
     _set_qt_env("QT_STYLE_OVERRIDE", "MOUNTLET_QT_STYLE_OVERRIDE", "Fusion", replace=False)
     _set_qt_env("QT_QPA_PLATFORMTHEME", "MOUNTLET_QT_PLATFORMTHEME", "", replace=True)
     os.environ.setdefault("QT_ACCESSIBILITY", "0")
@@ -97,6 +97,12 @@ def _prepare_frozen_linux_qt_environment() -> None:
     os.environ.pop("QT_PLUGIN_PATH", None)
     os.environ.pop("QML2_IMPORT_PATH", None)
     _append_runtime_log(_FROZEN_LINUX_QT_NOTE)
+
+
+def _default_frozen_linux_input_method() -> str:
+    if os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return "xim"
+    return "compose"
 
 
 def _set_qt_env(target: str, override: str, default: str, *, replace: bool) -> None:

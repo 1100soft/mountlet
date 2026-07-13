@@ -66,6 +66,7 @@ _CARDINAL_RE = re.compile(r"=\s*(\d+)")
 LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
 REMOTE_CHANGE_POLLING_ENV = "MOUNTLET_REMOTE_CHANGE_POLLING"
 BACKGROUND_RCLONE_CHECKS_ENV = "MOUNTLET_BACKGROUND_RCLONE_CHECKS"
+CUSTOM_KEYBOARD_SHORTCUTS_ENV = "MOUNTLET_CUSTOM_KEYBOARD_SHORTCUTS"
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
     ("existing_window", "Any existing file manager window"),
@@ -501,6 +502,15 @@ def _frozen_linux_x11() -> bool:
         and bool(os.environ.get("DISPLAY"))
         and not bool(os.environ.get("WAYLAND_DISPLAY"))
     )
+
+
+def _custom_keyboard_shortcuts_enabled() -> bool:
+    override = os.environ.get(CUSTOM_KEYBOARD_SHORTCUTS_ENV, "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    return not _frozen_linux_x11()
 
 
 def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
@@ -4848,6 +4858,7 @@ class MountletWindow:
             sync_paths=self._sync_cached_paths,
             file_manager_label=self.desktop.file_manager_label,
             embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
+            keyboard_shortcuts_enabled=_custom_keyboard_shortcuts_enabled(),
             layout_changed=self._browser_layout_changed,
             local_files_changed=self._local_browser_files_changed,
         )
@@ -7080,6 +7091,9 @@ class MountletWindow:
             pass
 
     def _handle_remote_row_key(self, event: Any, remote: core.RemoteInfo, row: Any) -> None:
+        if not _custom_keyboard_shortcuts_enabled():
+            event.ignore()
+            return
         if self._license_locked():
             self._show_license_dialog()
             event.accept()
@@ -7119,6 +7133,8 @@ class MountletWindow:
         event.accept()
 
     def _handle_main_key(self, event: Any) -> bool:
+        if not _custom_keyboard_shortcuts_enabled():
+            return False
         if self._license_locked():
             self._show_license_dialog()
             event.accept()

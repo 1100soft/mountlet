@@ -58,16 +58,25 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("failed during desktop startup", write_log.call_args.args[0])
         self.assertIn("RuntimeError: boom", write_log.call_args.args[0])
 
-    def test_frozen_linux_defaults_to_compose_input_method(self):
+    def test_frozen_linux_x11_defaults_to_xim_input_method(self):
         with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):
             with mock.patch.object(sys, "frozen", True, create=True):
-                with mock.patch.dict("os.environ", {}, clear=True):
+                with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                    with mock.patch.object(desktop, "_append_runtime_log"):
+                        desktop._prepare_frozen_linux_qt_environment()
+
+                    self.assertEqual(desktop.os.environ["QT_IM_MODULE"], "xim")
+                    self.assertEqual(desktop.os.environ["QT_STYLE_OVERRIDE"], "Fusion")
+                    self.assertNotIn("QT_QPA_PLATFORMTHEME", desktop.os.environ)
+
+    def test_frozen_linux_wayland_defaults_to_compose_input_method(self):
+        with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):
+            with mock.patch.object(sys, "frozen", True, create=True):
+                with mock.patch.dict("os.environ", {"WAYLAND_DISPLAY": "wayland-0"}, clear=True):
                     with mock.patch.object(desktop, "_append_runtime_log"):
                         desktop._prepare_frozen_linux_qt_environment()
 
                     self.assertEqual(desktop.os.environ["QT_IM_MODULE"], "compose")
-                    self.assertEqual(desktop.os.environ["QT_STYLE_OVERRIDE"], "Fusion")
-                    self.assertNotIn("QT_QPA_PLATFORMTHEME", desktop.os.environ)
 
     def test_frozen_linux_input_method_override_is_respected(self):
         with mock.patch("mountlet.desktop.platform.system", return_value="Linux"):

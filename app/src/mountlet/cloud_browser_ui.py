@@ -104,6 +104,7 @@ class CompactCloudBrowser:
         toggle_mount: Callable[[str, bool], None] | None = None,
         sync_paths: Callable[[core.RemoteInfo, list[tuple[str, bool]]], None] | None = None,
         embedded: bool = False,
+        keyboard_shortcuts_enabled: bool = True,
         layout_changed: Callable[[], None] | None = None,
         local_files_changed: Callable[[], None] | None = None,
     ) -> None:
@@ -116,6 +117,7 @@ class CompactCloudBrowser:
         self._open_local_folder = open_local_folder
         self._toggle_mount = toggle_mount
         self._sync_paths = sync_paths
+        self._keyboard_shortcuts_enabled = keyboard_shortcuts_enabled
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -1235,6 +1237,8 @@ class CompactCloudBrowser:
         root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
     def _handle_key(self, event: Any) -> bool:
+        if not getattr(self, "_keyboard_shortcuts_enabled", True):
+            return False
         key = event.key()
         modifiers = event.modifiers()
         control = bool(modifiers & self.qt.Qt.KeyboardModifier.ControlModifier)

@@ -1527,6 +1527,35 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(mountlet_window._usage_cache["Docs"].text, "?")
         self.assertFalse(mountlet_window._connection_cache["Docs"])
 
+    def test_frozen_linux_x11_disables_custom_keyboard_shortcuts_by_default(self):
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                self.assertFalse(tray._custom_keyboard_shortcuts_enabled())
+
+    def test_frozen_linux_x11_allows_custom_keyboard_shortcut_override(self):
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0", tray.CUSTOM_KEYBOARD_SHORTCUTS_ENV: "1"}, clear=True):
+                self.assertTrue(tray._custom_keyboard_shortcuts_enabled())
+
+    def test_main_key_handler_ignores_packaged_x11_when_shortcuts_disabled(self):
+        event = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray, "_custom_keyboard_shortcuts_enabled", return_value=False):
+            self.assertFalse(mountlet_window._handle_main_key(event))
+
+        event.accept.assert_not_called()
+
+    def test_remote_row_key_handler_ignores_packaged_x11_when_shortcuts_disabled(self):
+        event = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray, "_custom_keyboard_shortcuts_enabled", return_value=False):
+            mountlet_window._handle_remote_row_key(event, mock.Mock(), mock.Mock())
+
+        event.ignore.assert_called_once_with()
+        event.accept.assert_not_called()
+
     def test_mountlet_window_disables_config_sync_metadata_check_for_frozen_linux_x11_by_default(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window._remote_sync_check_pending = False
