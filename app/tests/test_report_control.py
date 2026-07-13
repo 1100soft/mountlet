@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -68,6 +69,26 @@ class ReportControlTests(unittest.TestCase):
     def test_report_user_agent_identifies_mountlet(self):
         self.assertIn("Mountlet/", report_control.REPORT_USER_AGENT)
         self.assertIn("mountlet.app", report_control.REPORT_USER_AGENT)
+
+    def test_packaged_report_api_url_uses_build_info(self):
+        encodings: list[str] = []
+
+        class FakeResource:
+            def is_file(self) -> bool:
+                return True
+
+            def read_text(self, *, encoding: str) -> str:
+                encodings.append(encoding)
+                return '{"reportApiUrl":"https://wip.mountlet.pages.dev/api/report"}'
+
+        fake_files = mock.Mock(return_value=SimpleNamespace(joinpath=mock.Mock(return_value=FakeResource())))
+        with mock.patch("mountlet.report_control.files", fake_files):
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(
+                    report_control.report_api_url(),
+                    "https://wip.mountlet.pages.dev/api/report",
+                )
+        self.assertEqual(encodings, ["utf-8"])
 
 
 if __name__ == "__main__":

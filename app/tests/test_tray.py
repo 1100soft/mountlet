@@ -1483,6 +1483,35 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(len(callbacks), 1)
         self.assertEqual(callbacks[0][0], 500)
 
+    def test_mountlet_window_disables_remote_polling_for_frozen_linux_x11_by_default(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._remote_change_poll_timer = None
+        mountlet_window.qt = SimpleNamespace(QTimer=mock.Mock())
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                mountlet_window._setup_remote_change_polling()
+
+        mountlet_window.qt.QTimer.assert_not_called()
+
+    def test_mountlet_window_allows_remote_polling_override_for_frozen_linux_x11(self):
+        timer = mock.Mock()
+        timer_type = mock.Mock(return_value=timer)
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._remote_change_poll_timer = None
+        mountlet_window.window = mock.Mock()
+        mountlet_window.qt = SimpleNamespace(QTimer=timer_type)
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0", tray.REMOTE_CHANGE_POLLING_ENV: "1"}, clear=True):
+                with mock.patch.object(tray, "load_app_settings", return_value=SimpleNamespace(remote_sync_interval_seconds=30)):
+                    mountlet_window._setup_remote_change_polling()
+
+        timer_type.assert_called_once_with(mountlet_window.window)
+        timer.setInterval.assert_called_once_with(30_000)
+        timer.timeout.connect.assert_called_once_with(mountlet_window._scan_remote_cache_changes)
+        timer.start.assert_called_once_with()
+
     def test_mountlet_window_local_cache_change_schedules_remote_reconcile(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.file_browser = SimpleNamespace(

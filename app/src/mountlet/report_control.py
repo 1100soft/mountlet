@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +35,24 @@ def report_api_url(*, site_url: str | None = None) -> str:
     configured = os.environ.get(REPORT_API_URL_ENV, "").strip()
     if configured:
         return configured
+    packaged = _packaged_report_api_url()
+    if packaged:
+        return packaged
     base = (site_url or license_site_url()).rstrip("/")
     return f"{base}/api/report"
+
+
+def _packaged_report_api_url() -> str:
+    try:
+        resource = files("mountlet").joinpath("mountlet-build-info.json")
+        if not resource.is_file():
+            return ""
+        data = json.loads(resource.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("reportApiUrl") or "").strip()
 
 
 def runtime_log_path() -> Path:

@@ -64,6 +64,7 @@ _dolphin_tab_target_cache: tuple[str, str] | None = None
 _file_manager_label_cache: str | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
 LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
+REMOTE_CHANGE_POLLING_ENV = "MOUNTLET_REMOTE_CHANGE_POLLING"
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
     ("existing_window", "Any existing file manager window"),
@@ -490,6 +491,15 @@ def _is_gnome_wayland() -> bool:
         (os.environ.get("XDG_CURRENT_DESKTOP", ""), os.environ.get("DESKTOP_SESSION", ""))
     ).casefold()
     return "gnome" in desktop
+
+
+def _frozen_linux_x11() -> bool:
+    return (
+        get_platform().system_name == "Linux"
+        and bool(getattr(sys, "frozen", False))
+        and bool(os.environ.get("DISPLAY"))
+        and not bool(os.environ.get("WAYLAND_DISPLAY"))
+    )
 
 
 def _acquire_instance_lock(qt: SimpleNamespace) -> Any | None:
@@ -5120,6 +5130,8 @@ class MountletWindow:
             with suppress(Exception):
                 existing.stop()
             self._remote_change_poll_timer = None
+        if not self._remote_change_polling_enabled():
+            return
         interval_seconds = load_app_settings().remote_sync_interval_seconds
         if interval_seconds <= 0:
             return
@@ -5134,6 +5146,14 @@ class MountletWindow:
         except Exception:
             return
         self._remote_change_poll_timer = timer
+
+    def _remote_change_polling_enabled(self) -> bool:
+        override = os.environ.get(REMOTE_CHANGE_POLLING_ENV, "").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            return True
+        if override in {"0", "false", "no", "off"}:
+            return False
+        return not _frozen_linux_x11()
 
     def _scan_remote_cache_changes(self) -> None:
         if self._tray_is_quitting() or self._license_locked():
