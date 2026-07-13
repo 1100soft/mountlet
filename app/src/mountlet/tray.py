@@ -4822,6 +4822,7 @@ class MountletWindow:
         self._global_search_items: list[IndexedEntry] = []
         self._global_search_verify_pending = False
         self._remote_hover_suppressed = False
+        self._remote_hover_suppression_token = 0
         self._app_menu: Any | None = None
         self._mount_menu: Any | None = None
         self._config_menu: Any | None = None
@@ -5812,7 +5813,7 @@ class MountletWindow:
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setMinimumHeight(REMOTE_LIST_MIN_HEIGHT)
+        scroll.setMinimumHeight(0)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
@@ -6392,9 +6393,11 @@ class MountletWindow:
         results.setSelectionBehavior(self.qt.QAbstractItemView.SelectionBehavior.SelectRows)
         results.setEditTriggers(self.qt.QAbstractItemView.EditTrigger.NoEditTriggers)
         results.setMaximumHeight(0)
+        results.setMinimumHeight(0)
         results.setVisible(False)
         results.itemClicked.connect(self._open_global_search_result)
         results.itemDoubleClicked.connect(self._open_global_search_result)
+        results.currentItemChanged.connect(self._preview_global_search_result)
         results.installEventFilter(self._make_global_search_key_filter())
         self._global_search_results = results
         layout.addWidget(results)
@@ -6520,12 +6523,15 @@ class MountletWindow:
             header_height = 28
         height = int(header_height + row_height * visible_rows + 8) if results else 0
         tree.setMaximumHeight(height)
+        tree.setMinimumHeight(height)
         tree.setVisible(bool(results))
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
         self._browser_layout_changed()
 
-    def _open_global_search_result(self, item: Any, _column: int | None = None) -> None:
+    def _preview_global_search_result(self, item: Any, _previous: Any | None = None) -> None:
+        if item is None:
+            return
         result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
         if not isinstance(result, IndexedEntry):
             return
@@ -6534,15 +6540,19 @@ class MountletWindow:
         if remote is None or row is None:
             self.tray_app._notify("Search", "That remote is no longer configured.", success=False)
             return
-        self._suppress_remote_hover_until_browser_interaction()
         self._set_browser_selected(remote.name)
-        self._focus_remote_row(remote.name)
+        self._selected_remote_name = remote.name
+        self._ensure_remote_row_visible(row.frame)
         self.file_browser.remote = remote
         self.file_browser.path = result.parent_path
         self.file_browser._pending_select_path = result.path
         self.file_browser.backend.remember_path(remote.name, result.parent_path)
-        self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=True)
-        self.file_browser.refresh(force=True)
+        self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=False)
+
+    def _open_global_search_result(self, item: Any, _column: int | None = None) -> None:
+        self._suppress_remote_hover_until_browser_interaction()
+        self._preview_global_search_result(item)
+        self.file_browser.focus()
 
     def _open_current_global_search_result(self) -> None:
         tree = getattr(self, "_global_search_results", None)
@@ -6570,6 +6580,7 @@ class MountletWindow:
         if tree is not None:
             tree.clear()
             tree.setMaximumHeight(0)
+            tree.setMinimumHeight(0)
             tree.setVisible(False)
         status = getattr(self, "_global_search_status", None)
         if status is not None:
@@ -7269,9 +7280,16 @@ class MountletWindow:
 
     def _suppress_remote_hover_until_browser_interaction(self) -> None:
         self._remote_hover_suppressed = True
+        self._remote_hover_suppression_token += 1
+        token = self._remote_hover_suppression_token
+        self.qt.QTimer.singleShot(5000, lambda current=token: self._release_remote_hover_suppression_if_current(current))
 
     def _release_remote_hover_suppression(self) -> None:
         self._remote_hover_suppressed = False
+
+    def _release_remote_hover_suppression_if_current(self, token: int) -> None:
+        if token == getattr(self, "_remote_hover_suppression_token", 0):
+            self._release_remote_hover_suppression()
 
     def _remote_row_style(self, row: Any, *, highlighted: bool) -> str:
         mounted = bool(row.property("mounted"))
@@ -7632,24 +7650,27 @@ class MountletWindow:
         menu_height = self.window.menuBar().sizeHint().height()
         margins = layout.contentsMargins()
         spacing = max(layout.spacing(), 0)
-        toolbar_size = self._layout_item_size(layout, 0)
-        add_row_size = self._layout_item_size(layout, 2)
+        fixed_sizes = self._fixed_layout_item_sizes(layout, exclude_widget=scroll)
         container_size = container.sizeHint()
         horizontal_padding = margins.left() + margins.right()
         vertical_padding = margins.top() + margins.bottom()
-        content_width = max(toolbar_size.width(), add_row_size.width(), container_size.width())
+        fixed_width = max((size.width() for size in fixed_sizes), default=0)
+        fixed_height = sum(size.height() for size in fixed_sizes)
+        fixed_count = len(fixed_sizes)
+        content_width = max(fixed_width, container_size.width())
         remote_panel_width = (
             horizontal_padding + content_width + scroll_frame + scroll.verticalScrollBar().sizeHint().width() + 2
         )
         width = remote_panel_width
+        remote_list_height = max(container_size.height(), 1)
+        if fixed_count:
+            fixed_height += spacing * fixed_count
         height = (
             menu_height
             + vertical_padding
-            + toolbar_size.height()
-            + add_row_size.height()
-            + max(container_size.height(), REMOTE_LIST_MIN_HEIGHT)
+            + fixed_height
+            + remote_list_height
             + scroll_frame
-            + (spacing * 2)
             + 2
         )
         file_browser = getattr(self, "file_browser", None)
@@ -7683,9 +7704,37 @@ class MountletWindow:
             width += scroll.verticalScrollBar().sizeHint().width()
             height = max_height
 
+        max_scroll_content_height = max(
+            1,
+            max_height
+            - menu_height
+            - vertical_padding
+            - fixed_height
+            - scroll_frame
+            - 2,
+        )
+        scroll_height = max(1, min(remote_list_height + scroll_frame, max_scroll_content_height + scroll_frame))
+        with suppress(Exception):
+            scroll.setMinimumHeight(scroll_height)
+            scroll.setMaximumHeight(scroll_height)
+
         target_width = min(max(width, 360), max_width)
-        target_height = min(max(height, 220), max_height)
+        target_height = min(max(height, 120), max_height)
         self._resize_anchored(target_width, target_height, screen)
+
+    def _fixed_layout_item_sizes(self, layout: Any, *, exclude_widget: Any) -> list[Any]:
+        sizes: list[Any] = []
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is exclude_widget:
+                continue
+            if widget is not None and not widget.isVisible():
+                continue
+            sizes.append(widget.sizeHint() if widget is not None else item.sizeHint())
+        return sizes
 
     def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
         """Resize while preserving the tray-side screen-edge offsets."""

@@ -204,6 +204,7 @@ class CompactCloudBrowser:
                 super().mousePressEvent(event)
 
             def keyPressEvent(self, event: Any) -> None:
+                outer._release_main_hover_suppression()
                 if outer._handle_key(event):
                     return
                 super().keyPressEvent(event)
@@ -376,9 +377,11 @@ class CompactCloudBrowser:
         self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
         self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.search_results.setMaximumHeight(0)
+        self.search_results.setMinimumHeight(0)
         self.search_results.setVisible(False)
         self.search_results.itemClicked.connect(self._open_search_result)
         self.search_results.itemDoubleClicked.connect(self._open_search_result)
+        self.search_results.currentItemChanged.connect(self._preview_search_result)
         self.search_results.installEventFilter(self._make_search_key_filter())
         layout.addWidget(self.search_results)
 
@@ -1608,12 +1611,15 @@ class CompactCloudBrowser:
             header_height = 28
         height = int(header_height + row_height * visible_rows + 8) if results else 0
         tree.setMaximumHeight(height)
+        tree.setMinimumHeight(height)
         tree.setVisible(bool(results))
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
         self._layout_changed()
 
-    def _open_search_result(self, item: Any, _column: int | None = None) -> None:
+    def _preview_search_result(self, item: Any, _previous: Any | None = None) -> None:
+        if item is None:
+            return
         result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
         if not isinstance(result, IndexedEntry):
             return
@@ -1631,7 +1637,12 @@ class CompactCloudBrowser:
         else:
             self.window.show()
             self.window.raise_()
-        self.refresh(force=True)
+        self.refresh(force=False)
+
+    def _open_search_result(self, item: Any, _column: int | None = None) -> None:
+        self._preview_search_result(item)
+        self._release_main_hover_suppression()
+        self.focus()
 
     def _open_current_search_result(self) -> None:
         tree = getattr(self, "search_results", None)
@@ -1659,6 +1670,7 @@ class CompactCloudBrowser:
         if tree is not None:
             tree.clear()
             tree.setMaximumHeight(0)
+            tree.setMinimumHeight(0)
             tree.setVisible(False)
         self._layout_changed()
 
