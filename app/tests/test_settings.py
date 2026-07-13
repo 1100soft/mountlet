@@ -40,6 +40,10 @@ file_manager = "org.example.Files.desktop"
 open_folder_behavior = "new_window"
 focus_file_manager = false
 
+[ui]
+window_mode = "single"
+theme = "dark"
+
 [sync]
 remote_check_interval = 75
 
@@ -60,6 +64,8 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.file_manager, "org.example.Files.desktop")
         self.assertEqual(config.open_folder_behavior, "new_window")
         self.assertFalse(config.focus_file_manager)
+        self.assertEqual(config.window_mode, settings.WINDOW_MODE_SINGLE)
+        self.assertEqual(config.theme, settings.THEME_DARK)
         self.assertEqual(config.remote_sync_interval_seconds, 75.0)
         self.assertEqual(config.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
         self.assertEqual(config.shortcuts["browser_root"], ("Ctrl+Home",))
@@ -212,6 +218,8 @@ remote_next = "S, PageDown"
                     file_manager="org.example.Files.desktop",
                     open_folder_behavior="new_window",
                     focus_file_manager=False,
+                    window_mode=settings.WINDOW_MODE_SINGLE,
+                    theme=settings.THEME_DARK,
                     remote_sync_interval_seconds=120.0,
                     config_sync_remote="Docs__Drive",
                     config_sync_path="Mountlet/shared.mountlet",
@@ -230,6 +238,8 @@ remote_next = "S, PageDown"
         self.assertEqual(loaded.file_manager, "org.example.Files.desktop")
         self.assertEqual(loaded.open_folder_behavior, "new_window")
         self.assertFalse(loaded.focus_file_manager)
+        self.assertEqual(loaded.window_mode, settings.WINDOW_MODE_SINGLE)
+        self.assertEqual(loaded.theme, settings.THEME_DARK)
         self.assertEqual(loaded.remote_sync_interval_seconds, 120.0)
         self.assertEqual(loaded.config_sync_remote, "Docs__Drive")
         self.assertEqual(loaded.config_sync_path, "Mountlet/shared.mountlet")

@@ -237,6 +237,16 @@ class TrayTests(unittest.TestCase):
             with mock.patch.object(tray.license_control, "current_status", return_value=status):
                 self.assertTrue(tray._license_locked())
 
+    def test_effective_window_mode_forces_single_on_wayland(self):
+        config = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
+
+        self.assertEqual(tray._effective_window_mode(config, is_wayland=True), settings.WINDOW_MODE_SINGLE)
+
+    def test_effective_window_mode_uses_setting_off_wayland(self):
+        config = settings.AppSettings(window_mode=settings.WINDOW_MODE_SINGLE)
+
+        self.assertEqual(tray._effective_window_mode(config, is_wayland=False), settings.WINDOW_MODE_SINGLE)
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

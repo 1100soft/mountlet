@@ -48,6 +48,11 @@ from .settings import (
     AppSettings,
     DEFAULT_SHORTCUTS,
     MountSettings,
+    THEME_DARK,
+    THEME_LIGHT,
+    THEME_SYSTEM,
+    WINDOW_MODE_MULTIPLE,
+    WINDOW_MODE_SINGLE,
     default_app_folder,
     ensure_default_config_files,
     load_app_settings,
@@ -555,6 +560,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QKeySequence,
             QPainter,
             QPainterPath,
+            QPalette,
             QPen,
             QPixmap,
         )
@@ -646,6 +652,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QPoint=QPoint,
         QPainter=QPainter,
         QPainterPath=QPainterPath,
+        QPalette=QPalette,
         QPen=QPen,
         QPixmap=QPixmap,
         QProgressBar=QProgressBar,
@@ -2189,6 +2196,71 @@ def _config_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _effective_window_mode(settings: AppSettings | None = None, *, is_wayland: bool = False) -> str:
+    if is_wayland:
+        return WINDOW_MODE_SINGLE
+    current = settings if settings is not None else load_app_settings()
+    return current.window_mode if current.window_mode in {WINDOW_MODE_SINGLE, WINDOW_MODE_MULTIPLE} else WINDOW_MODE_MULTIPLE
+
+
+def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
+    selected = theme if theme in {THEME_SYSTEM, THEME_LIGHT, THEME_DARK} else THEME_SYSTEM
+    if selected == THEME_SYSTEM:
+        try:
+            app.setPalette(app.style().standardPalette())
+        except Exception:
+            pass
+        return
+    try:
+        app.setStyle("Fusion")
+    except Exception:
+        pass
+    palette = qt.QPalette()
+    colors = _theme_colors(selected)
+    for role_name, color in colors.items():
+        role = getattr(qt.QPalette.ColorRole, role_name, None)
+        if role is not None:
+            palette.setColor(role, qt.QColor(color))
+    try:
+        app.setPalette(palette)
+    except Exception:
+        pass
+
+
+def _theme_colors(theme: str) -> dict[str, str]:
+    if theme == THEME_DARK:
+        return {
+            "Window": "#111827",
+            "WindowText": "#f9fafb",
+            "Base": "#0b1220",
+            "AlternateBase": "#1f2937",
+            "ToolTipBase": "#111827",
+            "ToolTipText": "#f9fafb",
+            "Text": "#f9fafb",
+            "Button": "#1f2937",
+            "ButtonText": "#f9fafb",
+            "BrightText": "#ffffff",
+            "Highlight": "#2563eb",
+            "HighlightedText": "#ffffff",
+            "PlaceholderText": "#9ca3af",
+        }
+    return {
+        "Window": "#f8fafc",
+        "WindowText": "#111827",
+        "Base": "#ffffff",
+        "AlternateBase": "#eef2f7",
+        "ToolTipBase": "#ffffff",
+        "ToolTipText": "#111827",
+        "Text": "#111827",
+        "Button": "#f3f4f6",
+        "ButtonText": "#111827",
+        "BrightText": "#ffffff",
+        "Highlight": "#bfdbfe",
+        "HighlightedText": "#111827",
+        "PlaceholderText": "#6b7280",
+    }
+
+
 def _license_required() -> bool:
     return os.environ.get(LICENSE_REQUIRE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -2266,8 +2338,10 @@ class AppConfigDialog(_ConfigDialogBase):
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("App settings")
-        self.dialog.resize(460, 280)
+        self.dialog.resize(520, 360)
         self.fields: dict[str, Any] = {}
+        self._layout_buttons: dict[str, Any] = {}
+        self._layout_group: Any | None = None
         self._build()
 
     def _build(self) -> None:
@@ -2295,6 +2369,14 @@ class AppConfigDialog(_ConfigDialogBase):
             ),
             "open_folder_behavior": self._combo(OPEN_FOLDER_BEHAVIORS, app_settings.open_folder_behavior),
             "focus_file_manager": self._check(app_settings.focus_file_manager),
+            "theme": self._combo(
+                (
+                    (THEME_SYSTEM, "System"),
+                    (THEME_LIGHT, "Light"),
+                    (THEME_DARK, "Dark"),
+                ),
+                app_settings.theme,
+            ),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
             "remote_sync_interval": self._line(f"{app_settings.remote_sync_interval_seconds:g}"),
             "config_sync_remote": self._combo(
@@ -2322,6 +2404,8 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow("File manager", self.fields["file_manager"])
         form.addRow("Open folders", self.fields["open_folder_behavior"])
         form.addRow(self.fields["focus_file_manager"])
+        form.addRow("Window mode", self._layout_mode_selector(app_settings.window_mode))
+        form.addRow("Theme", self.fields["theme"])
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow(self.fields["integrated_file_edits"])
         form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
@@ -2362,6 +2446,8 @@ class AppConfigDialog(_ConfigDialogBase):
                 file_manager=self.fields["file_manager"].currentData() or "",
                 open_folder_behavior=self.fields["open_folder_behavior"].currentData() or "current_desktop",
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
+                window_mode=self._selected_window_mode(),
+                theme=self.fields["theme"].currentData() or THEME_SYSTEM,
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
                 remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
                 config_sync_remote=self.fields["config_sync_remote"].currentData() or "",
@@ -2373,6 +2459,49 @@ class AppConfigDialog(_ConfigDialogBase):
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
+
+    def _layout_mode_selector(self, current_mode: str) -> Any:
+        container = self.qt.QWidget()
+        layout = self.qt.QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        group = self.qt.QButtonGroup(container)
+        group.setExclusive(True)
+        self._layout_group = group
+        effective = _effective_window_mode(
+            AppSettings(window_mode=current_mode),
+            is_wayland=bool(os.environ.get("WAYLAND_DISPLAY")) and get_platform().system_name == "Linux",
+        )
+        options = (
+            (WINDOW_MODE_SINGLE, "Single window", "ui-layout-single", "Dock files beside the remote list."),
+            (WINDOW_MODE_MULTIPLE, "Multiple windows", "ui-layout-multiple", "Open Mountlet Files as a separate window."),
+        )
+        for mode, label, icon_name, tooltip in options:
+            button = self.qt.QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip(tooltip)
+            button.setMinimumHeight(74)
+            button.setIcon(mountlet_icon(self.qt, icon_name, size=28) or self.qt.QIcon())
+            button.setIconSize(self.qt.QSize(28, 28))
+            button.setStyleSheet(
+                "QPushButton { text-align: left; padding: 8px; border-radius: 6px; } "
+                "QPushButton:checked { border: 2px solid #2563eb; font-weight: 700; }"
+            )
+            if mode == WINDOW_MODE_MULTIPLE and bool(os.environ.get("WAYLAND_DISPLAY")) and get_platform().system_name == "Linux":
+                button.setEnabled(False)
+                button.setToolTip("Wayland restricts separate tray-style windows, so Mountlet uses single window mode.")
+            group.addButton(button)
+            self._layout_buttons[mode] = button
+            layout.addWidget(button, 1)
+        selected = self._layout_buttons.get(effective) or self._layout_buttons[WINDOW_MODE_MULTIPLE]
+        selected.setChecked(True)
+        return container
+
+    def _selected_window_mode(self) -> str:
+        for mode, button in self._layout_buttons.items():
+            if button.isChecked():
+                return mode
+        return WINDOW_MODE_MULTIPLE
 
     def _app_folder_selector(self) -> Any:
         container = self.qt.QWidget()
@@ -2525,6 +2654,8 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 file_manager=current.file_manager,
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
+                window_mode=current.window_mode,
+                theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 config_sync_remote=current.config_sync_remote,
@@ -2651,6 +2782,8 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 file_manager=current.file_manager,
                 open_folder_behavior=current.open_folder_behavior,
                 focus_file_manager=current.focus_file_manager,
+                window_mode=current.window_mode,
+                theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 config_sync_remote=self.fields["remote"].currentData() or "",
@@ -4859,7 +4992,22 @@ class MountletWindow:
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
-        self.file_browser = CompactCloudBrowser(
+        self.file_browser = self._create_file_browser()
+        self.window.focus_remote_row = self._focus_current_remote_row
+        self.window.update_focus_style = self._update_main_focus_style
+        self.window.set_mountlet_focus_owner = self._set_focus_owner
+        self.window.mountlet_focus_owner = lambda: getattr(self, "_focus_owner", "main")
+        self.window.release_remote_hover_suppression = self._release_remote_hover_suppression
+        self.file_browser.preload(_load_visible_remotes())
+        self._setup_global_search_timer()
+        self._setup_offline_change_tracking()
+        self._close_filter = self._make_close_filter()
+        self.window.installEventFilter(self._close_filter)
+        self.window.resize(720, 260)
+        self._build_app_menu()
+
+    def _create_file_browser(self, *, backend: Any | None = None) -> CompactCloudBrowser:
+        browser = CompactCloudBrowser(
             self.qt,
             self.window,
             remotes=_load_visible_remotes,
@@ -4870,24 +5018,19 @@ class MountletWindow:
             toggle_mount=self._run_switch_action,
             sync_paths=self._sync_cached_paths,
             file_manager_label=self.desktop.file_manager_label,
-            embedded=bool(getattr(self.tray_app, "_is_wayland", False)),
+            embedded=self._file_browser_embedded(),
             keyboard_shortcuts_enabled=_custom_keyboard_shortcuts_enabled(),
             layout_changed=self._browser_layout_changed,
             local_files_changed=self._local_browser_files_changed,
         )
-        self.window.focus_remote_row = self._focus_current_remote_row
-        self.window.update_focus_style = self._update_main_focus_style
-        self.window.set_mountlet_focus_owner = self._set_focus_owner
-        self.window.mountlet_focus_owner = lambda: getattr(self, "_focus_owner", "main")
-        self.window.release_remote_hover_suppression = self._release_remote_hover_suppression
-        self.file_browser.window.setWindowIcon(self.tray_app.icon)
-        self.file_browser.preload(_load_visible_remotes())
-        self._setup_global_search_timer()
-        self._setup_offline_change_tracking()
-        self._close_filter = self._make_close_filter()
-        self.window.installEventFilter(self._close_filter)
-        self.window.resize(720, 260)
-        self._build_app_menu()
+        if backend is not None:
+            browser.backend = backend
+            browser.backend.operation_output_callback = lambda text: browser._bridge.rclone_output_ready.emit(text)
+        browser.window.setWindowIcon(self.tray_app.icon)
+        return browser
+
+    def _file_browser_embedded(self) -> bool:
+        return _effective_window_mode(load_app_settings(), is_wayland=bool(getattr(self.tray_app, "_is_wayland", False))) == WINDOW_MODE_SINGLE
 
     def _desktop_api(self) -> DesktopServices:
         desktop = getattr(self, "desktop", None)
@@ -5844,7 +5987,7 @@ class MountletWindow:
         outer.addWidget(self._add_remote_row())
 
         central = root
-        if getattr(self.tray_app, "_is_wayland", False):
+        if bool(getattr(self.file_browser, "_embedded", False)):
             central = self.qt.QWidget()
             shell = self.qt.QHBoxLayout(central)
             shell.setContentsMargins(0, 0, 0, 0)
@@ -5912,7 +6055,7 @@ class MountletWindow:
             self.file_browser.restore_focus_snapshot("tree")
 
     def _restore_embedded_browser_focus_on_activation(self) -> bool:
-        if not getattr(getattr(self, "tray_app", None), "_is_wayland", False):
+        if not bool(getattr(self.file_browser, "_embedded", False)):
             return False
         if getattr(self, "_focus_owner", "main") != "browser":
             return False
@@ -7788,14 +7931,14 @@ class MountletWindow:
             + 2
         )
         file_browser = getattr(self, "file_browser", None)
-        if getattr(getattr(self, "tray_app", None), "_is_wayland", False):
+        if bool(getattr(file_browser, "_embedded", False)):
             try:
                 root.setMinimumWidth(remote_panel_width)
                 root.setMaximumWidth(remote_panel_width)
             except Exception:
                 pass
         if (
-            getattr(getattr(self, "tray_app", None), "_is_wayland", False)
+            bool(getattr(file_browser, "_embedded", False))
             and file_browser is not None
             and file_browser.is_visible()
         ):
@@ -8723,9 +8866,12 @@ class MountletWindow:
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
+        old_embedded = self._file_browser_embedded()
         dialog = AppConfigDialog(self.qt, self.window)
 
         def on_accepted() -> None:
+            _apply_theme(self.qt, self.tray_app.app, load_app_settings().theme)
+            self._rebuild_file_browser_if_layout_changed(old_embedded)
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -8738,6 +8884,35 @@ class MountletWindow:
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
         self._open_child_dialog(dialog, on_accepted)
+
+    def _rebuild_file_browser_if_layout_changed(self, old_embedded: bool) -> None:
+        if self._file_browser_embedded() == old_embedded:
+            return
+        old_browser = self.file_browser
+        old_remote = old_browser.remote
+        old_path = old_browser.path
+        was_visible = old_browser.is_visible()
+        focus_snapshot = old_browser.focus_snapshot()
+        backend = old_browser.backend
+        with suppress(Exception):
+            old_browser.dispose()
+        self.file_browser = self._create_file_browser(backend=backend)
+        if old_remote is not None:
+            self.file_browser.remote = old_remote
+            self.file_browser.path = old_path
+            self.file_browser.backend.remember_path(old_remote.name, old_path)
+        self._current_remote_names = []
+        self._content_fit_widgets = None
+        if old_remote is not None and was_visible:
+            row = self._row_widgets.get(old_remote.name)
+            if row is not None:
+                self.file_browser.show_remote(
+                    old_remote,
+                    row.frame,
+                    show_browser=True,
+                    focus_browser=getattr(self, "_focus_owner", "main") == "browser",
+                )
+                self.file_browser.restore_focus_snapshot(focus_snapshot)
 
     def _show_shortcut_config_editor(self) -> None:
         if self._license_locked():
@@ -9308,6 +9483,9 @@ class MountletWindow:
             pass
 
     def _rclone_config_replaced(self) -> None:
+        old_embedded = bool(getattr(self.file_browser, "_embedded", False))
+        _apply_theme(self.qt, self.tray_app.app, load_app_settings().theme)
+        self._rebuild_file_browser_if_layout_changed(old_embedded)
         self._usage_cache.clear()
         getattr(self, "_connection_cache", {}).clear()
         self._usage_pending.clear()
@@ -9395,6 +9573,8 @@ class MountletWindow:
         getattr(self, "_connection_cache", {}).clear()
         self._action_pending.clear()
         self._hide_window_stack()
+        with suppress(Exception):
+            self.file_browser.dispose()
 
     def _tray_is_quitting(self) -> bool:
         return bool(getattr(getattr(self, "tray_app", None), "_quitting", False))
@@ -9414,6 +9594,7 @@ class MountletTray:
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setApplicationName("Mountlet")
         self.app.setApplicationDisplayName("Mountlet")
+        _apply_theme(self.qt, self.app, load_app_settings().theme)
         try:
             self.app.setDesktopFileName("com.ericholt.mountlet")
         except AttributeError:

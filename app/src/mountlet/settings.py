@@ -15,6 +15,13 @@ from .platform_services.file_managers import default_file_manager_id
 APP_FOLDER_NAME = "Mountlet"
 MOUNTED_FOLDER_NAME = "mounted"
 OFFLINE_FOLDER_NAME = "offline"
+WINDOW_MODE_SINGLE = "single"
+WINDOW_MODE_MULTIPLE = "multiple"
+THEME_SYSTEM = "system"
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+WINDOW_MODES = {WINDOW_MODE_SINGLE, WINDOW_MODE_MULTIPLE}
+THEMES = {THEME_SYSTEM, THEME_LIGHT, THEME_DARK}
 
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "common_previous": (),
@@ -50,6 +57,8 @@ class AppSettings:
     file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
+    window_mode: str = WINDOW_MODE_MULTIPLE
+    theme: str = THEME_SYSTEM
     integrated_file_edits: bool = False
     remote_sync_interval_seconds: float = 30.0
     config_sync_remote: str = ""
@@ -88,6 +97,12 @@ file_manager = ""
 # default uses the desktop's normal folder opener.
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
+
+[ui]
+# multiple keeps Mountlet Files in a separate window. single docks it beside the remote list.
+# Wayland always uses single because separate tray-style windows are restricted.
+window_mode = "multiple"
+theme = "system"
 
 [sync]
 # Seconds between background checks for cloud-side changes in cached/offline files.
@@ -249,6 +264,11 @@ def _bool_value(value: Any, default: bool) -> bool:
     return default
 
 
+def _choice_value(value: Any, default: str, choices: set[str]) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in choices else default
+
+
 def _float_value(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -315,6 +335,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     data = _read_simple_toml(source)
     app = data.get("app", {})
     tray = data.get("tray", {})
+    ui = data.get("ui", {})
     sync = data.get("sync", {})
     shortcuts = _shortcut_values(data.get("shortcuts", {}))
     return AppSettings(
@@ -326,6 +347,8 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        window_mode=_choice_value(ui.get("window_mode"), WINDOW_MODE_MULTIPLE, WINDOW_MODES),
+        theme=_choice_value(ui.get("theme"), THEME_SYSTEM, THEMES),
         remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
         config_sync_remote=str(sync.get("config_remote", "")).strip(),
         config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
@@ -443,6 +466,12 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
             "",
+            "[ui]",
+            "# multiple keeps Mountlet Files in a separate window. single docks it beside the remote list.",
+            "# Wayland always uses single because separate tray-style windows are restricted.",
+            f"window_mode = {_toml_string(settings.window_mode if settings.window_mode in WINDOW_MODES else WINDOW_MODE_MULTIPLE)}",
+            f"theme = {_toml_string(settings.theme if settings.theme in THEMES else THEME_SYSTEM)}",
+            "",
             "[sync]",
             "# Seconds between background checks for cloud-side changes in cached/offline files.",
             "# Set to 0 for manual sync only.",
@@ -516,6 +545,11 @@ __all__ = [
     "DEFAULT_SHORTCUTS",
     "MOUNTED_FOLDER_NAME",
     "OFFLINE_FOLDER_NAME",
+    "THEME_DARK",
+    "THEME_LIGHT",
+    "THEME_SYSTEM",
+    "WINDOW_MODE_MULTIPLE",
+    "WINDOW_MODE_SINGLE",
     "AppSettings",
     "MountSettings",
     "app_folder",

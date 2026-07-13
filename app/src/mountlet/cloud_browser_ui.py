@@ -1158,6 +1158,20 @@ class CompactCloudBrowser:
         else:
             self.window.close()
 
+    def dispose(self) -> None:
+        for timer_name in ("_working_timer", "_search_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+        unsubscribe = getattr(self, "_unsubscribe_rclone_log", None)
+        if unsubscribe is not None:
+            with suppress(Exception):
+                unsubscribe()
+            self._unsubscribe_rclone_log = None
+        with suppress(Exception):
+            self.close()
+
     def embed_into(self, layout: Any) -> None:
         if not self._embedded:
             return
