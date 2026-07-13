@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import tempfile
 import unittest
@@ -137,7 +138,8 @@ class BuildLinuxBundleTests(unittest.TestCase):
             self.assertIn('PYTHON_BIN="${MOUNTLET_PYTHON:-python3}"', text)
             self.assertIn('PYTHONPATH="$APP_DIR/lib', text)
             self.assertIn('-m mountlet.desktop "$@"', text)
-            self.assertTrue(launcher.stat().st_mode & 0o111)
+            if os.name != "nt":
+                self.assertTrue(launcher.stat().st_mode & 0o111)
 
     def test_preview_build_info_defaults_to_preview_report_api(self):
         build_linux_bundle = _load_build_linux_bundle()
