@@ -5,10 +5,10 @@ import time
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from pathlib import PurePosixPath
+from typing import Any, Iterable
 
 from . import core
-from .cloud_browser import BrowserEntry, normalize_browser_path, parent_browser_path
 from .config_tools.shared import app_state_dir, ensure_app_directories
 
 
@@ -69,9 +69,20 @@ class MetadataIndex:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(remote_name, parent_path)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_name ON entries(name_folded)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_path ON entries(path)")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS remote_index (
+                    remote_name TEXT PRIMARY KEY,
+                    remote_display TEXT NOT NULL DEFAULT '',
+                    provider TEXT NOT NULL DEFAULT '',
+                    backend_type TEXT NOT NULL DEFAULT '',
+                    fully_indexed_at REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
             connection.commit()
 
-    def upsert_folder(self, remote: core.RemoteInfo, parent_path: str, entries: Iterable[BrowserEntry]) -> None:
+    def upsert_folder(self, remote: core.RemoteInfo, parent_path: str, entries: Iterable[Any]) -> None:
         normalized_parent = normalize_browser_path(parent_path)
         now = time.time()
         values = list(entries)
@@ -121,35 +132,27 @@ class MetadataIndex:
             )
             connection.commit()
 
-    def upsert_entries(self, remote: core.RemoteInfo, entries: Iterable[BrowserEntry]) -> None:
-        grouped: dict[str, list[BrowserEntry]] = {}
+    def upsert_entries(self, remote: core.RemoteInfo, entries: Iterable[Any]) -> None:
+        grouped: dict[str, list[Any]] = {}
         for entry in entries:
             grouped.setdefault(parent_browser_path(entry.path), []).append(entry)
         for parent_path, children in grouped.items():
             self.upsert_folder(remote, parent_path, children)
 
-    def cached_folder(self, remote_name: str, parent_path: str) -> list[BrowserEntry]:
+    def cached_folder(self, remote_name: str, parent_path: str) -> list[IndexedEntry]:
         normalized_parent = normalize_browser_path(parent_path)
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT name, path, is_dir, size, modified
+                SELECT remote_name, remote_display, provider, backend_type, name, path,
+                       parent_path, is_dir, size, modified, updated_at
                 FROM entries
                 WHERE remote_name = ? AND parent_path = ?
                 ORDER BY is_dir DESC, name_folded ASC
                 """,
                 (remote_name, normalized_parent),
             ).fetchall()
-        return [
-            BrowserEntry(
-                name=str(row["name"]),
-                path=str(row["path"]),
-                is_dir=bool(row["is_dir"]),
-                size=max(int(row["size"] or 0), 0),
-                modified=str(row["modified"] or ""),
-            )
-            for row in rows
-        ]
+        return [_indexed_entry_from_row(row) for row in rows]
 
     def search(self, query: str, *, remotes: Iterable[core.RemoteInfo] = (), limit: int = 100) -> list[IndexedEntry]:
         terms = [term.casefold() for term in query.split() if term.strip()]
@@ -189,9 +192,76 @@ class MetadataIndex:
                 row = connection.execute("SELECT COUNT(*) AS count FROM entries").fetchone()
         return int(row["count"] if row else 0)
 
+    def is_remote_fully_indexed(self, remote_name: str) -> bool:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT fully_indexed_at FROM remote_index WHERE remote_name = ?",
+                (remote_name,),
+            ).fetchone()
+        return bool(row and float(row["fully_indexed_at"] or 0) > 0)
+
+    def mark_remote_fully_indexed(self, remote: core.RemoteInfo) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO remote_index (
+                    remote_name, remote_display, provider, backend_type, fully_indexed_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(remote_name) DO UPDATE SET
+                    remote_display = excluded.remote_display,
+                    provider = excluded.provider,
+                    backend_type = excluded.backend_type,
+                    fully_indexed_at = excluded.fully_indexed_at
+                """,
+                (remote.name, remote.display_name, remote.provider, remote.backend_type, time.time()),
+            )
+            connection.commit()
+
     def remove_remote(self, remote_name: str) -> None:
         with closing(self._connect()) as connection:
             connection.execute("DELETE FROM entries WHERE remote_name = ?", (remote_name,))
+            connection.execute("DELETE FROM remote_index WHERE remote_name = ?", (remote_name,))
+            connection.commit()
+
+    def rename_remote(self, old_name: str, new_remote: core.RemoteInfo) -> None:
+        if old_name == new_remote.name:
+            return
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE entries
+                SET remote_name = ?,
+                    remote_display = ?,
+                    provider = ?,
+                    backend_type = ?
+                WHERE remote_name = ?
+                """,
+                (
+                    new_remote.name,
+                    new_remote.display_name,
+                    new_remote.provider,
+                    new_remote.backend_type,
+                    old_name,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE remote_index
+                SET remote_name = ?,
+                    remote_display = ?,
+                    provider = ?,
+                    backend_type = ?
+                WHERE remote_name = ?
+                """,
+                (
+                    new_remote.name,
+                    new_remote.display_name,
+                    new_remote.provider,
+                    new_remote.backend_type,
+                    old_name,
+                ),
+            )
             connection.commit()
 
 
@@ -210,3 +280,20 @@ def _indexed_entry_from_row(row: sqlite3.Row) -> IndexedEntry:
         updated_at=float(row["updated_at"] or 0),
     )
 
+
+def normalize_browser_path(path: str) -> str:
+    parts: list[str] = []
+    for part in PurePosixPath(path.replace("\\", "/")).parts:
+        if part in {"", "/", "."}:
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def parent_browser_path(path: str) -> str:
+    normalized = normalize_browser_path(path)
+    return normalize_browser_path(str(PurePosixPath(normalized).parent)) if normalized else ""

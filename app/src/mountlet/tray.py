@@ -8269,6 +8269,7 @@ class MountletWindow:
             if dialog.deleted:
                 self._usage_cache.pop(remote.name, None)
                 getattr(self, "_connection_cache", {}).pop(remote.name, None)
+                self.file_browser.backend.remove_indexed_remote(remote.name)
                 self._current_remote_names = []
                 if getattr(getattr(self.file_browser, "remote", None), "name", "") == remote.name:
                     self.file_browser.close()
@@ -8282,6 +8283,12 @@ class MountletWindow:
                 self._usage_cache.pop(dialog.renamed_from, None)
                 getattr(self, "_connection_cache", {}).pop(dialog.renamed_from, None)
                 self.file_browser.backend.rename_remote(dialog.renamed_from, dialog.renamed_to)
+                renamed_remote = next(
+                    (candidate for candidate in _load_visible_remotes() if candidate.name == dialog.renamed_to),
+                    None,
+                )
+                if renamed_remote is not None:
+                    self.file_browser.backend.rename_indexed_remote(dialog.renamed_from, renamed_remote)
                 if getattr(getattr(self.file_browser, "remote", None), "name", "") == dialog.renamed_from:
                     self.file_browser.close()
                     self.file_browser.remote = None

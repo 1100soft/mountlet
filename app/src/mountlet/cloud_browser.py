@@ -15,6 +15,7 @@ from typing import Callable, Iterable
 
 from . import core
 from .config_tools.shared import app_cache_dir, app_state_dir, ensure_app_directories
+from .metadata_index import IndexedEntry, MetadataIndex
 from .settings import offline_root
 
 
@@ -103,6 +104,23 @@ def remote_target(remote: core.RemoteInfo, relative_path: str = "") -> str:
     return f"{base}/{relative}" if relative else base
 
 
+def _browser_entry_from_lsjson_value(value: object) -> BrowserEntry | None:
+    if not isinstance(value, dict):
+        return None
+    relative = normalize_browser_path(str(value.get("Path") or value.get("Name") or ""))
+    if not relative:
+        return None
+    name = PurePosixPath(relative).name
+    is_dir = bool(value.get("IsDir"))
+    return BrowserEntry(
+        name=name,
+        path=relative,
+        is_dir=is_dir,
+        size=0 if is_dir else max(int(value.get("Size") or 0), 0),
+        modified=_display_time(str(value.get("ModTime") or "")),
+    )
+
+
 def _is_google_photos_upload_listing(remote: core.RemoteInfo, path: str, stderr: str) -> bool:
     return (
         remote.backend_type.casefold() == "gphotos"
@@ -139,6 +157,7 @@ class CloudBrowserBackend:
         self._paths = self._load_paths()
         self._offline_lock = threading.RLock()
         self._offline_records = self._load_offline_manifest()
+        self.index = MetadataIndex(self.state_path.with_name("metadata-index.sqlite3"))
         self.operation_output_callback: Callable[[str], None] | None = None
 
     def current_path(self, remote_name: str) -> str:
@@ -163,6 +182,12 @@ class CloudBrowserBackend:
         if old_root.exists() and old_root != new_root and not new_root.exists():
             new_root.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_root), str(new_root))
+
+    def rename_indexed_remote(self, old_name: str, new_remote: core.RemoteInfo) -> None:
+        self.index.rename_remote(old_name, new_remote)
+
+    def remove_indexed_remote(self, remote_name: str) -> None:
+        self.index.remove_remote(remote_name)
 
     def _save_paths(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,7 +237,9 @@ class CloudBrowserBackend:
                     modified=modified,
                 )
             )
-        return sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
+        entries = sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
+        self.index.upsert_folder(remote, path, entries)
+        return entries
 
     def list_entries_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
         if not entry.is_dir:
@@ -252,6 +279,55 @@ class CloudBrowserBackend:
 
     def list_files_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
         return [candidate for candidate in self.list_entries_recursive(remote, entry) if not candidate.is_dir]
+
+    def cached_entries(self, remote: core.RemoteInfo, path: str) -> list[BrowserEntry]:
+        return [
+            BrowserEntry(
+                name=entry.name,
+                path=entry.path,
+                is_dir=entry.is_dir,
+                size=entry.size,
+                modified=entry.modified,
+            )
+            for entry in self.index.cached_folder(remote.name, path)
+        ]
+
+    def search_index(
+        self,
+        query: str,
+        *,
+        remotes: Iterable[core.RemoteInfo] = (),
+        limit: int = 100,
+    ) -> list[IndexedEntry]:
+        return self.index.search(query, remotes=remotes, limit=limit)
+
+    def indexed_entry_count(self, remote_name: str | None = None) -> int:
+        return self.index.count_entries(remote_name)
+
+    def remote_fully_indexed(self, remote_name: str) -> bool:
+        return self.index.is_remote_fully_indexed(remote_name)
+
+    def index_remote_tree(self, remote: core.RemoteInfo) -> int:
+        binary = self._rclone()
+        result = subprocess.run(
+            self._command(binary, "lsjson", remote_target(remote, ""), "--recursive"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=None,
+            **core.PLATFORM.command_process_options(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+        try:
+            values = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("rclone returned an invalid recursive folder listing") from exc
+        entries = [_browser_entry_from_lsjson_value(value) for value in values]
+        entries = [entry for entry in entries if entry is not None]
+        self.index.upsert_entries(remote, entries)
+        self.index.mark_remote_fully_indexed(remote)
+        return len(entries)
 
     def _list_offline_entries(self, remote_name: str, path: str) -> list[BrowserEntry] | None:
         normalized = normalize_browser_path(path)

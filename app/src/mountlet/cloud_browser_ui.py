@@ -16,6 +16,7 @@ from .cloud_browser import (
     normalize_browser_path,
     parent_browser_path,
 )
+from .metadata_index import IndexedEntry
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
 from .ui_icons import apply_button_icon, mountlet_icon
@@ -139,12 +140,16 @@ class CompactCloudBrowser:
         self._rclone_output_dialog: Any | None = None
         self._rclone_output_text: Any | None = None
         self._rclone_raw_output_text: Any | None = None
+        self._search_dialog: Any | None = None
+        self._search_tree: Any | None = None
         self._rclone_output_lines: list[str] = []
         self._rclone_progress_block: list[str] = []
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
         ] = []
+        self._indexing_remote_names: set[str] = set()
+        self._auto_index_requested = False
         self._pending_select_path = ""
         self._closed_until_selected = False
         self._load_slots = threading.BoundedSemaphore(4)
@@ -156,6 +161,8 @@ class CompactCloudBrowser:
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
         self._bridge.rclone_output_ready.connect(self._append_rclone_output)
         self._bridge.rclone_raw_log_changed.connect(self._raw_rclone_log_changed)
+        self._bridge.search_ready.connect(self._search_ready)
+        self._bridge.index_finished.connect(self._index_finished)
         self.backend.operation_output_callback = lambda text: self._bridge.rclone_output_ready.emit(text)
         self._unsubscribe_rclone_log = rclone_log.subscribe(
             lambda _text: self._bridge.rclone_raw_log_changed.emit()
@@ -176,6 +183,8 @@ class CompactCloudBrowser:
             offline_job_finished = qt.Signal(str, object, str, bool, str)
             rclone_output_ready = qt.Signal(str)
             rclone_raw_log_changed = qt.Signal()
+            search_ready = qt.Signal(str, object, str)
+            index_finished = qt.Signal(str, int, str)
 
         return Bridge()
 
@@ -319,6 +328,37 @@ class CompactCloudBrowser:
         )
         navigation.addWidget(self.open_folder_button)
         layout.addLayout(navigation)
+
+        index_search = qt.QHBoxLayout()
+        self.search_field = qt.QLineEdit()
+        self.search_field.setPlaceholderText("Search indexed files")
+        self.search_field.returnPressed.connect(self.search_index)
+        index_search.addWidget(self.search_field, 1)
+        self.search_button = self._button(
+            "⌕",
+            self.search_index,
+            "Search indexed metadata",
+            square=True,
+            icon_name="ui-search",
+        )
+        self.index_remote_button = self._button(
+            "≡",
+            self.index_current_remote,
+            "Index this remote for search",
+            square=True,
+            icon_name="ui-index",
+        )
+        self.index_all_button = self._button(
+            "≣",
+            self.index_all_remotes,
+            "Index all remotes for search",
+            square=True,
+            icon_name="ui-index-all",
+        )
+        index_search.addWidget(self.search_button)
+        index_search.addWidget(self.index_remote_button)
+        index_search.addWidget(self.index_all_button)
+        layout.addLayout(index_search)
 
         item_actions = qt.QHBoxLayout()
         self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True, icon_name="ui-copy")
@@ -1102,6 +1142,21 @@ class CompactCloudBrowser:
             key = (remote.name, path)
             if key not in self._folder_cache and key not in self._loads_pending:
                 self._load_folder(remote, path)
+        self._start_missing_index(remotes)
+
+    def _start_missing_index(self, remotes: list[core.RemoteInfo]) -> None:
+        if self._auto_index_requested:
+            return
+        self._auto_index_requested = True
+        missing: list[core.RemoteInfo] = []
+        for remote in remotes:
+            try:
+                if not self.backend.remote_fully_indexed(remote.name):
+                    missing.append(remote)
+            except Exception:
+                continue
+        if missing:
+            self._index_remotes(missing, "Indexing metadata for search…")
 
     def invalidate(self, remote_name: str | None = None) -> None:
         if remote_name is None:
@@ -1343,8 +1398,17 @@ class CompactCloudBrowser:
         self.root_button.setEnabled(bool(path))
         key = (remote.name, path)
         cached = self._folder_cache.get(key)
+        if cached is None and not force:
+            indexed: list[BrowserEntry] = []
+            with suppress(Exception):
+                indexed = self.backend.cached_entries(remote, path)
+            if indexed:
+                cached = indexed
+                self._folder_cache[key] = indexed
         if cached is not None and not force:
             self._display_entries(cached)
+            if key not in self._loads_pending:
+                self._load_folder(remote, path)
             return
         if key in self._loads_pending:
             if cached is not None:
@@ -1391,6 +1455,142 @@ class CompactCloudBrowser:
         if self.remote is None or (self.remote.name, self.path) != key:
             return
         self._display_entries(entries)
+
+    def search_index(self) -> None:
+        query = self.search_field.text().strip()
+        if not query:
+            self.status.setText("Enter a search term")
+            return
+        remotes = list(self._remotes())
+        self.status.setText("Searching indexed metadata…")
+
+        def worker() -> None:
+            try:
+                results = self.backend.search_index(query, remotes=remotes, limit=200)
+            except Exception as exc:
+                self._bridge.search_ready.emit(query, None, str(exc))
+                return
+            self._bridge.search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _search_ready(self, query: str, results: object, error: str) -> None:
+        if error or not isinstance(results, list):
+            self.status.setText(error or "Search failed")
+            return
+        self.status.setText(f"{len(results)} indexed result{'s' if len(results) != 1 else ''}")
+        self._show_search_results(query, results)
+
+    def _show_search_results(self, query: str, results: list[IndexedEntry]) -> None:
+        dialog = self._search_dialog
+        if dialog is None:
+            dialog = self.qt.QDialog(self.window)
+            dialog.setWindowTitle("Indexed search")
+            layout = self.qt.QVBoxLayout(dialog)
+            self._search_title = self.qt.QLabel("")
+            layout.addWidget(self._search_title)
+            tree = self.qt.QTreeWidget()
+            tree.setColumnCount(4)
+            tree.setHeaderLabels(["Name", "Remote", "Path", "Modified"])
+            tree.setRootIsDecorated(False)
+            tree.setSelectionBehavior(self.qt.QAbstractItemView.SelectionBehavior.SelectRows)
+            tree.setEditTriggers(self.qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+            tree.itemDoubleClicked.connect(self._open_search_result)
+            layout.addWidget(tree)
+            buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+            buttons.rejected.connect(dialog.hide)
+            layout.addWidget(buttons)
+            dialog.resize(720, 420)
+            self._search_dialog = dialog
+            self._search_tree = tree
+        title = getattr(self, "_search_title", None)
+        if title is not None:
+            title.setText(f'Results for "{query}"')
+        tree = self._search_tree
+        if tree is None:
+            return
+        tree.clear()
+        for result in results:
+            path_text = result.parent_path or "Remote root"
+            item = self.qt.QTreeWidgetItem([result.name, result.remote_display, path_text, result.modified])
+            item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
+            tree.addTopLevelItem(item)
+        for column in range(4):
+            with suppress(Exception):
+                tree.resizeColumnToContents(column)
+        dialog.show()
+        dialog.raise_()
+
+    def _open_search_result(self, item: Any) -> None:
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(result, IndexedEntry):
+            return
+        remote = next((candidate for candidate in self._remotes() if candidate.name == result.remote_name), None)
+        if remote is None:
+            self.status.setText("That remote is no longer configured")
+            return
+        self.remote = remote
+        self.path = result.parent_path
+        self._pending_select_path = result.path
+        self.backend.remember_path(remote.name, result.parent_path)
+        if self._embedded:
+            self.root.show()
+            self._layout_changed()
+        else:
+            self.window.show()
+            self.window.raise_()
+        self.refresh(force=True)
+        with suppress(Exception):
+            self._search_dialog.hide()
+
+    def index_current_remote(self) -> None:
+        if self.remote is None:
+            self.status.setText("Select a remote to index")
+            return
+        self._index_remotes([self.remote], "Indexing remote metadata…")
+
+    def index_all_remotes(self) -> None:
+        remotes = list(self._remotes())
+        if not remotes:
+            self.status.setText("No remotes to index")
+            return
+        self._index_remotes(remotes, "Indexing all remote metadata…")
+
+    def _index_remotes(self, remotes: list[core.RemoteInfo], message: str) -> None:
+        runnable = [remote for remote in remotes if remote.name not in self._indexing_remote_names]
+        if not runnable:
+            self.status.setText("Indexing is already running")
+            return
+        for remote in runnable:
+            self._indexing_remote_names.add(remote.name)
+        self.status.setText(message)
+        self._update_actions()
+
+        def worker() -> None:
+            total = 0
+            errors: list[str] = []
+            last_name = ""
+            try:
+                for remote in runnable:
+                    last_name = remote.name
+                    try:
+                        total += self.backend.index_remote_tree(remote)
+                    except Exception as exc:
+                        errors.append(f"{remote.display_name}: {exc}")
+            finally:
+                for remote in runnable:
+                    self._indexing_remote_names.discard(remote.name)
+            self._bridge.index_finished.emit(last_name or "all", total, "\n".join(errors))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _index_finished(self, remote_name: str, count: int, error: str) -> None:
+        self._update_actions()
+        if error:
+            first_error = error.splitlines()[0]
+            self.status.setText(f"Indexed {count} item{'s' if count != 1 else ''}; {first_error}")
+            return
+        self.status.setText(f"Indexed {count} item{'s' if count != 1 else ''}")
 
     def _display_entries(self, entries: list[BrowserEntry]) -> None:
         previous_path = ""
@@ -2567,6 +2767,23 @@ class CompactCloudBrowser:
                 clear_button,
                 clear_enabled,
                 "Clear resolved cache for selected items" if clear_enabled else "Select temporarily cached items first",
+            )
+        index_remote_button = getattr(self, "index_remote_button", None)
+        if index_remote_button is not None:
+            indexing_current = bool(self.remote and self.remote.name in self._indexing_remote_names)
+            enabled = bool(self.remote and not indexing_current)
+            self._set_action_button_state(
+                index_remote_button,
+                enabled,
+                "Index this remote for search" if enabled else "Indexing this remote…",
+            )
+        index_all_button = getattr(self, "index_all_button", None)
+        if index_all_button is not None:
+            indexing = bool(self._indexing_remote_names)
+            self._set_action_button_state(
+                index_all_button,
+                not indexing,
+                "Index all remotes for search" if not indexing else "Indexing remote metadata…",
             )
         self._update_open_folder_button()
 
