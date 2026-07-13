@@ -6366,19 +6366,12 @@ class MountletWindow:
         row.setSpacing(4)
         field = self.qt.QLineEdit()
         field.setPlaceholderText("Search all remotes")
-        with suppress(Exception):
-            field.setFixedHeight(26)
+        self._style_search_field(field)
         field.textChanged.connect(self._global_search_text_changed)
         field.returnPressed.connect(self._open_current_global_search_result)
         field.installEventFilter(self._make_global_search_key_filter())
         self._global_search_field = field
-        button = self.qt.QPushButton("⌕")
-        button.setFixedSize(28, 26)
-        button.setToolTip("Search all indexed remotes")
-        apply_button_icon(self.qt, button, "ui-search", fallback_text="⌕", size=18)
-        button.clicked.connect(lambda checked=False: self._run_global_search())
         row.addWidget(field, 1)
-        row.addWidget(button)
         status = self.qt.QLabel("")
         status.setStyleSheet(_muted_text_style(status))
         status.setFixedWidth(86)
@@ -6402,6 +6395,31 @@ class MountletWindow:
         self._global_search_results = results
         layout.addWidget(results)
         return widget
+
+    def _style_search_field(self, field: Any) -> None:
+        with suppress(Exception):
+            field.setFixedHeight(28)
+            field.setClearButtonEnabled(True)
+        icon = mountlet_icon(self.qt, "ui-search", size=16)
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if icon is not None and leading_position is not None:
+            with suppress(Exception):
+                field.addAction(icon, leading_position)
+        field.setStyleSheet(
+            """
+            QLineEdit {
+                border: 1px solid rgba(107, 114, 128, 130);
+                border-radius: 14px;
+                padding: 2px 8px;
+                background: palette(base);
+                color: palette(text);
+            }
+            QLineEdit:focus {
+                border: 1px solid #3b82f6;
+            }
+            """
+        )
 
     def _make_global_search_key_filter(self) -> Any:
         outer = self
@@ -7275,7 +7293,7 @@ class MountletWindow:
             if child.property("rowControl"):
                 return
             child = child.parentWidget()
-        self._suppress_remote_hover_until_browser_interaction()
+        self._release_remote_hover_suppression()
         self._browse_remote(remote, row)
 
     def _suppress_remote_hover_until_browser_interaction(self) -> None:
@@ -7405,6 +7423,7 @@ class MountletWindow:
         row.setProperty("keyboardFocus", focused)
         row.setStyleSheet(self._remote_row_style(row, highlighted=False))
         if focused:
+            self._release_remote_hover_suppression()
             self._select_browser_remote(remote, row)
         try:
             event.accept()

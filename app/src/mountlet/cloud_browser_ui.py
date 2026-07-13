@@ -337,38 +337,15 @@ class CompactCloudBrowser:
         navigation.addWidget(self.open_folder_button)
         layout.addLayout(navigation)
 
-        index_search = qt.QHBoxLayout()
+        search_layout = qt.QHBoxLayout()
         self.search_field = qt.QLineEdit()
         self.search_field.setPlaceholderText("Search this remote")
+        self._style_search_field(self.search_field)
         self.search_field.textChanged.connect(self._search_text_changed)
         self.search_field.returnPressed.connect(self._open_current_search_result)
         self.search_field.installEventFilter(self._make_search_key_filter())
-        index_search.addWidget(self.search_field, 1)
-        self.search_button = self._button(
-            "⌕",
-            self.search_index,
-            "Search indexed metadata",
-            square=True,
-            icon_name="ui-search",
-        )
-        self.index_remote_button = self._button(
-            "≡",
-            self.index_current_remote,
-            "Index this remote for search",
-            square=True,
-            icon_name="ui-index",
-        )
-        self.index_all_button = self._button(
-            "≣",
-            self.index_all_remotes,
-            "Index all remotes for search",
-            square=True,
-            icon_name="ui-index-all",
-        )
-        index_search.addWidget(self.search_button)
-        index_search.addWidget(self.index_remote_button)
-        index_search.addWidget(self.index_all_button)
-        layout.addLayout(index_search)
+        search_layout.addWidget(self.search_field, 1)
+        layout.addLayout(search_layout)
 
         self.search_results = qt.QTreeWidget()
         self.search_results.setColumnCount(3)
@@ -736,6 +713,31 @@ class CompactCloudBrowser:
         button.setToolTip(tooltip)
         button.clicked.connect(lambda _checked=False: callback())
         return button
+
+    def _style_search_field(self, field: Any) -> None:
+        with suppress(Exception):
+            field.setFixedHeight(28)
+            field.setClearButtonEnabled(True)
+        icon = mountlet_icon(self.qt, "ui-search", size=16)
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if icon is not None and leading_position is not None:
+            with suppress(Exception):
+                field.addAction(icon, leading_position)
+        field.setStyleSheet(
+            """
+            QLineEdit {
+                border: 1px solid rgba(107, 114, 128, 130);
+                border-radius: 14px;
+                padding: 2px 8px;
+                background: palette(base);
+                color: palette(text);
+            }
+            QLineEdit:focus {
+                border: 1px solid #3b82f6;
+            }
+            """
+        )
 
     def _mount_switch(self) -> Any:
         qt = self.qt
@@ -2939,23 +2941,6 @@ class CompactCloudBrowser:
                 clear_button,
                 clear_enabled,
                 "Clear resolved cache for selected items" if clear_enabled else "Select temporarily cached items first",
-            )
-        index_remote_button = getattr(self, "index_remote_button", None)
-        if index_remote_button is not None:
-            indexing_current = bool(self.remote and self.remote.name in self._indexing_remote_names)
-            enabled = bool(self.remote and not indexing_current)
-            self._set_action_button_state(
-                index_remote_button,
-                enabled,
-                "Index this remote for search" if enabled else "Indexing this remote…",
-            )
-        index_all_button = getattr(self, "index_all_button", None)
-        if index_all_button is not None:
-            indexing = bool(self._indexing_remote_names)
-            self._set_action_button_state(
-                index_all_button,
-                not indexing,
-                "Index all remotes for search" if not indexing else "Indexing remote metadata…",
             )
         self._update_open_folder_button()
 
