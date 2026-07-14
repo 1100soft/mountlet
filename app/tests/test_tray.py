@@ -46,9 +46,6 @@ class _FakeAction:
     def setEnabled(self, enabled: bool) -> None:
         self._enabled = enabled
 
-    def isSeparator(self) -> bool:
-        return False
-
 
 class _FakeSeparator(_FakeAction):
     def __init__(self) -> None:
@@ -65,6 +62,9 @@ class _FakeMenu:
 
     def text(self) -> str:
         return self._text
+
+    def isSeparator(self) -> bool:
+        return False
 
     def clear(self) -> None:
         self.items.clear()
@@ -488,7 +488,10 @@ class TrayTests(unittest.TestCase):
                 tray_app.rebuild_menus()
 
         top_level = [item.text() for item in tray_app.app_menu.items if not item.isSeparator()]
-        self.assertEqual(top_level, ["Open Mountlet", "App", "Mount", "Config", "Quit"])
+        self.assertEqual(top_level, ["Open Mountlet", "More", "Quit"])
+        more_menu = next(item for item in tray_app.app_menu.items if item.text() == "More")
+        more_items = [item.text() for item in more_menu.items if not item.isSeparator()]
+        self.assertEqual(more_items, ["App", "Mount", "Config"])
 
     def test_macos_accessory_mode_hides_dock_application(self):
         application = mock.Mock()
@@ -1679,7 +1682,8 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(sys, "frozen", True, create=True):
             with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
                 with mock.patch.object(tray.core, "is_mounted", return_value=False):
-                    mountlet_window._schedule_storage_load(remote)
+                    with mock.patch.object(mountlet_window, "_license_locked", return_value=False):
+                        mountlet_window._schedule_storage_load(remote)
 
         self.assertEqual(mountlet_window._usage_cache["Docs"].text, "?")
         self.assertFalse(mountlet_window._connection_cache["Docs"])

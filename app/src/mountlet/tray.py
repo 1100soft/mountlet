@@ -9815,8 +9815,9 @@ class MountletTray:
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
         self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
+        more_menu = self.app_menu.addMenu("More")
         if not locked:
-            app_submenu = self.app_menu.addMenu("App")
+            app_submenu = more_menu.addMenu("App")
             status = app_submenu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
             status.setEnabled(False)
             app_submenu.addSeparator()
@@ -9830,7 +9831,7 @@ class MountletTray:
             self._add_action(app_submenu, "License", self._show_license_from_tray)
             self._add_action(app_submenu, "About Mountlet", self._show_about_from_tray)
 
-            mount_submenu = self.app_menu.addMenu("Mount")
+            mount_submenu = more_menu.addMenu("Mount")
             self._add_action(mount_submenu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
             self._add_action(mount_submenu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
             self._add_action(mount_submenu, "Add remote", self.main_window._show_new_remote_wizard)
@@ -9843,7 +9844,7 @@ class MountletTray:
                 action = remotes_submenu.addAction("No rclone remotes found")
                 action.setEnabled(False)
 
-            config_submenu = self.app_menu.addMenu("Config")
+            config_submenu = more_menu.addMenu("Config")
             self._add_action(config_submenu, "App settings", self._show_app_settings_from_tray)
             self._add_action(config_submenu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
             config_submenu.addSeparator()
@@ -9857,10 +9858,10 @@ class MountletTray:
             config_submenu.addSeparator()
             self.main_window._add_open_config_files_menu(config_submenu)
         else:
-            locked_action = self.app_menu.addAction(_license_lock_message())
+            locked_action = more_menu.addAction(_license_lock_message())
             locked_action.setEnabled(False)
-            self._add_action(self.app_menu, "License", self._show_license_from_tray)
-            self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
+            self._add_action(more_menu, "License", self._show_license_from_tray)
+            self._add_action(more_menu, "About Mountlet", self._show_about_from_tray)
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
