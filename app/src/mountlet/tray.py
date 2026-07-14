@@ -8189,8 +8189,8 @@ class MountletWindow:
                 preserve_right = False
                 preserve_bottom = False
             else:
-                preserve_right = right_gap < left_gap
-                preserve_bottom = bottom_gap < top_gap
+                self._resize_in_place(width, height, screen)
+                return
             self.window.resize(width, height)
             x = available.right() - right_gap - width + 1 if preserve_right else available.left() + left_gap
             y = available.bottom() - bottom_gap - height + 1 if preserve_bottom else available.top() + top_gap
