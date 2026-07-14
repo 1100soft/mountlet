@@ -232,6 +232,11 @@ S3-compatible API instead.
 The `wip` branch uploads to the preview bucket. `main` and version tags upload
 to the production bucket.
 
+Preview app builds also embed the preview license and report API defaults:
+`https://wip.mountlet.pages.dev/api/license` and
+`https://wip.mountlet.pages.dev/api/report`. Production builds keep the
+relocatable production defaults under `https://mountlet.app`.
+
 These keys are the public download API names. Keep them in
 `web/release-files.json` so the website, deployment check, and R2 upload tool
 use the same list.

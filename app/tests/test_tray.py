@@ -3696,6 +3696,23 @@ class TrayTests(unittest.TestCase):
         window._schedule_storage_load.assert_not_called()
         self.assertFalse(window._skip_background_refresh_once)
 
+    def test_browser_layout_change_repositions_file_browser_after_main_resize(self):
+        window = object.__new__(tray.MountletWindow)
+        root = mock.Mock()
+        scroll = mock.Mock()
+        container = mock.Mock()
+        window._content_fit_widgets = (root, scroll, container)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._invalidate_widget_tree = mock.Mock()
+        window._fit_to_content = mock.Mock()
+        window._reposition_file_browser = mock.Mock()
+        window.qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=mock.Mock(side_effect=lambda _delay, cb: cb())))
+
+        window._browser_layout_changed()
+
+        self.assertEqual(window._fit_to_content.call_count, 2)
+        self.assertEqual(window._reposition_file_browser.call_count, 2)
+
     def test_app_settings_layout_change_reopens_through_normal_show_path(self):
         old_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
         new_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_SINGLE)

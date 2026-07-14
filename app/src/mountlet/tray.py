@@ -6129,11 +6129,13 @@ class MountletWindow:
             return
         self._invalidate_widget_tree(widgets[0])
         self._fit_to_content(*widgets, preserve_position=True)
+        self._reposition_file_browser()
         self.qt.QTimer.singleShot(0, lambda: self._fit_after_layout_settles(*widgets))
 
     def _fit_after_layout_settles(self, root: Any, scroll: Any, container: Any) -> None:
         self._invalidate_widget_tree(root)
         self._fit_to_content(root, scroll, container, preserve_position=True)
+        self._reposition_file_browser()
 
     def _update_main_focus_style(self) -> None:
         root = getattr(self, "_main_surface", None)
@@ -8976,6 +8978,9 @@ class MountletWindow:
             )
             reopen_after_layout_change = layout_changed and self.is_visible()
             if reopen_after_layout_change:
+                self._untrack_child_dialog(dialog.dialog)
+                with suppress(Exception):
+                    dialog.dialog.close()
                 with suppress(Exception):
                     self.window.hide()
             _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
