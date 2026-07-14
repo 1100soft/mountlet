@@ -5579,6 +5579,7 @@ class MountletWindow:
         self.refresh()
         if not was_visible:
             self._position_after_fit = True
+            self._queue_hidden_file_browser_restore()
             if getattr(self, "_last_tray_anchor", None) is not None:
                 self._prefer_remembered_tray_anchor_once = True
             self._position_near_tray()
@@ -6170,6 +6171,19 @@ class MountletWindow:
             self._show_pending_file_browser_after_fit()
             return
         self._reposition_file_browser()
+
+    def _queue_hidden_file_browser_restore(self) -> None:
+        if not getattr(self, "_window_stack_hidden", False):
+            return
+        file_browser = getattr(self, "file_browser", None)
+        remote = getattr(file_browser, "remote", None)
+        if file_browser is None or remote is None:
+            return
+        if bool(getattr(file_browser, "_embedded", False)):
+            return
+        if getattr(file_browser, "_closed_until_selected", False):
+            return
+        self._pending_file_browser_show = (remote.name, getattr(self, "_focus_owner", "main") == "browser")
 
     def _show_pending_file_browser_after_fit(self) -> None:
         pending = getattr(self, "_pending_file_browser_show", None)

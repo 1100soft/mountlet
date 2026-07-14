@@ -2705,6 +2705,32 @@ class TrayTests(unittest.TestCase):
         file_browser.show_remote.assert_called_once_with(remote, row.frame, show_browser=True, focus_browser=False)
         self.assertIsNone(window._pending_file_browser_show)
 
+    def test_reopening_hidden_window_stack_queues_previous_file_browser_restore(self):
+        remote = SimpleNamespace(name="remote")
+        file_browser = SimpleNamespace(remote=remote, _embedded=False, _closed_until_selected=False)
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._window_stack_hidden = True
+        window._pending_file_browser_show = None
+        window._focus_owner = "browser"
+
+        window._queue_hidden_file_browser_restore()
+
+        self.assertEqual(window._pending_file_browser_show, ("remote", True))
+
+    def test_reopening_hidden_window_stack_does_not_restore_user_closed_file_browser(self):
+        remote = SimpleNamespace(name="remote")
+        file_browser = SimpleNamespace(remote=remote, _embedded=False, _closed_until_selected=True)
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._window_stack_hidden = True
+        window._pending_file_browser_show = None
+        window._focus_owner = "browser"
+
+        window._queue_hidden_file_browser_restore()
+
+        self.assertIsNone(window._pending_file_browser_show)
+
     def test_reposition_file_browser_only_moves_existing_browser_window(self):
         remote = SimpleNamespace(name="remote")
         row = SimpleNamespace(frame=object())
