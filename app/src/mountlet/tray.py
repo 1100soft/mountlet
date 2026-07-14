@@ -1036,17 +1036,40 @@ def _popup_position(
     anchor_y: int,
     available: tuple[int, int, int, int],
     window_size: tuple[int, int],
+    *,
+    center_on_anchor: bool = False,
 ) -> tuple[int, int]:
     left, top, available_width, available_height = available
     width, height = window_size
+    right = left + available_width
+    bottom = top + available_height
     max_x = max(left, left + available_width - width)
     max_y = max(top, top + available_height - height)
-    x = min(max(anchor_x - (width // 2), left), max_x)
-    if anchor_y > top + (available_height // 2):
-        y = anchor_y - height - 8
-    else:
+    if center_on_anchor:
+        x = anchor_x - (width // 2)
+        y = anchor_y - (height // 2)
+        return min(max(x, left), max_x), min(max(y, top), max_y)
+
+    edge_distances = {
+        "left": abs(anchor_x - left),
+        "right": abs(anchor_x - right),
+        "top": abs(anchor_y - top),
+        "bottom": abs(anchor_y - bottom),
+    }
+    edge = min(edge_distances, key=edge_distances.get)
+    if edge == "left":
+        x = anchor_x + 8
+        y = anchor_y - (height // 2)
+    elif edge == "right":
+        x = anchor_x - width - 8
+        y = anchor_y - (height // 2)
+    elif edge == "top":
+        x = anchor_x - (width // 2)
         y = anchor_y + 8
-    return x, min(max(y, top), max_y)
+    else:
+        x = anchor_x - (width // 2)
+        y = anchor_y - height - 8
+    return min(max(x, left), max_x), min(max(y, top), max_y)
 
 
 def _set_combo_item_color(qt: SimpleNamespace, combo: Any, index: int, color: str) -> None:
@@ -5843,6 +5866,7 @@ class MountletWindow:
                     anchor.y(),
                     (available.left(), available.top(), available.width(), available.height()),
                     (size.width(), size.height()),
+                    center_on_anchor=not geometry_valid,
                 )
             x, y = self._safe_popup_position(x, y, available, size)
             self.window.move(x, y)
@@ -10161,6 +10185,8 @@ class MountletTray:
         except Exception:
             pass
         self.main_window.prepare_quit()
+        with suppress(Exception):
+            report_control.mark_clean_shutdown()
         try:
             self.tray.hide()
         except Exception:

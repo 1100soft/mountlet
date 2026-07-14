@@ -48,7 +48,7 @@ writeFileSync(
     "# Optional bug/crash report delivery to GitHub Issues.",
     "# REPORT_GITHUB_TOKEN=\"github_pat_replace\"",
     "# REPORT_GITHUB_REPO=\"owner/private-support-repo\"",
-    "# REPORT_GITHUB_LABELS=\"mountlet-report\"",
+    "# REPORT_GITHUB_LABELS=\"bug\"",
     "",
   ].join("\n"),
   {encoding: "utf8", mode: 0o600}

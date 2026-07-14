@@ -185,7 +185,18 @@ class TrayTests(unittest.TestCase):
             (400, 300),
         )
 
-        self.assertEqual(position, (500, 332))
+        self.assertEqual(position, (482, 350))
+
+    def test_popup_position_centers_fallback_anchor(self):
+        position = tray._popup_position(
+            890,
+            640,
+            (100, 50, 800, 600),
+            (400, 300),
+            center_on_anchor=True,
+        )
+
+        self.assertEqual(position, (500, 350))
 
     def test_provider_status_colors_follow_light_system_palette(self):
         foreground = SimpleNamespace(name=lambda: "#202020")
@@ -2606,10 +2617,12 @@ class TrayTests(unittest.TestCase):
         tray_app.app = mock.Mock()
 
         with mock.patch.object(tray.rclone_wizard, "cancel_all_remote_configs") as cancel_configs:
-            tray_app.request_quit()
+            with mock.patch.object(tray.report_control, "mark_clean_shutdown") as mark_clean:
+                tray_app.request_quit()
 
         self.assertTrue(tray_app._quitting)
         cancel_configs.assert_called_once_with()
+        mark_clean.assert_called_once_with()
         tray_app.timer.stop.assert_called_once_with()
         tray_app.main_window.prepare_quit.assert_called_once_with()
         tray_app.tray.hide.assert_called_once_with()

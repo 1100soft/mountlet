@@ -48,6 +48,16 @@ class ReportControlTests(unittest.TestCase):
         report_control.mark_crash_reported(crash)
         self.assertEqual(report_control.unreported_crash_log(), "")
 
+    def test_clean_shutdown_suppresses_older_crash_log(self):
+        report_control.runtime_log_path().write_text(
+            "Mountlet runtime\nUnhandled exception:\nold traceback\n",
+            encoding="utf-8",
+        )
+
+        report_control.mark_clean_shutdown()
+
+        self.assertEqual(report_control.unreported_crash_log(), "")
+
     def test_report_payload_includes_redacted_logs(self):
         report_control.runtime_log_path().write_text("token=runtime-secret\n", encoding="utf-8")
         report_control.rclone_log_path().write_text("client_secret=rclone-secret\n", encoding="utf-8")
