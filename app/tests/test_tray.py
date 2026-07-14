@@ -198,6 +198,17 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(position, (500, 350))
 
+    def test_popup_position_uses_explicit_tray_edge(self):
+        position = tray._popup_position(
+            800,
+            640,
+            (100, 50, 800, 600),
+            (400, 300),
+            edge="right",
+        )
+
+        self.assertEqual(position, (392, 350))
+
     def test_provider_status_colors_follow_light_system_palette(self):
         foreground = SimpleNamespace(name=lambda: "#202020")
         background = SimpleNamespace(red=lambda: 245, green=lambda: 245, blue=lambda: 245)
@@ -2640,6 +2651,48 @@ class TrayTests(unittest.TestCase):
         mountlet_window._reposition_file_browser.assert_not_called()
         self.assertFalse(mountlet_window._position_after_fit)
 
+    def test_resize_anchored_preserves_only_explicit_right_tray_edge(self):
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x = x
+                self._y = y
+                self._width = width
+                self._height = height
+
+            def left(self) -> int:
+                return self._x
+
+            def right(self) -> int:
+                return self._x + self._width
+
+            def top(self) -> int:
+                return self._y
+
+            def bottom(self) -> int:
+                return self._y + self._height
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        moves: list[tuple[int, int]] = []
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_edge = "right"
+        window.window = SimpleNamespace(
+            resize=mock.Mock(),
+            frameGeometry=lambda: Rect(880, 500, 320, 280),
+            move=lambda x, y: moves.append((x, y)),
+        )
+        window.is_visible = mock.Mock(return_value=True)
+        window._clamp_to_screen = mock.Mock()
+        screen = SimpleNamespace(availableGeometry=lambda: Rect(0, 0, 1200, 800))
+
+        window._resize_anchored(260, 200, screen)
+
+        self.assertEqual(moves, [(941, 500)])
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
@@ -3859,7 +3912,7 @@ class TrayTests(unittest.TestCase):
         self.assertFalse(geometry_valid)
         window.qt.QCursor.pos.assert_not_called()
 
-    def test_layout_change_remembers_current_window_edge_anchor(self):
+    def test_layout_change_remembers_tray_anchor_and_edge(self):
         class Point:
             def __init__(self, x: int, y: int) -> None:
                 self._x = x
@@ -3871,7 +3924,20 @@ class TrayTests(unittest.TestCase):
             def y(self) -> int:
                 return self._y
 
-        class Rect:
+        class Geometry:
+            def isValid(self) -> bool:
+                return True
+
+            def width(self) -> int:
+                return 24
+
+            def height(self) -> int:
+                return 24
+
+            def center(self) -> Point:
+                return Point(1220, 780)
+
+        class Available:
             def __init__(self, x: int, y: int, width: int, height: int) -> None:
                 self._x = x
                 self._y = y
@@ -3902,18 +3968,23 @@ class TrayTests(unittest.TestCase):
             def bottom(self) -> int:
                 return self._y + self._height
 
-        available = Rect(0, 0, 1200, 800)
-        frame = Rect(880, 240, 320, 280)
+        available = Available(0, 0, 1200, 800)
         screen = SimpleNamespace(availableGeometry=lambda: available)
         window = object.__new__(tray.MountletWindow)
-        window.window = SimpleNamespace(screen=lambda: screen, frameGeometry=lambda: frame)
-        window.qt = SimpleNamespace(QApplication=SimpleNamespace(primaryScreen=lambda: screen), QPoint=Point)
+        window.tray_app = SimpleNamespace(tray=SimpleNamespace(geometry=lambda: Geometry()))
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: screen, screenAt=lambda _point: screen),
+            QCursor=SimpleNamespace(pos=mock.Mock()),
+            QPoint=Point,
+        )
 
-        window._remember_current_window_edge_anchor()
+        window._remember_tray_anchor_for_layout_change()
 
-        self.assertEqual(window._last_tray_anchor.x(), 1200)
-        self.assertEqual(window._last_tray_anchor.y(), 380)
+        self.assertEqual(window._last_tray_anchor.x(), 1220)
+        self.assertEqual(window._last_tray_anchor.y(), 780)
+        self.assertEqual(window._last_tray_edge, "right")
         self.assertTrue(window._prefer_remembered_tray_anchor_once)
+        window.qt.QCursor.pos.assert_not_called()
 
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)

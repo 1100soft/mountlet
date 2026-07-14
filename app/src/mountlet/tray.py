@@ -1038,6 +1038,7 @@ def _popup_position(
     window_size: tuple[int, int],
     *,
     center_on_anchor: bool = False,
+    edge: str | None = None,
 ) -> tuple[int, int]:
     left, top, available_width, available_height = available
     width, height = window_size
@@ -1045,18 +1046,19 @@ def _popup_position(
     bottom = top + available_height
     max_x = max(left, left + available_width - width)
     max_y = max(top, top + available_height - height)
-    if center_on_anchor:
+    if center_on_anchor and edge is None:
         x = anchor_x - (width // 2)
         y = anchor_y - (height // 2)
         return min(max(x, left), max_x), min(max(y, top), max_y)
 
-    edge_distances = {
-        "left": abs(anchor_x - left),
-        "right": abs(anchor_x - right),
-        "top": abs(anchor_y - top),
-        "bottom": abs(anchor_y - bottom),
-    }
-    edge = min(edge_distances, key=edge_distances.get)
+    if edge not in {"left", "right", "top", "bottom"}:
+        edge_distances = {
+            "left": abs(anchor_x - left),
+            "right": abs(anchor_x - right),
+            "top": abs(anchor_y - top),
+            "bottom": abs(anchor_y - bottom),
+        }
+        edge = min(edge_distances, key=edge_distances.get)
     if edge == "left":
         x = anchor_x + 8
         y = anchor_y - (height // 2)
@@ -5005,6 +5007,7 @@ class MountletWindow:
         self._remote_change_poll_index = 0
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
+        self._last_tray_edge: str | None = None
         self._last_popup_position: tuple[int, int] | None = None
         self._skip_background_refresh_once = False
         self._drag_offset: Any | None = None
@@ -5857,7 +5860,8 @@ class MountletWindow:
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
-            if getattr(self.tray_app, "_is_gnome_wayland", False) and not geometry_valid:
+            edge = getattr(self, "_last_tray_edge", None)
+            if getattr(self.tray_app, "_is_gnome_wayland", False) and not geometry_valid and edge is None:
                 x = available.left() + available.width() - size.width() - 8
                 y = available.top() + 8
             else:
@@ -5867,6 +5871,7 @@ class MountletWindow:
                     (available.left(), available.top(), available.width(), available.height()),
                     (size.width(), size.height()),
                     center_on_anchor=not geometry_valid,
+                    edge=edge,
                 )
             x, y = self._safe_popup_position(x, y, available, size)
             self.window.move(x, y)
@@ -5883,31 +5888,10 @@ class MountletWindow:
             self._prefer_remembered_tray_anchor_once = True
         self._position_window_stack_near_tray()
 
-    def _remember_current_window_edge_anchor(self) -> None:
+    def _remember_tray_anchor_for_layout_change(self) -> None:
         try:
-            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
-            if screen is None:
-                return
-            available = screen.availableGeometry()
-            frame = self.window.frameGeometry()
-            center_x = frame.x() + (frame.width() // 2)
-            center_y = frame.y() + (frame.height() // 2)
-            distances = {
-                "left": abs(frame.left() - available.left()),
-                "right": abs(available.right() - frame.right()),
-                "top": abs(frame.top() - available.top()),
-                "bottom": abs(available.bottom() - frame.bottom()),
-            }
-            edge = min(distances, key=distances.get)
-            if edge == "left":
-                point = self.qt.QPoint(available.left(), center_y)
-            elif edge == "right":
-                point = self.qt.QPoint(available.right(), center_y)
-            elif edge == "top":
-                point = self.qt.QPoint(center_x, available.top())
-            else:
-                point = self.qt.QPoint(center_x, available.bottom())
-            self._last_tray_anchor = point
+            anchor, _geometry_valid = self._tray_anchor()
+            self._last_tray_anchor = anchor
             self._prefer_remembered_tray_anchor_once = True
         except Exception:
             return
@@ -5924,19 +5908,51 @@ class MountletWindow:
         if tray_geometry.isValid() and available is not None and not self._tray_geometry_is_suspicious(tray_geometry, available):
             anchor = tray_geometry.center()
             self._last_tray_anchor = anchor
+            self._last_tray_edge = self._tray_edge_for_point(anchor, available)
             return anchor, True
         cursor = self.qt.QCursor.pos()
         screen = self.qt.QApplication.screenAt(cursor) or primary_screen
         available = screen.availableGeometry() if screen is not None else available
         if available is not None and not self._point_is_suspicious_anchor(cursor, available):
             self._last_tray_anchor = cursor
+            self._last_tray_edge = self._tray_edge_for_point(cursor, available)
             return cursor, False
         if remembered is not None:
             return remembered, False
         if available is not None:
             point = self.qt.QPoint(available.right() - 8, available.top() + 8)
+            self._last_tray_edge = "right"
             return point, False
         return cursor, False
+
+    def _tray_edge_for_point(self, point: Any, available: Any) -> str:
+        try:
+            x = point.x()
+            y = point.y()
+            left = available.left()
+            right = available.right()
+            top = available.top()
+            bottom = available.bottom()
+            if x <= left:
+                return "left"
+            if x >= right:
+                return "right"
+            if y <= top:
+                return "top"
+            if y >= bottom:
+                return "bottom"
+            remembered_edge = getattr(self, "_last_tray_edge", None)
+            if remembered_edge in {"left", "right", "top", "bottom"}:
+                return remembered_edge
+            edge_distances = {
+                "left": abs(x - left),
+                "right": abs(x - right),
+                "top": abs(y - top),
+                "bottom": abs(y - bottom),
+            }
+            return min(edge_distances, key=edge_distances.get)
+        except Exception:
+            return getattr(self, "_last_tray_edge", None) or "right"
 
     def _tray_geometry_is_suspicious(self, tray_geometry: Any, available: Any) -> bool:
         try:
@@ -8155,10 +8171,19 @@ class MountletWindow:
             right_gap = max(available.right() - frame.right(), 0)
             top_gap = max(frame.top() - available.top(), 0)
             bottom_gap = max(available.bottom() - frame.bottom(), 0)
-            anchor = getattr(self, "_last_tray_anchor", None)
-            if anchor is not None:
-                preserve_right = anchor.x() > available.left() + (available.width() / 2)
-                preserve_bottom = anchor.y() > available.top() + (available.height() / 2)
+            edge = getattr(self, "_last_tray_edge", None)
+            if edge == "right":
+                preserve_right = True
+                preserve_bottom = False
+            elif edge == "left":
+                preserve_right = False
+                preserve_bottom = False
+            elif edge == "bottom":
+                preserve_right = False
+                preserve_bottom = True
+            elif edge == "top":
+                preserve_right = False
+                preserve_bottom = False
             else:
                 preserve_right = right_gap < left_gap
                 preserve_bottom = bottom_gap < top_gap
@@ -9012,7 +9037,7 @@ class MountletWindow:
             )
             reopen_after_layout_change = layout_changed and self.is_visible()
             if reopen_after_layout_change:
-                self._remember_current_window_edge_anchor()
+                self._remember_tray_anchor_for_layout_change()
                 self._untrack_child_dialog(dialog.dialog)
                 with suppress(Exception):
                     dialog.dialog.close()
