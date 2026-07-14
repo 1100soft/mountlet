@@ -19,7 +19,7 @@ from .cloud_browser import (
 from .metadata_index import IndexedEntry
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
-from .ui_icons import apply_button_icon, mountlet_icon
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
@@ -160,6 +160,7 @@ class CompactCloudBrowser:
         self._auto_index_requested = False
         self._pending_select_path = ""
         self._closed_until_selected = False
+        self._disposed = False
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -744,7 +745,8 @@ class CompactCloudBrowser:
         leading_position = getattr(action_position, "LeadingPosition", None)
         if icon is not None and leading_position is not None:
             with suppress(Exception):
-                field.addAction(icon, leading_position)
+                action = field.addAction(icon, leading_position)
+                setattr(field, "_mountlet_search_icon_action", action)
         field.setStyleSheet(
             """
             QLineEdit {
@@ -1187,6 +1189,7 @@ class CompactCloudBrowser:
             self.window.close()
 
     def dispose(self) -> None:
+        self._disposed = True
         for timer_name in ("_working_timer", "_search_timer"):
             timer = getattr(self, timer_name, None)
             if timer is not None:
@@ -1957,6 +1960,8 @@ class CompactCloudBrowser:
         threading.Thread(target=worker, daemon=True).start()
 
     def _index_finished(self, remote_name: str, count: int, error: str) -> None:
+        if self._is_disposed():
+            return
         self._update_actions()
         if error:
             first_error = error.splitlines()[0]
@@ -2193,11 +2198,18 @@ class CompactCloudBrowser:
                 return
 
     def _selected_entries(self) -> list[BrowserEntry]:
+        if self._is_disposed():
+            return []
         result: list[BrowserEntry] = []
-        for item in self.tree.selectedItems():
-            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
-            if isinstance(entry, BrowserEntry):
-                result.append(entry)
+        try:
+            selected_items = self.tree.selectedItems()
+        except RuntimeError:
+            return []
+        for item in selected_items:
+            with suppress(RuntimeError):
+                entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+                if isinstance(entry, BrowserEntry):
+                    result.append(entry)
         return result
 
     def selected_transfer_items(self) -> list[TransferItem]:
@@ -2985,10 +2997,15 @@ class CompactCloudBrowser:
         return brush_factory(qt_color) if brush_factory is not None else qt_color
 
     def _update_actions(self) -> None:
-        selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
-        edits_enabled = self._edits_enabled()
-        operation_pending = bool(getattr(self, "_operation_pending", False))
-        self.tree.setDragEnabled(edits_enabled and selected)
+        if self._is_disposed():
+            return
+        try:
+            selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
+            edits_enabled = self._edits_enabled()
+            operation_pending = bool(getattr(self, "_operation_pending", False))
+            self.tree.setDragEnabled(edits_enabled and selected)
+        except RuntimeError:
+            return
         edit_action_enabled = selected and edits_enabled and not operation_pending
         edit_disabled_reason = self._edit_action_disabled_reason(
             selected=selected,
@@ -3191,6 +3208,39 @@ class CompactCloudBrowser:
             self.offline_button.setIcon(icon)
             return
         self.offline_button.setIcon(self._dimmed_icon(icon))
+
+    def refresh_theme_icons(self) -> None:
+        if self._is_disposed():
+            return
+        refresh_widget_icons(self.qt, getattr(self, "root", None))
+        self._refresh_search_icon(getattr(self, "search_field", None))
+        save_icon = self._offline_icon()
+        self._offline_base_icon = save_icon
+        if save_icon is not None:
+            with suppress(Exception):
+                self.offline_button.setIcon(save_icon)
+            self._update_snapshot_button_icon(getattr(self.offline_button, "isEnabled", lambda: True)())
+
+    def _refresh_search_icon(self, field: Any | None) -> None:
+        if field is None:
+            return
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if leading_position is None:
+            return
+        old_action = getattr(field, "_mountlet_search_icon_action", None)
+        if old_action is not None:
+            with suppress(Exception):
+                field.removeAction(old_action)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=self._widget_text_color(field))
+        if icon is None:
+            return
+        with suppress(Exception):
+            action = field.addAction(icon, leading_position)
+            setattr(field, "_mountlet_search_icon_action", action)
+
+    def _is_disposed(self) -> bool:
+        return bool(getattr(self, "_disposed", False))
 
     def _dimmed_icon(self, icon: Any) -> Any:
         try:

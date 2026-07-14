@@ -511,6 +511,21 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray_app.app_menu.items, [existing])
         tray_app.tray.setToolTip.assert_not_called()
 
+    def test_rebuild_menus_does_not_clear_context_menu_open_flag(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app._context_menu_open = True
+        tray_app.remote_menu = _FakeMenu("remote")
+        tray_app.app_menu = _FakeMenu("app")
+        existing = tray_app.app_menu.addAction("Existing")
+        tray_app.tray = mock.Mock()
+        tray_app.main_window = mock.Mock()
+
+        tray_app.rebuild_menus()
+
+        self.assertEqual(tray_app.app_menu.items, [existing])
+        tray_app.tray.setToolTip.assert_not_called()
+
     def test_macos_accessory_mode_hides_dock_application(self):
         application = mock.Mock()
         application.setActivationPolicy_.return_value = True

@@ -62,7 +62,7 @@ from .settings import (
     set_start_at_login,
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
-from .ui_icons import apply_button_icon, mountlet_icon
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -6623,7 +6623,8 @@ class MountletWindow:
         leading_position = getattr(action_position, "LeadingPosition", None)
         if icon is not None and leading_position is not None:
             with suppress(Exception):
-                field.addAction(icon, leading_position)
+                action = field.addAction(icon, leading_position)
+                setattr(field, "_mountlet_search_icon_action", action)
         field.setStyleSheet(
             """
             QLineEdit {
@@ -8920,9 +8921,9 @@ class MountletWindow:
 
         def on_accepted() -> None:
             new_settings = load_app_settings()
-            theme_or_layout_changed = (
-                new_settings.theme != old_settings.theme
-                or _effective_window_mode(
+            theme_changed = new_settings.theme != old_settings.theme
+            layout_changed = (
+                _effective_window_mode(
                     new_settings,
                     is_wayland=bool(getattr(self.tray_app, "_is_wayland", False)),
                 )
@@ -8948,20 +8949,50 @@ class MountletWindow:
                 self._usage_cache.clear()
                 getattr(self, "_connection_cache", {}).clear()
                 self._setup_remote_change_polling()
-            visual_only_refresh = theme_or_layout_changed and not rclone_relevant_change
+            visual_only_refresh = (theme_changed or layout_changed) and not rclone_relevant_change
             if visual_only_refresh:
                 self._skip_background_refresh_once = True
             self.tray_app.rebuild_menus()
             if visual_only_refresh:
                 self._skip_background_refresh_once = True
             self.refresh()
-            if theme_or_layout_changed and self.is_visible():
+            if theme_changed:
+                self._refresh_theme_icons()
+            if layout_changed and self.is_visible():
                 self._position_after_fit = True
                 self._schedule_position_near_tray()
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
         self._open_child_dialog(dialog, on_accepted)
+
+    def _refresh_theme_icons(self) -> None:
+        refresh_widget_icons(self.qt, getattr(self, "_main_surface", None))
+        refresh_widget_icons(self.qt, self.window)
+        self._refresh_search_icon(getattr(self, "_global_search_field", None))
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser.refresh_theme_icons()
+        self._update_config_sync_buttons()
+        self._update_keep_above_button()
+
+    def _refresh_search_icon(self, field: Any | None) -> None:
+        if field is None:
+            return
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if leading_position is None:
+            return
+        old_action = getattr(field, "_mountlet_search_icon_action", None)
+        if old_action is not None:
+            with suppress(Exception):
+                field.removeAction(old_action)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=_palette_text_color(field))
+        if icon is None:
+            return
+        with suppress(Exception):
+            action = field.addAction(icon, leading_position)
+            setattr(field, "_mountlet_search_icon_action", action)
 
     def _rebuild_file_browser_if_layout_changed(self, old_embedded: bool) -> None:
         if self._file_browser_embedded() == old_embedded:
@@ -9711,6 +9742,10 @@ class MountletTray:
         self._forced_exit_scheduled = False
         self.remote_menu = qt.QMenu()
         self.app_menu = qt.QMenu()
+        self._context_menu_open = False
+        with suppress(Exception):
+            self.app_menu.aboutToShow.connect(self._mark_context_menu_open)
+            self.app_menu.aboutToHide.connect(self._mark_context_menu_closing)
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
@@ -9837,8 +9872,16 @@ class MountletTray:
         self.main_window.show()
         self.qt.QTimer.singleShot(0, self.main_window._show_bug_report_dialog)
 
+    def _mark_context_menu_open(self) -> None:
+        self._context_menu_open = True
+
+    def _mark_context_menu_closing(self) -> None:
+        self.qt.QTimer.singleShot(250, lambda: setattr(self, "_context_menu_open", False))
+
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
+            return
+        if getattr(self, "_context_menu_open", False):
             return
         if self._menu_stack_visible(getattr(self, "app_menu", None)):
             return
@@ -9906,6 +9949,10 @@ class MountletTray:
     def _menu_stack_visible(self, menu: Any | None, *, _seen: set[int] | None = None) -> bool:
         if menu is None:
             return False
+        with suppress(Exception):
+            active_popup = self.qt.QApplication.activePopupWidget()
+            if active_popup is not None:
+                return True
         if _seen is None:
             _seen = set()
         if id(menu) in _seen:

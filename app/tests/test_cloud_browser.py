@@ -2643,6 +2643,23 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertTrue(browser.tree.drag_enabled)
 
+    def test_update_actions_ignores_deleted_qt_tree_during_shutdown(self):
+        class DeletedTree:
+            def selectedItems(self) -> list[object]:
+                raise RuntimeError("Internal C++ object already deleted")
+
+            def setDragEnabled(self, _enabled: bool) -> None:
+                raise RuntimeError("Internal C++ object already deleted")
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._disposed = False
+        browser.tree = DeletedTree()
+        browser._edits_enabled = mock.Mock(return_value=True)
+
+        browser._update_actions()
+
+        browser._edits_enabled.assert_called_once_with()
+
     def test_offline_button_tracks_selected_item_state(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()

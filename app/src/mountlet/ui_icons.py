@@ -76,6 +76,7 @@ def apply_button_icon(
     size: int = 22,
     color: str | None = None,
 ) -> bool:
+    explicit_color = color
     if color is None:
         color = _button_text_color(button)
     icon = mountlet_icon(qt, name, size=size, color=color)
@@ -88,11 +89,42 @@ def apply_button_icon(
         if hasattr(button, "setIconSize") and hasattr(qt, "QSize"):
             button.setIconSize(qt.QSize(size, size))
         button.setText("")
+        with suppress(Exception):
+            button.setProperty("mountletIconName", name)
+            button.setProperty("mountletIconFallback", fallback_text)
+            button.setProperty("mountletIconSize", size)
+            button.setProperty("mountletIconColor", explicit_color or "")
         return True
     except Exception:
         with suppress(Exception):
             button.setText(fallback_text)
         return False
+
+
+def refresh_widget_icons(qt: Any, widget: Any | None) -> None:
+    if widget is None:
+        return
+    _refresh_one_widget_icon(qt, widget)
+    children = getattr(widget, "children", lambda: [])()
+    for child in children:
+        refresh_widget_icons(qt, child)
+
+
+def _refresh_one_widget_icon(qt: Any, widget: Any) -> None:
+    property_getter = getattr(widget, "property", None)
+    if not callable(property_getter):
+        return
+    icon_name = property_getter("mountletIconName")
+    if not icon_name:
+        return
+    fallback = property_getter("mountletIconFallback") or ""
+    size = property_getter("mountletIconSize") or 22
+    color = property_getter("mountletIconColor") or None
+    if not color:
+        color = _button_text_color(widget)
+    with suppress(Exception):
+        size = int(size)
+    apply_button_icon(qt, widget, str(icon_name), fallback_text=str(fallback), size=size, color=color)
 
 
 def _button_text_color(button: Any) -> str | None:
@@ -107,4 +139,4 @@ def _button_text_color(button: Any) -> str | None:
     return None
 
 
-__all__ = ["apply_button_icon", "icon_path", "mountlet_icon"]
+__all__ = ["apply_button_icon", "icon_path", "mountlet_icon", "refresh_widget_icons"]
