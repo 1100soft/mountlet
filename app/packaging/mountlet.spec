@@ -37,10 +37,18 @@ def build_channel():
 def build_info_data():
     channel = build_channel()
     report_api_url = os.environ.get("MOUNTLET_DEFAULT_REPORT_API_URL", "").strip()
+    license_api_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_API_URL", "").strip()
+    license_site_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_SITE_URL", "").strip()
     if not report_api_url and channel == "preview":
         report_api_url = "https://wip.mountlet.pages.dev/api/report"
+    if not license_api_url and channel == "preview":
+        license_api_url = "https://wip.mountlet.pages.dev/api/license"
+    if not license_site_url and channel == "preview":
+        license_site_url = "https://wip.mountlet.pages.dev"
     return {
         "channel": channel,
+        "licenseApiUrl": license_api_url,
+        "licenseSiteUrl": license_site_url,
         "reportApiUrl": report_api_url,
     }
 

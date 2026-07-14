@@ -5575,7 +5575,7 @@ class MountletWindow:
         self.refresh()
         if not was_visible:
             self._position_after_fit = True
-            self._position_near_tray()
+            self._position_window_stack_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
         if not was_visible:
@@ -5621,9 +5621,9 @@ class MountletWindow:
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
         if timer is None:
             return
-        timer.singleShot(0, self._position_near_tray)
-        timer.singleShot(50, self._position_near_tray)
-        timer.singleShot(150, self._position_near_tray)
+        timer.singleShot(0, self._position_window_stack_near_tray)
+        timer.singleShot(50, self._position_window_stack_near_tray)
+        timer.singleShot(150, self._position_window_stack_near_tray)
 
     def _activate_main_window_if_current_desktop(self) -> None:
         if not self.is_visible():
@@ -5874,6 +5874,10 @@ class MountletWindow:
         except Exception:
             return
 
+    def _position_window_stack_near_tray(self) -> None:
+        self._position_near_tray()
+        self._reposition_file_browser()
+
     def _tray_anchor(self) -> tuple[Any, bool]:
         prefer_remembered = bool(getattr(self, "_prefer_remembered_tray_anchor_once", False))
         self._prefer_remembered_tray_anchor_once = False
@@ -6115,7 +6119,8 @@ class MountletWindow:
         self._fit_to_content(root, scroll, container)
         if getattr(self, "_position_after_fit", False):
             self._position_after_fit = False
-            self._position_near_tray()
+            self._position_window_stack_near_tray()
+            return
         self._reposition_file_browser()
 
     def _browser_layout_changed(self) -> None:

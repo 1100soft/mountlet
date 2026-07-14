@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -212,6 +213,31 @@ class LicenseControlTests(unittest.TestCase):
         license_control.clear_license_key()
 
         self.assertEqual(license_control.load_license_key(), "")
+
+    def test_packaged_license_urls_use_build_info(self):
+        encodings: list[str] = []
+
+        class FakeResource:
+            def is_file(self) -> bool:
+                return True
+
+            def read_text(self, *, encoding: str) -> str:
+                encodings.append(encoding)
+                return (
+                    '{"licenseApiUrl":"https://wip.mountlet.pages.dev/api/license",'
+                    '"licenseSiteUrl":"https://wip.mountlet.pages.dev"}'
+                )
+
+        fake_files = mock.Mock(return_value=SimpleNamespace(joinpath=mock.Mock(return_value=FakeResource())))
+        with mock.patch("mountlet.license_control.files", fake_files):
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(license_control.license_site_url(), "https://wip.mountlet.pages.dev")
+                self.assertEqual(
+                    license_control._api_endpoint(None, "activate"),
+                    "https://wip.mountlet.pages.dev/api/license/activate",
+                )
+
+        self.assertEqual(encodings, ["utf-8", "utf-8"])
 
     def test_invalid_license_token_is_rejected(self):
         private_key = ec.generate_private_key(ec.SECP256R1())

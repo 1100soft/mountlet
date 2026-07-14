@@ -144,10 +144,11 @@ class BuildLinuxBundleTests(unittest.TestCase):
     def test_preview_build_info_defaults_to_preview_report_api(self):
         build_linux_bundle = _load_build_linux_bundle()
         with mock.patch.dict(build_linux_bundle.os.environ, {"GITHUB_REF_NAME": "wip"}, clear=True):
-            self.assertEqual(
-                build_linux_bundle.build_info_data()["reportApiUrl"],
-                "https://wip.mountlet.pages.dev/api/report",
-            )
+            data = build_linux_bundle.build_info_data()
+
+        self.assertEqual(data["licenseApiUrl"], "https://wip.mountlet.pages.dev/api/license")
+        self.assertEqual(data["licenseSiteUrl"], "https://wip.mountlet.pages.dev")
+        self.assertEqual(data["reportApiUrl"], "https://wip.mountlet.pages.dev/api/report")
 
     def test_install_build_info_writes_to_installed_package(self):
         build_linux_bundle = _load_build_linux_bundle()

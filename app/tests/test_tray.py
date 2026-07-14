@@ -2267,6 +2267,18 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_delayed_tray_positioning_repositions_file_browser_after_main_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        calls: list[str] = []
+        mountlet_window._position_near_tray = mock.Mock(side_effect=lambda: calls.append("main"))
+        mountlet_window._reposition_file_browser = mock.Mock(side_effect=lambda: calls.append("browser"))
+        single_shot = mock.Mock(side_effect=lambda _delay, callback: callback())
+        mountlet_window.qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=single_shot))
+
+        mountlet_window._schedule_position_near_tray()
+
+        self.assertEqual(calls, ["main", "browser", "main", "browser", "main", "browser"])
+
     def test_mountlet_window_show_restores_minimized_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()

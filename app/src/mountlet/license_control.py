@@ -15,6 +15,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +133,10 @@ def license_site_url(*, api_url: str | None = None) -> str:
     configured = os.environ.get(LICENSE_SITE_URL_ENV, "").strip()
     if configured:
         return configured.rstrip("/")
-    api_base = (api_url or os.environ.get(LICENSE_API_URL_ENV) or DEFAULT_LICENSE_API_URL).strip()
+    packaged_site = _packaged_license_site_url()
+    if packaged_site:
+        return packaged_site.rstrip("/")
+    api_base = (api_url or _license_api_base()).strip()
     if api_base:
         parsed = urllib.parse.urlsplit(api_base)
         path = parsed.path.rstrip("/")
@@ -155,6 +159,33 @@ def license_purchase_url(*, add_devices: bool = False, license_key: str = "", ap
         query["license_key"] = key
     suffix = f"?{urllib.parse.urlencode(query)}" if query else ""
     return f"{base}/{suffix}#pricing"
+
+
+def _packaged_build_info() -> dict[str, Any]:
+    try:
+        resource = files("mountlet").joinpath("mountlet-build-info.json")
+        if not resource.is_file():
+            return {}
+        data = json.loads(resource.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _packaged_license_api_url() -> str:
+    return str(_packaged_build_info().get("licenseApiUrl") or "").strip()
+
+
+def _packaged_license_site_url() -> str:
+    return str(_packaged_build_info().get("licenseSiteUrl") or "").strip()
+
+
+def _license_api_base() -> str:
+    return (
+        os.environ.get(LICENSE_API_URL_ENV, "").strip()
+        or _packaged_license_api_url()
+        or DEFAULT_LICENSE_API_URL
+    ).rstrip("/")
 
 
 def activate_license(license_key: str, *, device_label: str = "", api_url: str | None = None) -> LicenseStatus:
@@ -429,7 +460,7 @@ def _load_public_key() -> ec.EllipticCurvePublicKey:
 
 
 def _api_endpoint(api_url: str | None, action: str) -> str:
-    base = (api_url or os.environ.get(LICENSE_API_URL_ENV) or DEFAULT_LICENSE_API_URL).rstrip("/")
+    base = (api_url or _license_api_base()).rstrip("/")
     return f"{base}/{action}"
 
 
