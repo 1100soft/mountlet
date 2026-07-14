@@ -5991,6 +5991,7 @@ class MountletWindow:
         outer.addWidget(scroll)
         outer.addWidget(self._add_remote_row())
 
+        root.setObjectName("mountletMainSurface")
         central = root
         if bool(getattr(self.file_browser, "_embedded", False)):
             central = self.qt.QWidget()
@@ -6006,8 +6007,7 @@ class MountletWindow:
                 pass
             shell.addWidget(root, 0, self.qt.Qt.AlignmentFlag.AlignTop)
             self.file_browser.embed_into(shell)
-        central.setObjectName("mountletMainSurface")
-        self._main_surface = central
+        self._main_surface = root
         self.window.setCentralWidget(central)
         self._update_main_focus_style()
         self._content_fit_widgets = (root, scroll, container)
@@ -9814,48 +9814,54 @@ class MountletTray:
         mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
-        if locked:
-            action = self.remote_menu.addAction(_license_lock_message())
-            action.setEnabled(False)
-        elif remotes:
-            for remote in remotes:
-                self._add_remote_menu(remote, self.remote_menu)
-        else:
-            action = self.remote_menu.addAction("No rclone remotes found")
-            action.setEnabled(False)
-
-        status = self.app_menu.addAction(
-            _license_lock_message() if locked else _status_tooltip(remotes, mounted_names).replace("Mountlet - ", "")
-        )
-        status.setEnabled(False)
-        self.app_menu.addSeparator()
+        self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
         if not locked:
-            self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
-            self._add_action(self.app_menu, "Update status", self.rebuild_menus)
-            self.app_menu.addSeparator()
-            self._add_action(self.app_menu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
-            self._add_action(self.app_menu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
-            self._add_action(self.app_menu, "Add remote", self.main_window._show_new_remote_wizard)
-            self.app_menu.addSeparator()
-            self._add_action(self.app_menu, "Sync cached files now", self.main_window._sync_all_cached_files)
-            self._add_action(self.app_menu, "Remove all offline files", self.main_window._remove_all_offline_files)
-            self._add_action(self.app_menu, "Clear all resolved cache", self.main_window._clear_all_cache_files)
-            self._add_action(self.app_menu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
-            self._add_action(self.app_menu, "Report bug", self._show_bug_report_from_tray)
-            self.app_menu.addSeparator()
-            self._add_action(self.app_menu, "App settings", self._show_app_settings_from_tray)
-            self._add_action(self.app_menu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
-            self.app_menu.addSeparator()
-            self._add_action(self.app_menu, "Export config bundle", self.main_window._export_config_bundle)
-            self._add_action(self.app_menu, "Import config bundle", self.main_window._import_config_bundle)
-            self._add_action(self.app_menu, "Open config backup folder", self.main_window._open_config_backup_folder)
-            self._add_action(self.app_menu, "Set config sync location", self._show_config_sync_from_tray)
-            self._add_action(self.app_menu, "Push config to sync location", self._push_config_sync_from_tray)
-            self._add_action(self.app_menu, "Pull config from sync location", self._pull_config_sync_from_tray)
-            self.main_window._add_open_config_files_menu(self.app_menu)
-            self.app_menu.addSeparator()
-        self._add_action(self.app_menu, "License", self._show_license_from_tray)
-        self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
+            app_submenu = self.app_menu.addMenu("App")
+            status = app_submenu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
+            status.setEnabled(False)
+            app_submenu.addSeparator()
+            self._add_action(app_submenu, "Update status", self.rebuild_menus)
+            self._add_action(app_submenu, "Sync cached files now", self.main_window._sync_all_cached_files)
+            self._add_action(app_submenu, "Remove all offline files", self.main_window._remove_all_offline_files)
+            self._add_action(app_submenu, "Clear all resolved cache", self.main_window._clear_all_cache_files)
+            self._add_action(app_submenu, "Debug cache sync", self.main_window._show_cache_sync_debug_report)
+            self._add_action(app_submenu, "Report bug", self._show_bug_report_from_tray)
+            app_submenu.addSeparator()
+            self._add_action(app_submenu, "License", self._show_license_from_tray)
+            self._add_action(app_submenu, "About Mountlet", self._show_about_from_tray)
+
+            mount_submenu = self.app_menu.addMenu("Mount")
+            self._add_action(mount_submenu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
+            self._add_action(mount_submenu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
+            self._add_action(mount_submenu, "Add remote", self.main_window._show_new_remote_wizard)
+            mount_submenu.addSeparator()
+            remotes_submenu = mount_submenu.addMenu("Remotes")
+            if remotes:
+                for remote in remotes:
+                    self._add_remote_menu(remote, remotes_submenu)
+            else:
+                action = remotes_submenu.addAction("No rclone remotes found")
+                action.setEnabled(False)
+
+            config_submenu = self.app_menu.addMenu("Config")
+            self._add_action(config_submenu, "App settings", self._show_app_settings_from_tray)
+            self._add_action(config_submenu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
+            config_submenu.addSeparator()
+            self._add_action(config_submenu, "Export config bundle", self.main_window._export_config_bundle)
+            self._add_action(config_submenu, "Import config bundle", self.main_window._import_config_bundle)
+            self._add_action(config_submenu, "Open config backup folder", self.main_window._open_config_backup_folder)
+            config_submenu.addSeparator()
+            self._add_action(config_submenu, "Set config sync location", self._show_config_sync_from_tray)
+            self._add_action(config_submenu, "Push config to sync location", self._push_config_sync_from_tray)
+            self._add_action(config_submenu, "Pull config from sync location", self._pull_config_sync_from_tray)
+            config_submenu.addSeparator()
+            self.main_window._add_open_config_files_menu(config_submenu)
+        else:
+            locked_action = self.app_menu.addAction(_license_lock_message())
+            locked_action.setEnabled(False)
+            self._add_action(self.app_menu, "License", self._show_license_from_tray)
+            self._add_action(self.app_menu, "About Mountlet", self._show_about_from_tray)
+        self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
         if self.main_window.is_visible():
