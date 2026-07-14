@@ -23,6 +23,7 @@ REPORT_API_URL_ENV = "MOUNTLET_REPORT_API_URL"
 HTTP_TIMEOUT_SECONDS = 15
 MAX_LOG_CHARS = 18_000
 MAX_MESSAGE_CHARS = 8_000
+CLEAN_SHUTDOWN_MARKER = "Mountlet shutdown cleanly"
 REPORT_USER_AGENT = f"Mountlet/{__version__} (+https://mountlet.app)"
 LICENSE_KEY_RE = re.compile(r"\bMNT-[A-Z0-9-]{8,}\b", re.IGNORECASE)
 SECRET_ASSIGNMENT_RE = re.compile(
@@ -86,6 +87,9 @@ def latest_crash_log() -> str:
     if "Fatal Python error" not in text and "Unhandled exception" not in text:
         return ""
     marker = max(text.rfind("Fatal Python error"), text.rfind("Unhandled exception"))
+    clean_marker = text.rfind(CLEAN_SHUTDOWN_MARKER)
+    if clean_marker > marker:
+        return ""
     return text[marker:] if marker >= 0 else text
 
 
@@ -115,6 +119,14 @@ def mark_crash_reported(text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"fingerprint": crash_fingerprint(text), "reportedAt": int(time.time())}
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    apply_permissions(path)
+
+
+def mark_clean_shutdown() -> None:
+    path = runtime_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n{CLEAN_SHUTDOWN_MARKER}\n")
     apply_permissions(path)
 
 
