@@ -5572,6 +5572,7 @@ class MountletWindow:
         was_visible = self.is_visible()
         visible_on_current_desktop = self._desktop_api().window_is_on_current_workspace(self.window)
         reopened_from_other_desktop = was_visible and visible_on_current_desktop is False
+        browser_restore = self._file_browser_restore_request(include_visible=reopened_from_other_desktop)
         if reopened_from_other_desktop:
             self._close_child_dialogs()
             self.window.hide()
@@ -5579,7 +5580,7 @@ class MountletWindow:
         self.refresh()
         if not was_visible:
             self._position_after_fit = True
-            self._queue_hidden_file_browser_restore()
+            self._pending_file_browser_show = browser_restore
             if getattr(self, "_last_tray_anchor", None) is not None:
                 self._prefer_remembered_tray_anchor_once = True
             self._position_near_tray()
@@ -6172,18 +6173,22 @@ class MountletWindow:
             return
         self._reposition_file_browser()
 
-    def _queue_hidden_file_browser_restore(self) -> None:
-        if not getattr(self, "_window_stack_hidden", False):
-            return
+    def _file_browser_restore_request(self, *, include_visible: bool = False) -> tuple[str, bool] | None:
         file_browser = getattr(self, "file_browser", None)
         remote = getattr(file_browser, "remote", None)
         if file_browser is None or remote is None:
-            return
+            return None
         if bool(getattr(file_browser, "_embedded", False)):
-            return
+            return None
         if getattr(file_browser, "_closed_until_selected", False):
-            return
-        self._pending_file_browser_show = (remote.name, getattr(self, "_focus_owner", "main") == "browser")
+            return None
+        if not (
+            getattr(self, "_window_stack_hidden", False)
+            or include_visible
+            or getattr(file_browser, "is_visible", lambda: False)()
+        ):
+            return None
+        return remote.name, getattr(self, "_focus_owner", "main") == "browser"
 
     def _show_pending_file_browser_after_fit(self) -> None:
         pending = getattr(self, "_pending_file_browser_show", None)

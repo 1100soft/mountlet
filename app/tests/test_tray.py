@@ -2294,6 +2294,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.desktop = mock.Mock()
         mountlet_window.desktop.window_is_on_current_workspace.return_value = True
         mountlet_window._last_tray_anchor = object()
+        mountlet_window._file_browser_restore_request = mock.Mock(return_value=("remote", False))
         mountlet_window.refresh = mock.Mock()
         mountlet_window._position_near_tray = mock.Mock()
         mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
@@ -2301,6 +2302,8 @@ class TrayTests(unittest.TestCase):
 
         mountlet_window.show()
 
+        mountlet_window._file_browser_restore_request.assert_called_once_with(include_visible=False)
+        self.assertEqual(mountlet_window._pending_file_browser_show, ("remote", False))
         mountlet_window._position_near_tray.assert_called_once_with()
         mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_not_called()
         self.assertTrue(mountlet_window._position_after_fit)
@@ -2705,31 +2708,39 @@ class TrayTests(unittest.TestCase):
         file_browser.show_remote.assert_called_once_with(remote, row.frame, show_browser=True, focus_browser=False)
         self.assertIsNone(window._pending_file_browser_show)
 
-    def test_reopening_hidden_window_stack_queues_previous_file_browser_restore(self):
+    def test_hidden_window_stack_restore_request_keeps_previous_file_browser(self):
         remote = SimpleNamespace(name="remote")
-        file_browser = SimpleNamespace(remote=remote, _embedded=False, _closed_until_selected=False)
+        file_browser = SimpleNamespace(
+            remote=remote,
+            _embedded=False,
+            _closed_until_selected=False,
+            is_visible=lambda: False,
+        )
         window = object.__new__(tray.MountletWindow)
         window.file_browser = file_browser
         window._window_stack_hidden = True
-        window._pending_file_browser_show = None
         window._focus_owner = "browser"
 
-        window._queue_hidden_file_browser_restore()
+        request = window._file_browser_restore_request()
 
-        self.assertEqual(window._pending_file_browser_show, ("remote", True))
+        self.assertEqual(request, ("remote", True))
 
-    def test_reopening_hidden_window_stack_does_not_restore_user_closed_file_browser(self):
+    def test_hidden_window_stack_restore_request_ignores_user_closed_file_browser(self):
         remote = SimpleNamespace(name="remote")
-        file_browser = SimpleNamespace(remote=remote, _embedded=False, _closed_until_selected=True)
+        file_browser = SimpleNamespace(
+            remote=remote,
+            _embedded=False,
+            _closed_until_selected=True,
+            is_visible=lambda: False,
+        )
         window = object.__new__(tray.MountletWindow)
         window.file_browser = file_browser
         window._window_stack_hidden = True
-        window._pending_file_browser_show = None
         window._focus_owner = "browser"
 
-        window._queue_hidden_file_browser_restore()
+        request = window._file_browser_restore_request()
 
-        self.assertIsNone(window._pending_file_browser_show)
+        self.assertIsNone(request)
 
     def test_reposition_file_browser_only_moves_existing_browser_window(self):
         remote = SimpleNamespace(name="remote")
