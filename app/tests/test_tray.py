@@ -200,6 +200,19 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
         self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
 
+    def test_system_theme_uses_fusion_standard_palette_consistently(self):
+        palette = object()
+        style = mock.Mock()
+        style.standardPalette.return_value = palette
+        app = mock.Mock()
+        app.style.return_value = style
+        qt = SimpleNamespace()
+
+        tray._apply_theme(qt, app, settings.THEME_SYSTEM)
+
+        app.setStyle.assert_called_once_with("Fusion")
+        app.setPalette.assert_called_once_with(palette)
+
     def test_platform_without_driver_config_hides_config_action(self):
         platform = mock.Mock()
         platform.mount_driver_config_paths.return_value = ()
@@ -3699,6 +3712,45 @@ class TrayTests(unittest.TestCase):
         single_shot.assert_called_once_with(0, window.show)
         window.show.assert_called_once_with()
         window.refresh.assert_not_called()
+        self.assertTrue(window._prefer_remembered_tray_anchor_once)
+
+    def test_layout_reposition_prefers_remembered_tray_anchor_over_cursor(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+        class Geometry:
+            def isValid(self) -> bool:
+                return False
+
+        class Screen:
+            def availableGeometry(self) -> object:
+                return SimpleNamespace(left=lambda: 0, top=lambda: 0)
+
+        remembered = Point(780, 580)
+        cursor = Point(100, 100)
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_anchor = remembered
+        window._prefer_remembered_tray_anchor_once = True
+        window.tray_app = SimpleNamespace(tray=SimpleNamespace(geometry=lambda: Geometry()))
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: Screen(), screenAt=lambda _point: Screen()),
+            QCursor=SimpleNamespace(pos=mock.Mock(return_value=cursor)),
+        )
+
+        anchor, geometry_valid = window._tray_anchor()
+
+        self.assertIs(anchor, remembered)
+        self.assertFalse(geometry_valid)
+        self.assertFalse(window._prefer_remembered_tray_anchor_once)
+        window.qt.QCursor.pos.assert_not_called()
 
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)

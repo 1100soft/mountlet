@@ -2205,16 +2205,16 @@ def _effective_window_mode(settings: AppSettings | None = None, *, is_wayland: b
 
 def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
     selected = theme if theme in {THEME_SYSTEM, THEME_LIGHT, THEME_DARK} else THEME_SYSTEM
+    try:
+        app.setStyle("Fusion")
+    except Exception:
+        pass
     if selected == THEME_SYSTEM:
         try:
             app.setPalette(app.style().standardPalette())
         except Exception:
             pass
         return
-    try:
-        app.setStyle("Fusion")
-    except Exception:
-        pass
     palette = qt.QPalette()
     colors = _theme_colors(selected)
     for role_name, color in colors.items():
@@ -5851,6 +5851,8 @@ class MountletWindow:
             return
 
     def _tray_anchor(self) -> tuple[Any, bool]:
+        prefer_remembered = bool(getattr(self, "_prefer_remembered_tray_anchor_once", False))
+        self._prefer_remembered_tray_anchor_once = False
         tray_geometry = self.tray_app.tray.geometry()
         primary_screen = self.qt.QApplication.primaryScreen()
         available = primary_screen.availableGeometry() if primary_screen is not None else None
@@ -5858,13 +5860,15 @@ class MountletWindow:
             anchor = tray_geometry.center()
             self._last_tray_anchor = anchor
             return anchor, True
+        remembered = getattr(self, "_last_tray_anchor", None)
+        if prefer_remembered and remembered is not None:
+            return remembered, False
         cursor = self.qt.QCursor.pos()
         screen = self.qt.QApplication.screenAt(cursor) or primary_screen
         available = screen.availableGeometry() if screen is not None else available
         if available is not None and not self._point_is_suspicious_anchor(cursor, available):
             self._last_tray_anchor = cursor
             return cursor, False
-        remembered = getattr(self, "_last_tray_anchor", None)
         if remembered is not None:
             return remembered, False
         if available is not None:
@@ -8969,6 +8973,7 @@ class MountletWindow:
             if visual_only_refresh and not layout_changed:
                 self._skip_background_refresh_once = True
             if layout_changed:
+                self._prefer_remembered_tray_anchor_once = True
                 self.qt.QTimer.singleShot(0, self.show)
             else:
                 self.refresh()
