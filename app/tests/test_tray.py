@@ -2658,14 +2658,52 @@ class TrayTests(unittest.TestCase):
         mountlet_window._tray_is_quitting = mock.Mock(return_value=False)
         mountlet_window._fit_to_content = mock.Mock()
         mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+        mountlet_window._show_pending_file_browser_after_fit = mock.Mock()
         mountlet_window._reposition_file_browser = mock.Mock()
 
         mountlet_window._finish_content_fit(root, scroll, container)
 
         mountlet_window._fit_to_content.assert_called_once_with(root, scroll, container)
         mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_called_once_with()
+        mountlet_window._show_pending_file_browser_after_fit.assert_called_once_with()
         mountlet_window._reposition_file_browser.assert_not_called()
         self.assertFalse(mountlet_window._position_after_fit)
+
+    def test_pending_file_browser_show_waits_until_main_window_fit_finishes(self):
+        remote = SimpleNamespace(name="remote")
+        row = SimpleNamespace(frame=object())
+        file_browser = mock.Mock()
+        file_browser._embedded = False
+        file_browser.backend.current_path.return_value = "folder"
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._position_after_fit = True
+        window._pending_file_browser_show = None
+        window._row_widgets = {"remote": row}
+        window._license_locked = mock.Mock(return_value=False)
+        window._set_browser_selected = mock.Mock()
+
+        window._show_file_browser_for_remote(remote, row.frame, focus_browser=True)
+
+        self.assertEqual(window._pending_file_browser_show, ("remote", True))
+        self.assertIs(file_browser.remote, remote)
+        self.assertEqual(file_browser.path, "folder")
+        file_browser.show_remote.assert_not_called()
+
+    def test_pending_file_browser_show_runs_after_fit_with_final_row_geometry(self):
+        remote = SimpleNamespace(name="remote")
+        row = SimpleNamespace(frame=object())
+        file_browser = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._pending_file_browser_show = ("remote", False)
+        window._row_widgets = {"remote": row}
+        window._remote_by_name = mock.Mock(return_value=remote)
+
+        window._show_pending_file_browser_after_fit()
+
+        file_browser.show_remote.assert_called_once_with(remote, row.frame, show_browser=True, focus_browser=False)
+        self.assertIsNone(window._pending_file_browser_show)
 
     def test_reposition_file_browser_only_moves_existing_browser_window(self):
         remote = SimpleNamespace(name="remote")

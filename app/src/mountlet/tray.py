@@ -5006,6 +5006,7 @@ class MountletWindow:
         self._remote_change_poll_offsets: dict[str, int] = {}
         self._remote_change_poll_index = 0
         self._position_after_fit = False
+        self._pending_file_browser_show: tuple[str, bool] | None = None
         self._last_tray_anchor: Any | None = None
         self._last_tray_edge: str | None = None
         self._last_popup_position: tuple[int, int] | None = None
@@ -6166,8 +6167,21 @@ class MountletWindow:
         if getattr(self, "_position_after_fit", False):
             self._position_after_fit = False
             self._position_window_stack_near_tray_with_stable_anchor()
+            self._show_pending_file_browser_after_fit()
             return
         self._reposition_file_browser()
+
+    def _show_pending_file_browser_after_fit(self) -> None:
+        pending = getattr(self, "_pending_file_browser_show", None)
+        self._pending_file_browser_show = None
+        if pending is None:
+            return
+        remote_name, focus_browser = pending
+        remote = self._remote_by_name(remote_name)
+        row = self._row_widgets.get(remote_name)
+        if remote is None or row is None:
+            return
+        self.file_browser.show_remote(remote, row.frame, show_browser=True, focus_browser=focus_browser)
 
     def _browser_layout_changed(self) -> None:
         widgets = getattr(self, "_content_fit_widgets", None)
@@ -7727,6 +7741,15 @@ class MountletWindow:
             self._show_license_dialog()
             return
         self._set_browser_selected(remote.name)
+        if (
+            getattr(self, "_position_after_fit", False)
+            and not bool(getattr(self.file_browser, "_embedded", False))
+        ):
+            self._pending_file_browser_show = (remote.name, focus_browser)
+            self.file_browser.remote = remote
+            self.file_browser.path = self.file_browser.backend.current_path(remote.name)
+            self.file_browser.backend.remember_path(remote.name, self.file_browser.path)
+            return
         self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=focus_browser)
 
     def _set_browser_selected(self, remote_name: str | None) -> None:
