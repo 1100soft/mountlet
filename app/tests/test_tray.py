@@ -3664,7 +3664,8 @@ class TrayTests(unittest.TestCase):
         dialog = SimpleNamespace(dialog=object())
         tray_app = SimpleNamespace(_is_wayland=False, app=object(), rebuild_menus=mock.Mock())
         window = object.__new__(tray.MountletWindow)
-        window.qt = SimpleNamespace()
+        single_shot = mock.Mock(side_effect=lambda _delay, callback: callback())
+        window.qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=single_shot))
         window.tray_app = tray_app
         window.window = mock.Mock()
         window.window.isVisible.return_value = True
@@ -3695,6 +3696,7 @@ class TrayTests(unittest.TestCase):
 
         window.window.hide.assert_called_once_with()
         tray_app.rebuild_menus.assert_called_once_with()
+        single_shot.assert_called_once_with(0, window.show)
         window.show.assert_called_once_with()
         window.refresh.assert_not_called()
 

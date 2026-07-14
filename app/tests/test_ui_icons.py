@@ -47,6 +47,42 @@ class UiIconTests(unittest.TestCase):
 
         self.assertEqual(button.property("mountletIconColor"), "")
 
+    def test_refresh_palette_derived_icon_keeps_color_dynamic(self):
+        class Button:
+            def __init__(self) -> None:
+                self.properties = {
+                    "mountletIconName": "ui-copy",
+                    "mountletIconFallback": "Copy",
+                    "mountletIconSize": 18,
+                    "mountletIconColor": "",
+                }
+                self.children = lambda: []
+
+            def setIcon(self, _icon) -> None:
+                pass
+
+            def setIconSize(self, _size) -> None:
+                pass
+
+            def setText(self, _text: str) -> None:
+                pass
+
+            def setProperty(self, key: str, value) -> None:
+                self.properties[key] = value
+
+            def property(self, key: str):
+                return self.properties.get(key)
+
+        button = Button()
+        qt = mock.Mock()
+        qt.QSize.side_effect = lambda width, height: (width, height)
+
+        with mock.patch.object(ui_icons, "mountlet_icon", return_value=object()):
+            with mock.patch.object(ui_icons, "_button_text_color", return_value="#111827"):
+                ui_icons.refresh_widget_icons(qt, button)
+
+        self.assertEqual(button.property("mountletIconColor"), "")
+
 
 if __name__ == "__main__":
     unittest.main()

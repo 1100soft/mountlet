@@ -119,12 +119,14 @@ def _refresh_one_widget_icon(qt: Any, widget: Any) -> None:
         return
     fallback = property_getter("mountletIconFallback") or ""
     size = property_getter("mountletIconSize") or 22
-    color = property_getter("mountletIconColor") or None
-    if not color:
-        color = _button_text_color(widget)
+    stored_color = property_getter("mountletIconColor") or None
+    color = stored_color or _button_text_color(widget)
     with suppress(Exception):
         size = int(size)
     apply_button_icon(qt, widget, str(icon_name), fallback_text=str(fallback), size=size, color=color)
+    if not stored_color:
+        with suppress(Exception):
+            widget.setProperty("mountletIconColor", "")
 
 
 def _button_text_color(button: Any) -> str | None:

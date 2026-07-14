@@ -8932,12 +8932,12 @@ class MountletWindow:
                     is_wayland=bool(getattr(self.tray_app, "_is_wayland", False)),
                 )
             )
-            _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
-            self._rebuild_file_browser_if_layout_changed(old_embedded)
             reopen_after_layout_change = layout_changed and self.is_visible()
             if reopen_after_layout_change:
                 with suppress(Exception):
                     self.window.hide()
+            _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
+            self._rebuild_file_browser_if_layout_changed(old_embedded)
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -8960,7 +8960,7 @@ class MountletWindow:
             if visual_only_refresh and not layout_changed:
                 self._skip_background_refresh_once = True
             if layout_changed:
-                self.show()
+                self.qt.QTimer.singleShot(0, self.show)
             else:
                 self.refresh()
             if theme_changed and not layout_changed:
