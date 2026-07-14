@@ -8015,7 +8015,18 @@ class MountletWindow:
                 return False
             available = target_screen.availableGeometry()
             frame = self.window.frameGeometry()
-            return frame.height() >= available.height() - 6 or frame.width() >= available.width() - 6
+            full_tolerance = 6
+            half_tolerance = 10
+            frame_height = frame.height()
+            frame_width = frame.width()
+            available_height = available.height()
+            available_width = available.width()
+            return (
+                frame_height >= available_height - full_tolerance
+                or frame_width >= available_width - full_tolerance
+                or abs(frame_height - (available_height / 2)) <= half_tolerance
+                or abs(frame_width - (available_width / 2)) <= half_tolerance
+            )
         except Exception:
             return False
 

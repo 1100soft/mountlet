@@ -272,6 +272,31 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(window._single_window_size_managed(screen))
 
+    def test_single_window_managed_size_detects_quarter_tiling(self):
+        class Rect:
+            def __init__(self, width: int, height: int) -> None:
+                self._width = width
+                self._height = height
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = SimpleNamespace(_embedded=True)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowState=SimpleNamespace()))
+        window.window = SimpleNamespace(
+            isMaximized=lambda: False,
+            isFullScreen=lambda: False,
+            windowState=lambda: 0,
+            frameGeometry=lambda: Rect(600, 402),
+        )
+        screen = SimpleNamespace(availableGeometry=lambda: Rect(1200, 804))
+
+        self.assertTrue(window._single_window_size_managed(screen))
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

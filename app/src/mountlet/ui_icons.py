@@ -5,7 +5,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-NEUTRAL_ICON_COLORS = ("#334155", "#333333", "#000000")
+NEUTRAL_ICON_COLORS = ("#334155",)
 
 
 def icon_path(name: str) -> str | None:

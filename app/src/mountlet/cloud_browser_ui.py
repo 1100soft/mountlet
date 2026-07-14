@@ -258,6 +258,8 @@ class CompactCloudBrowser:
         layout = qt.QVBoxLayout(root)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(5)
+        with suppress(Exception):
+            layout.setAlignment(qt.Qt.AlignmentFlag.AlignTop)
 
         header = qt.QHBoxLayout()
         self.title = qt.QLabel("Files")
