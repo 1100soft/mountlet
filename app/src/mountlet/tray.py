@@ -5583,8 +5583,6 @@ class MountletWindow:
             self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
-        if not was_visible:
-            self._schedule_position_near_tray()
 
     def _window_is_active(self) -> bool:
         try:
@@ -5621,14 +5619,6 @@ class MountletWindow:
         timer.singleShot(50, self._activate_main_window_if_current_desktop)
         timer.singleShot(150, self._activate_main_window_if_current_desktop)
         timer.singleShot(300, self._activate_main_window_if_current_desktop)
-
-    def _schedule_position_near_tray(self) -> None:
-        timer = getattr(getattr(self, "qt", None), "QTimer", None)
-        if timer is None:
-            return
-        timer.singleShot(0, self._position_window_stack_near_tray_with_stable_anchor)
-        timer.singleShot(50, self._position_window_stack_near_tray_with_stable_anchor)
-        timer.singleShot(150, self._position_window_stack_near_tray_with_stable_anchor)
 
     def _activate_main_window_if_current_desktop(self) -> None:
         if not self.is_visible():
