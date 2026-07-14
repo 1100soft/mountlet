@@ -14,13 +14,16 @@ export async function onRequestPost({request, env}) {
   const report = normalizedReport(payload);
   const sinks = [];
   const failures = [];
+  const githubState = githubConfig(env);
 
-  if (githubConfigured(env)) {
+  if (githubState.enabled) {
     try {
       sinks.push(await createGitHubIssue(env, report));
     } catch (error) {
       failures.push(`GitHub: ${clean(error.message || error, 500)}`);
     }
+  } else if (githubState.present) {
+    failures.push("GitHub: REPORT_GITHUB_REPO must be in owner/repo format and REPORT_GITHUB_TOKEN must be set.");
   }
 
   if (resendConfigured(env)) {
@@ -31,8 +34,11 @@ export async function onRequestPost({request, env}) {
     }
   }
 
-  if (!githubConfigured(env) && !resendConfigured(env)) {
+  if (!githubState.present && !resendConfigured(env)) {
     return json({ok: false, error: "Bug reports are not configured."}, 503);
+  }
+  if (githubState.present && !sinks.some((sink) => sink.kind === "github")) {
+    return json({ok: false, error: failures.join("\n") || "GitHub report delivery failed.", sinks}, 502);
   }
   if (sinks.length === 0) {
     return json({ok: false, error: failures.join("\n") || "Bug report delivery failed."}, 502);
@@ -177,11 +183,13 @@ function fenced(language, value) {
   return `\`\`\`${language}\n${String(value || "").replaceAll("```", "`\u200b``")}\n\`\`\``;
 }
 
-function githubConfigured(env) {
-  return Boolean(
-    String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim()
-    && normalizeRepo(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "")
-  );
+function githubConfig(env) {
+  const token = String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim();
+  const repo = String(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "").trim();
+  return {
+    present: Boolean(token || repo),
+    enabled: Boolean(token && normalizeRepo(repo)),
+  };
 }
 
 function resendConfigured(env) {

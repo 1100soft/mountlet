@@ -3794,6 +3794,62 @@ class TrayTests(unittest.TestCase):
         self.assertFalse(window._prefer_remembered_tray_anchor_once)
         window.qt.QCursor.pos.assert_not_called()
 
+    def test_layout_change_remembers_current_window_edge_anchor(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x = x
+                self._y = y
+                self._width = width
+                self._height = height
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+            def left(self) -> int:
+                return self._x
+
+            def right(self) -> int:
+                return self._x + self._width
+
+            def top(self) -> int:
+                return self._y
+
+            def bottom(self) -> int:
+                return self._y + self._height
+
+        available = Rect(0, 0, 1200, 800)
+        frame = Rect(880, 240, 320, 280)
+        screen = SimpleNamespace(availableGeometry=lambda: available)
+        window = object.__new__(tray.MountletWindow)
+        window.window = SimpleNamespace(screen=lambda: screen, frameGeometry=lambda: frame)
+        window.qt = SimpleNamespace(QApplication=SimpleNamespace(primaryScreen=lambda: screen), QPoint=Point)
+
+        window._remember_current_window_edge_anchor()
+
+        self.assertEqual(window._last_tray_anchor.x(), 1200)
+        self.assertEqual(window._last_tray_anchor.y(), 380)
+        self.assertTrue(window._prefer_remembered_tray_anchor_once)
+
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False

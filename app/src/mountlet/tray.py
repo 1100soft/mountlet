@@ -5621,9 +5621,9 @@ class MountletWindow:
         timer = getattr(getattr(self, "qt", None), "QTimer", None)
         if timer is None:
             return
-        timer.singleShot(0, self._position_window_stack_near_tray)
-        timer.singleShot(50, self._position_window_stack_near_tray)
-        timer.singleShot(150, self._position_window_stack_near_tray)
+        timer.singleShot(0, self._position_window_stack_near_tray_with_stable_anchor)
+        timer.singleShot(50, self._position_window_stack_near_tray_with_stable_anchor)
+        timer.singleShot(150, self._position_window_stack_near_tray_with_stable_anchor)
 
     def _activate_main_window_if_current_desktop(self) -> None:
         if not self.is_visible():
@@ -5877,6 +5877,40 @@ class MountletWindow:
     def _position_window_stack_near_tray(self) -> None:
         self._position_near_tray()
         self._reposition_file_browser()
+
+    def _position_window_stack_near_tray_with_stable_anchor(self) -> None:
+        if getattr(self, "_last_tray_anchor", None) is not None:
+            self._prefer_remembered_tray_anchor_once = True
+        self._position_window_stack_near_tray()
+
+    def _remember_current_window_edge_anchor(self) -> None:
+        try:
+            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            frame = self.window.frameGeometry()
+            center_x = frame.x() + (frame.width() // 2)
+            center_y = frame.y() + (frame.height() // 2)
+            distances = {
+                "left": abs(frame.left() - available.left()),
+                "right": abs(available.right() - frame.right()),
+                "top": abs(frame.top() - available.top()),
+                "bottom": abs(available.bottom() - frame.bottom()),
+            }
+            edge = min(distances, key=distances.get)
+            if edge == "left":
+                point = self.qt.QPoint(available.left(), center_y)
+            elif edge == "right":
+                point = self.qt.QPoint(available.right(), center_y)
+            elif edge == "top":
+                point = self.qt.QPoint(center_x, available.top())
+            else:
+                point = self.qt.QPoint(center_x, available.bottom())
+            self._last_tray_anchor = point
+            self._prefer_remembered_tray_anchor_once = True
+        except Exception:
+            return
 
     def _tray_anchor(self) -> tuple[Any, bool]:
         prefer_remembered = bool(getattr(self, "_prefer_remembered_tray_anchor_once", False))
@@ -8978,6 +9012,7 @@ class MountletWindow:
             )
             reopen_after_layout_change = layout_changed and self.is_visible()
             if reopen_after_layout_change:
+                self._remember_current_window_edge_anchor()
                 self._untrack_child_dialog(dialog.dialog)
                 with suppress(Exception):
                     dialog.dialog.close()
