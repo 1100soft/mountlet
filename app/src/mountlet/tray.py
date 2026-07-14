@@ -5595,6 +5595,25 @@ class MountletWindow:
         timer.singleShot(50, self._position_near_tray)
         timer.singleShot(150, self._position_near_tray)
 
+    def _schedule_reanchor_near_tray(self) -> None:
+        timer = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer is None:
+            self._fit_and_position_near_tray()
+            return
+        timer.singleShot(0, self._fit_and_position_near_tray)
+        timer.singleShot(75, self._fit_and_position_near_tray)
+        timer.singleShot(200, self._fit_and_position_near_tray)
+        timer.singleShot(400, self._fit_and_position_near_tray)
+
+    def _fit_and_position_near_tray(self) -> None:
+        if not self.is_visible() or self._tray_is_quitting():
+            return
+        widgets = getattr(self, "_content_fit_widgets", None)
+        if widgets is not None:
+            self._fit_to_content(*widgets, preserve_position=False)
+        self._position_near_tray()
+        self._reposition_file_browser()
+
     def _activate_main_window_if_current_desktop(self) -> None:
         if not self.is_visible():
             return
@@ -8959,8 +8978,7 @@ class MountletWindow:
             if theme_changed:
                 self._refresh_theme_icons()
             if layout_changed and self.is_visible():
-                self._position_after_fit = True
-                self._schedule_position_near_tray()
+                self._schedule_reanchor_near_tray()
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
@@ -9895,7 +9913,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
         more_menu = self.app_menu.addMenu("More")
         if not locked:
-            app_submenu = more_menu.addMenu("App")
+            app_submenu = more_menu.addMenu("Application")
             status = app_submenu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
             status.setEnabled(False)
             app_submenu.addSeparator()
@@ -9909,7 +9927,7 @@ class MountletTray:
             self._add_action(app_submenu, "License", self._show_license_from_tray)
             self._add_action(app_submenu, "About Mountlet", self._show_about_from_tray)
 
-            mount_submenu = more_menu.addMenu("Mount")
+            mount_submenu = more_menu.addMenu("Mount actions")
             self._add_action(mount_submenu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
             self._add_action(mount_submenu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
             self._add_action(mount_submenu, "Add remote", self.main_window._show_new_remote_wizard)
@@ -9922,7 +9940,7 @@ class MountletTray:
                 action = remotes_submenu.addAction("No rclone remotes found")
                 action.setEnabled(False)
 
-            config_submenu = more_menu.addMenu("Config")
+            config_submenu = more_menu.addMenu("Configuration")
             self._add_action(config_submenu, "App settings", self._show_app_settings_from_tray)
             self._add_action(config_submenu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
             config_submenu.addSeparator()
