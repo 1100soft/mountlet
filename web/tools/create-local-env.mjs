@@ -49,6 +49,7 @@ writeFileSync(
     "# REPORT_GITHUB_TOKEN=\"github_pat_replace\"",
     "# REPORT_GITHUB_REPO=\"owner/private-support-repo\"",
     "# REPORT_GITHUB_LABELS=\"bug\"",
+    "# REPORT_ADMIN_TOKEN=\"report_admin_replace\"",
     "",
   ].join("\n"),
   {encoding: "utf8", mode: 0o600}

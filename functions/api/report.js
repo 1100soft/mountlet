@@ -1,275 +1,83 @@
-const RESEND_EMAIL_ENDPOINT = "https://api.resend.com/emails";
-const GITHUB_API_ENDPOINT = "https://api.github.com";
-const MAX_FIELD_CHARS = 24_000;
-const MAX_ISSUE_BODY_CHARS = 60_000;
+import {
+  githubConfig,
+  githubConfigurationError,
+  jsonResponse,
+  mirrorReportToGitHub,
+  normalizedReport,
+  readJson,
+  resendConfigured,
+  sendReportEmail,
+  setReportEmailMirror,
+  setReportGitHubError,
+  setReportGitHubMirror,
+  storeReport,
+} from "../_lib/reports.js";
 
 export async function onRequestPost({request, env}) {
   let payload;
   try {
-    payload = await request.json();
+    payload = await readJson(request);
   } catch (_error) {
-    return json({ok: false, error: "Invalid JSON."}, 400);
+    return jsonResponse({ok: false, error: "Invalid JSON."}, 400);
   }
 
   const report = normalizedReport(payload);
   const sinks = [];
   const failures = [];
-  const githubState = githubConfig(env);
+  let reportId = "";
 
+  try {
+    reportId = await storeReport(env, report);
+    sinks.push({kind: "d1", id: reportId});
+  } catch (error) {
+    failures.push(`D1: ${String(error.message || error).slice(0, 500)}`);
+  }
+
+  const githubState = githubConfig(env);
   if (githubState.enabled) {
     try {
-      sinks.push(await createGitHubIssue(env, report));
+      const sink = await mirrorReportToGitHub(env, report);
+      sinks.push(sink);
+      if (reportId) {
+        await setReportGitHubMirror(env, reportId, sink);
+      }
     } catch (error) {
-      failures.push(`GitHub: ${clean(error.message || error, 500)}`);
+      const message = String(error.message || error).slice(0, 500);
+      failures.push(`GitHub: ${message}`);
+      if (reportId) {
+        await setReportGitHubError(env, reportId, message);
+      }
     }
   } else if (githubState.present) {
-    failures.push(githubConfigurationError(githubState));
+    const message = githubConfigurationError(githubState);
+    failures.push(message);
+    if (reportId) {
+      await setReportGitHubError(env, reportId, message);
+    }
   }
 
   if (resendConfigured(env)) {
     try {
-      sinks.push(await sendReportEmail(env, report));
+      const sink = await sendReportEmail(env, report);
+      sinks.push(sink);
+      if (reportId) {
+        await setReportEmailMirror(env, reportId, sink);
+      }
     } catch (error) {
-      failures.push(`Resend: ${clean(error.message || error, 500)}`);
+      failures.push(`Resend: ${String(error.message || error).slice(0, 500)}`);
     }
   }
 
-  if (!githubState.present && !resendConfigured(env)) {
-    return json({ok: false, error: "Bug reports are not configured."}, 503);
+  if (!reportId && !githubState.present && !resendConfigured(env)) {
+    return jsonResponse({ok: false, error: "Bug reports are not configured."}, 503);
   }
-  if (githubState.present && !sinks.some((sink) => sink.kind === "github")) {
-    return json({ok: false, error: failures.join("\n") || "GitHub report delivery failed.", sinks}, 502);
+  if (!reportId && sinks.length === 0) {
+    return jsonResponse({ok: false, error: failures.join("\n") || "Bug report delivery failed."}, 502);
   }
-  if (sinks.length === 0) {
-    return json({ok: false, error: failures.join("\n") || "Bug report delivery failed."}, 502);
-  }
-  return json({
+  return jsonResponse({
     ok: true,
-    id: sinks[0]?.id || "",
+    id: reportId || sinks[0]?.id || "",
     sinks,
     warning: failures.join("\n"),
-  });
-}
-
-function normalizedReport(payload) {
-  const kind = clean(payload.kind || "bug", 40);
-  const metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
-  const logs = payload.logs && typeof payload.logs === "object" ? payload.logs : {};
-  return {
-    kind,
-    subject: kind === "crash" ? "Mountlet crash report" : "Mountlet bug report",
-    message: clean(payload.message || "", MAX_FIELD_CHARS),
-    contact: clean(payload.contact || "", 240),
-    metadata,
-    runtimeLog: redact(clean(logs.runtime || "", MAX_FIELD_CHARS)),
-    rcloneLog: redact(clean(logs.rclone || "", MAX_FIELD_CHARS)),
-  };
-}
-
-function reportText(report) {
-  return [
-    report.subject,
-    "",
-    "Message:",
-    report.message || "(none)",
-    "",
-    report.contact ? `Contact: ${report.contact}` : "Contact: (not provided)",
-    "",
-    "Metadata:",
-    JSON.stringify(report.metadata, null, 2),
-    "",
-    "Runtime log:",
-    report.runtimeLog || "(not included)",
-    "",
-    "rclone log:",
-    report.rcloneLog || "(not included)",
-  ].join("\n");
-}
-
-async function sendReportEmail(env, report) {
-  const response = await fetch(RESEND_EMAIL_ENDPOINT, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${String(env.RESEND_API_KEY || "").trim()}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      from: String(env.REPORT_FROM || env.RESEND_FROM || env.EMAIL_FROM || "").trim(),
-      to: [String(env.REPORT_TO || env.EMAIL_REPLY_TO || env.RESEND_REPLY_TO || env.RESEND_FROM || env.EMAIL_FROM || "").trim()],
-      reply_to: report.contact || undefined,
-      subject: report.subject,
-      text: reportText(report),
-    }),
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(resendErrorMessage(body));
-  }
-  let parsed = {};
-  try {
-    parsed = body ? JSON.parse(body) : {};
-  } catch (_error) {
-    parsed = {};
-  }
-  return {kind: "email", id: parsed.id || ""};
-}
-
-async function createGitHubIssue(env, report) {
-  const token = String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim();
-  const repo = normalizeRepo(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "");
-  const labels = reportLabels(env, report.kind);
-  let response = await postGitHubIssue(token, repo, report, labels);
-  if (response.status === 422 && labels.length > 0) {
-    response = await postGitHubIssue(token, repo, report, []);
-  }
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(githubErrorMessage(body, response.status));
-  }
-  let parsed = {};
-  try {
-    parsed = body ? JSON.parse(body) : {};
-  } catch (_error) {
-    parsed = {};
-  }
-  return {kind: "github", id: String(parsed.number || parsed.id || ""), url: parsed.html_url || ""};
-}
-
-function postGitHubIssue(token, repo, report, labels) {
-  return fetch(`${GITHUB_API_ENDPOINT}/repos/${repo}/issues`, {
-    method: "POST",
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      "user-agent": "mountlet-report-function",
-      "x-github-api-version": "2022-11-28",
-    },
-    body: JSON.stringify({
-      title: issueTitle(report),
-      body: issueBody(report),
-      labels,
-    }),
-  });
-}
-
-function issueTitle(report) {
-  const metadata = report.metadata || {};
-  const version = clean(metadata.appVersion || "unknown", 40);
-  const platform = clean(metadata.platform || "unknown platform", 80);
-  return `[${report.kind}] Mountlet ${version} on ${platform}`;
-}
-
-function issueBody(report) {
-  const body = [
-    report.message || "_No user message provided._",
-    "",
-    "### Contact",
-    report.contact || "_Not provided._",
-    "",
-    "### Metadata",
-    fenced("json", JSON.stringify(report.metadata, null, 2)),
-    "",
-    "### Runtime Log",
-    fenced("text", report.runtimeLog || "(not included)"),
-    "",
-    "### rclone Log",
-    fenced("text", report.rcloneLog || "(not included)"),
-  ].join("\n");
-  return body.slice(0, MAX_ISSUE_BODY_CHARS);
-}
-
-function fenced(language, value) {
-  return `\`\`\`${language}\n${String(value || "").replaceAll("```", "`\u200b``")}\n\`\`\``;
-}
-
-function githubConfig(env) {
-  const token = String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim();
-  const repo = String(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "").trim();
-  const repoValid = Boolean(normalizeRepo(repo));
-  return {
-    present: Boolean(token || repo),
-    enabled: Boolean(token && repoValid),
-    tokenPresent: Boolean(token),
-    repoPresent: Boolean(repo),
-    repoValid,
-  };
-}
-
-function githubConfigurationError(state) {
-  const problems = [];
-  if (!state.tokenPresent) {
-    problems.push("REPORT_GITHUB_TOKEN is missing");
-  }
-  if (!state.repoPresent) {
-    problems.push("REPORT_GITHUB_REPO is missing");
-  } else if (!state.repoValid) {
-    problems.push("REPORT_GITHUB_REPO must be in owner/repo format");
-  }
-  return `GitHub: ${problems.join("; ")}.`;
-}
-
-function resendConfigured(env) {
-  return Boolean(
-    String(env.RESEND_API_KEY || "").trim()
-    && String(env.REPORT_FROM || env.RESEND_FROM || env.EMAIL_FROM || "").trim()
-    && String(env.REPORT_TO || env.EMAIL_REPLY_TO || env.RESEND_REPLY_TO || env.RESEND_FROM || env.EMAIL_FROM || "").trim()
-  );
-}
-
-function normalizeRepo(value) {
-  const repo = String(value || "").trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ? repo : "";
-}
-
-function reportLabels(env, kind) {
-  const configured = String(env.REPORT_GITHUB_LABELS || env.GITHUB_REPORT_LABELS || "").trim();
-  const labels = configured.split(",").map((label) => label.trim()).filter(Boolean);
-  if (labels.length === 0) {
-    return [];
-  }
-  if (kind === "crash" && !labels.includes("crash")) {
-    labels.push("crash");
-  }
-  if (kind !== "crash" && !labels.includes("bug")) {
-    labels.push("bug");
-  }
-  return labels;
-}
-
-function clean(value, limit) {
-  return String(value || "").replace(/\r\n/g, "\n").slice(0, limit);
-}
-
-function redact(value) {
-  return String(value || "")
-    .replace(/((?:access|refresh|id)?_?token["'\s:=]+)[^\s"',}]+/gi, "$1[redacted]")
-    .replace(/((?:client_)?secret["'\s:=]+)[^\s"',}]+/gi, "$1[redacted]")
-    .replace(/((?:password|pass|api[_-]?key)["'\s:=]+)[^\s"',}]+/gi, "$1[redacted]")
-    .replace(/(authorization:\s*bearer\s+)[^\s]+/gi, "$1[redacted]");
-}
-
-function resendErrorMessage(body) {
-  try {
-    const parsed = JSON.parse(body || "{}");
-    return clean(parsed.message || parsed.error || body, 500);
-  } catch (_error) {
-    return clean(body, 500);
-  }
-}
-
-function githubErrorMessage(body, status) {
-  try {
-    const parsed = JSON.parse(body || "{}");
-    return clean(parsed.message || body || `GitHub returned ${status}.`, 500);
-  } catch (_error) {
-    return clean(body || `GitHub returned ${status}.`, 500);
-  }
-}
-
-function json(body, status = 200) {
-  return Response.json(body, {
-    status,
-    headers: {"cache-control": "no-store"},
   });
 }
