@@ -23,7 +23,7 @@ export async function onRequestPost({request, env}) {
       failures.push(`GitHub: ${clean(error.message || error, 500)}`);
     }
   } else if (githubState.present) {
-    failures.push("GitHub: REPORT_GITHUB_REPO must be in owner/repo format and REPORT_GITHUB_TOKEN must be set.");
+    failures.push(githubConfigurationError(githubState));
   }
 
   if (resendConfigured(env)) {
@@ -186,10 +186,27 @@ function fenced(language, value) {
 function githubConfig(env) {
   const token = String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim();
   const repo = String(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "").trim();
+  const repoValid = Boolean(normalizeRepo(repo));
   return {
     present: Boolean(token || repo),
-    enabled: Boolean(token && normalizeRepo(repo)),
+    enabled: Boolean(token && repoValid),
+    tokenPresent: Boolean(token),
+    repoPresent: Boolean(repo),
+    repoValid,
   };
+}
+
+function githubConfigurationError(state) {
+  const problems = [];
+  if (!state.tokenPresent) {
+    problems.push("REPORT_GITHUB_TOKEN is missing");
+  }
+  if (!state.repoPresent) {
+    problems.push("REPORT_GITHUB_REPO is missing");
+  } else if (!state.repoValid) {
+    problems.push("REPORT_GITHUB_REPO must be in owner/repo format");
+  }
+  return `GitHub: ${problems.join("; ")}.`;
 }
 
 function resendConfigured(env) {

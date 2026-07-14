@@ -13,6 +13,11 @@ export async function onRequestGet({env}) {
     reportSinks: {
       github: github.enabled,
       githubNeedsAttention: github.present && !github.enabled,
+      githubDiagnostic: {
+        tokenPresent: github.tokenPresent,
+        repoPresent: github.repoPresent,
+        repoFormatValid: github.repoValid,
+      },
       email,
     },
   };
@@ -26,9 +31,13 @@ export async function onRequestGet({env}) {
 function githubConfig(env) {
   const token = String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim();
   const repo = String(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "").trim();
+  const repoValid = Boolean(normalizeRepo(repo));
   return {
     present: Boolean(token || repo),
-    enabled: Boolean(token && normalizeRepo(repo)),
+    enabled: Boolean(token && repoValid),
+    tokenPresent: Boolean(token),
+    repoPresent: Boolean(repo),
+    repoValid,
   };
 }
 

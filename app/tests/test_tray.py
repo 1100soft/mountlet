@@ -2620,6 +2620,26 @@ class TrayTests(unittest.TestCase):
         fit.assert_called_once_with(root, scroll, container)
         position.assert_not_called()
 
+    def test_completed_content_resize_positions_after_final_resize_with_stable_anchor(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        root = mock.Mock()
+        scroll = mock.Mock()
+        container = mock.Mock()
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.centralWidget.return_value = root
+        mountlet_window._position_after_fit = True
+        mountlet_window._tray_is_quitting = mock.Mock(return_value=False)
+        mountlet_window._fit_to_content = mock.Mock()
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+        mountlet_window._reposition_file_browser = mock.Mock()
+
+        mountlet_window._finish_content_fit(root, scroll, container)
+
+        mountlet_window._fit_to_content.assert_called_once_with(root, scroll, container)
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_called_once_with()
+        mountlet_window._reposition_file_browser.assert_not_called()
+        self.assertFalse(mountlet_window._position_after_fit)
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
@@ -3792,6 +3812,51 @@ class TrayTests(unittest.TestCase):
         self.assertIs(anchor, remembered)
         self.assertFalse(geometry_valid)
         self.assertFalse(window._prefer_remembered_tray_anchor_once)
+        window.qt.QCursor.pos.assert_not_called()
+
+    def test_layout_reposition_prefers_remembered_anchor_over_valid_tray_geometry(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+        class Geometry:
+            def isValid(self) -> bool:
+                return True
+
+            def width(self) -> int:
+                return 24
+
+            def height(self) -> int:
+                return 24
+
+            def center(self) -> Point:
+                return Point(1040, 580)
+
+        class Screen:
+            def availableGeometry(self) -> object:
+                return SimpleNamespace(left=lambda: 0, top=lambda: 0)
+
+        remembered = Point(1200, 580)
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_anchor = remembered
+        window._prefer_remembered_tray_anchor_once = True
+        window.tray_app = SimpleNamespace(tray=SimpleNamespace(geometry=lambda: Geometry()))
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: Screen(), screenAt=lambda _point: Screen()),
+            QCursor=SimpleNamespace(pos=mock.Mock()),
+        )
+
+        anchor, geometry_valid = window._tray_anchor()
+
+        self.assertIs(anchor, remembered)
+        self.assertFalse(geometry_valid)
         window.qt.QCursor.pos.assert_not_called()
 
     def test_layout_change_remembers_current_window_edge_anchor(self):

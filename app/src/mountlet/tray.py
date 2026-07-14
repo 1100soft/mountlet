@@ -5575,7 +5575,7 @@ class MountletWindow:
         self.refresh()
         if not was_visible:
             self._position_after_fit = True
-            self._position_window_stack_near_tray()
+            self._position_window_stack_near_tray_with_stable_anchor()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
         if not was_visible:
@@ -5915,6 +5915,9 @@ class MountletWindow:
     def _tray_anchor(self) -> tuple[Any, bool]:
         prefer_remembered = bool(getattr(self, "_prefer_remembered_tray_anchor_once", False))
         self._prefer_remembered_tray_anchor_once = False
+        remembered = getattr(self, "_last_tray_anchor", None)
+        if prefer_remembered and remembered is not None:
+            return remembered, False
         tray_geometry = self.tray_app.tray.geometry()
         primary_screen = self.qt.QApplication.primaryScreen()
         available = primary_screen.availableGeometry() if primary_screen is not None else None
@@ -5922,9 +5925,6 @@ class MountletWindow:
             anchor = tray_geometry.center()
             self._last_tray_anchor = anchor
             return anchor, True
-        remembered = getattr(self, "_last_tray_anchor", None)
-        if prefer_remembered and remembered is not None:
-            return remembered, False
         cursor = self.qt.QCursor.pos()
         screen = self.qt.QApplication.screenAt(cursor) or primary_screen
         available = screen.availableGeometry() if screen is not None else available
@@ -6153,7 +6153,7 @@ class MountletWindow:
         self._fit_to_content(root, scroll, container)
         if getattr(self, "_position_after_fit", False):
             self._position_after_fit = False
-            self._position_window_stack_near_tray()
+            self._position_window_stack_near_tray_with_stable_anchor()
             return
         self._reposition_file_browser()
 
