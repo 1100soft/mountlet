@@ -8,10 +8,24 @@ export async function onRequestGet({env}) {
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),
     resendConfigured: Boolean(env.RESEND_API_KEY && (env.RESEND_FROM || env.EMAIL_FROM)),
     reportsConfigured: Boolean(
+      (env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN)
+      && (env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO)
+    ) || Boolean(
       env.RESEND_API_KEY
       && (env.REPORT_FROM || env.RESEND_FROM || env.EMAIL_FROM)
       && (env.REPORT_TO || env.EMAIL_REPLY_TO || env.RESEND_REPLY_TO || env.RESEND_FROM || env.EMAIL_FROM)
     ),
+    reportSinks: {
+      github: Boolean(
+        (env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN)
+        && (env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO)
+      ),
+      email: Boolean(
+        env.RESEND_API_KEY
+        && (env.REPORT_FROM || env.RESEND_FROM || env.EMAIL_FROM)
+        && (env.REPORT_TO || env.EMAIL_REPLY_TO || env.RESEND_REPLY_TO || env.RESEND_FROM || env.EMAIL_FROM)
+      ),
+    },
   };
   return Response.json(body, {
     headers: {

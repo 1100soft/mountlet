@@ -5601,9 +5601,6 @@ class MountletWindow:
             self._fit_and_position_near_tray()
             return
         timer.singleShot(0, self._fit_and_position_near_tray)
-        timer.singleShot(75, self._fit_and_position_near_tray)
-        timer.singleShot(200, self._fit_and_position_near_tray)
-        timer.singleShot(400, self._fit_and_position_near_tray)
 
     def _fit_and_position_near_tray(self) -> None:
         if not self.is_visible() or self._tray_is_quitting():
@@ -9739,6 +9736,11 @@ class MountletTray:
         self._is_macos = get_platform().system_name == "Darwin"
         self._is_wayland = get_platform().system_name == "Linux" and bool(os.environ.get("WAYLAND_DISPLAY"))
         self._is_gnome_wayland = _is_gnome_wayland()
+        self._pad_cascade_labels = (
+            get_platform().system_name == "Linux"
+            and bool(os.environ.get("DISPLAY"))
+            and not bool(os.environ.get("WAYLAND_DISPLAY"))
+        )
         self._manual_context_menu = self._is_macos or (self._is_wayland and not self._is_gnome_wayland)
         if self._is_macos:
             _set_macos_accessory_mode()
@@ -9913,7 +9915,7 @@ class MountletTray:
         self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
         more_menu = self.app_menu.addMenu("More")
         if not locked:
-            app_submenu = more_menu.addMenu("Application")
+            app_submenu = more_menu.addMenu(self._cascade_label("App"))
             status = app_submenu.addAction(_status_tooltip(remotes, mounted_names).replace("Mountlet - ", ""))
             status.setEnabled(False)
             app_submenu.addSeparator()
@@ -9927,7 +9929,7 @@ class MountletTray:
             self._add_action(app_submenu, "License", self._show_license_from_tray)
             self._add_action(app_submenu, "About Mountlet", self._show_about_from_tray)
 
-            mount_submenu = more_menu.addMenu("Mount actions")
+            mount_submenu = more_menu.addMenu(self._cascade_label("Mount"))
             self._add_action(mount_submenu, "Mount all", lambda: self._mount_all(remotes), enabled=bool(remotes))
             self._add_action(mount_submenu, "Unmount all", lambda: self._unmount_all(remotes), enabled=bool(remotes))
             self._add_action(mount_submenu, "Add remote", self.main_window._show_new_remote_wizard)
@@ -9940,7 +9942,7 @@ class MountletTray:
                 action = remotes_submenu.addAction("No rclone remotes found")
                 action.setEnabled(False)
 
-            config_submenu = more_menu.addMenu("Configuration")
+            config_submenu = more_menu.addMenu(self._cascade_label("Config"))
             self._add_action(config_submenu, "App settings", self._show_app_settings_from_tray)
             self._add_action(config_submenu, "Keyboard shortcuts", self._show_shortcuts_from_tray)
             config_submenu.addSeparator()
@@ -9963,6 +9965,9 @@ class MountletTray:
 
         if self.main_window.is_visible():
             self.main_window.refresh()
+
+    def _cascade_label(self, label: str) -> str:
+        return f"{label}  " if getattr(self, "_pad_cascade_labels", False) else label
 
     def _menu_stack_visible(self, menu: Any | None, *, _seen: set[int] | None = None) -> bool:
         if menu is None:

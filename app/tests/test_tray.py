@@ -495,7 +495,7 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(top_level, ["Open Mountlet", "More", "Quit"])
         more_menu = next(item for item in tray_app.app_menu.items if item.text() == "More")
         more_items = [item.text() for item in more_menu.items if not item.isSeparator()]
-        self.assertEqual(more_items, ["Application", "Mount actions", "Configuration"])
+        self.assertEqual(more_items, ["App", "Mount", "Config"])
 
     def test_rebuild_menus_does_not_clear_visible_context_menu(self):
         tray_app = object.__new__(tray.MountletTray)

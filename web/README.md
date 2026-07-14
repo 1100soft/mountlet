@@ -29,6 +29,9 @@ environment overrides.
 - Optional Resend reply-to alias: `EMAIL_REPLY_TO`
 - Optional report sender: `REPORT_FROM`
 - Optional report recipient: `REPORT_TO`
+- GitHub report token: `REPORT_GITHUB_TOKEN`
+- GitHub report repository: `REPORT_GITHUB_REPO`
+- Optional GitHub report labels: `REPORT_GITHUB_LABELS`
 - Stripe secret key: `STRIPE_SECRET_KEY`
 - Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
 <!-- mountlet-vars:end -->
@@ -279,11 +282,25 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
   reports fall back to the reply-to or sender address.
 - `REPORT_FROM`: optional verified sender for in-app crash and bug reports. If
   unset, reports fall back to the license email sender.
+- `REPORT_GITHUB_TOKEN`: optional fine-grained GitHub token for creating private
+  crash and bug report issues.
+- `REPORT_GITHUB_REPO`: optional GitHub repository target in `owner/repo`
+  format.
+- `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
+  those labels in GitHub first. Mountlet adds `bug` or `crash` to the list.
+
+The report endpoint accepts either GitHub Issues or Resend email, and can use
+both. For GitHub reporting, create a private support repository, create a
+fine-grained personal access token limited to that repository with Issues
+read/write permission, then set `REPORT_GITHUB_TOKEN` as a Pages secret and
+`REPORT_GITHUB_REPO` as an environment variable. The Function redacts obvious
+tokens and secrets, but reports can still include paths and filenames because
+users review them before sending.
 
 If in-app reports return Cloudflare error 1010 or another 403 before reaching
 the Function, add a Cloudflare security/WAF skip or allow rule for `/api/report`
 or for the `Mountlet/...` user agent. The report Function still validates JSON
-and sends only through the configured Resend account.
+and sends only through configured report sinks.
 
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and
