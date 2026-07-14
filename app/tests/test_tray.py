@@ -31,6 +31,64 @@ class _FakeWindow:
         self.toggle_calls += 1
 
 
+class _FakeAction:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._enabled = True
+        self.triggered = SimpleNamespace(connect=lambda _callback: None)
+
+    def text(self) -> str:
+        return self._text
+
+    def isSeparator(self) -> bool:
+        return False
+
+    def setEnabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+
+    def isSeparator(self) -> bool:
+        return False
+
+
+class _FakeSeparator(_FakeAction):
+    def __init__(self) -> None:
+        super().__init__("")
+
+    def isSeparator(self) -> bool:
+        return True
+
+
+class _FakeMenu:
+    def __init__(self, text: str = "") -> None:
+        self._text = text
+        self.items: list[_FakeAction | _FakeMenu] = []
+
+    def text(self) -> str:
+        return self._text
+
+    def clear(self) -> None:
+        self.items.clear()
+
+    def addAction(self, action: _FakeAction | str) -> _FakeAction:
+        if isinstance(action, str):
+            action = _FakeAction(action)
+        self.items.append(action)
+        return action
+
+    def addMenu(self, text: str) -> "_FakeMenu":
+        menu = _FakeMenu(text)
+        self.items.append(menu)
+        return menu
+
+    def addSeparator(self) -> _FakeSeparator:
+        separator = _FakeSeparator()
+        self.items.append(separator)
+        return separator
+
+    def actions(self) -> list[_FakeAction | "_FakeMenu"]:
+        return self.items
+
+
 class TrayTests(unittest.TestCase):
     def setUp(self) -> None:
         tray._dolphin_tab_target_cache = None
@@ -412,6 +470,25 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.app_menu.popup.assert_called_once_with("cursor-position")
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_tray_context_menu_keeps_short_top_level_with_cascades(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.remote_menu = _FakeMenu("remote")
+        tray_app.app_menu = _FakeMenu("app")
+        tray_app.tray = mock.Mock()
+        tray_app.qt = SimpleNamespace(QAction=lambda label, _menu: _FakeAction(label))
+        main_window = mock.Mock()
+        main_window.is_visible.return_value = False
+        main_window._add_open_config_files_menu.side_effect = lambda menu: menu.addMenu("Open config file")
+        tray_app.main_window = main_window
+
+        with mock.patch.object(tray, "_license_locked", return_value=False):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[]):
+                tray_app.rebuild_menus()
+
+        top_level = [item.text() for item in tray_app.app_menu.items if not item.isSeparator()]
+        self.assertEqual(top_level, ["Open Mountlet", "App", "Mount", "Config", "Quit"])
 
     def test_macos_accessory_mode_hides_dock_application(self):
         application = mock.Mock()
@@ -3504,6 +3581,18 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.rebuild_menus.assert_not_called()
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_main_focus_style_updates_only_registered_main_surface(self):
+        main_surface = mock.Mock()
+        other_surface = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window._main_surface = main_surface
+        window._focus_owner = "main"
+
+        window._update_main_focus_style()
+
+        main_surface.setStyleSheet.assert_called_once()
+        other_surface.setStyleSheet.assert_not_called()
 
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)
