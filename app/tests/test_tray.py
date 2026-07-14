@@ -56,15 +56,19 @@ class _FakeSeparator(_FakeAction):
 
 
 class _FakeMenu:
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", *, visible: bool = False) -> None:
         self._text = text
         self.items: list[_FakeAction | _FakeMenu] = []
+        self._visible = visible
 
     def text(self) -> str:
         return self._text
 
     def isSeparator(self) -> bool:
         return False
+
+    def isVisible(self) -> bool:
+        return self._visible
 
     def clear(self) -> None:
         self.items.clear()
@@ -492,6 +496,20 @@ class TrayTests(unittest.TestCase):
         more_menu = next(item for item in tray_app.app_menu.items if item.text() == "More")
         more_items = [item.text() for item in more_menu.items if not item.isSeparator()]
         self.assertEqual(more_items, ["App", "Mount", "Config"])
+
+    def test_rebuild_menus_does_not_clear_visible_context_menu(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.remote_menu = _FakeMenu("remote")
+        tray_app.app_menu = _FakeMenu("app", visible=True)
+        existing = tray_app.app_menu.addAction("Existing")
+        tray_app.tray = mock.Mock()
+        tray_app.main_window = mock.Mock()
+
+        tray_app.rebuild_menus()
+
+        self.assertEqual(tray_app.app_menu.items, [existing])
+        tray_app.tray.setToolTip.assert_not_called()
 
     def test_macos_accessory_mode_hides_dock_application(self):
         application = mock.Mock()
@@ -3597,6 +3615,33 @@ class TrayTests(unittest.TestCase):
 
         main_surface.setStyleSheet.assert_called_once()
         other_surface.setStyleSheet.assert_not_called()
+
+    def test_visual_only_refresh_skips_background_rclone_checks_once(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._skip_background_refresh_once = True
+        window._current_remote_names = [remote.name]
+        window._row_widgets = {remote.name: SimpleNamespace()}
+        window._focus_snapshot = mock.Mock(return_value=("main", remote.name))
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._license_locked = mock.Mock(return_value=False)
+        window._remote_name_width = mock.Mock(return_value=120)
+        window._update_purchase_license_button = mock.Mock()
+        window._update_remote_row = mock.Mock()
+        window._schedule_storage_load = mock.Mock()
+        window._request_config_sync_metadata_check = mock.Mock()
+        window._update_license_lock_state = mock.Mock()
+        window._browser_layout_changed = mock.Mock()
+        window._restore_focus_snapshot = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                window.refresh()
+
+        window._update_remote_row.assert_called_once_with(remote, False)
+        window._request_config_sync_metadata_check.assert_not_called()
+        window._schedule_storage_load.assert_not_called()
+        self.assertFalse(window._skip_background_refresh_once)
 
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)

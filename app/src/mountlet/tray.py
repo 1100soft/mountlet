@@ -4976,6 +4976,7 @@ class MountletWindow:
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_popup_position: tuple[int, int] | None = None
+        self._skip_background_refresh_once = False
         self._drag_offset: Any | None = None
         self._deactivated_for_tray = False
         self._focus_owner = "main"
@@ -5936,10 +5937,12 @@ class MountletWindow:
         focus_snapshot = self._focus_snapshot()
         self._refresh_pending = False
         locked = self._license_locked()
+        skip_background = bool(getattr(self, "_skip_background_refresh_once", False))
+        self._skip_background_refresh_once = False
         if locked:
             self._hide_locked_file_browser()
         remotes = _load_visible_remotes()
-        if not locked:
+        if not locked and not skip_background:
             self._request_config_sync_metadata_check(remotes)
         mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
         remote_names = [remote.name for remote in remotes]
@@ -5949,7 +5952,7 @@ class MountletWindow:
             self._update_purchase_license_button()
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
-                if not locked:
+                if not locked and not skip_background:
                     self._schedule_storage_load(remote)
             self._update_license_lock_state()
             self._browser_layout_changed()
@@ -5983,7 +5986,7 @@ class MountletWindow:
         if remotes:
             for remote in remotes:
                 rows.addWidget(self._remote_row(remote, mounted_by_name[remote.name]))
-                if not locked:
+                if not locked and not skip_background:
                     self._schedule_storage_load(remote)
         else:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
@@ -8908,6 +8911,7 @@ class MountletWindow:
         if self._license_locked():
             self._show_license_dialog()
             return
+        old_settings = load_app_settings()
         old_remotes = _load_visible_remotes()
         mounted_before = self._mounted_remote_names(old_remotes)
         old_base = core.BASE_MOUNT_DIR
@@ -8915,16 +8919,45 @@ class MountletWindow:
         dialog = AppConfigDialog(self.qt, self.window)
 
         def on_accepted() -> None:
-            _apply_theme(self.qt, self.tray_app.app, load_app_settings().theme)
+            new_settings = load_app_settings()
+            theme_or_layout_changed = (
+                new_settings.theme != old_settings.theme
+                or _effective_window_mode(
+                    new_settings,
+                    is_wayland=bool(getattr(self.tray_app, "_is_wayland", False)),
+                )
+                != _effective_window_mode(
+                    old_settings,
+                    is_wayland=bool(getattr(self.tray_app, "_is_wayland", False)),
+                )
+            )
+            _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
             self._rebuild_file_browser_if_layout_changed(old_embedded)
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
-            self._usage_cache.clear()
-            getattr(self, "_connection_cache", {}).clear()
-            self._setup_remote_change_polling()
+            rclone_relevant_change = (
+                base_changed
+                or new_settings.auto_mount != old_settings.auto_mount
+                or new_settings.auto_mount_delay != old_settings.auto_mount_delay
+                or new_settings.config_sync_remote != old_settings.config_sync_remote
+                or new_settings.config_sync_path != old_settings.config_sync_path
+                or new_settings.remote_sync_interval_seconds != old_settings.remote_sync_interval_seconds
+            )
+            if rclone_relevant_change:
+                self._usage_cache.clear()
+                getattr(self, "_connection_cache", {}).clear()
+                self._setup_remote_change_polling()
+            visual_only_refresh = theme_or_layout_changed and not rclone_relevant_change
+            if visual_only_refresh:
+                self._skip_background_refresh_once = True
             self.tray_app.rebuild_menus()
+            if visual_only_refresh:
+                self._skip_background_refresh_once = True
             self.refresh()
+            if theme_or_layout_changed and self.is_visible():
+                self._position_after_fit = True
+                self._schedule_position_near_tray()
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
@@ -9807,6 +9840,8 @@ class MountletTray:
     def rebuild_menus(self) -> None:
         if getattr(self, "_quitting", False):
             return
+        if self._menu_stack_visible(getattr(self, "app_menu", None)):
+            return
         self.remote_menu.clear()
         self.app_menu.clear()
         locked = _license_locked()
@@ -9867,6 +9902,31 @@ class MountletTray:
 
         if self.main_window.is_visible():
             self.main_window.refresh()
+
+    def _menu_stack_visible(self, menu: Any | None, *, _seen: set[int] | None = None) -> bool:
+        if menu is None:
+            return False
+        if _seen is None:
+            _seen = set()
+        if id(menu) in _seen:
+            return False
+        _seen.add(id(menu))
+        try:
+            if menu.isVisible():
+                return True
+        except Exception:
+            return False
+        try:
+            actions = menu.actions()
+        except Exception:
+            return False
+        for action in actions:
+            submenu = None
+            with suppress(Exception):
+                submenu = action.menu()
+            if submenu is not None and self._menu_stack_visible(submenu, _seen=_seen):
+                return True
+        return False
 
     def _add_remote_menu(self, remote: core.RemoteInfo, menu: Any) -> None:
         mounted = core.is_mounted(remote)

@@ -3,9 +3,10 @@ from __future__ import annotations
 from contextlib import suppress
 from importlib.resources import files
 from pathlib import Path
+import re
 from typing import Any
 
-NEUTRAL_ICON_COLORS = ("#334155",)
+NEUTRAL_ICON_RE = re.compile(r"#334155\b", re.IGNORECASE)
 
 
 def icon_path(name: str) -> str | None:
@@ -49,8 +50,7 @@ def _recolored_svg_icon(qt: Any, path: str, *, size: int, color: str) -> Any | N
         from PySide6.QtSvg import QSvgRenderer
 
         svg = Path(path).read_text(encoding="utf-8")
-        for neutral in NEUTRAL_ICON_COLORS:
-            svg = svg.replace(neutral, color).replace(neutral.upper(), color)
+        svg = NEUTRAL_ICON_RE.sub(color, svg)
         renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
         if not renderer.isValid():
             return None
