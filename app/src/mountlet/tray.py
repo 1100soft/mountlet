@@ -5888,10 +5888,14 @@ class MountletWindow:
             self._prefer_remembered_tray_anchor_once = True
         self._position_window_stack_near_tray()
 
-    def _remember_tray_anchor_for_layout_change(self) -> None:
+    def remember_tray_click_anchor(self, point: Any | None = None) -> None:
         try:
-            anchor, _geometry_valid = self._tray_anchor()
+            anchor = point if point is not None else self.qt.QCursor.pos()
+            screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
+            available = screen.availableGeometry() if screen is not None else None
             self._last_tray_anchor = anchor
+            if available is not None:
+                self._last_tray_edge = self._tray_edge_for_point(anchor, available)
             self._prefer_remembered_tray_anchor_once = True
         except Exception:
             return
@@ -9037,7 +9041,8 @@ class MountletWindow:
             )
             reopen_after_layout_change = layout_changed and self.is_visible()
             if reopen_after_layout_change:
-                self._remember_tray_anchor_for_layout_change()
+                if getattr(self, "_last_tray_anchor", None) is not None:
+                    self._prefer_remembered_tray_anchor_once = True
                 self._untrack_child_dialog(dialog.dialog)
                 with suppress(Exception):
                     dialog.dialog.close()
@@ -9934,6 +9939,7 @@ class MountletTray:
             return
         activation_reason = self.qt.QSystemTrayIcon.ActivationReason
         if reason in (activation_reason.Trigger, getattr(activation_reason, "DoubleClick", None)):
+            self.main_window.remember_tray_click_anchor(self.qt.QCursor.pos())
             self.main_window.toggle_from_tray()
             self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return

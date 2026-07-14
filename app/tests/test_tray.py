@@ -23,12 +23,16 @@ class _FakeWindow:
     def __init__(self) -> None:
         self.show_calls = 0
         self.toggle_calls = 0
+        self.tray_click_anchors: list[object] = []
 
     def show(self) -> None:
         self.show_calls += 1
 
     def toggle_from_tray(self) -> None:
         self.toggle_calls += 1
+
+    def remember_tray_click_anchor(self, point: object) -> None:
+        self.tray_click_anchors.append(point)
 
 
 class _FakeAction:
@@ -459,6 +463,7 @@ class TrayTests(unittest.TestCase):
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
         fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick = "double"
+        fake_qt.QCursor.pos.return_value = "tray-click"
         tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = fake_qt
         tray_app.main_window = fake_window
@@ -469,13 +474,16 @@ class TrayTests(unittest.TestCase):
         rebuild.assert_not_called()
         fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 1)
+        self.assertEqual(fake_window.tray_click_anchors, ["tray-click"])
 
         fake_qt.QTimer.singleShot.reset_mock()
+        fake_qt.QCursor.pos.return_value = "tray-double-click"
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
         fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 2)
+        self.assertEqual(fake_window.tray_click_anchors, ["tray-click", "tray-double-click"])
 
     def test_gnome_wayland_detection(self):
         environment = {
@@ -506,6 +514,7 @@ class TrayTests(unittest.TestCase):
         tray_app._handle_activation(trigger)
         tray_app._handle_activation(context)
 
+        tray_app.main_window.remember_tray_click_anchor.assert_called_once_with("cursor-position")
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.app_menu.popup.assert_called_once_with("cursor-position")
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
@@ -3721,11 +3730,13 @@ class TrayTests(unittest.TestCase):
         trigger = object()
         tray_app.qt = SimpleNamespace(
             QSystemTrayIcon=SimpleNamespace(ActivationReason=SimpleNamespace(Trigger=trigger)),
+            QCursor=SimpleNamespace(pos=lambda: "tray-click"),
             QTimer=mock.Mock(),
         )
 
         tray_app._handle_activation(trigger)
 
+        tray_app.main_window.remember_tray_click_anchor.assert_called_once_with("tray-click")
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.rebuild_menus.assert_not_called()
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
@@ -3809,6 +3820,8 @@ class TrayTests(unittest.TestCase):
         window.show = mock.Mock()
         window._usage_cache = {}
         window._connection_cache = {}
+        window._last_tray_anchor = object()
+        window._tray_anchor = mock.Mock()
 
         def open_child_dialog(_dialog: object, on_accepted: object) -> None:
             on_accepted()
@@ -3827,6 +3840,7 @@ class TrayTests(unittest.TestCase):
         single_shot.assert_called_once_with(0, window.show)
         window.show.assert_called_once_with()
         window.refresh.assert_not_called()
+        window._tray_anchor.assert_not_called()
         self.assertTrue(window._prefer_remembered_tray_anchor_once)
 
     def test_layout_reposition_prefers_remembered_tray_anchor_over_cursor(self):
@@ -3912,7 +3926,7 @@ class TrayTests(unittest.TestCase):
         self.assertFalse(geometry_valid)
         window.qt.QCursor.pos.assert_not_called()
 
-    def test_layout_change_remembers_tray_anchor_and_edge(self):
+    def test_tray_click_anchor_remembers_click_point_and_edge(self):
         class Point:
             def __init__(self, x: int, y: int) -> None:
                 self._x = x
@@ -3923,19 +3937,6 @@ class TrayTests(unittest.TestCase):
 
             def y(self) -> int:
                 return self._y
-
-        class Geometry:
-            def isValid(self) -> bool:
-                return True
-
-            def width(self) -> int:
-                return 24
-
-            def height(self) -> int:
-                return 24
-
-            def center(self) -> Point:
-                return Point(1220, 780)
 
         class Available:
             def __init__(self, x: int, y: int, width: int, height: int) -> None:
@@ -3969,19 +3970,17 @@ class TrayTests(unittest.TestCase):
                 return self._y + self._height
 
         available = Available(0, 0, 1200, 800)
+        anchor = Point(1220, 780)
         screen = SimpleNamespace(availableGeometry=lambda: available)
         window = object.__new__(tray.MountletWindow)
-        window.tray_app = SimpleNamespace(tray=SimpleNamespace(geometry=lambda: Geometry()))
         window.qt = SimpleNamespace(
             QApplication=SimpleNamespace(primaryScreen=lambda: screen, screenAt=lambda _point: screen),
             QCursor=SimpleNamespace(pos=mock.Mock()),
-            QPoint=Point,
         )
 
-        window._remember_tray_anchor_for_layout_change()
+        window.remember_tray_click_anchor(anchor)
 
-        self.assertEqual(window._last_tray_anchor.x(), 1220)
-        self.assertEqual(window._last_tray_anchor.y(), 780)
+        self.assertIs(window._last_tray_anchor, anchor)
         self.assertEqual(window._last_tray_edge, "right")
         self.assertTrue(window._prefer_remembered_tray_anchor_once)
         window.qt.QCursor.pos.assert_not_called()
