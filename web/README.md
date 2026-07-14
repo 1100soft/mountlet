@@ -287,7 +287,8 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `REPORT_GITHUB_REPO`: optional GitHub repository target in `owner/repo`
   format.
 - `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
-  those labels in GitHub first. Mountlet adds `bug` or `crash` to the list.
+  those labels in GitHub first. Mountlet adds `bug` or `crash` to the list and
+  retries without labels if GitHub rejects the configured labels.
 
 The report endpoint accepts either GitHub Issues or Resend email, and can use
 both. For GitHub reporting, create a private support repository, create a

@@ -2274,6 +2274,13 @@ def _license_lock_message() -> str:
     return "Mountlet is not activated, and the trial has ended."
 
 
+def _report_issue_url(result: dict[str, Any]) -> str:
+    for sink in result.get("sinks", []):
+        if isinstance(sink, dict) and sink.get("kind") == "github":
+            return str(sink.get("url") or "")
+    return ""
+
+
 class _ConfigDialogBase:
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         self.qt = qt
@@ -8599,13 +8606,15 @@ class MountletWindow:
 
             def worker() -> None:
                 try:
-                    report_control.submit_report(prepared)
+                    result = report_control.submit_report(prepared)
                 except Exception as exc:
                     self._bridge.bug_report_ready.emit(False, str(exc), kind)
                     return
                 if kind == "crash":
                     report_control.mark_crash_reported(crash_log)
-                self._bridge.bug_report_ready.emit(True, "Report sent. Thank you.", kind)
+                issue_url = _report_issue_url(result)
+                message_text = f"Report sent: {issue_url}" if issue_url else "Report sent. Thank you."
+                self._bridge.bug_report_ready.emit(True, message_text, kind)
 
             threading.Thread(target=worker, daemon=True).start()
 

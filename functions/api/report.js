@@ -111,21 +111,11 @@ async function sendReportEmail(env, report) {
 async function createGitHubIssue(env, report) {
   const token = String(env.REPORT_GITHUB_TOKEN || env.GITHUB_REPORT_TOKEN || "").trim();
   const repo = normalizeRepo(env.REPORT_GITHUB_REPO || env.GITHUB_REPORT_REPO || "");
-  const response = await fetch(`${GITHUB_API_ENDPOINT}/repos/${repo}/issues`, {
-    method: "POST",
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      "user-agent": "mountlet-report-function",
-      "x-github-api-version": "2022-11-28",
-    },
-    body: JSON.stringify({
-      title: issueTitle(report),
-      body: issueBody(report),
-      labels: reportLabels(env, report.kind),
-    }),
-  });
+  const labels = reportLabels(env, report.kind);
+  let response = await postGitHubIssue(token, repo, report, labels);
+  if (response.status === 422 && labels.length > 0) {
+    response = await postGitHubIssue(token, repo, report, []);
+  }
   const body = await response.text();
   if (!response.ok) {
     throw new Error(githubErrorMessage(body, response.status));
@@ -137,6 +127,24 @@ async function createGitHubIssue(env, report) {
     parsed = {};
   }
   return {kind: "github", id: String(parsed.number || parsed.id || ""), url: parsed.html_url || ""};
+}
+
+function postGitHubIssue(token, repo, report, labels) {
+  return fetch(`${GITHUB_API_ENDPOINT}/repos/${repo}/issues`, {
+    method: "POST",
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "user-agent": "mountlet-report-function",
+      "x-github-api-version": "2022-11-28",
+    },
+    body: JSON.stringify({
+      title: issueTitle(report),
+      body: issueBody(report),
+      labels,
+    }),
+  });
 }
 
 function issueTitle(report) {
