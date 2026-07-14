@@ -2287,6 +2287,26 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_mountlet_window_show_positions_main_before_browser_stack_after_fit(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = False
+        mountlet_window.desktop = mock.Mock()
+        mountlet_window.desktop.window_is_on_current_workspace.return_value = True
+        mountlet_window._last_tray_anchor = object()
+        mountlet_window.refresh = mock.Mock()
+        mountlet_window._position_near_tray = mock.Mock()
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+        mountlet_window._focus_window = mock.Mock()
+        mountlet_window._schedule_position_near_tray = mock.Mock()
+
+        mountlet_window.show()
+
+        mountlet_window._position_near_tray.assert_called_once_with()
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_not_called()
+        self.assertTrue(mountlet_window._position_after_fit)
+        self.assertTrue(mountlet_window._prefer_remembered_tray_anchor_once)
+
     def test_delayed_tray_positioning_repositions_file_browser_after_main_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         calls: list[str] = []
@@ -2659,6 +2679,21 @@ class TrayTests(unittest.TestCase):
         mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_called_once_with()
         mountlet_window._reposition_file_browser.assert_not_called()
         self.assertFalse(mountlet_window._position_after_fit)
+
+    def test_reposition_file_browser_only_moves_existing_browser_window(self):
+        remote = SimpleNamespace(name="remote")
+        row = SimpleNamespace(frame=object())
+        file_browser = mock.Mock()
+        file_browser.is_visible.return_value = True
+        file_browser.remote = remote
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._row_widgets = {"remote": row}
+
+        window._reposition_file_browser()
+
+        file_browser.reposition.assert_called_once_with(row.frame)
+        file_browser.show_remote.assert_not_called()
 
     def test_resize_anchored_preserves_only_explicit_right_tray_edge(self):
         class Rect:

@@ -1324,6 +1324,10 @@ class CompactCloudBrowser:
         if changed or show_browser:
             self.refresh(force=False)
 
+    def reposition(self, row: Any) -> None:
+        if not self._embedded:
+            self._position(row)
+
     def focus(self) -> None:
         self._set_focus_owner("browser")
         if self._embedded:

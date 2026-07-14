@@ -5578,7 +5578,9 @@ class MountletWindow:
         self.refresh()
         if not was_visible:
             self._position_after_fit = True
-            self._position_window_stack_near_tray_with_stable_anchor()
+            if getattr(self, "_last_tray_anchor", None) is not None:
+                self._prefer_remembered_tray_anchor_once = True
+            self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
         if not was_visible:
@@ -7749,7 +7751,7 @@ class MountletWindow:
             return
         row = self._row_widgets.get(file_browser.remote.name)
         if row is not None:
-            file_browser.show_remote(file_browser.remote, row.frame, show_browser=False)
+            file_browser.reposition(row.frame)
 
     def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
         if focused:
