@@ -3658,6 +3658,46 @@ class TrayTests(unittest.TestCase):
         window._schedule_storage_load.assert_not_called()
         self.assertFalse(window._skip_background_refresh_once)
 
+    def test_app_settings_layout_change_reopens_through_normal_show_path(self):
+        old_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
+        new_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_SINGLE)
+        dialog = SimpleNamespace(dialog=object())
+        tray_app = SimpleNamespace(_is_wayland=False, app=object(), rebuild_menus=mock.Mock())
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace()
+        window.tray_app = tray_app
+        window.window = mock.Mock()
+        window.window.isVisible.return_value = True
+        window._license_locked = mock.Mock(return_value=False)
+        window._file_browser_embedded = mock.Mock(return_value=False)
+        window._mounted_remote_names = mock.Mock(return_value=set())
+        window._rebuild_file_browser_if_layout_changed = mock.Mock()
+        window._remount_changes = mock.Mock(return_value=[])
+        window._configuration_changed = mock.Mock()
+        window._ask_remount_for_config_changes = mock.Mock()
+        window._setup_remote_change_polling = mock.Mock()
+        window.refresh = mock.Mock()
+        window.show = mock.Mock()
+        window._usage_cache = {}
+        window._connection_cache = {}
+
+        def open_child_dialog(_dialog: object, on_accepted: object) -> None:
+            on_accepted()
+
+        window._open_child_dialog = mock.Mock(side_effect=open_child_dialog)
+
+        with mock.patch.object(tray, "load_app_settings", side_effect=[old_settings, new_settings]):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[]):
+                with mock.patch.object(tray.core, "ensure_base_mount_dir", return_value=(tray.core.BASE_MOUNT_DIR, "")):
+                    with mock.patch.object(tray, "_apply_theme"):
+                        with mock.patch.object(tray, "AppConfigDialog", return_value=dialog):
+                            window._show_app_config_editor()
+
+        window.window.hide.assert_called_once_with()
+        tray_app.rebuild_menus.assert_called_once_with()
+        window.show.assert_called_once_with()
+        window.refresh.assert_not_called()
+
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False

@@ -5595,22 +5595,6 @@ class MountletWindow:
         timer.singleShot(50, self._position_near_tray)
         timer.singleShot(150, self._position_near_tray)
 
-    def _schedule_reanchor_near_tray(self) -> None:
-        timer = getattr(getattr(self, "qt", None), "QTimer", None)
-        if timer is None:
-            self._fit_and_position_near_tray()
-            return
-        timer.singleShot(0, self._fit_and_position_near_tray)
-
-    def _fit_and_position_near_tray(self) -> None:
-        if not self.is_visible() or self._tray_is_quitting():
-            return
-        widgets = getattr(self, "_content_fit_widgets", None)
-        if widgets is not None:
-            self._fit_to_content(*widgets, preserve_position=False)
-        self._position_near_tray()
-        self._reposition_file_browser()
-
     def _activate_main_window_if_current_desktop(self) -> None:
         if not self.is_visible():
             return
@@ -8950,6 +8934,10 @@ class MountletWindow:
             )
             _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
             self._rebuild_file_browser_if_layout_changed(old_embedded)
+            reopen_after_layout_change = layout_changed and self.is_visible()
+            if reopen_after_layout_change:
+                with suppress(Exception):
+                    self.window.hide()
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -8969,13 +8957,14 @@ class MountletWindow:
             if visual_only_refresh:
                 self._skip_background_refresh_once = True
             self.tray_app.rebuild_menus()
-            if visual_only_refresh:
+            if visual_only_refresh and not layout_changed:
                 self._skip_background_refresh_once = True
-            self.refresh()
-            if theme_changed:
+            if layout_changed:
+                self.show()
+            else:
+                self.refresh()
+            if theme_changed and not layout_changed:
                 self._refresh_theme_icons()
-            if layout_changed and self.is_visible():
-                self._schedule_reanchor_near_tray()
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
