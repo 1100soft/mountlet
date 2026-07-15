@@ -10,6 +10,7 @@
     "web:r2:seed": "node web/tools/seed-local-r2.mjs",
     "web:r2:upload": "node web/tools/upload-release-r2.mjs",
     "web:deploy:check": "node web/tools/check-deployment.mjs",
+    "web:reports": "node web/tools/reports-admin.mjs",
     "web:release:check": "node web/tools/check-release-files.mjs",
     "web:license:smoke": "node web/tools/test-license-flow.mjs",
     "docs:vars": "node web/tools/update-doc-vars.mjs"

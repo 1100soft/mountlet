@@ -323,6 +323,19 @@ curl -X PATCH -H "Authorization: Bearer $REPORT_ADMIN_TOKEN" \
 Use `{"mirrorGithub": true}` in the PATCH body to create a GitHub mirror for a
 stored report that does not have one yet.
 
+The repo also includes a small deployed-admin client that reads
+`REPORT_ADMIN_TOKEN` from the environment or `.dev.vars`:
+
+```bash
+npm run web:reports -- list
+npm run web:reports -- get <report-id>
+npm run web:reports -- close <report-id>
+npm run web:reports -- delete <report-id>
+```
+
+Pass `--site https://mountlet.app` or another Pages URL to target a different
+deployment.
+
 If the database already existed before D1-backed report storage, apply:
 
 ```bash
