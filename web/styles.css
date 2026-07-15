@@ -40,6 +40,17 @@ a {
   color: inherit;
 }
 
+.inline-link {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 720;
+  padding: 0;
+  text-decoration: underline;
+}
+
 button,
 a {
   -webkit-tap-highlight-color: transparent;

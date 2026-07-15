@@ -153,8 +153,9 @@
         <p class="note">
           Mountlet can browse and open files immediately. Add FUSE, WinFsp, or macFUSE
           to also mount cloud accounts as folders in the system file manager.
-          Source code is available on
-          <a href="#" data-config-link="repository">GitHub</a>.
+          Current beta installers are unsigned and may show an operating-system
+          warning. See the <button class="inline-link tab-action" type="button" data-tab="faq">FAQ</button>
+          before installing.
         </p>
       </section>
 
@@ -355,6 +356,16 @@
         <details>
           <summary>Does Mountlet need to stay online for licensing?</summary>
           <p>No. Paid builds use a 7-day trial and online activation. Lifetime licenses keep working offline. Subscriptions store a signed local license through the current paid period.</p>
+        </details>
+        <details>
+          <summary>Why does the installer show a security warning?</summary>
+          <p>Current beta builds are not code-signed or Apple-notarized. Only install Mountlet from this site or Mountlet's GitHub release/build artifacts.</p>
+          <ul>
+            <li><strong>Windows:</strong> if SmartScreen shows <em>Windows protected your PC</em>, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+            <li><strong>macOS:</strong> in Finder, Control-click <strong>Mountlet</strong>, choose <strong>Open</strong>, then confirm. If macOS still blocks it, use <strong>System Settings > Privacy & Security > Open Anyway</strong> for Mountlet.</li>
+            <li><strong>Linux:</strong> install the `.deb` normally. For an extracted portable build, mark the launcher executable if your file manager refuses to run it.</li>
+          </ul>
+          <p>Do not disable SmartScreen, Gatekeeper, or other system protection globally.</p>
         </details>
       </section>
     </main>
