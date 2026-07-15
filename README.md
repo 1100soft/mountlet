@@ -12,7 +12,6 @@ This repository is organized as a small monorepo:
 
 <!-- mountlet-vars:start -->
 - Production website: https://mountlet.app
-- Source repository: https://github.com/eric-holt/mountlet
 <!-- mountlet-vars:end -->
 
 Start with:
