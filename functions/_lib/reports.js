@@ -1,4 +1,4 @@
-import {HttpError, jsonResponse, nowIso, randomId, readJson, requireEnv} from "./license.js";
+import {HttpError, jsonResponse, readJson} from "./license.js";
 
 const RESEND_EMAIL_ENDPOINT = "https://api.resend.com/emails";
 const GITHUB_API_ENDPOINT = "https://api.github.com";
@@ -6,45 +6,6 @@ const MAX_FIELD_CHARS = 24_000;
 const MAX_ISSUE_BODY_CHARS = 60_000;
 
 export {jsonResponse, readJson};
-
-export async function requireReportAdmin(request, env) {
-  const expected = String(env.REPORT_ADMIN_TOKEN || env.LICENSE_ADMIN_TOKEN || "").trim();
-  if (!expected) {
-    throw new HttpError(500, "Missing REPORT_ADMIN_TOKEN.");
-  }
-  const provided = String(request.headers.get("authorization") || "").trim();
-  if (provided !== `Bearer ${expected}`) {
-    throw new HttpError(401, "Unauthorized.");
-  }
-}
-
-export async function ensureReportSchema(env) {
-  if (!env.DB) {
-    throw new HttpError(500, "Missing DB binding.");
-  }
-  await env.DB.prepare(`
-    CREATE TABLE IF NOT EXISTS reports (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      message TEXT NOT NULL,
-      contact TEXT NOT NULL,
-      metadata_json TEXT NOT NULL,
-      runtime_log TEXT NOT NULL,
-      rclone_log TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      github_issue_number INTEGER,
-      github_issue_url TEXT NOT NULL DEFAULT '',
-      github_sync_status TEXT NOT NULL DEFAULT '',
-      github_sync_error TEXT NOT NULL DEFAULT '',
-      email_id TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `).run();
-  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_reports_status_created ON reports(status, created_at)").run();
-  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_reports_github_issue ON reports(github_issue_number)").run();
-}
 
 export function normalizedReport(payload) {
   const kind = clean(payload.kind || "bug", 40);
@@ -61,121 +22,7 @@ export function normalizedReport(payload) {
   };
 }
 
-export async function storeReport(env, report) {
-  await ensureReportSchema(env);
-  const now = nowIso();
-  const id = randomId("rpt");
-  await env.DB.prepare(`
-    INSERT INTO reports (
-      id, kind, subject, message, contact, metadata_json, runtime_log, rclone_log,
-      status, github_sync_status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 'pending', ?, ?)
-  `).bind(
-    id,
-    report.kind,
-    report.subject,
-    report.message,
-    report.contact,
-    JSON.stringify(report.metadata || {}),
-    report.runtimeLog,
-    report.rcloneLog,
-    now,
-    now,
-  ).run();
-  return id;
-}
-
-export async function setReportGitHubMirror(env, id, sink) {
-  await env.DB.prepare(`
-    UPDATE reports
-    SET github_issue_number = ?, github_issue_url = ?, github_sync_status = 'mirrored',
-        github_sync_error = '', updated_at = ?
-    WHERE id = ?
-  `).bind(Number(sink.id || 0) || null, sink.url || "", nowIso(), id).run();
-}
-
-export async function setReportGitHubError(env, id, error) {
-  await env.DB.prepare(`
-    UPDATE reports
-    SET github_sync_status = 'error', github_sync_error = ?, updated_at = ?
-    WHERE id = ?
-  `).bind(clean(error, 500), nowIso(), id).run();
-}
-
-export async function setReportEmailMirror(env, id, sink) {
-  await env.DB.prepare("UPDATE reports SET email_id = ?, updated_at = ? WHERE id = ?")
-    .bind(sink.id || "", nowIso(), id)
-    .run();
-}
-
-export async function listReports(env, request) {
-  await ensureReportSchema(env);
-  const url = new URL(request.url);
-  const status = String(url.searchParams.get("status") || "open").trim();
-  const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || 50)));
-  const rows = status === "all"
-    ? await env.DB.prepare(`
-      SELECT id, kind, subject, status, contact, metadata_json, github_issue_number,
-             github_issue_url, github_sync_status, github_sync_error, email_id, created_at, updated_at
-      FROM reports
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).bind(limit).all()
-    : await env.DB.prepare(`
-      SELECT id, kind, subject, status, contact, metadata_json, github_issue_number,
-             github_issue_url, github_sync_status, github_sync_error, email_id, created_at, updated_at
-      FROM reports
-      WHERE status = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).bind(status, limit).all();
-  return (rows.results || []).map(reportSummaryFromRow);
-}
-
-export async function loadReport(env, id) {
-  await ensureReportSchema(env);
-  const row = await env.DB.prepare("SELECT * FROM reports WHERE id = ?").bind(id).first();
-  if (!row) {
-    throw new HttpError(404, "Report not found.");
-  }
-  return reportFromRow(row);
-}
-
-export async function updateReport(env, id, updates) {
-  const current = await loadReport(env, id);
-  const allowedStatuses = new Set(["open", "triaged", "resolved", "closed", "deleted"]);
-  const status = updates.status === undefined ? current.status : String(updates.status || "").trim().toLowerCase();
-  if (!allowedStatuses.has(status)) {
-    throw new HttpError(400, "Invalid report status.");
-  }
-  await env.DB.prepare("UPDATE reports SET status = ?, updated_at = ? WHERE id = ?")
-    .bind(status, nowIso(), id)
-    .run();
-  return loadReport(env, id);
-}
-
-export async function updateReportByGitHubIssue(env, issueNumber, updates) {
-  await ensureReportSchema(env);
-  const allowedStatuses = new Set(["open", "triaged", "resolved", "closed", "deleted"]);
-  const status = String(updates.status || "").trim().toLowerCase();
-  if (!allowedStatuses.has(status)) {
-    throw new HttpError(400, "Invalid report status.");
-  }
-  const result = await env.DB.prepare(`
-    UPDATE reports
-    SET status = ?, github_issue_url = COALESCE(NULLIF(?, ''), github_issue_url), updated_at = ?
-    WHERE github_issue_number = ?
-  `).bind(status, updates.githubIssueUrl || "", nowIso(), Number(issueNumber || 0)).run();
-  return Number(result.meta?.changes || 0);
-}
-
-export async function deleteReport(env, id) {
-  const report = await loadReport(env, id);
-  await env.DB.prepare("DELETE FROM reports WHERE id = ?").bind(id).run();
-  return report;
-}
-
-export async function mirrorReportToGitHub(env, report) {
+export async function createReportIssue(env, report) {
   const githubState = githubConfig(env);
   if (!githubState.enabled) {
     throw new HttpError(409, githubConfigurationError(githubState));
@@ -196,40 +43,6 @@ export async function mirrorReportToGitHub(env, report) {
     parsed = {};
   }
   return {kind: "github", id: String(parsed.number || parsed.id || ""), url: parsed.html_url || ""};
-}
-
-export async function updateGitHubIssueState(env, issueNumber, state) {
-  const githubState = githubConfig(env);
-  if (!githubState.enabled) {
-    throw new HttpError(409, githubConfigurationError(githubState));
-  }
-  const response = await fetch(`${GITHUB_API_ENDPOINT}/repos/${githubState.repo}/issues/${issueNumber}`, {
-    method: "PATCH",
-    headers: githubHeaders(githubState.token),
-    body: JSON.stringify({state}),
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(githubErrorMessage(body, response.status));
-  }
-  return body ? JSON.parse(body) : {};
-}
-
-export async function commentOnGitHubIssue(env, issueNumber, comment) {
-  const githubState = githubConfig(env);
-  if (!githubState.enabled) {
-    throw new HttpError(409, githubConfigurationError(githubState));
-  }
-  const response = await fetch(`${GITHUB_API_ENDPOINT}/repos/${githubState.repo}/issues/${issueNumber}/comments`, {
-    method: "POST",
-    headers: githubHeaders(githubState.token),
-    body: JSON.stringify({body: clean(comment, 4_000)}),
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(githubErrorMessage(body, response.status));
-  }
-  return body ? JSON.parse(body) : {};
 }
 
 export async function sendReportEmail(env, report) {
@@ -296,7 +109,7 @@ export function githubConfigurationError(state) {
   return `GitHub: ${problems.join("; ")}.`;
 }
 
-export function reportText(report) {
+function reportText(report) {
   return [
     report.subject,
     "",
@@ -314,47 +127,6 @@ export function reportText(report) {
     "rclone log:",
     report.rcloneLog || "(not included)",
   ].join("\n");
-}
-
-export function reportFromRow(row) {
-  return {
-    id: row.id,
-    kind: row.kind,
-    subject: row.subject,
-    message: row.message,
-    contact: row.contact,
-    metadata: parseJson(row.metadata_json, {}),
-    runtimeLog: row.runtime_log,
-    rcloneLog: row.rclone_log,
-    status: row.status,
-    githubIssueNumber: row.github_issue_number || null,
-    githubIssueUrl: row.github_issue_url || "",
-    githubSyncStatus: row.github_sync_status || "",
-    githubSyncError: row.github_sync_error || "",
-    emailId: row.email_id || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function reportSummaryFromRow(row) {
-  const metadata = parseJson(row.metadata_json, {});
-  return {
-    id: row.id,
-    kind: row.kind,
-    subject: row.subject,
-    status: row.status,
-    contact: row.contact,
-    appVersion: metadata.appVersion || "",
-    platform: metadata.platform || "",
-    githubIssueNumber: row.github_issue_number || null,
-    githubIssueUrl: row.github_issue_url || "",
-    githubSyncStatus: row.github_sync_status || "",
-    githubSyncError: row.github_sync_error || "",
-    emailId: row.email_id || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 function postGitHubIssue(token, repo, report, labels) {
@@ -456,13 +228,5 @@ function githubErrorMessage(body, status) {
     return clean(parsed.message || body, 500) || `GitHub returned ${status}.`;
   } catch (_error) {
     return clean(body, 500) || `GitHub returned ${status}.`;
-  }
-}
-
-function parseJson(value, fallback) {
-  try {
-    return JSON.parse(value || "");
-  } catch (_error) {
-    return fallback;
   }
 }
