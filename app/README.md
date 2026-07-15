@@ -5,7 +5,13 @@ files without mounting, open cloud files in local apps, keep selected files
 available offline, sync safe local edits back to the cloud, search across
 remotes, and optionally mount remotes as native folders.
 
-Paid downloads and licenses: https://mountlet.app
+<!-- mountlet-vars:start -->
+- Paid downloads and license purchases: https://mountlet.app
+- Default license API: https://mountlet.app/api/license
+- Override license API: `MOUNTLET_LICENSE_API_URL`
+- Override public purchase site: `MOUNTLET_LICENSE_SITE_URL`
+- Override crash/bug report API: `MOUNTLET_REPORT_API_URL`
+<!-- mountlet-vars:end -->
 
 ## Install
 
