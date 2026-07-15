@@ -294,6 +294,8 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
 - `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
   those labels in GitHub first. Mountlet adds `bug` or `crash` to the list and
   retries without labels if GitHub rejects the configured labels.
+- `REPORT_GITHUB_WEBHOOK_SECRET`: optional shared secret for syncing GitHub issue
+  state changes back into D1.
 - `REPORT_ADMIN_TOKEN`: bearer token for the private report admin API. If unset,
   `LICENSE_ADMIN_TOKEN` is accepted as a fallback.
 
@@ -322,6 +324,17 @@ curl -X PATCH -H "Authorization: Bearer $REPORT_ADMIN_TOKEN" \
 
 Use `{"mirrorGithub": true}` in the PATCH body to create a GitHub mirror for a
 stored report that does not have one yet.
+
+To keep D1 report status in sync when reports are triaged directly in GitHub,
+create a GitHub repository webhook on the report repository:
+
+- Payload URL: `https://<site>/api/report-github-webhook`
+- Content type: `application/json`
+- Secret: the same value as `REPORT_GITHUB_WEBHOOK_SECRET`
+- Events: Issues
+
+Closing a mirrored GitHub issue marks the stored D1 report as resolved;
+reopening it marks the report open again.
 
 The repo also includes a small deployed-admin client that reads
 `REPORT_ADMIN_TOKEN` from the environment or `.dev.vars`:

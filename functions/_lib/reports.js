@@ -154,6 +154,21 @@ export async function updateReport(env, id, updates) {
   return loadReport(env, id);
 }
 
+export async function updateReportByGitHubIssue(env, issueNumber, updates) {
+  await ensureReportSchema(env);
+  const allowedStatuses = new Set(["open", "triaged", "resolved", "closed", "deleted"]);
+  const status = String(updates.status || "").trim().toLowerCase();
+  if (!allowedStatuses.has(status)) {
+    throw new HttpError(400, "Invalid report status.");
+  }
+  const result = await env.DB.prepare(`
+    UPDATE reports
+    SET status = ?, github_issue_url = COALESCE(NULLIF(?, ''), github_issue_url), updated_at = ?
+    WHERE github_issue_number = ?
+  `).bind(status, updates.githubIssueUrl || "", nowIso(), Number(issueNumber || 0)).run();
+  return Number(result.meta?.changes || 0);
+}
+
 export async function deleteReport(env, id) {
   const report = await loadReport(env, id);
   await env.DB.prepare("DELETE FROM reports WHERE id = ?").bind(id).run();

@@ -12,6 +12,7 @@ export async function onRequestGet({env}) {
     reportsConfigured: github.enabled || email,
     reportStoreConfigured: Boolean(env.DB),
     reportAdminConfigured: Boolean(env.REPORT_ADMIN_TOKEN || env.LICENSE_ADMIN_TOKEN),
+    reportGithubWebhookConfigured: Boolean(env.REPORT_GITHUB_WEBHOOK_SECRET),
     reportSinks: {
       github: github.enabled,
       githubNeedsAttention: github.present && !github.enabled,
