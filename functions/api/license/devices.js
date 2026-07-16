@@ -26,6 +26,7 @@ export async function onRequestPost({request, env}) {
       expiresAt: license?.expires_at || payload.expiresAt || "",
       plan: license?.plan || payload.plan || "Mountlet License",
       billingModel: license?.billing_model || "",
+      licenseKind: license?.license_kind || payload.licenseKind || "paid",
       token,
     });
   } catch (error) {

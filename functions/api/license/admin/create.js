@@ -3,6 +3,7 @@ import {
   handleError,
   jsonResponse,
   licenseKeyHash,
+  normalizeLicenseKey,
   nowIso,
   randomId,
   readJson,
@@ -25,7 +26,10 @@ export async function onRequestPost({request, env}) {
     const requestedDevices = Number(body.maxDevices || 3);
     const maxDevices = Number.isFinite(requestedDevices) && requestedDevices > 0 ? Math.floor(requestedDevices) : 3;
     const prefix = licenseKind === "beta" ? "MTB" : "MNT";
-    const licenseKey = generateLicenseKey(prefix);
+    const licenseKey = normalizeLicenseKey(body.licenseKey || generateLicenseKey(prefix));
+    if (!/^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(licenseKey)) {
+      return jsonResponse({error: "licenseKey must match MNT/MTB-XXXXX-XXXXX-XXXXX-XXXXX."}, 400);
+    }
     const licenseId = randomId("lic");
     const now = nowIso();
     await env.DB.prepare(
