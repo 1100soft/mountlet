@@ -184,6 +184,7 @@ async function importPublicKey(pem) {
 }
 
 function pemToBytes(pem) {
-  const body = pem.replace(/-----BEGIN [^-]+-----/g, "").replace(/-----END [^-]+-----/g, "").replace(/\s+/g, "");
+  const normalized = String(pem || "").replace(/\\n/g, "\n").trim();
+  const body = normalized.replace(/-----BEGIN [^-]+-----/g, "").replace(/-----END [^-]+-----/g, "").replace(/\s+/g, "");
   return bytesFromBase64Url(body.replace(/\+/g, "-").replace(/\//g, "_"));
 }
