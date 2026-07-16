@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -123,7 +124,7 @@ def _parse_time(value: Any) -> float | None:
         pass
     normalized = text.replace("Z", "+00:00")
     try:
-        return __import__("datetime").datetime.fromisoformat(normalized).timestamp()
+        return datetime.fromisoformat(normalized).timestamp()
     except ValueError:
         return None
 

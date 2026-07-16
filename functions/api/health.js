@@ -12,6 +12,7 @@ export async function onRequestGet({env}) {
     licenseKeyPepperConfigured: Boolean(env.LICENSE_KEY_PEPPER),
     licenseSigningConfigured: Boolean(env.LICENSE_SIGNING_PRIVATE_KEY && env.LICENSE_SIGNING_PUBLIC_KEY),
     licenseAdminConfigured: Boolean(env.LICENSE_ADMIN_TOKEN),
+    noticesConfigured: Boolean(env.MOUNTLET_NOTICES_JSON || env.NOTICES_JSON),
     downloadsBound: Boolean(env.DOWNLOADS),
     stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),

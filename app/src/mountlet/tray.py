@@ -27,7 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import __version__, core, license_control, rclone_wizard, report_control
+from . import __version__, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
@@ -48,6 +48,9 @@ from .settings import (
     AppSettings,
     DEFAULT_SHORTCUTS,
     MountSettings,
+    NOTICE_DISPLAY_DIALOG,
+    NOTICE_DISPLAY_OFF,
+    NOTICE_DISPLAY_TRAY,
     THEME_DARK,
     THEME_LIGHT,
     THEME_SYSTEM,
@@ -2411,6 +2414,23 @@ class AppConfigDialog(_ConfigDialogBase):
             ),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
             "remote_sync_interval": self._line(f"{app_settings.remote_sync_interval_seconds:g}"),
+            "notice_info_display": self._combo(
+                (
+                    (NOTICE_DISPLAY_TRAY, "Tray notification"),
+                    (NOTICE_DISPLAY_DIALOG, "Dialog"),
+                    (NOTICE_DISPLAY_OFF, "Off"),
+                ),
+                app_settings.notice_info_display,
+            ),
+            "notice_important_display": self._combo(
+                (
+                    (NOTICE_DISPLAY_DIALOG, "Dialog"),
+                    (NOTICE_DISPLAY_TRAY, "Tray notification"),
+                    (NOTICE_DISPLAY_OFF, "Off"),
+                ),
+                app_settings.notice_important_display,
+            ),
+            "notice_check_interval": self._line(f"{app_settings.notice_check_interval_seconds:g}"),
             "config_sync_remote": self._combo(
                 (("", "Not set"), *((remote.name, remote.display_name) for remote in _load_visible_remotes())),
                 app_settings.config_sync_remote,
@@ -2430,6 +2450,9 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["remote_sync_interval"].setToolTip(
             "Seconds between background checks for cloud-side changes in cached and offline files. Use 0 for manual sync only."
         )
+        self.fields["notice_info_display"].setToolTip("How Mountlet should show informational notices.")
+        self.fields["notice_important_display"].setToolTip("How Mountlet should show important notices. Critical notices are always shown.")
+        self.fields["notice_check_interval"].setToolTip("Seconds between background notice checks. Use 0 to check only at startup.")
         form.addRow(self.fields["start_at_login"])
         form.addRow(self.fields["auto_mount"])
         form.addRow("App folder", self._app_folder_selector())
@@ -2441,6 +2464,9 @@ class AppConfigDialog(_ConfigDialogBase):
         form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
         form.addRow(self.fields["integrated_file_edits"])
         form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
+        form.addRow("Info notices", self.fields["notice_info_display"])
+        form.addRow("Important notices", self.fields["notice_important_display"])
+        form.addRow("Notice interval", self.fields["notice_check_interval"])
         form.addRow("Config sync remote", self.fields["config_sync_remote"])
         form.addRow("Config sync path", self.fields["config_sync_path"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
@@ -2461,6 +2487,10 @@ class AppConfigDialog(_ConfigDialogBase):
             remote_sync_interval = float(self.fields["remote_sync_interval"].text().strip() or "0")
         except ValueError:
             remote_sync_interval = 30.0
+        try:
+            notice_check_interval = float(self.fields["notice_check_interval"].text().strip() or "0")
+        except ValueError:
+            notice_check_interval = 14_400.0
         if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
             self.qt.QMessageBox.warning(
                 self.dialog,
@@ -2482,6 +2512,9 @@ class AppConfigDialog(_ConfigDialogBase):
                 theme=self.fields["theme"].currentData() or THEME_SYSTEM,
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
                 remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
+                notice_info_display=self.fields["notice_info_display"].currentData() or NOTICE_DISPLAY_TRAY,
+                notice_important_display=self.fields["notice_important_display"].currentData() or NOTICE_DISPLAY_DIALOG,
+                notice_check_interval_seconds=max(notice_check_interval, 0.0),
                 config_sync_remote=self.fields["config_sync_remote"].currentData() or "",
                 config_sync_path=self.fields["config_sync_path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
@@ -2690,6 +2723,9 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
+                notice_info_display=current.notice_info_display,
+                notice_important_display=current.notice_important_display,
+                notice_check_interval_seconds=current.notice_check_interval_seconds,
                 config_sync_remote=current.config_sync_remote,
                 config_sync_path=current.config_sync_path,
                 shortcuts=shortcuts,
@@ -2818,6 +2854,9 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
+                notice_info_display=current.notice_info_display,
+                notice_important_display=current.notice_important_display,
+                notice_check_interval_seconds=current.notice_check_interval_seconds,
                 config_sync_remote=self.fields["remote"].currentData() or "",
                 config_sync_path=self.fields["path"].text().strip() or "Mountlet/config.mountlet",
                 shortcuts=current.shortcuts,
@@ -5040,6 +5079,7 @@ class MountletWindow:
         self._bridge.cache_sync_debug_ready.connect(self._handle_cache_sync_debug_ready)
         self._bridge.bug_report_ready.connect(self._handle_bug_report_ready)
         self._bridge.global_search_ready.connect(self._handle_global_search_ready)
+        self._bridge.notices_ready.connect(self.tray_app._handle_notices_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
@@ -5107,6 +5147,7 @@ class MountletWindow:
             cache_sync_debug_ready = qt.Signal(str)
             bug_report_ready = qt.Signal(bool, str, str)
             global_search_ready = qt.Signal(str, object, str)
+            notices_ready = qt.Signal(object, object)
 
         return Bridge()
 
@@ -9106,6 +9147,12 @@ class MountletWindow:
                 self._usage_cache.clear()
                 getattr(self, "_connection_cache", {}).clear()
                 self._setup_remote_change_polling()
+            if (
+                new_settings.notice_info_display != old_settings.notice_info_display
+                or new_settings.notice_important_display != old_settings.notice_important_display
+                or new_settings.notice_check_interval_seconds != old_settings.notice_check_interval_seconds
+            ):
+                self.tray_app._reschedule_notice_timer()
             visual_only_refresh = (theme_changed or layout_changed) and not rclone_relevant_change
             if visual_only_refresh:
                 self._skip_background_refresh_once = True
@@ -9924,6 +9971,9 @@ class MountletTray:
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self.rebuild_menus)
+        self.notice_timer = qt.QTimer()
+        self.notice_timer.timeout.connect(self._check_notices)
+        self._notice_check_pending = False
         try:
             self.app.aboutToQuit.connect(self._prepare_quit)
         except Exception:
@@ -9956,9 +10006,79 @@ class MountletTray:
         self.rebuild_menus()
         self.timer.start(self.refresh_interval * 1000)
         self.qt.QTimer.singleShot(1200, self.main_window._maybe_prompt_crash_report)
+        self.qt.QTimer.singleShot(2500, self._check_notices)
+        self._reschedule_notice_timer()
         if not locked:
             self._schedule_auto_mounts()
         return int(self.app.exec() or 0)
+
+    def _reschedule_notice_timer(self) -> None:
+        with suppress(Exception):
+            self.notice_timer.stop()
+        interval = load_app_settings().notice_check_interval_seconds
+        if interval > 0:
+            self.notice_timer.start(int(max(interval, 60.0) * 1000))
+
+    def _check_notices(self) -> None:
+        if getattr(self, "_quitting", False) or getattr(self, "_notice_check_pending", False):
+            return
+        self._notice_check_pending = True
+
+        def worker() -> None:
+            try:
+                notices = notice_control.unseen_notices(notice_control.fetch_notices())
+                self.main_window._bridge.notices_ready.emit(notices, None)
+            except Exception as exc:
+                self.main_window._bridge.notices_ready.emit(None, exc)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_notices_ready(self, notices: object, error: object) -> None:
+        self._notice_check_pending = False
+        if getattr(self, "_quitting", False) or error is not None:
+            return
+        if not isinstance(notices, list):
+            return
+        for notice in notices:
+            if isinstance(notice, notice_control.Notice):
+                self._show_notice(notice)
+
+    def _show_notice(self, notice: notice_control.Notice) -> None:
+        if notice.critical:
+            self._show_notice_dialog(notice)
+            return
+        settings = load_app_settings()
+        display = (
+            settings.notice_important_display
+            if notice.level == notice_control.NOTICE_LEVEL_IMPORTANT
+            else settings.notice_info_display
+        )
+        if display == NOTICE_DISPLAY_OFF:
+            notice_control.mark_seen(notice)
+            return
+        if display == NOTICE_DISPLAY_DIALOG:
+            self._show_notice_dialog(notice)
+            return
+        self._notify(notice.title, notice.message, success=notice.level != notice_control.NOTICE_LEVEL_IMPORTANT)
+        notice_control.mark_seen(notice)
+
+    def _show_notice_dialog(self, notice: notice_control.Notice) -> None:
+        message = self.qt.QMessageBox(self.main_window.window)
+        message.setWindowTitle(notice.title)
+        message.setText(notice.message)
+        message.setIcon(
+            self.qt.QMessageBox.Icon.Warning
+            if notice.critical or notice.level == notice_control.NOTICE_LEVEL_IMPORTANT
+            else self.qt.QMessageBox.Icon.Information
+        )
+        open_button = None
+        if notice.url:
+            open_button = message.addButton("Open link", self.qt.QMessageBox.ButtonRole.ActionRole)
+        message.addButton(self.qt.QMessageBox.StandardButton.Ok)
+        message.exec()
+        notice_control.mark_seen(notice)
+        if open_button is not None and message.clickedButton() is open_button:
+            _open_external_url(self.qt, self.main_window.window, notice.url, title=notice.title)
 
     def _show_license_required_prompt(self) -> None:
         message = self.qt.QMessageBox(self.main_window.window)
@@ -10295,6 +10415,10 @@ class MountletTray:
         self._quitting = True
         try:
             self.timer.stop()
+        except Exception:
+            pass
+        try:
+            self.notice_timer.stop()
         except Exception:
             pass
         try:

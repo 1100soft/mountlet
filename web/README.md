@@ -285,6 +285,7 @@ Then set these environment variables:
   `Mountlet <licenses@example.com>`.
 - `EMAIL_REPLY_TO` or `RESEND_REPLY_TO`: optional reply-to address for license
   emails.
+- `MOUNTLET_NOTICES_JSON`: optional app notices served from `/api/notices`.
 - `REPORT_TO`: optional recipient for in-app crash and bug reports. If unset,
   reports fall back to the reply-to or sender address.
 - `REPORT_FROM`: optional verified sender for in-app crash and bug reports. If
@@ -388,3 +389,20 @@ curl -X POST https://<site>/api/license/admin/create \
 ```
 
 The response contains the raw key. Store or send it immediately.
+
+Notices are a JSON array. Critical notices, including price notices, are always
+shown in the app:
+
+```json
+[
+  {
+    "id": "price-2026-09",
+    "version": "1",
+    "type": "price",
+    "level": "critical",
+    "title": "Subscription price change",
+    "message": "Subscription prices will change on September 1. You can cancel before renewal.",
+    "url": "https://mountlet.app/#pricing"
+  }
+]
+```

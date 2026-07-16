@@ -65,7 +65,8 @@ class AppSettings:
     theme: str = THEME_SYSTEM
     integrated_file_edits: bool = False
     remote_sync_interval_seconds: float = 30.0
-    notice_display: str = NOTICE_DISPLAY_TRAY
+    notice_info_display: str = NOTICE_DISPLAY_TRAY
+    notice_important_display: str = NOTICE_DISPLAY_DIALOG
     notice_check_interval_seconds: float = 14_400.0
     config_sync_remote: str = ""
     config_sync_path: str = "Mountlet/config.mountlet"
@@ -116,8 +117,9 @@ theme = "system"
 remote_check_interval = 30
 
 [notices]
-# off hides normal notices. Critical notices are always shown.
-display = "tray"
+# Critical notices are always shown as dialogs.
+info = "tray"
+important = "dialog"
 check_interval = 14400
 
 # Optional encrypted config-bundle location, stored as an rclone remote and path.
@@ -362,7 +364,16 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         window_mode=_choice_value(ui.get("window_mode"), WINDOW_MODE_MULTIPLE, WINDOW_MODES),
         theme=_choice_value(ui.get("theme"), THEME_SYSTEM, THEMES),
         remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
-        notice_display=_choice_value(notices.get("display"), NOTICE_DISPLAY_TRAY, NOTICE_DISPLAYS),
+        notice_info_display=_choice_value(
+            notices.get("info", notices.get("display")),
+            NOTICE_DISPLAY_TRAY,
+            NOTICE_DISPLAYS,
+        ),
+        notice_important_display=_choice_value(
+            notices.get("important"),
+            NOTICE_DISPLAY_DIALOG,
+            NOTICE_DISPLAYS,
+        ),
         notice_check_interval_seconds=max(_float_value(notices.get("check_interval"), 14_400.0), 0.0),
         config_sync_remote=str(sync.get("config_remote", "")).strip(),
         config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
@@ -491,14 +502,15 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# Set to 0 for manual sync only.",
             f"remote_check_interval = {settings.remote_sync_interval_seconds:g}",
             "",
-            "[notices]",
-            "# off hides normal notices. Critical notices are always shown.",
-            f"display = {_toml_string(settings.notice_display if settings.notice_display in NOTICE_DISPLAYS else NOTICE_DISPLAY_TRAY)}",
-            f"check_interval = {settings.notice_check_interval_seconds:g}",
-            "",
             "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
             f"config_remote = {_toml_string(settings.config_sync_remote)}",
             f"config_path = {_toml_string(settings.config_sync_path)}",
+            "",
+            "[notices]",
+            "# Critical notices are always shown as dialogs.",
+            f"info = {_toml_string(settings.notice_info_display if settings.notice_info_display in NOTICE_DISPLAYS else NOTICE_DISPLAY_TRAY)}",
+            f"important = {_toml_string(settings.notice_important_display if settings.notice_important_display in NOTICE_DISPLAYS else NOTICE_DISPLAY_DIALOG)}",
+            f"check_interval = {settings.notice_check_interval_seconds:g}",
             "",
             "[shortcuts]",
             *(
@@ -563,6 +575,9 @@ __all__ = [
     "APP_FOLDER_NAME",
     "DEFAULT_SHORTCUTS",
     "MOUNTED_FOLDER_NAME",
+    "NOTICE_DISPLAY_DIALOG",
+    "NOTICE_DISPLAY_OFF",
+    "NOTICE_DISPLAY_TRAY",
     "OFFLINE_FOLDER_NAME",
     "THEME_DARK",
     "THEME_LIGHT",

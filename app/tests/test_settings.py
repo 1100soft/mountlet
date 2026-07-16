@@ -47,6 +47,11 @@ theme = "dark"
 [sync]
 remote_check_interval = 75
 
+[notices]
+info = "off"
+important = "tray"
+check_interval = 3600
+
 [shortcuts]
 browser_parent = "Alt+Up, Backspace"
 browser_root = "Ctrl+Home"
@@ -67,6 +72,9 @@ browser_root = "Ctrl+Home"
         self.assertEqual(config.window_mode, settings.WINDOW_MODE_SINGLE)
         self.assertEqual(config.theme, settings.THEME_DARK)
         self.assertEqual(config.remote_sync_interval_seconds, 75.0)
+        self.assertEqual(config.notice_info_display, settings.NOTICE_DISPLAY_OFF)
+        self.assertEqual(config.notice_important_display, settings.NOTICE_DISPLAY_TRAY)
+        self.assertEqual(config.notice_check_interval_seconds, 3600.0)
         self.assertEqual(config.shortcuts["browser_parent"], ("Alt+Up", "Backspace"))
         self.assertEqual(config.shortcuts["browser_root"], ("Ctrl+Home",))
         self.assertEqual(config.shortcuts["remote_enter_browser"], settings.DEFAULT_SHORTCUTS["remote_enter_browser"])
