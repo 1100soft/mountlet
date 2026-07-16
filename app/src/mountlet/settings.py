@@ -20,8 +20,12 @@ WINDOW_MODE_MULTIPLE = "multiple"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
+NOTICE_DISPLAY_OFF = "off"
+NOTICE_DISPLAY_TRAY = "tray"
+NOTICE_DISPLAY_DIALOG = "dialog"
 WINDOW_MODES = {WINDOW_MODE_SINGLE, WINDOW_MODE_MULTIPLE}
 THEMES = {THEME_SYSTEM, THEME_LIGHT, THEME_DARK}
+NOTICE_DISPLAYS = {NOTICE_DISPLAY_OFF, NOTICE_DISPLAY_TRAY, NOTICE_DISPLAY_DIALOG}
 
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "common_previous": (),
@@ -61,6 +65,8 @@ class AppSettings:
     theme: str = THEME_SYSTEM
     integrated_file_edits: bool = False
     remote_sync_interval_seconds: float = 30.0
+    notice_display: str = NOTICE_DISPLAY_TRAY
+    notice_check_interval_seconds: float = 14_400.0
     config_sync_remote: str = ""
     config_sync_path: str = "Mountlet/config.mountlet"
     shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
@@ -108,6 +114,11 @@ theme = "system"
 # Seconds between background checks for cloud-side changes in cached/offline files.
 # Set to 0 for manual sync only.
 remote_check_interval = 30
+
+[notices]
+# off hides normal notices. Critical notices are always shown.
+display = "tray"
+check_interval = 14400
 
 # Optional encrypted config-bundle location, stored as an rclone remote and path.
 config_remote = ""
@@ -337,6 +348,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     tray = data.get("tray", {})
     ui = data.get("ui", {})
     sync = data.get("sync", {})
+    notices = data.get("notices", {})
     shortcuts = _shortcut_values(data.get("shortcuts", {}))
     return AppSettings(
         mount_base=_string_value(app.get("mount_base")),
@@ -350,6 +362,8 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         window_mode=_choice_value(ui.get("window_mode"), WINDOW_MODE_MULTIPLE, WINDOW_MODES),
         theme=_choice_value(ui.get("theme"), THEME_SYSTEM, THEMES),
         remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
+        notice_display=_choice_value(notices.get("display"), NOTICE_DISPLAY_TRAY, NOTICE_DISPLAYS),
+        notice_check_interval_seconds=max(_float_value(notices.get("check_interval"), 14_400.0), 0.0),
         config_sync_remote=str(sync.get("config_remote", "")).strip(),
         config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
         shortcuts=shortcuts,
@@ -476,6 +490,11 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# Seconds between background checks for cloud-side changes in cached/offline files.",
             "# Set to 0 for manual sync only.",
             f"remote_check_interval = {settings.remote_sync_interval_seconds:g}",
+            "",
+            "[notices]",
+            "# off hides normal notices. Critical notices are always shown.",
+            f"display = {_toml_string(settings.notice_display if settings.notice_display in NOTICE_DISPLAYS else NOTICE_DISPLAY_TRAY)}",
+            f"check_interval = {settings.notice_check_interval_seconds:g}",
             "",
             "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
             f"config_remote = {_toml_string(settings.config_sync_remote)}",
