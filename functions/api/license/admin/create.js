@@ -30,13 +30,27 @@ export async function onRequestPost({request, env}) {
     if (!/^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(licenseKey)) {
       return jsonResponse({error: "licenseKey must match MNT/MTB-XXXXX-XXXXX-XXXXX-XXXXX."}, 400);
     }
+    const hash = await licenseKeyHash(env, licenseKey);
+    const existing = await env.DB.prepare(
+      "SELECT id, license_kind, plan, max_devices FROM licenses WHERE license_key_hash = ?"
+    ).bind(hash).first();
+    if (existing) {
+      return jsonResponse({
+        licenseId: existing.id,
+        licenseKey,
+        licenseKind: existing.license_kind || licenseKind,
+        plan: existing.plan || plan,
+        maxDevices: Number(existing.max_devices || maxDevices),
+        alreadyExists: true,
+      });
+    }
     const licenseId = randomId("lic");
     const now = nowIso();
     await env.DB.prepare(
       "INSERT INTO licenses (id, license_key_hash, status, plan, license_kind, max_devices, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)"
     ).bind(
       licenseId,
-      await licenseKeyHash(env, licenseKey),
+      hash,
       plan,
       licenseKind,
       maxDevices,

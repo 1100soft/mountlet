@@ -1,10 +1,12 @@
 export async function onRequestGet({env}) {
   const github = githubConfig(env);
   const email = emailConfigured(env);
+  const licenseDb = await licenseDbStatus(env);
   const body = {
     ok: true,
     functions: true,
     dbBound: Boolean(env.DB),
+    licenseDb,
     downloadsBound: Boolean(env.DOWNLOADS),
     stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),
@@ -26,6 +28,70 @@ export async function onRequestGet({env}) {
       "cache-control": "no-store",
     },
   });
+}
+
+async function licenseDbStatus(env) {
+  if (!env.DB) {
+    return {ok: false, error: "DB binding is missing."};
+  }
+  const required = {
+    licenses: [
+      "id",
+      "license_key_hash",
+      "status",
+      "plan",
+      "license_kind",
+      "billing_model",
+      "max_devices",
+      "stripe_subscription_id",
+      "subscription_status",
+      "expires_at",
+      "created_at",
+      "updated_at",
+    ],
+    devices: [
+      "id",
+      "license_id",
+      "device_hash",
+      "device_label",
+      "platform",
+      "app_version",
+      "activated_at",
+      "last_seen_at",
+      "deactivated_at",
+    ],
+    payments: [
+      "id",
+      "stripe_session_id",
+      "stripe_customer_id",
+      "license_id",
+      "kind",
+      "quantity",
+      "license_key",
+      "created_at",
+    ],
+  };
+  try {
+    const tables = {};
+    for (const [table, columns] of Object.entries(required)) {
+      const info = await env.DB.prepare(`PRAGMA table_info(${table})`).all();
+      const names = new Set((info.results || []).map((row) => String(row.name || "")));
+      const missing = columns.filter((column) => !names.has(column));
+      tables[table] = {
+        ok: missing.length === 0 && names.size > 0,
+        missing,
+      };
+    }
+    return {
+      ok: Object.values(tables).every((table) => table.ok),
+      tables,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error || "Could not inspect license database."),
+    };
+  }
 }
 
 function githubConfig(env) {

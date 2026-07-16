@@ -63,7 +63,8 @@ authentication flow, so OAuth stays with the provider and rclone.
 
 The app starts with a 7-day trial in commercial builds. Activate a license from
 the License window. Lifetime licenses keep working offline after activation;
-subscription licenses are refreshed at renewal boundaries.
+subscription licenses are refreshed at renewal boundaries. Subscription prices
+may change for future renewals with advance notice.
 
 ## Daily Use
 
