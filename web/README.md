@@ -263,13 +263,15 @@ Paid installers should set `MOUNTLET_REQUIRE_LICENSE=1` and provide the
 matching public signing key to the app through `MOUNTLET_LICENSE_PUBLIC_KEY` or
 `MOUNTLET_LICENSE_PUBLIC_KEY_FILE`.
 
-Create a D1 database and apply `schema.sql`:
+Create a D1 database and bind it to Pages as `DB`. After deployment, initialize
+or upgrade the bound database through the admin endpoint:
 
 ```bash
-wrangler d1 execute mountlet-license --file web/schema.sql
+curl -X POST https://<site>/api/license/admin/init \
+  -H "Authorization: Bearer $LICENSE_ADMIN_TOKEN"
 ```
 
-Bind the D1 database to Pages as `DB`, then set these environment variables:
+Then set these environment variables:
 
 - `LICENSE_KEY_PEPPER`: private salt for hashing license keys in D1.
 - `LICENSE_SIGNING_PRIVATE_KEY`: ECDSA P-256 private key in PKCS8 PEM format.
@@ -386,9 +388,3 @@ curl -X POST https://<site>/api/license/admin/create \
 ```
 
 The response contains the raw key. Store or send it immediately.
-
-If the database already existed before beta support, apply:
-
-```bash
-wrangler d1 execute mountlet-license --file web/migrations/0002_license_kind.sql
-```
