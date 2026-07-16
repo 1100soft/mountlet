@@ -100,6 +100,7 @@ async function startCheckout(button) {
 }
 
 const LICENSE_KEY_PATTERN = /^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/;
+const PUBLIC_BETA_KEY = "MTB-BETA2-PUBLC-TRIAL-2026X";
 const LICENSE_PLANS = {
   monthly: {
     label: "Monthly",
@@ -125,6 +126,7 @@ let validatedLicenseDevices = 0;
 let validatedUsedDevices = 0;
 let validatedBillingModel = "";
 let validatedExpiresAt = "";
+let validatedLicenseKind = "";
 let currentCheckoutSessionId = "";
 
 function updateAddDevicePrice() {
@@ -165,6 +167,16 @@ async function validateLicenseKey() {
     validatedUsedDevices = Number(data.usedDevices || 0);
     validatedBillingModel = String(data.billingModel || "lifetime");
     validatedExpiresAt = String(data.expiresAt || "");
+    validatedLicenseKind = String(data.licenseKind || "paid");
+    if (validatedLicenseKind === "beta") {
+      setLicenseStatus(
+        "Valid public beta key. It renews daily while the beta is open; add-device checkout is disabled.",
+        "valid"
+      );
+      setAddDeviceEnabled(false);
+      updateCart();
+      return;
+    }
     const billingText = validatedBillingModel === "lifetime" ? "key" : `${validatedBillingModel} key`;
     const renewalText = validatedBillingModel === "lifetime"
       ? ""
@@ -180,9 +192,23 @@ async function validateLicenseKey() {
     validatedUsedDevices = 0;
     validatedBillingModel = "";
     validatedExpiresAt = "";
+    validatedLicenseKind = "";
     setLicenseStatus(error.message || "License key is not valid.", "invalid");
     updateCart();
   }
+}
+
+function usePublicBetaKey() {
+  const betaOption = document.querySelector('input[name="license-action"][value="add_devices"]');
+  const input = document.querySelector("#existing-license-key");
+  if (betaOption) {
+    betaOption.checked = true;
+  }
+  updatePricingMode();
+  if (input) {
+    input.value = PUBLIC_BETA_KEY;
+  }
+  validateLicenseKey();
 }
 
 function setLicenseStatus(message, state) {
@@ -236,6 +262,7 @@ function updatePricingMode() {
     validatedUsedDevices = 0;
     validatedBillingModel = "";
     validatedExpiresAt = "";
+    validatedLicenseKind = "";
     if (keyField) {
       keyField.disabled = true;
     }
@@ -332,6 +359,14 @@ function updateCart() {
     }
     checkoutButton.disabled = false;
   } else {
+    if (validatedLicenseKind === "beta") {
+      parts.push(["Public beta key", "Free"]);
+      checkoutButton.disabled = true;
+      lines.innerHTML = parts.map(([label, price]) => `<div><dt>${label}</dt><dd>${price}</dd></div>`).join("");
+      devices.textContent = "Temporary beta access";
+      total.textContent = "$0";
+      return;
+    }
     const enabled = !addInput?.disabled;
     const existingPlan = LICENSE_PLANS[validatedBillingModel] || LICENSE_PLANS.lifetime;
     amount = extraDevices * existingPlan.extra;
@@ -540,6 +575,12 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const betaButton = event.target.closest("#use-beta-key");
+  if (betaButton) {
+    usePublicBetaKey();
+    return;
+  }
+
   const downloadButton = event.target.closest(".download-button");
   if (downloadButton) {
     openConfiguredLink("downloads", downloadButton.dataset.download)
@@ -622,6 +663,8 @@ document.addEventListener("input", (event) => {
     validatedLicenseDevices = 0;
     validatedUsedDevices = 0;
     validatedBillingModel = "";
+    validatedExpiresAt = "";
+    validatedLicenseKind = "";
     setLicenseStatus("", "");
     setAddDeviceEnabled(false);
     updateValidateButtonState();

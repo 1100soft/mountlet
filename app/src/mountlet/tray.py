@@ -2989,8 +2989,13 @@ class LicenseDialog(_ConfigDialogBase):
             self.buy_license_button.setVisible(not licensed)
             self.buy_license_button.setToolTip("Open the Mountlet license purchase page.")
         if self.add_devices_button is not None:
-            self.add_devices_button.setVisible(licensed)
-            self.add_devices_button.setToolTip("Open the purchase page with this license key prefilled.")
+            beta = licensed and license_control.is_beta_status(status)
+            self.add_devices_button.setVisible(licensed and not beta)
+            self.add_devices_button.setToolTip(
+                "Public beta keys cannot add device slots."
+                if beta
+                else "Open the purchase page with this license key prefilled."
+            )
 
     def _activate(self) -> None:
         try:
@@ -3010,7 +3015,11 @@ class LicenseDialog(_ConfigDialogBase):
         self.qt.QMessageBox.information(self.dialog, "License activation", "Mountlet is activated on this device.")
 
     def _set_expiry_label(self, status: license_control.LicenseStatus) -> None:
-        if status.state == "licensed" and status.expires_at:
+        if status.state == "licensed" and status.license_kind == "beta":
+            self.expiry_label.setText(
+                "Public beta key. Beta access renews daily and can end when the beta closes."
+            )
+        elif status.state == "licensed" and status.expires_at:
             self.expiry_label.setText(f"Renews: {status.expires_at}")
         elif status.state == "trial" and status.expires_at:
             self.expiry_label.setText(f"Trial ends: {status.expires_at}")
@@ -3072,7 +3081,15 @@ class LicenseDialog(_ConfigDialogBase):
         devices = list(device_info.get("devices") or [])
         used_devices = int(device_info.get("usedDevices") or len(devices))
         max_devices = int(device_info.get("maxDevices") or 0)
+        license_kind = str(device_info.get("licenseKind") or "")
         expires_at = license_control.display_timestamp(str(device_info.get("expiresAt") or ""))
+        if license_kind == "beta":
+            self.devices_label.setText("Public beta")
+            self.devices_text.setPlainText(
+                "This public beta key can be disabled when the beta ends. Device slots cannot be added to it."
+            )
+            self._update_button_state()
+            return
         if expires_at:
             self.expiry_label.setText(f"Renews: {expires_at}")
             self.expiry_label.setVisible(True)

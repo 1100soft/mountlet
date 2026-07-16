@@ -77,6 +77,21 @@ def current_status(now: float | None = None) -> LicenseStatus:
             token_payload = verify_license_token(token)
         except RuntimeError as exc:
             if "expired" in str(exc).lower():
+                expired_payload = _unverified_license_payload(token)
+                key = load_license_key()
+                if str(expired_payload.get("licenseKind") or "") == "beta" or key.upper().startswith("MTB-"):
+                    if key:
+                        try:
+                            return activate_license(key)
+                        except RuntimeError:
+                            pass
+                    clear_license_token()
+                    clear_license_key()
+                    return LicenseStatus(
+                        "expired",
+                        "Public beta access has ended. Buy a license to continue.",
+                        license_kind="beta",
+                    )
                 clear_license_token()
                 clear_license_key()
                 reset_trial(now=now)
@@ -159,6 +174,11 @@ def license_purchase_url(*, add_devices: bool = False, license_key: str = "", ap
         query["license_key"] = key
     suffix = f"?{urllib.parse.urlencode(query)}" if query else ""
     return f"{base}/{suffix}#pricing"
+
+
+def is_beta_status(status: LicenseStatus | None = None) -> bool:
+    status = status or current_status()
+    return status.license_kind == "beta" or status.license_key.upper().startswith("MTB-")
 
 
 def _packaged_build_info() -> dict[str, Any]:
@@ -244,6 +264,7 @@ def license_devices(api_url: str | None = None) -> dict[str, Any]:
         "maxDevices": _int_value(response.get("maxDevices"), current_status().max_devices),
         "expiresAt": str(response.get("expiresAt") or ""),
         "billingModel": str(response.get("billingModel") or ""),
+        "licenseKind": str(response.get("licenseKind") or ""),
         "plan": str(response.get("plan") or ""),
     }
 
@@ -441,6 +462,17 @@ def verify_license_token(token: str) -> dict[str, Any]:
             if _parse_timestamp(expires_at) < _now(None):
                 raise RuntimeError("License token has expired.")
     return payload
+
+
+def _unverified_license_payload(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+    try:
+        payload = json.loads(_b64decode(parts[1]).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _load_public_key() -> ec.EllipticCurvePublicKey:
@@ -663,6 +695,7 @@ __all__ = [
     "license_devices",
     "license_purchase_url",
     "license_site_url",
+    "is_beta_status",
     "load_license_key",
     "load_license_payload",
     "load_or_create_trial",

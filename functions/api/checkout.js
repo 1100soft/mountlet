@@ -37,6 +37,9 @@ export async function onRequestPost({request, env}) {
     let session;
     if (kind === "add_devices") {
       const license = await loadActiveLicenseByKey(env, body.licenseKey);
+      if (license.license_kind === "beta") {
+        return jsonResponse({error: "Public beta keys cannot add device slots."}, 409);
+      }
       const requestedDevices = Number(body.deviceCount || 1);
       const deviceCount = Number.isFinite(requestedDevices)
         ? Math.min(50, Math.max(1, Math.floor(requestedDevices)))
