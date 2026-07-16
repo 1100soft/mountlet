@@ -165,12 +165,6 @@
           <h2>Buy a license or add devices.</h2>
         </div>
         <div class="pricing-grid license-grid">
-          <article class="price-card beta-card">
-            <h3>Public beta</h3>
-            <p class="price">Free during beta</p>
-            <p>Use the public beta key for temporary access. It renews daily while the beta is open and can be disabled when the beta ends.</p>
-            <button class="button secondary" type="button" id="use-beta-key">Use beta key</button>
-          </article>
           <article class="price-card plan-card" id="plan-card">
             <div>
               <h3>Choose a plan</h3>
@@ -234,9 +228,7 @@
           Mountlet starts with a 7-day trial, then unlocks with one online
           activation. Lifetime licenses keep working offline; subscriptions
           work offline until the current paid period ends. The license key is
-          your support identity; keep it somewhere safe. Paid licenses remain
-          usable after the beta ends; introductory prices may change for future
-          purchases.
+          your support identity; keep it somewhere safe.
         </p>
       </section>
 
@@ -343,19 +335,8 @@
       <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>
         <div class="panel-heading">
           <p class="eyebrow">FAQ</p>
-          <h2>Search answers before opening support.</h2>
+          <h2>Short answers before you install.</h2>
         </div>
-        <label class="faq-search" style="display: block; margin: 0 0 18px; max-width: 620px;">
-          <span style="display: block; font-size: 0.85rem; font-weight: 720; margin-bottom: 6px;">Search FAQ</span>
-          <input
-            id="faq-search"
-            type="search"
-            autocomplete="off"
-            placeholder="Search install warnings, licensing, mounting, offline files..."
-            style="box-sizing: border-box; width: 100%; border-radius: 999px; border: 1px solid rgba(148, 163, 184, 0.5); padding: 11px 16px; font: inherit;"
-          />
-          <span id="faq-result-count" style="display: block; min-height: 1.4em; margin-top: 6px; font-size: 0.85rem; opacity: 0.75;" aria-live="polite"></span>
-        </label>
         <details>
           <summary>Can Mountlet replace provider desktop apps?</summary>
           <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
@@ -386,58 +367,13 @@
           </ul>
           <p>Do not disable SmartScreen, Gatekeeper, or other system protection globally.</p>
         </details>
-        <details>
-          <summary>Where should I get support?</summary>
-          <p>Search this FAQ first. For crashes or reproducible bugs, use Mountlet's in-app report option so logs and platform details are included automatically.</p>
-        </details>
-        <details>
-          <summary>What should I include in a bug report?</summary>
-          <p>Describe what you were doing, which provider was involved, and what you expected to happen. The in-app reporter can include recent Mountlet and rclone logs with your consent.</p>
-        </details>
       </section>
     </main>
 
     <footer class="site-footer">
       <span>© 2026 Mountlet</span>
-      <a href="#" class="tab-action" data-tab="faq">FAQ</a>
       <a href="#" data-config-link="repository">GitHub</a>
+      <a href="#" data-config-link="support">Support</a>
     </footer>
-    <script>
-      (() => {
-        const search = document.getElementById("faq-search");
-        if (!search) return;
-        const count = document.getElementById("faq-result-count");
-        const items = Array.from(document.querySelectorAll("#panel-faq details"));
-        items.forEach((item) => {
-          item.dataset.initialOpen = item.open ? "true" : "false";
-        });
-        const update = () => {
-          const query = search.value.trim().toLowerCase();
-          let matches = 0;
-          items.forEach((item) => {
-            if (!query) {
-              item.hidden = false;
-              item.open = item.dataset.initialOpen === "true";
-              return;
-            }
-            const match = item.textContent.toLowerCase().includes(query);
-            item.hidden = !match;
-            item.open = match;
-            if (match) matches += 1;
-          });
-          if (!count) return;
-          if (!query) {
-            count.textContent = "";
-          } else if (matches === 1) {
-            count.textContent = "1 answer found.";
-          } else if (matches > 1) {
-            count.textContent = `${matches} answers found.`;
-          } else {
-            count.textContent = "No answers found.";
-          }
-        };
-        search.addEventListener("input", update);
-      })();
-    </script>
   </body>
 </html>
