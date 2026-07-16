@@ -1,9 +1,11 @@
 import {inspectLicenseSchema} from "../_lib/license-schema.js";
+import {signLicenseToken, verifyLicenseToken} from "../_lib/license.js";
 
 export async function onRequestGet({env}) {
   const github = githubConfig(env);
   const email = emailConfigured(env);
   const licenseDb = await inspectLicenseSchema(env);
+  const licenseSigning = await licenseSigningStatus(env);
   const body = {
     ok: true,
     functions: true,
@@ -11,6 +13,7 @@ export async function onRequestGet({env}) {
     licenseDb,
     licenseKeyPepperConfigured: Boolean(env.LICENSE_KEY_PEPPER),
     licenseSigningConfigured: Boolean(env.LICENSE_SIGNING_PRIVATE_KEY && env.LICENSE_SIGNING_PUBLIC_KEY),
+    licenseSigning,
     licenseAdminConfigured: Boolean(env.LICENSE_ADMIN_TOKEN),
     noticesConfigured: Boolean(env.MOUNTLET_NOTICES_JSON || env.NOTICES_JSON),
     downloadsBound: Boolean(env.DOWNLOADS),
@@ -34,6 +37,30 @@ export async function onRequestGet({env}) {
       "cache-control": "no-store",
     },
   });
+}
+
+async function licenseSigningStatus(env) {
+  if (!env.LICENSE_SIGNING_PRIVATE_KEY || !env.LICENSE_SIGNING_PUBLIC_KEY) {
+    return {ok: false, error: "License signing keys are missing."};
+  }
+  try {
+    const token = await signLicenseToken(env, {
+      licenseId: "health",
+      deviceId: "health",
+      plan: "Health check",
+      licenseKind: "health",
+      maxDevices: 0,
+      issuedAt: new Date().toISOString(),
+      expiresAt: "",
+    });
+    const payload = await verifyLicenseToken(env, token);
+    return {ok: payload.licenseId === "health"};
+  } catch (error) {
+    return {
+      ok: false,
+      error: String(error?.message || error || "License signing check failed."),
+    };
+  }
 }
 
 function githubConfig(env) {
