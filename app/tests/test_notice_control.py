@@ -48,6 +48,8 @@ class NoticeControlTests(unittest.TestCase):
 
         notice_control.mark_seen(notices[0])
         self.assertEqual(notice_control.unseen_notices(notices), [])
+        notice_control.mark_unread(notices[0])
+        self.assertEqual(notice_control.unseen_notices(notices), notices)
 
         changed = notice_control.Notice(id="n1", title="Title", message="Body", version="2")
         self.assertEqual(notice_control.unseen_notices([changed]), [changed])

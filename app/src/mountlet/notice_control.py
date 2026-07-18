@@ -83,6 +83,13 @@ def mark_seen_many(notices: list[Notice]) -> None:
         _save_state(state)
 
 
+def mark_unread(notice: Notice) -> None:
+    with _STATE_LOCK:
+        state = _load_state()
+        state["seen"].pop(notice.key, None)
+        _save_state(state)
+
+
 def remember_notices(notices: list[Notice]) -> None:
     if not notices:
         return

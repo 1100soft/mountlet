@@ -44,6 +44,9 @@
         <button class="tab-link" type="button" id="tab-platforms" role="tab" data-tab="platforms" aria-controls="panel-platforms" aria-selected="false">
           Platforms
         </button>
+        <button class="tab-link" type="button" id="tab-notifications" role="tab" data-tab="notifications" aria-controls="panel-notifications" aria-selected="false">
+          Notifications
+        </button>
         <button class="tab-link" type="button" id="tab-faq" role="tab" data-tab="faq" aria-controls="panel-faq" aria-selected="false">
           FAQ
         </button>
@@ -331,6 +334,18 @@
             <p>Menu-bar app with Finder support. Public distribution needs Apple Developer ID signing and notarization.</p>
           </article>
         </div>
+      </section>
+
+      <section class="tab-panel notifications-panel" id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" data-panel="notifications" hidden>
+        <div class="notifications-heading">
+          <div class="panel-heading">
+            <p class="eyebrow">Notifications</p>
+            <h2>Mountlet notices.</h2>
+          </div>
+          <button class="button secondary compact" type="button" id="refresh-notifications">Refresh</button>
+        </div>
+        <p class="notice-load-status" id="notifications-status" role="status">Loading notifications...</p>
+        <div class="notifications-list" id="notifications-list" aria-live="polite"></div>
       </section>
 
       <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>

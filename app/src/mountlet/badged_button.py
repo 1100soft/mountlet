@@ -15,7 +15,40 @@ def create_badged_button(qt: Any, text: str = "") -> Any:
             self._mountlet_check_visible = False
             self._mountlet_check_color = "#22c55e"
             self._mountlet_disabled_opacity_effect = None
+            self._mountlet_context_options: list[tuple[str, Any, Any]] = []
             self._update_mountlet_disabled_opacity()
+
+        def addContextMenuOption(self, label: str, callback: Any, *, enabled: Any = True) -> None:
+            """Append an action shown after the button's normal tooltip action."""
+            self._mountlet_context_options.append((str(label).strip(), callback, enabled))
+
+        def clearContextMenuOptions(self) -> None:
+            self._mountlet_context_options.clear()
+
+        def contextMenuEvent(self, event: Any) -> None:
+            tooltip = str(self.toolTip() or "").strip()
+            options = [option for option in self._mountlet_context_options if option[0]]
+            if not tooltip and not options:
+                super().contextMenuEvent(event)
+                return
+
+            menu = qt.QMenu(self)
+            default_action = None
+            if tooltip:
+                label = next((line.strip() for line in tooltip.splitlines() if line.strip()), tooltip)
+                default_action = menu.addAction(label)
+                default_action.setToolTip(tooltip)
+                default_action.triggered.connect(lambda _checked=False: self.click())
+            if default_action is not None and options:
+                menu.addSeparator()
+            for label, callback, enabled in options:
+                action = menu.addAction(label)
+                action.setEnabled(bool(enabled() if callable(enabled) else enabled))
+                action.triggered.connect(lambda _checked=False, selected=callback: selected())
+            if default_action is not None:
+                menu.setActiveAction(default_action)
+            event.accept()
+            menu.exec(event.globalPos())
 
         def setEnabled(self, enabled: bool) -> None:
             super().setEnabled(enabled)

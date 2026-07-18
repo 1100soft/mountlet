@@ -632,6 +632,88 @@ h3 {
   align-content: center;
 }
 
+.notifications-panel {
+  align-content: start !important;
+  gap: 18px;
+}
+
+.notifications-heading {
+  align-items: end;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.notifications-heading .panel-heading h2 {
+  margin-bottom: 0;
+}
+
+.button.compact {
+  min-height: 36px;
+  padding: 7px 14px;
+}
+
+.notice-load-status {
+  color: var(--muted);
+  margin: 0;
+}
+
+.notice-load-status.error {
+  color: #b42318;
+}
+
+.notifications-list {
+  display: grid;
+  gap: 12px;
+  max-width: 940px;
+  width: 100%;
+}
+
+.website-notice {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 6px solid #3b82f6;
+  padding: 16px 18px;
+}
+
+.website-notice.notice-important {
+  border-left-color: #f59e0b;
+}
+
+.website-notice.notice-critical {
+  border-left-color: #ef4444;
+}
+
+.website-notice-header {
+  align-items: baseline;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.website-notice-header h3 {
+  margin-bottom: 6px;
+}
+
+.website-notice-header time {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 0.86rem;
+}
+
+.website-notice-message {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+}
+
+.website-notice-link {
+  color: var(--accent);
+  display: inline-block;
+  font-weight: 720;
+  margin-top: 10px;
+}
+
 .faq details {
   margin-top: 12px;
 }
@@ -691,6 +773,13 @@ h3 {
 
   .plan-choice {
     grid-template-columns: 1fr;
+  }
+
+  .notifications-heading,
+  .website-notice-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 
   h1 {

@@ -605,6 +605,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QTreeWidgetItem,
             QVBoxLayout,
             QWidget,
+            QWidgetAction,
         )
     except ImportError as exc:
         raise TrayDependencyError(
@@ -679,6 +680,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         Signal=Signal,
         QVBoxLayout=QVBoxLayout,
         QWidget=QWidget,
+        QWidgetAction=QWidgetAction,
     )
 
 
@@ -2411,7 +2413,7 @@ class NotificationHistoryDialog:
         self.dialog.setWindowTitle("Notifications")
         self.dialog.resize(620, 390)
         self.tree = qt.QTreeWidget()
-        self.tree.setHeaderLabels(["Notification", "Level", "Updated"])
+        self.tree.setHeaderLabels(["Notification", "Updated"])
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.itemSelectionChanged.connect(self._update_actions)
@@ -2419,7 +2421,7 @@ class NotificationHistoryDialog:
         self.open_button = qt.QPushButton("Open")
         self.open_button.clicked.connect(self._open_selected)
         self.read_button = qt.QPushButton("Mark read")
-        self.read_button.clicked.connect(self._mark_selected_read)
+        self.read_button.clicked.connect(self._toggle_selected_read)
         self.delete_button = qt.QPushButton("Delete")
         self.delete_button.clicked.connect(self._delete_selected)
         self.clear_button = qt.QPushButton("Clear non-critical")
@@ -2450,8 +2452,10 @@ class NotificationHistoryDialog:
         for notice in notice_control.notification_history():
             unread = not notice_control.is_seen(notice)
             title = f"● {notice.title}" if unread else notice.title
-            item = self.qt.QTreeWidgetItem([title, notice.level.title(), _notice_display_time(notice)])
+            item = self.qt.QTreeWidgetItem([title, _notice_display_time(notice)])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, notice)
+            with suppress(Exception):
+                item.setForeground(0, self.qt.QBrush(self.qt.QColor(_notice_accent(notice))))
             if notice.critical:
                 item.setToolTip(0, "Critical notifications remain in history.")
             self.tree.addTopLevelItem(item)
@@ -2462,7 +2466,6 @@ class NotificationHistoryDialog:
         elif self.tree.topLevelItemCount():
             self.tree.setCurrentItem(self.tree.topLevelItem(0))
         self.tree.resizeColumnToContents(1)
-        self.tree.resizeColumnToContents(2)
         self._update_actions()
 
     def _selected_notice(self) -> notice_control.Notice | None:
@@ -2475,7 +2478,8 @@ class NotificationHistoryDialog:
     def _update_actions(self) -> None:
         notice = self._selected_notice()
         self.open_button.setEnabled(notice is not None)
-        self.read_button.setEnabled(notice is not None and not notice_control.is_seen(notice))
+        self.read_button.setEnabled(notice is not None)
+        self.read_button.setText("Mark unread" if notice and notice_control.is_seen(notice) else "Mark read")
         self.delete_button.setEnabled(notice is not None and not notice.critical)
         self.delete_button.setToolTip("Critical notifications cannot be deleted." if notice and notice.critical else "")
         self.clear_button.setEnabled(any(not item.critical for item in notice_control.notification_history()))
@@ -2488,11 +2492,14 @@ class NotificationHistoryDialog:
         self._reload()
         self.changed()
 
-    def _mark_selected_read(self) -> None:
+    def _toggle_selected_read(self) -> None:
         notice = self._selected_notice()
         if notice is None:
             return
-        notice_control.mark_seen(notice)
+        if notice_control.is_seen(notice):
+            notice_control.mark_unread(notice)
+        else:
+            notice_control.mark_seen(notice)
         self._reload()
         self.changed()
 
@@ -2518,6 +2525,22 @@ def _notice_display_time(notice: notice_control.Notice) -> str:
     except ValueError:
         return text
     return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _notice_accent(notice: notice_control.Notice) -> str:
+    if notice.critical:
+        return "#ef4444"
+    if notice.level == notice_control.NOTICE_LEVEL_IMPORTANT:
+        return "#f59e0b"
+    return "#3b82f6"
+
+
+def _notice_preview_text(message: str, limit: int = 220) -> str:
+    text = " ".join(str(message).split())
+    if len(text) <= limit:
+        return text
+    shortened = text[: max(limit - 1, 1)].rsplit(" ", 1)[0].rstrip()
+    return f"{shortened or text[: max(limit - 1, 1)]}…"
 
 
 class AppConfigDialog(_ConfigDialogBase):
@@ -6521,6 +6544,7 @@ class MountletWindow:
             "QPushButton:hover { background: palette(midlight); border-radius: 3px; }"
         )
         apply_button_icon(self.qt, button, "ui-bell", fallback_text="!", size=22)
+        button.addContextMenuOption("View notifications online", self._open_notifications_website)
         menu = self.qt.QMenu(button)
         menu.aboutToShow.connect(self._refresh_notification_menu)
         button.clicked.connect(lambda checked=False: self._show_notification_menu())
@@ -6543,14 +6567,10 @@ class MountletWindow:
             return
         menu.clear()
         history = notice_control.notification_history()
-        for notice in history[:8]:
-            prefix = "● " if not notice_control.is_seen(notice) else ""
-            action = self.tray_app._add_action(
-                menu,
-                f"{prefix}{notice.title}",
-                lambda selected=notice: self._open_notification(selected),
-            )
-            action.setToolTip(notice.message)
+        for notice in history[:5]:
+            action = self.qt.QWidgetAction(menu)
+            action.setDefaultWidget(self._notification_menu_card(menu, action, notice))
+            menu.addAction(action)
         if history:
             menu.addSeparator()
         unseen = [notice for notice in history if not notice_control.is_seen(notice)]
@@ -6561,6 +6581,102 @@ class MountletWindow:
             enabled=bool(unseen),
         )
         self.tray_app._add_action(menu, "Manage history", self._show_notification_history)
+
+    def _notification_menu_card(self, menu: Any, action: Any, notice: notice_control.Notice) -> Any:
+        card = self.qt.QFrame(menu)
+        card.setObjectName("notificationCard")
+        card.setFixedWidth(390)
+        card.setStyleSheet(
+            "QFrame#notificationCard { background: palette(window); border: 1px solid palette(mid); "
+            "border-radius: 4px; }"
+        )
+        root = self.qt.QHBoxLayout(card)
+        root.setContentsMargins(7, 7, 8, 7)
+        root.setSpacing(8)
+
+        importance = self.qt.QFrame(card)
+        importance.setFixedWidth(5)
+        importance.setStyleSheet(f"background: {_notice_accent(notice)}; border-radius: 2px;")
+        root.addWidget(importance)
+
+        content = self.qt.QWidget(card)
+        content_layout = self.qt.QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(4)
+
+        header = self.qt.QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+        unread_marker = self.qt.QLabel("●")
+        unread_marker.setStyleSheet("color: #ef4444;")
+        title = self.qt.QLabel(notice.title)
+        title.setWordWrap(True)
+        date = self.qt.QLabel(_notice_display_time(notice))
+        date.setStyleSheet("color: palette(mid); font-size: 10px;")
+        header.addWidget(unread_marker)
+        header.addWidget(title, 1)
+        header.addWidget(date)
+        content_layout.addLayout(header)
+
+        message = self.qt.QLabel(_notice_preview_text(notice.message))
+        message.setWordWrap(True)
+        message.setMaximumHeight(58)
+        message.setStyleSheet("color: palette(text); font-size: 11px;")
+        content_layout.addWidget(message)
+
+        controls = self.qt.QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(5)
+        open_button = self.qt.QPushButton("Open")
+        read_button = self.qt.QPushButton()
+        delete_button = self.qt.QPushButton("Delete")
+        for button in (open_button, read_button, delete_button):
+            button.setFixedHeight(24)
+        delete_button.setEnabled(not notice.critical)
+        if notice.critical:
+            delete_button.setToolTip("Critical notifications cannot be deleted.")
+        controls.addStretch(1)
+        controls.addWidget(open_button)
+        controls.addWidget(read_button)
+        controls.addWidget(delete_button)
+        content_layout.addLayout(controls)
+        root.addWidget(content, 1)
+
+        def update_read_state() -> None:
+            unread = not notice_control.is_seen(notice)
+            unread_marker.setVisible(unread)
+            font = title.font()
+            font.setBold(unread)
+            title.setFont(font)
+            read_button.setText("Mark read" if unread else "Mark unread")
+
+        def open_notice() -> None:
+            self._open_notification(notice)
+            update_read_state()
+
+        def toggle_read() -> None:
+            if notice_control.is_seen(notice):
+                notice_control.mark_unread(notice)
+            else:
+                notice_control.mark_seen(notice)
+            update_read_state()
+            self._update_notification_button()
+
+        def delete_notice() -> None:
+            if not notice_control.delete_notice(notice):
+                return
+            action.setVisible(False)
+            self._update_notification_button()
+
+        open_button.clicked.connect(lambda _checked=False: open_notice())
+        read_button.clicked.connect(lambda _checked=False: toggle_read())
+        delete_button.clicked.connect(lambda _checked=False: delete_notice())
+        update_read_state()
+        return card
+
+    def _open_notifications_website(self) -> None:
+        url = f"{license_control.license_site_url().rstrip('/')}#notifications"
+        _open_external_url(self.qt, self.window, url, title="Notifications")
 
     def _open_notification(self, notice: notice_control.Notice) -> None:
         self.tray_app._show_notice_dialog(notice)

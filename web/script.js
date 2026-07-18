@@ -1,4 +1,5 @@
 let releaseFilesPromise = null;
+let notificationsPromise = null;
 
 async function openConfiguredLink(group, key) {
   if (group === "downloads") {
@@ -527,6 +528,111 @@ function setActiveTab(nextTab, options = {}) {
       window.history.pushState(null, "", nextHash);
     }
   }
+
+  if (tabName === "notifications") {
+    loadNotifications().catch(() => {});
+  }
+}
+
+async function loadNotifications({force = false} = {}) {
+  const status = document.querySelector("#notifications-status");
+  const refreshButton = document.querySelector("#refresh-notifications");
+  if (force) {
+    notificationsPromise = null;
+  }
+  if (!notificationsPromise) {
+    notificationsPromise = fetch("/api/notices", {headers: {accept: "application/json"}})
+      .then(async (response) => {
+        const data = await readJsonResponse(response, "Notifications");
+        if (!response.ok || data.error || !data.ok) {
+          throw new Error(data.error || "Could not load notifications.");
+        }
+        return Array.isArray(data.notices) ? data.notices : [];
+      })
+      .catch((error) => {
+        notificationsPromise = null;
+        throw error;
+      });
+  }
+  if (status) {
+    status.hidden = false;
+    status.textContent = "Loading notifications...";
+    status.classList.remove("error");
+  }
+  if (refreshButton) {
+    refreshButton.disabled = true;
+  }
+  try {
+    const notices = await notificationsPromise;
+    renderNotifications(notices);
+    if (status) {
+      status.textContent = notices.length ? "" : "There are no current notifications.";
+      status.hidden = Boolean(notices.length);
+    }
+  } catch (error) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = error.message || "Could not load notifications.";
+      status.classList.add("error");
+    }
+  } finally {
+    if (refreshButton) {
+      refreshButton.disabled = false;
+    }
+  }
+}
+
+function renderNotifications(notices) {
+  const list = document.querySelector("#notifications-list");
+  if (!list) {
+    return;
+  }
+  list.replaceChildren();
+  for (const notice of notices) {
+    const article = document.createElement("article");
+    const level = ["critical", "important"].includes(String(notice.level || "").toLowerCase())
+      ? String(notice.level).toLowerCase()
+      : "info";
+    article.className = `website-notice notice-${level}`;
+
+    const header = document.createElement("div");
+    header.className = "website-notice-header";
+    const title = document.createElement("h3");
+    title.textContent = String(notice.title || "Notification");
+    const date = document.createElement("time");
+    date.dateTime = String(notice.updatedAt || "");
+    date.textContent = formatNoticeDate(notice.updatedAt);
+    header.append(title, date);
+
+    const message = document.createElement("p");
+    message.className = "website-notice-message";
+    message.textContent = String(notice.message || "");
+    article.append(header, message);
+
+    if (notice.url) {
+      const link = document.createElement("a");
+      link.className = "website-notice-link";
+      link.href = String(notice.url);
+      link.rel = "noreferrer";
+      link.textContent = "Read more";
+      article.append(link);
+    }
+    list.append(article);
+  }
+}
+
+function formatNoticeDate(value) {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) {
+    return String(value || "");
+  }
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function setDownloadPlatform(nextPlatform) {
@@ -578,6 +684,12 @@ document.addEventListener("click", (event) => {
   const betaButton = event.target.closest("#use-beta-key");
   if (betaButton) {
     usePublicBetaKey();
+    return;
+  }
+
+  const refreshNotifications = event.target.closest("#refresh-notifications");
+  if (refreshNotifications) {
+    loadNotifications({force: true}).catch(() => {});
     return;
   }
 
