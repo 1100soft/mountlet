@@ -43,3 +43,21 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at TEXT NOT NULL,
   FOREIGN KEY (license_id) REFERENCES licenses(id)
 );
+
+CREATE TABLE IF NOT EXISTS notices (
+  id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL DEFAULT 1,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'info',
+  type TEXT NOT NULL DEFAULT 'general',
+  url TEXT NOT NULL DEFAULT '',
+  starts_at TEXT NOT NULL DEFAULT '',
+  ends_at TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notices_status_time
+ON notices(status, starts_at, ends_at);

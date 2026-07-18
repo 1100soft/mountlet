@@ -2286,6 +2286,35 @@ class CompactCloudBrowser:
         remote, parent = self.remote, self.path
         self._run_operation("Creating folder…", lambda: self.backend.create_folder(remote, parent, name.strip()))
 
+    def rename_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        entries = self._selected_entries()
+        if len(entries) != 1 or self.remote is None or self._operation_pending:
+            return
+        entry = entries[0]
+        name, accepted = self.qt.QInputDialog.getText(
+            self.window,
+            "Rename",
+            "New name",
+            self.qt.QLineEdit.EchoMode.Normal,
+            entry.name,
+        )
+        new_name = name.strip()
+        if not accepted or not new_name or new_name == entry.name:
+            return
+        if any(candidate.path != entry.path and candidate.name.casefold() == new_name.casefold() for candidate in self.entries):
+            self._notify("Rename", f"An item named {new_name} already exists in this folder.", False)
+            return
+        remote = self.remote
+        parent = parent_browser_path(entry.path)
+        self._run_operation(
+            "Renaming…",
+            lambda: self.backend.rename_entry(remote, entry, new_name),
+            invalidate_keys={(remote.name, parent)},
+        )
+
     def _show_tree_menu(self, point: Any) -> None:
         item = self.tree.itemAt(point)
         if item is None:
@@ -2321,6 +2350,12 @@ class CompactCloudBrowser:
         edits_enabled = self._edits_enabled()
         self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
         self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
+        self._menu_action(
+            menu,
+            "Rename",
+            self.rename_selected,
+            enabled=edits_enabled and len(self._selected_entries()) == 1 and not self._operation_pending,
+        )
         self._add_offline_menu_actions(menu, entry)
         self._menu_action(
             menu,
@@ -3422,21 +3457,29 @@ class CompactCloudBrowser:
     def _open_external_folder(self, path: str) -> None:
         if self.remote is None:
             return
-        if not core.is_mounted(self.remote):
-            offline = self.backend.offline_path(self.remote.name, path)
-            if offline.is_dir():
-                local_folder = self.backend.prepare_offline_open(self.remote.name, path)
-                if self._open_local_folder and self._open_local_folder(local_folder):
-                    return
-                if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local_folder))):
-                    return
-            self._notify(
-                "Open folder",
-                "Open or cache a file in this folder before opening it in the system file manager.",
-                False,
-            )
+        self._open_remote_folder(self.remote, path)
+
+    def open_remote_root(self, remote: core.RemoteInfo) -> None:
+        self._open_remote_folder(remote, "", create_cache_root=True)
+
+    def _open_remote_folder(self, remote: core.RemoteInfo, path: str, *, create_cache_root: bool = False) -> None:
+        if core.is_mounted(remote):
+            self._open_mount(remote, path)
             return
-        self._open_mount(self.remote, path)
+        offline = self.backend.offline_path(remote.name, path)
+        if create_cache_root:
+            offline.mkdir(parents=True, exist_ok=True)
+        if offline.is_dir():
+            local_folder = self.backend.prepare_offline_open(remote.name, path)
+            if self._open_local_folder and self._open_local_folder(local_folder):
+                return
+            if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local_folder))):
+                return
+        self._notify(
+            "Open folder",
+            "Open or cache a file in this folder before opening it in the system file manager.",
+            False,
+        )
 
     def _position(self, row: Any) -> None:
         try:

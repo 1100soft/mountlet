@@ -83,6 +83,66 @@ class UiIconTests(unittest.TestCase):
 
         self.assertEqual(button.property("mountletIconColor"), "")
 
+    def test_palette_change_event_recolors_dynamic_icon(self):
+        class QObject:
+            def __init__(self, _parent=None) -> None:
+                pass
+
+        class QEvent:
+            class Type:
+                ApplicationPaletteChange = 1
+                PaletteChange = 2
+                StyleChange = 3
+
+        class QTimer:
+            @staticmethod
+            def singleShot(_delay: int, callback) -> None:
+                callback()
+
+        class Event:
+            def type(self) -> int:
+                return QEvent.Type.PaletteChange
+
+        class Button:
+            def __init__(self) -> None:
+                self.properties = {}
+                self.event_filter = None
+
+            def setIcon(self, _icon) -> None:
+                pass
+
+            def setIconSize(self, _size) -> None:
+                pass
+
+            def setText(self, _text: str) -> None:
+                pass
+
+            def setProperty(self, key: str, value) -> None:
+                self.properties[key] = value
+
+            def property(self, key: str):
+                return self.properties.get(key)
+
+            def installEventFilter(self, event_filter) -> None:
+                self.event_filter = event_filter
+
+        button = Button()
+        qt = mock.Mock(QObject=QObject, QEvent=QEvent, QTimer=QTimer)
+        qt.QSize.side_effect = lambda width, height: (width, height)
+        colors = iter(("#111827", "#f9fafb"))
+
+        with mock.patch.object(ui_icons, "mountlet_icon", return_value=object()) as icon, mock.patch.object(
+            ui_icons,
+            "_button_text_color",
+            side_effect=lambda _button: next(colors),
+        ):
+            ui_icons.apply_button_icon(qt, button, "ui-copy", size=18)
+            button.event_filter.eventFilter(button, Event())
+
+        self.assertEqual(icon.call_args_list[0].kwargs["color"], "#111827")
+        self.assertEqual(icon.call_args_list[1].kwargs["color"], "#f9fafb")
+        self.assertEqual(button.property("mountletIconColor"), "")
+
 
 if __name__ == "__main__":
     unittest.main()

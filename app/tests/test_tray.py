@@ -64,6 +64,7 @@ class _FakeMenu:
         self._text = text
         self.items: list[_FakeAction | _FakeMenu] = []
         self._visible = visible
+        self.executed_at: object | None = None
 
     def text(self) -> str:
         return self._text
@@ -95,6 +96,9 @@ class _FakeMenu:
 
     def actions(self) -> list[_FakeAction | "_FakeMenu"]:
         return self.items
+
+    def exec(self, position: object) -> None:
+        self.executed_at = position
 
 
 class TrayTests(unittest.TestCase):
@@ -1515,27 +1519,55 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(window._can_move_remote("Beta", -1))
 
-    def test_mountlet_window_remote_title_colors_provider(self):
+    def test_mountlet_window_remote_title_uses_alias_only(self):
         window = object.__new__(tray.MountletWindow)
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
         title = window._display_remote_name(remote)
 
-        self.assertIn("Docs", title)
-        self.assertIn("(Drive)", title)
-        self.assertIn(tray.PROVIDER_COLORS["drive"], title)
+        self.assertEqual(title, "Docs")
+        self.assertNotIn("Drive", title)
 
-    def test_mountlet_window_browser_button_uses_provider_color(self):
+    def test_mountlet_window_provider_icon_opens_web_ui(self):
         window = object.__new__(tray.MountletWindow)
-        button = mock.Mock()
+        window.qt = mock.Mock()
+        window.qt.Qt.MouseButton.LeftButton = 1
+        event = mock.Mock()
+        event.button.return_value = 1
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
-        with mock.patch.object(tray, "_shortcut_hint", return_value=""):
-            window._update_browser_button(button, remote)
+        with mock.patch.object(window, "_open_remote_in_browser") as open_browser:
+            window._handle_provider_icon_click(event, remote)
 
-        button.setEnabled.assert_called_once_with(True)
-        button.setStyleSheet.assert_called_once_with(f"color: {tray.PROVIDER_COLORS['drive']};")
-        button.setToolTip.assert_called_once_with("Open Drive in browser")
+        open_browser.assert_called_once_with(remote)
+        event.accept.assert_called_once_with()
+
+    def test_remote_context_menu_exposes_remote_operations(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        menu = _FakeMenu()
+        event = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(QMenu=lambda _parent: menu)
+        window.window = mock.Mock()
+        window._action_pending = set()
+        window._license_locked = mock.Mock(return_value=False)
+        window._can_move_remote = mock.Mock(side_effect=lambda _name, delta: delta > 0)
+        window._event_global_point = mock.Mock(return_value="cursor-position")
+
+        with mock.patch.object(tray.core, "is_mounted", return_value=True):
+            with mock.patch.object(tray, "_file_manager_label", return_value="Dolphin"):
+                window._show_remote_context_menu(event, remote)
+
+        labels = [item.text() for item in menu.items if not item.isSeparator()]
+        self.assertEqual(
+            labels,
+            ["Unmount", "Open in Dolphin", "Open in web", "Config", "Move up", "Move down", "Reauthenticate"],
+        )
+        enabled = {item.text(): item._enabled for item in menu.items if not item.isSeparator()}
+        self.assertFalse(enabled["Move up"])
+        self.assertTrue(enabled["Move down"])
+        self.assertEqual(menu.executed_at, "cursor-position")
+        event.accept.assert_called_once_with()
 
     def test_mountlet_window_remote_status_icon_symbols_match_states(self):
         class Label:
@@ -1555,8 +1587,14 @@ class TrayTests(unittest.TestCase):
             def setStyleSheet(self, style: str) -> None:
                 self.style = style
 
+            def setCursor(self, _cursor: object) -> None:
+                return
+
         window = object.__new__(tray.MountletWindow)
-        window.qt = SimpleNamespace(QCursor=SimpleNamespace(pos=mock.Mock(return_value=None)))
+        window.qt = SimpleNamespace(
+            QCursor=mock.Mock(pos=mock.Mock(return_value=None)),
+            Qt=SimpleNamespace(CursorShape=SimpleNamespace(PointingHandCursor=1, ArrowCursor=2)),
+        )
         window._connection_cache = {}
         window._show_immediate_tooltip = mock.Mock()
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
@@ -3299,70 +3337,43 @@ class TrayTests(unittest.TestCase):
 
         tray_app.main_window._open_folder.assert_called_once_with(remote)
 
-    def test_window_folder_open_uses_mount_status_instead_of_directory_probe(self):
+    def test_window_folder_open_delegates_to_shared_browser_root_opener(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
+        window.file_browser = mock.Mock()
         active_status = tray.license_control.LicenseStatus("trial", "Trial active")
 
         with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
-            with mock.patch.object(core, "is_mounted", return_value=False):
-                with mock.patch.object(tray.os.path, "isdir", return_value=True) as isdir:
-                    window._open_folder(remote)
+            window._open_folder(remote)
 
-        isdir.assert_not_called()
-        window.tray_app._notify.assert_called_once_with(
-            "Open folder",
-            "Mount the remote before opening its folder.",
-            success=False,
-        )
+        window.file_browser.open_remote_root.assert_called_once_with(remote)
 
-    def test_window_folder_open_refuses_unreachable_mount_path(self):
+    def test_window_folder_open_is_blocked_when_license_is_locked(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
-        window.desktop = mock.Mock()
-        active_status = tray.license_control.LicenseStatus("trial", "Trial active")
+        window.file_browser = mock.Mock()
+        window._show_license_dialog = mock.Mock()
 
-        with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
-            with mock.patch.object(core, "is_mounted", return_value=True):
-                with mock.patch.object(tray.platform, "system", return_value="Linux"):
-                    with mock.patch.object(tray.Path, "is_dir", return_value=False):
-                        window._open_folder(remote)
+        with mock.patch.object(window, "_license_locked", return_value=True):
+            window._open_folder(remote)
 
-        window.desktop.open_folder.assert_not_called()
-        window.tray_app._notify.assert_called_once_with(
-            "Open folder",
-            "The mount folder is not reachable. Remount this remote and try again.",
-            success=False,
-        )
+        window._show_license_dialog.assert_called_once_with()
+        window.file_browser.open_remote_root.assert_not_called()
 
-    def test_windows_folder_open_skips_python_directory_probe_after_mount_check(self):
-        class ImmediateThread:
-            def __init__(self, target, **_kwargs):
-                self.target = target
-
-            def start(self) -> None:
-                self.target()
-
+    def test_window_folder_open_uses_browser_root_opener_on_windows(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
-        window.desktop = mock.Mock()
-        window._bridge = SimpleNamespace(folder_opened=SimpleNamespace(emit=mock.Mock()))
+        window.file_browser = mock.Mock()
         active_status = tray.license_control.LicenseStatus("trial", "Trial active")
 
         with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
-            with mock.patch.object(core, "is_mounted", return_value=True):
-                with mock.patch.object(tray.platform, "system", return_value="Windows"):
-                    with mock.patch.object(tray.Path, "is_dir", return_value=False) as is_dir:
-                        with mock.patch.object(tray.threading, "Thread", ImmediateThread):
-                            window.desktop.open_folder.return_value = True
-                            window._open_folder(remote)
+            with mock.patch.object(tray.platform, "system", return_value="Windows"):
+                window._open_folder(remote)
 
-        is_dir.assert_not_called()
-        window.desktop.open_folder.assert_called_once_with(r"C:\Mountlet\Docs")
-        window._bridge.folder_opened.emit.assert_called_once_with(True)
+        window.file_browser.open_remote_root.assert_called_once_with(remote)
 
     def test_remote_row_style_keeps_border_geometry_constant(self):
         class Row:
@@ -4587,11 +4598,47 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.threading, "Thread") as thread:
             worker_holder = {}
             thread.side_effect = lambda target, daemon: worker_holder.setdefault("thread", mock.Mock(start=lambda: target()))
-            with mock.patch.object(tray.core, "reconnect_remote", return_value=(True, "reauthenticated")):
-                with mock.patch.object(tray.core, "mount_remote", return_value=(True, "mounted")):
-                    window._run_remote_reauthentication(remote, remount=True)
+            with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                with mock.patch.object(tray.core, "reconnect_remote", return_value=(True, "reauthenticated")):
+                    with mock.patch.object(tray.core, "mount_remote", return_value=(True, "mounted")):
+                        window._run_remote_reauthentication(remote, remount=True)
 
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "reauthenticated\nmounted")
+
+    def test_remote_reauthentication_unmounts_before_reconnecting(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._action_pending = set()
+        window._request_refresh = mock.Mock()
+        window._bridge = SimpleNamespace(action_finished=SimpleNamespace(emit=mock.Mock()))
+        calls: list[str] = []
+
+        with mock.patch.object(tray.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon: mock.Mock(start=target)
+            with mock.patch.object(tray.core, "is_mounted", return_value=True):
+                with mock.patch.object(
+                    tray.core,
+                    "unmount_remote",
+                    side_effect=lambda _remote: (calls.append("unmount") or True, "unmounted"),
+                ):
+                    with mock.patch.object(
+                        tray.core,
+                        "reconnect_remote",
+                        side_effect=lambda _remote: (calls.append("reauthenticate") or True, "reauthenticated"),
+                    ):
+                        with mock.patch.object(
+                            tray.core,
+                            "mount_remote",
+                            side_effect=lambda _remote: (calls.append("mount") or True, "mounted"),
+                        ):
+                            window._run_remote_reauthentication(remote, remount=True)
+
+        self.assertEqual(calls, ["unmount", "reauthenticate", "mount"])
+        window._bridge.action_finished.emit.assert_called_once_with(
+            "Docs",
+            True,
+            "unmounted\nreauthenticated\nmounted",
+        )
 
     def test_bulk_action_finish_invalidates_pending_file_browser_caches(self):
         tray_app = mock.Mock()

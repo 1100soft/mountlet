@@ -94,6 +94,8 @@ def apply_button_icon(
             button.setProperty("mountletIconFallback", fallback_text)
             button.setProperty("mountletIconSize", size)
             button.setProperty("mountletIconColor", explicit_color or "")
+        if explicit_color is None:
+            _ensure_dynamic_icon_refresh(qt, button)
         return True
     except Exception:
         with suppress(Exception):
@@ -139,6 +141,55 @@ def _button_text_color(button: Any) -> str | None:
     except Exception:
         pass
     return None
+
+
+def _ensure_dynamic_icon_refresh(qt: Any, widget: Any) -> None:
+    if getattr(widget, "_mountlet_dynamic_icon_filter", None) is not None:
+        return
+    object_type = getattr(qt, "QObject", None)
+    event_type = getattr(qt, "QEvent", None)
+    timer_type = getattr(qt, "QTimer", None)
+    install_filter = getattr(widget, "installEventFilter", None)
+    if object_type is None or event_type is None or timer_type is None or not callable(install_filter):
+        return
+    changed_types = {
+        value
+        for value in (
+            getattr(event_type.Type, "ApplicationPaletteChange", None),
+            getattr(event_type.Type, "PaletteChange", None),
+            getattr(event_type.Type, "StyleChange", None),
+        )
+        if value is not None
+    }
+
+    class DynamicIconFilter(object_type):
+        def __init__(self) -> None:
+            super().__init__(widget)
+            self.pending = False
+
+        def eventFilter(self, watched: Any, event: Any) -> bool:
+            try:
+                changed = event.type() in changed_types
+            except Exception:
+                changed = False
+            if changed and not self.pending:
+                self.pending = True
+                # Palette-change events reach the filter before the widget has
+                # adopted the new application palette. Refresh on the next tick.
+                timer_type.singleShot(1, self.refresh)
+            return False
+
+        def refresh(self) -> None:
+            self.pending = False
+            with suppress(Exception):
+                _refresh_one_widget_icon(qt, widget)
+
+    try:
+        event_filter = DynamicIconFilter()
+        install_filter(event_filter)
+        widget._mountlet_dynamic_icon_filter = event_filter
+    except Exception:
+        return
 
 
 __all__ = ["apply_button_icon", "icon_path", "mountlet_icon", "refresh_widget_icons"]

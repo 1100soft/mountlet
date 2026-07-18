@@ -44,6 +44,7 @@ from .platform_services.file_managers import (
     resolve_file_manager,
 )
 from .platform_services.processes import external_process_environment
+from .provider_icons import provider_icon
 from .settings import (
     AppSettings,
     DEFAULT_SHORTCUTS,
@@ -598,6 +599,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QSizePolicy,
             QStyle,
             QSystemTrayIcon,
+            QTabWidget,
             QToolTip,
             QTreeWidget,
             QTreeWidgetItem,
@@ -666,6 +668,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
         QSystemTrayIcon=QSystemTrayIcon,
+        QTabWidget=QTabWidget,
         QTimer=QTimer,
         QToolTip=QToolTip,
         QTreeWidget=QTreeWidget,
@@ -692,6 +695,18 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
     backend_type = remote.backend_type.casefold()
     if backend_type in REMOTE_BROWSER_URLS:
         return REMOTE_BROWSER_URLS[backend_type]
+    if backend_type == "s3":
+        provider = remote.extra_info.get("provider", remote.provider).strip().casefold()
+        if provider == "cloudflare":
+            return "https://dash.cloudflare.com/?to=/:account/r2"
+        if provider == "aws":
+            return "https://console.aws.amazon.com/s3/"
+        if provider == "wasabi":
+            return "https://console.wasabisys.com/"
+        if provider == "minio":
+            endpoint = remote.extra_info.get("endpoint", "").strip()
+            if endpoint.startswith(("http://", "https://")):
+                return endpoint
     if backend_type == "webdav":
         url = remote.extra_info.get("url", "").strip()
         if url.startswith(("http://", "https://")):
@@ -701,6 +716,17 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
 
 def _provider_color(remote: core.RemoteInfo) -> str:
     return PROVIDER_COLORS.get(remote.backend_type.casefold(), "#64748b")
+
+
+def _remote_provider_icon(qt: SimpleNamespace, remote: core.RemoteInfo, *, size: int = 22) -> Any:
+    return provider_icon(
+        qt,
+        remote.backend_type,
+        provider_name=remote.provider,
+        extra_info=remote.extra_info,
+        color=_provider_color(remote),
+        size=size,
+    )
 
 
 def _remote_service_label(remote: core.RemoteInfo) -> str:
@@ -2369,11 +2395,136 @@ class _ConfigDialogBase:
         raise NotImplementedError
 
 
+class NotificationHistoryDialog:
+    def __init__(
+        self,
+        qt: SimpleNamespace,
+        parent: Any,
+        *,
+        open_notice: Any,
+        changed: Any,
+    ) -> None:
+        self.qt = qt
+        self.open_notice = open_notice
+        self.changed = changed
+        self.dialog = _create_child_dialog(qt, parent)
+        self.dialog.setWindowTitle("Notifications")
+        self.dialog.resize(620, 390)
+        self.tree = qt.QTreeWidget()
+        self.tree.setHeaderLabels(["Notification", "Level", "Updated"])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree.itemSelectionChanged.connect(self._update_actions)
+        self.tree.itemDoubleClicked.connect(lambda _item, _column: self._open_selected())
+        self.open_button = qt.QPushButton("Open")
+        self.open_button.clicked.connect(self._open_selected)
+        self.read_button = qt.QPushButton("Mark read")
+        self.read_button.clicked.connect(self._mark_selected_read)
+        self.delete_button = qt.QPushButton("Delete")
+        self.delete_button.clicked.connect(self._delete_selected)
+        self.clear_button = qt.QPushButton("Clear non-critical")
+        self.clear_button.clicked.connect(self._clear_history)
+        close_button = qt.QPushButton("Close")
+        close_button.clicked.connect(self.dialog.accept)
+
+        buttons = qt.QHBoxLayout()
+        buttons.addWidget(self.open_button)
+        buttons.addWidget(self.read_button)
+        buttons.addWidget(self.delete_button)
+        buttons.addStretch(1)
+        buttons.addWidget(self.clear_button)
+        buttons.addWidget(close_button)
+        root = qt.QVBoxLayout(self.dialog)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.addWidget(self.tree)
+        root.addLayout(buttons)
+        self._reload()
+
+    def exec(self) -> int:
+        return int(self.dialog.exec() or 0)
+
+    def _reload(self) -> None:
+        selected_key = self._selected_notice().key if self._selected_notice() else ""
+        self.tree.clear()
+        selected_item = None
+        for notice in notice_control.notification_history():
+            unread = not notice_control.is_seen(notice)
+            title = f"● {notice.title}" if unread else notice.title
+            item = self.qt.QTreeWidgetItem([title, notice.level.title(), _notice_display_time(notice)])
+            item.setData(0, self.qt.Qt.ItemDataRole.UserRole, notice)
+            if notice.critical:
+                item.setToolTip(0, "Critical notifications remain in history.")
+            self.tree.addTopLevelItem(item)
+            if notice.key == selected_key:
+                selected_item = item
+        if selected_item is not None:
+            self.tree.setCurrentItem(selected_item)
+        elif self.tree.topLevelItemCount():
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        self.tree.resizeColumnToContents(1)
+        self.tree.resizeColumnToContents(2)
+        self._update_actions()
+
+    def _selected_notice(self) -> notice_control.Notice | None:
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        value = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        return value if isinstance(value, notice_control.Notice) else None
+
+    def _update_actions(self) -> None:
+        notice = self._selected_notice()
+        self.open_button.setEnabled(notice is not None)
+        self.read_button.setEnabled(notice is not None and not notice_control.is_seen(notice))
+        self.delete_button.setEnabled(notice is not None and not notice.critical)
+        self.delete_button.setToolTip("Critical notifications cannot be deleted." if notice and notice.critical else "")
+        self.clear_button.setEnabled(any(not item.critical for item in notice_control.notification_history()))
+
+    def _open_selected(self) -> None:
+        notice = self._selected_notice()
+        if notice is None:
+            return
+        self.open_notice(notice)
+        self._reload()
+        self.changed()
+
+    def _mark_selected_read(self) -> None:
+        notice = self._selected_notice()
+        if notice is None:
+            return
+        notice_control.mark_seen(notice)
+        self._reload()
+        self.changed()
+
+    def _delete_selected(self) -> None:
+        notice = self._selected_notice()
+        if notice is None or not notice_control.delete_notice(notice):
+            return
+        self._reload()
+        self.changed()
+
+    def _clear_history(self) -> None:
+        notice_control.clear_deletable_history()
+        self._reload()
+        self.changed()
+
+
+def _notice_display_time(notice: notice_control.Notice) -> str:
+    text = notice.updated_at.strip()
+    if not text:
+        return ""
+    try:
+        value = datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return text
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
 class AppConfigDialog(_ConfigDialogBase):
     def __init__(self, qt: SimpleNamespace, parent: Any | None = None) -> None:
         super().__init__(qt, parent)
         self.dialog.setWindowTitle("App settings")
-        self.dialog.resize(520, 360)
+        self.dialog.resize(560, 430)
         self.fields: dict[str, Any] = {}
         self._layout_buttons: dict[str, Any] = {}
         self._layout_group: Any | None = None
@@ -2386,10 +2537,21 @@ class AppConfigDialog(_ConfigDialogBase):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
-        frame = self.qt.QFrame()
-        frame.setObjectName("remoteRow")
-        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
-        form = self.qt.QFormLayout(frame)
+        tabs = self.qt.QTabWidget()
+
+        def tab_form(title: str) -> Any:
+            page = self.qt.QWidget()
+            form = self.qt.QFormLayout(page)
+            form.setContentsMargins(12, 12, 12, 12)
+            form.setSpacing(8)
+            tabs.addTab(page, title)
+            return form
+
+        general_form = tab_form("General")
+        mounting_form = tab_form("Mounting")
+        files_form = tab_form("Files")
+        sync_form = tab_form("Config Sync")
+        notices_form = tab_form("Notifications")
         self.fields = {
             "mount_base": self._line(app_settings.mount_base, default=str(default_app_folder())),
             "auto_mount": self._check(app_settings.auto_mount),
@@ -2453,27 +2615,35 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["notice_info_display"].setToolTip("How Mountlet should show informational notices.")
         self.fields["notice_important_display"].setToolTip("How Mountlet should show important notices. Critical notices are always shown.")
         self.fields["notice_check_interval"].setToolTip("Seconds between background notice checks. Use 0 to check only at startup.")
-        form.addRow(self.fields["start_at_login"])
-        form.addRow(self.fields["auto_mount"])
-        form.addRow("App folder", self._app_folder_selector())
-        form.addRow("File manager", self.fields["file_manager"])
-        form.addRow("Open folders", self.fields["open_folder_behavior"])
-        form.addRow(self.fields["focus_file_manager"])
-        form.addRow("Window mode", self._layout_mode_selector(app_settings.window_mode))
-        form.addRow("Theme", self.fields["theme"])
-        form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
-        form.addRow(self.fields["integrated_file_edits"])
-        form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
-        form.addRow("Info notices", self.fields["notice_info_display"])
-        form.addRow("Important notices", self.fields["notice_important_display"])
-        form.addRow("Notice interval", self.fields["notice_check_interval"])
-        form.addRow("Config sync remote", self.fields["config_sync_remote"])
-        form.addRow("Config sync path", self.fields["config_sync_path"])
+        general_form.addRow(self.fields["start_at_login"])
+        general_form.addRow("App folder", self._app_folder_selector())
+        general_form.addRow("Window mode", self._layout_mode_selector(app_settings.window_mode))
+        general_form.addRow("Theme", self.fields["theme"])
+
+        mounting_form.addRow(self.fields["auto_mount"])
+        mounting_form.addRow("Auto-mount delay", self.fields["auto_mount_delay"])
+        mounting_form.addRow("File manager", self.fields["file_manager"])
+        mounting_form.addRow("Open folders", self.fields["open_folder_behavior"])
+        mounting_form.addRow(self.fields["focus_file_manager"])
+
+        files_form.addRow(self.fields["integrated_file_edits"])
+        files_form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
         warning.setWordWrap(True)
         warning.setStyleSheet(_muted_text_style(warning))
-        form.addRow("", warning)
-        root.addWidget(frame)
+        files_form.addRow("", warning)
+
+        sync_form.addRow("Remote", self.fields["config_sync_remote"])
+        sync_form.addRow("Path", self.fields["config_sync_path"])
+
+        notices_form.addRow("Info", self.fields["notice_info_display"])
+        notices_form.addRow("Important", self.fields["notice_important_display"])
+        notices_form.addRow("Check interval", self.fields["notice_check_interval"])
+        critical_note = self.qt.QLabel("Critical notices are always shown.")
+        critical_note.setStyleSheet(_muted_text_style(critical_note))
+        notices_form.addRow("", critical_note)
+
+        root.addWidget(tabs)
         root.addWidget(self._buttons())
         self.dialog.adjustSize()
 
@@ -3534,6 +3704,16 @@ class NewRemoteWizard:
         provider = self.qt.QComboBox()
         for index, (label, backend_type) in enumerate(REMOTE_PROVIDER_OPTIONS):
             provider.addItem(label, backend_type)
+            provider.setItemIcon(
+                index,
+                provider_icon(
+                    self.qt,
+                    backend_type,
+                    provider_name=REMOTE_CONFIG_SUFFIXES.get(backend_type, label),
+                    color=PROVIDER_COLORS.get(backend_type, "#64748b"),
+                    size=22,
+                ),
+            )
             _set_combo_item_color(
                 self.qt,
                 provider,
@@ -3619,6 +3799,17 @@ class NewRemoteWizard:
         s3_provider = self.qt.QComboBox()
         for index, option in enumerate(S3_PROVIDER_OPTIONS):
             s3_provider.addItem(option["label"], option)
+            s3_provider.setItemIcon(
+                index,
+                provider_icon(
+                    self.qt,
+                    "s3",
+                    provider_name=option["config_name"],
+                    extra_info={"provider": option["provider"]},
+                    color=PROVIDER_COLORS["s3"],
+                    size=22,
+                ),
+            )
             _set_combo_item_color(
                 self.qt,
                 s3_provider,
@@ -3698,6 +3889,17 @@ class NewRemoteWizard:
         webdav_vendor = self.qt.QComboBox()
         for index, option in enumerate(WEBDAV_VENDOR_OPTIONS):
             webdav_vendor.addItem(option["label"], option)
+            webdav_vendor.setItemIcon(
+                index,
+                provider_icon(
+                    self.qt,
+                    "webdav",
+                    provider_name=option["config_name"],
+                    extra_info={"vendor": option["vendor"]},
+                    color=PROVIDER_COLORS["webdav"],
+                    size=22,
+                ),
+            )
             _set_combo_item_color(
                 self.qt,
                 webdav_vendor,
@@ -5029,6 +5231,8 @@ class MountletWindow:
         self._keep_above = False
         self._keep_above_button: Any | None = None
         self._settings_button: Any | None = None
+        self._notification_button: Any | None = None
+        self._notification_menu: Any | None = None
         self._push_sync_button: Any | None = None
         self._pull_sync_button: Any | None = None
         self._purchase_license_button: Any | None = None
@@ -6307,6 +6511,82 @@ class MountletWindow:
         self._settings_button = button
         return button
 
+    def _notifications_toolbar_button(self) -> Any:
+        button = create_badged_button(self.qt)
+        button.setFixedSize(34, 30)
+        button.setToolTip("Notifications")
+        button.setFlat(True)
+        button.setStyleSheet(
+            "QPushButton { border: none; background: transparent; padding: 0; }"
+            "QPushButton:hover { background: palette(midlight); border-radius: 3px; }"
+        )
+        apply_button_icon(self.qt, button, "ui-bell", fallback_text="!", size=22)
+        menu = self.qt.QMenu(button)
+        menu.aboutToShow.connect(self._refresh_notification_menu)
+        button.clicked.connect(lambda checked=False: self._show_notification_menu())
+        self._notification_button = button
+        self._notification_menu = menu
+        self._update_notification_button()
+        return button
+
+    def _show_notification_menu(self) -> None:
+        button = self._notification_button
+        menu = self._notification_menu
+        if button is None or menu is None:
+            return
+        menu.popup(button.mapToGlobal(self.qt.QPoint(0, button.height())))
+
+    def _refresh_notification_menu(self) -> None:
+        self.tray_app._check_notices()
+        menu = self._notification_menu
+        if menu is None:
+            return
+        menu.clear()
+        history = notice_control.notification_history()
+        for notice in history[:8]:
+            prefix = "● " if not notice_control.is_seen(notice) else ""
+            action = self.tray_app._add_action(
+                menu,
+                f"{prefix}{notice.title}",
+                lambda selected=notice: self._open_notification(selected),
+            )
+            action.setToolTip(notice.message)
+        if history:
+            menu.addSeparator()
+        unseen = [notice for notice in history if not notice_control.is_seen(notice)]
+        self.tray_app._add_action(
+            menu,
+            "Mark all read",
+            self._mark_all_notifications_read,
+            enabled=bool(unseen),
+        )
+        self.tray_app._add_action(menu, "Manage history", self._show_notification_history)
+
+    def _open_notification(self, notice: notice_control.Notice) -> None:
+        self.tray_app._show_notice_dialog(notice)
+        self._update_notification_button()
+
+    def _mark_all_notifications_read(self) -> None:
+        notice_control.mark_seen_many(notice_control.notification_history())
+        self._update_notification_button()
+
+    def _show_notification_history(self) -> None:
+        dialog = NotificationHistoryDialog(
+            self.qt,
+            self.window,
+            open_notice=self.tray_app._show_notice_dialog,
+            changed=self._update_notification_button,
+        )
+        dialog.exec()
+        self._update_notification_button()
+
+    def _update_notification_button(self) -> None:
+        button = self._notification_button
+        if button is None:
+            return
+        history = notice_control.notification_history()
+        set_badge(button, any(not notice_control.is_seen(notice) for notice in history), "#ef4444")
+
     def _push_sync_toolbar_button(self) -> Any:
         button = self._toolbar_button(
             "ui-config-push",
@@ -6736,7 +7016,7 @@ class MountletWindow:
             )
             widgets.frame.setToolTip(_license_lock_message() if locked else widgets.frame.toolTip())
             if locked:
-                for name in ("config_button", "browser_button", "up_button", "down_button"):
+                for name in ("config_button", "up_button", "down_button"):
                     button = getattr(widgets, name, None)
                     if button is not None:
                         button.setEnabled(False)
@@ -7118,6 +7398,7 @@ class MountletWindow:
         layout.addWidget(reverse_button)
         layout.addStretch(1)
         layout.addWidget(self._purchase_license_toolbar_button())
+        layout.addWidget(self._notifications_toolbar_button())
         layout.addWidget(self._pin_button())
         self._update_config_sync_buttons()
         self._update_app_cache_buttons()
@@ -7227,6 +7508,7 @@ class MountletWindow:
         frame.setToolTip(open_tooltip)
         frame.setAcceptDrops(True)
         frame.mouseReleaseEvent = lambda event, row=frame, selected=remote: self._handle_remote_row_click(event, row, selected)
+        frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
         frame.enterEvent = lambda event, row=frame, tooltip=open_tooltip: self._highlight_remote_row(
             row,
             highlighted=True,
@@ -7256,7 +7538,6 @@ class MountletWindow:
         layout.setColumnMinimumWidth(3, 116)
         layout.setColumnMinimumWidth(4, 36)
         layout.setColumnMinimumWidth(5, 36)
-        layout.setColumnMinimumWidth(6, 24)
         layout.setColumnStretch(1, 1)
 
         status_icon = self._remote_status_icon(remote, mounted, checking=checking_usage)
@@ -7266,6 +7547,16 @@ class MountletWindow:
         title.setFixedWidth(self._name_column_width)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
         title.enterEvent = lambda event, widget=title, tooltip=title_tooltip: self._show_immediate_tooltip(widget, tooltip)
+        provider_label = self.qt.QLabel()
+        provider_label.setFixedSize(24, 24)
+        provider_label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        self._update_provider_label(provider_label, remote)
+        title_group = self.qt.QWidget()
+        title_layout = self.qt.QHBoxLayout(title_group)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(7)
+        title_layout.addWidget(provider_label)
+        title_layout.addWidget(title, 1)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
 
@@ -7292,31 +7583,23 @@ class MountletWindow:
             widget,
             tooltip,
         )
-        browser_button = self._icon_button(
-            "ui-external-link",
-            lambda selected=remote: self._open_remote_in_browser(selected),
-            fallback_text="↗",
-        )
-        browser_button.setProperty("rowControl", True)
-        self._update_browser_button(browser_button, remote)
         move_controls, up_button, down_button = self._move_button_stack(remote)
 
         layout.addWidget(status_icon, 0, 0)
-        layout.addWidget(title, 0, 1)
+        layout.addWidget(title_group, 0, 1)
         layout.addWidget(usage_indicator, 0, 2)
         layout.addWidget(status_group, 0, 3)
         layout.addWidget(config_button, 0, 4)
-        layout.addWidget(browser_button, 0, 5)
-        layout.addWidget(move_controls, 0, 6)
+        layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
             frame=frame,
             status_icon=status_icon,
+            provider_label=provider_label,
             title=title,
             usage_indicator=usage_indicator,
             status=status,
             usage_note=usage_note,
             config_button=config_button,
-            browser_button=browser_button,
             up_button=up_button,
             down_button=down_button,
         )
@@ -7368,6 +7651,7 @@ class MountletWindow:
             frame,
             selected,
         )
+        row.frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
         row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
             frame,
             highlighted=True,
@@ -7397,6 +7681,7 @@ class MountletWindow:
             widget,
             tooltip,
         )
+        self._update_provider_label(row.provider_label, remote)
 
         self._apply_remote_status_icon(row.status_icon, remote, mounted, checking=checking_usage)
         row.usage_indicator.setEnabled(True)
@@ -7409,26 +7694,29 @@ class MountletWindow:
         row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
             self._show_immediate_tooltip(widget, tooltip)
         )
-        self._update_browser_button(row.browser_button, remote)
         self._update_move_button(row.up_button, remote, -1)
         self._update_move_button(row.down_button, remote, 1)
 
-    def _update_browser_button(self, button: Any, remote: core.RemoteInfo) -> None:
+    def _update_provider_label(self, label: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
+        label.setPixmap(_remote_provider_icon(self.qt, remote, size=22).pixmap(22, 22))
         if url:
             tooltip = _remote_browser_tooltip(remote) + _shortcut_hint("remote_open_browser")
-            button.setEnabled(True)
-            self._apply_button_icon_if_available(
-                button, "ui-external-link", "↗", size=22, color=_provider_color(remote)
-            )
-            button.setStyleSheet(f"color: {_provider_color(remote)};")
+            cursor = self.qt.Qt.CursorShape.PointingHandCursor
         else:
             tooltip = f"No browser view is configured for {remote.display_name}" + _shortcut_hint("remote_open_browser")
-            button.setEnabled(False)
-            self._apply_button_icon_if_available(button, "ui-external-link", "↗", size=22)
-            button.setStyleSheet("")
-        button.setToolTip(tooltip)
-        button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
+            cursor = self.qt.Qt.CursorShape.ArrowCursor
+        label.setCursor(self.qt.QCursor(cursor))
+        label.setToolTip(tooltip)
+        label.enterEvent = lambda event, widget=label, text=tooltip: self._show_immediate_tooltip(widget, text)
+        label.mouseReleaseEvent = lambda event, selected=remote: self._handle_provider_icon_click(event, selected)
+
+    def _handle_provider_icon_click(self, event: Any, remote: core.RemoteInfo) -> None:
+        if event.button() != self.qt.Qt.MouseButton.LeftButton or _remote_browser_url(remote) is None:
+            event.ignore()
+            return
+        event.accept()
+        self._open_remote_in_browser(remote)
 
     def _move_button_stack(self, remote: core.RemoteInfo) -> tuple[Any, Any, Any]:
         widget = self.qt.QWidget()
@@ -7573,14 +7861,28 @@ class MountletWindow:
         label = self.qt.QLabel()
         label.setFixedSize(22, 22)
         label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
+        label.setProperty("rowControl", True)
         self._apply_remote_status_icon(label, remote, mounted, checking=checking)
         return label
 
     def _apply_remote_status_icon(self, label: Any, remote: core.RemoteInfo, mounted: bool, *, checking: bool) -> None:
         connected = getattr(self, "_connection_cache", {}).get(remote.name)
         tooltip = self._remote_status_tooltip(remote, mounted, connected, checking=checking)
+        can_open = mounted or connected is True
+        if can_open:
+            tooltip += f"\nClick to open in {_file_manager_label()}."
         label.setToolTip(tooltip)
+        label.setCursor(
+            self.qt.QCursor(
+                self.qt.Qt.CursorShape.PointingHandCursor if can_open else self.qt.Qt.CursorShape.ArrowCursor
+            )
+        )
         label.enterEvent = lambda event, widget=label, text=tooltip: self._show_immediate_tooltip(widget, text)
+        label.mouseReleaseEvent = lambda event, selected=remote, enabled=can_open: self._handle_remote_status_icon_click(
+            event,
+            selected,
+            enabled=enabled,
+        )
         pixmap = self._remote_status_pixmap(mounted=mounted, connected=connected, checking=checking)
         if pixmap is not None:
             label.setPixmap(pixmap)
@@ -7595,6 +7897,13 @@ class MountletWindow:
         else:
             label.setText("")
             label.setStyleSheet("")
+
+    def _handle_remote_status_icon_click(self, event: Any, remote: core.RemoteInfo, *, enabled: bool) -> None:
+        if event.button() != self.qt.Qt.MouseButton.LeftButton or not enabled:
+            event.ignore()
+            return
+        event.accept()
+        self._open_folder(remote)
 
     def _remote_status_tooltip(
         self,
@@ -7707,6 +8016,9 @@ class MountletWindow:
             self.qt.QToolTip.showText(self.qt.QCursor.pos(), tooltip, widget)
 
     def _handle_remote_row_click(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        if event.button() != self.qt.Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         child = row.childAt(event.position().toPoint()) if hasattr(event, "position") else None
         while child is not None and child is not row:
             if child.property("rowControl"):
@@ -7714,6 +8026,75 @@ class MountletWindow:
             child = child.parentWidget()
         self._release_remote_hover_suppression()
         self._browse_remote(remote, row)
+
+    def _show_remote_context_menu(self, event: Any, remote: core.RemoteInfo) -> None:
+        if self._license_locked():
+            self._show_license_dialog()
+            event.accept()
+            return
+
+        mounted = core.is_mounted(remote)
+        pending = remote.name in self._action_pending
+        menu = self.qt.QMenu(self.window)
+        self._add_context_action(
+            menu,
+            "Unmount" if mounted else "Mount",
+            lambda: self._toggle_remote_mount(remote),
+            enabled=not pending,
+        )
+        self._add_context_action(
+            menu,
+            f"Open in {_file_manager_label()}",
+            lambda: self._open_folder(remote),
+            enabled=not pending,
+        )
+        self._add_context_action(
+            menu,
+            "Open in web",
+            lambda: self._open_remote_in_browser(remote),
+            enabled=_remote_browser_url(remote) is not None,
+        )
+        menu.addSeparator()
+        self._add_context_action(
+            menu,
+            "Config",
+            lambda: self._show_mount_config_editor(remote),
+            enabled=not pending,
+        )
+        self._add_context_action(
+            menu,
+            "Move up",
+            lambda: self._move_remote(remote.name, -1),
+            enabled=not pending and self._can_move_remote(remote.name, -1),
+        )
+        self._add_context_action(
+            menu,
+            "Move down",
+            lambda: self._move_remote(remote.name, 1),
+            enabled=not pending and self._can_move_remote(remote.name, 1),
+        )
+        menu.addSeparator()
+        self._add_context_action(
+            menu,
+            "Reauthenticate",
+            lambda: self._run_remote_reauthentication(remote, remount=mounted),
+            enabled=not pending,
+        )
+        event.accept()
+        menu.exec(self._event_global_point(event))
+
+    def _add_context_action(
+        self,
+        menu: Any,
+        label: str,
+        callback: Any,
+        *,
+        enabled: bool = True,
+    ) -> Any:
+        action = menu.addAction(label)
+        action.setEnabled(enabled)
+        action.triggered.connect(lambda checked=False: callback())
+        return action
 
     def _suppress_remote_hover_until_browser_interaction(self) -> None:
         self._remote_hover_suppressed = True
@@ -8060,23 +8441,14 @@ class MountletWindow:
         event.acceptProposedAction()
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
-        name = html.escape(self._truncated_remote_alias(remote, include_provider=bool(remote.provider)))
-        if not remote.provider:
-            return name
-        color = _provider_color(remote)
-        provider = html.escape(remote.provider)
-        return f'{name} <span style="color:{color};">({provider})</span>'
+        return html.escape(self._truncated_remote_alias(remote))
 
     def _plain_remote_name(self, remote: core.RemoteInfo) -> str:
-        alias = self._truncated_remote_alias(remote, include_provider=bool(remote.provider))
-        if remote.provider:
-            return f"{alias} ({remote.provider})"
-        return alias
+        return self._truncated_remote_alias(remote)
 
-    def _truncated_remote_alias(self, remote: core.RemoteInfo, *, include_provider: bool) -> str:
+    def _truncated_remote_alias(self, remote: core.RemoteInfo) -> str:
         name = remote.alias
-        suffix_length = len(f" ({remote.provider})") if include_provider else 0
-        limit = max(4, 28 - suffix_length)
+        limit = 28
         return name if len(name) <= limit else name[: limit - 3] + "..."
 
     def _remote_name_width(self, remotes: list[core.RemoteInfo]) -> int:
@@ -8408,13 +8780,21 @@ class MountletWindow:
         self._request_refresh()
 
         def worker() -> None:
+            messages: list[str] = []
+            if remount and core.is_mounted(remote):
+                unmount_success, unmount_message = core.unmount_remote(remote)
+                messages.append(unmount_message)
+                if not unmount_success:
+                    self._bridge.action_finished.emit(remote.name, False, "\n".join(messages))
+                    return
             success, reconnect_message = core.reconnect_remote(remote)
+            messages.append(reconnect_message)
             if success and remount:
                 mount_success, mount_message = core.mount_remote(remote)
-                message = f"{reconnect_message}\n{mount_message}"
-                self._bridge.action_finished.emit(remote.name, mount_success, message)
+                messages.append(mount_message)
+                self._bridge.action_finished.emit(remote.name, mount_success, "\n".join(messages))
                 return
-            self._bridge.action_finished.emit(remote.name, success, reconnect_message)
+            self._bridge.action_finished.emit(remote.name, success, "\n".join(messages))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -9062,7 +9442,7 @@ class MountletWindow:
         if self._license_locked():
             self._show_license_dialog()
             return
-        self._open_remote_path(remote, "")
+        self.file_browser.open_remote_root(remote)
 
     def _open_remote_path(self, remote: core.RemoteInfo, relative_path: str) -> None:
         if self._license_locked():
@@ -9164,8 +9544,10 @@ class MountletWindow:
                 self.qt.QTimer.singleShot(0, self.show)
             else:
                 self.refresh()
-            if theme_changed and not layout_changed:
-                self._refresh_theme_icons()
+            if theme_changed:
+                # Application palette changes reach existing widgets
+                # asynchronously. Rebuild every derived icon after adoption.
+                self.qt.QTimer.singleShot(1, self._refresh_theme_icons)
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
@@ -10037,6 +10419,7 @@ class MountletTray:
         self._notice_check_pending = False
         if getattr(self, "_quitting", False) or error is not None:
             return
+        self.main_window._update_notification_button()
         if not isinstance(notices, list):
             return
         for notice in notices:
@@ -10055,12 +10438,14 @@ class MountletTray:
         )
         if display == NOTICE_DISPLAY_OFF:
             notice_control.mark_seen(notice)
+            self.main_window._update_notification_button()
             return
         if display == NOTICE_DISPLAY_DIALOG:
             self._show_notice_dialog(notice)
             return
         self._notify(notice.title, notice.message, success=notice.level != notice_control.NOTICE_LEVEL_IMPORTANT)
         notice_control.mark_seen(notice)
+        self.main_window._update_notification_button()
 
     def _show_notice_dialog(self, notice: notice_control.Notice) -> None:
         message = self.qt.QMessageBox(self.main_window.window)
@@ -10077,6 +10462,7 @@ class MountletTray:
         message.addButton(self.qt.QMessageBox.StandardButton.Ok)
         message.exec()
         notice_control.mark_seen(notice)
+        self.main_window._update_notification_button()
         if open_button is not None and message.clickedButton() is open_button:
             _open_external_url(self.qt, self.main_window.window, notice.url, title=notice.title)
 
@@ -10272,9 +10658,9 @@ class MountletTray:
         if mounted:
             self._add_action(submenu, "Unmount", lambda: self._run_remote_action(remote, core.unmount_remote))
             self._add_action(submenu, "Restart mount", lambda: self._run_remote_action(remote, core.refresh_remote))
-            self._add_action(submenu, "Open folder", lambda: self._open_folder(remote))
         else:
             self._add_action(submenu, "Mount", lambda: self._run_remote_action(remote, core.mount_remote))
+        self._add_action(submenu, f"Open in {_file_manager_label()}", lambda: self._open_folder(remote))
         browser_url = _remote_browser_url(remote)
         if browser_url:
             self._add_action(submenu, "Open in browser", lambda: self._open_remote_in_browser(remote))

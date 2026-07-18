@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Standard_product_icon" xmlns="http://www.w3.org/2000/svg" width="24px" height="24px" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" viewBox="0 0 192 192">
+  <!-- Generator: Adobe Illustrator 29.8.2, SVG Export Plug-In . SVG Version: 2.1.1 Build 3)  -->
+  <defs>
+    <radialGradient id="radial-gradient" cx="128.41" cy="250.3" fx="128.41" fy="250.3" r="1" gradientTransform="translate(20528.48 12812.1) rotate(-86.42) scale(88.17 -84.66) skewX(.24)" gradientUnits="userSpaceOnUse">
+      <stop offset=".05" stop-color="#ff96da"/>
+      <stop offset=".27" stop-color="#ff69c3"/>
+      <stop offset=".75" stop-color="#fc413d"/>
+    </radialGradient>
+    <radialGradient id="radial-gradient1" cx="130.69" cy="257.96" fx="130.69" fy="257.96" r="1" gradientTransform="translate(11685.01 -21648.47) rotate(-180) scale(88 -84.48)" gradientUnits="userSpaceOnUse">
+      <stop offset=".5" stop-color="#3186ff"/>
+      <stop offset="1" stop-color="#a9a8ff"/>
+    </radialGradient>
+    <radialGradient id="radial-gradient2" cx="128.24" cy="250.6" fx="128.24" fy="250.6" r="1" gradientTransform="translate(21218.47 11469.01) rotate(-90) scale(88 -84.48)" gradientUnits="userSpaceOnUse">
+      <stop offset=".5" stop-color="#00af57"/>
+      <stop offset="1" stop-color="#78c9ff"/>
+    </radialGradient>
+    <radialGradient id="radial-gradient3" cx="135.31" cy="248.04" fx="135.31" fy="248.04" r="1" gradientTransform="translate(-11899.01 21002.47) scale(88 -84.48)" gradientUnits="userSpaceOnUse">
+      <stop offset=".3" stop-color="#fec700"/>
+      <stop offset="1" stop-color="#ffe921"/>
+    </radialGradient>
+  </defs>
+  <rect id="bounding_box" width="192" height="192" fill="none"/>
+  <g id="art_layer">
+    <path d="M96,96V14.75c0-.7,0-1.04.03-1.34.28-2.85,2.53-5.1,5.38-5.38.29-.03.64-.03,1.34-.03,22.78,0,41.25,19.7,41.25,44s-18.47,44-41.25,44h-6.75Z" fill="url(#radial-gradient)"/>
+    <path d="M96,96h81.6c3.53,0,6.4,2.87,6.4,6.4v.35c0,22.78-19.7,41.25-44,41.25s-44-18.47-44-41.25v-6.75Z" fill="url(#radial-gradient1)"/>
+    <path d="M96,96v81.25c0,.7,0,1.04-.03,1.34-.28,2.85-2.53,5.1-5.38,5.38-.29.03-.64.03-1.34.03-22.78,0-41.25-19.7-41.25-44s18.47-44,41.25-44h6.75Z" fill="url(#radial-gradient2)"/>
+    <path d="M96,96H14.75c-.7,0-1.04,0-1.34-.03-2.85-.28-5.1-2.53-5.38-5.38-.03-.29-.03-.64-.03-1.34,0-22.78,19.7-41.25,44-41.25s44,18.47,44,41.25v6.75Z" fill="url(#radial-gradient3)"/>
+  </g>
+</svg>

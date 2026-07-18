@@ -1,11 +1,13 @@
 import {inspectLicenseSchema} from "../_lib/license-schema.js";
 import {signLicenseToken, verifyLicenseToken} from "../_lib/license.js";
+import {inspectNoticeSchema} from "../_lib/notices.js";
 
 export async function onRequestGet({env}) {
   const github = githubConfig(env);
   const email = emailConfigured(env);
   const licenseDb = await inspectLicenseSchema(env);
   const licenseSigning = await licenseSigningStatus(env);
+  const notices = await inspectNoticeSchema(env);
   const body = {
     ok: true,
     functions: true,
@@ -15,7 +17,8 @@ export async function onRequestGet({env}) {
     licenseSigningConfigured: Boolean(env.LICENSE_SIGNING_PRIVATE_KEY && env.LICENSE_SIGNING_PUBLIC_KEY),
     licenseSigning,
     licenseAdminConfigured: Boolean(env.LICENSE_ADMIN_TOKEN),
-    noticesConfigured: Boolean(env.MOUNTLET_NOTICES_JSON || env.NOTICES_JSON),
+    noticesConfigured: notices.ok || Boolean(env.MOUNTLET_NOTICES_JSON || env.NOTICES_JSON),
+    notices,
     downloadsBound: Boolean(env.DOWNLOADS),
     stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),

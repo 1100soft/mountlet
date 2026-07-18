@@ -426,6 +426,54 @@ class CloudBrowserBackend:
             raise RuntimeError("Enter a single folder name without slashes")
         self._run_operation(self._rclone(), "mkdir", remote_target(remote, join_browser_path(parent, normalized_name)))
 
+    def rename_entry(self, remote: core.RemoteInfo, entry: BrowserEntry, new_name: str) -> str:
+        normalized_name = normalize_browser_path(new_name)
+        if not normalized_name or "/" in normalized_name or normalized_name != new_name.strip():
+            raise RuntimeError("Enter a single file or folder name without slashes")
+        old_path = normalize_browser_path(entry.path)
+        new_path = join_browser_path(parent_browser_path(old_path), normalized_name)
+        if old_path == new_path:
+            return new_path
+
+        new_local = self.offline_path(remote.name, new_path)
+        with self._offline_lock:
+            records = self._offline_records.get(remote.name, {})
+            new_prefix = f"{new_path}/"
+            if new_local.exists() or any(path == new_path or path.startswith(new_prefix) for path in records):
+                raise RuntimeError(f"A cached item named {normalized_name} already exists")
+
+        self._run_operation(
+            self._rclone(),
+            "moveto",
+            remote_target(remote, old_path),
+            remote_target(remote, new_path),
+        )
+        self._rename_offline_path(remote.name, old_path, new_path)
+        self.index.rename_path(remote.name, old_path, new_path)
+        return new_path
+
+    def _rename_offline_path(self, remote_name: str, old_path: str, new_path: str) -> None:
+        old = normalize_browser_path(old_path)
+        new = normalize_browser_path(new_path)
+        old_prefix = f"{old}/"
+        with self._offline_lock:
+            old_local = self.offline_path(remote_name, old)
+            new_local = self.offline_path(remote_name, new)
+            if old_local.exists():
+                new_local.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_local), str(new_local))
+            records = self._offline_records.get(remote_name, {})
+            renamed_records: dict[str, dict[str, object]] = {}
+            for path in list(records):
+                if path != old and not path.startswith(old_prefix):
+                    continue
+                record = records.pop(path)
+                renamed = new if path == old else f"{new}/{path[len(old_prefix):]}"
+                renamed_records[renamed] = record
+            if renamed_records:
+                records.update(renamed_records)
+                self._save_offline_manifest()
+
     def make_offline(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path:
         binary = self._rclone()
         destination = self.offline_path(remote.name, entry.path)

@@ -285,7 +285,7 @@ Then set these environment variables:
   `Mountlet <licenses@example.com>`.
 - `EMAIL_REPLY_TO` or `RESEND_REPLY_TO`: optional reply-to address for license
   emails.
-- `MOUNTLET_NOTICES_JSON`: optional app notices served from `/api/notices`.
+- `MOUNTLET_NOTICES_JSON`: optional emergency fallback notices served from `/api/notices`.
 - `REPORT_TO`: optional recipient for in-app crash and bug reports. If unset,
   reports fall back to the reply-to or sender address.
 - `REPORT_FROM`: optional verified sender for in-app crash and bug reports. If
@@ -310,6 +310,34 @@ If in-app reports return Cloudflare error 1010 or another 403 before reaching
 the Function, add a Cloudflare security/WAF skip or allow rule for `/api/report`
 or for the `Mountlet/...` user agent. The report Function still validates JSON
 and sends only through configured report sinks.
+
+## App notices
+
+Notices are stored in the bound D1 database and become visible as soon as they
+are published. The same `LICENSE_ADMIN_TOKEN` protects management actions.
+Initialize the current environment once after deploying this schema:
+
+```bash
+curl -X POST https://<site>/api/license/admin/init \
+  -H "Authorization: Bearer $LICENSE_ADMIN_TOKEN"
+```
+
+Manage notices without editing Cloudflare variables or redeploying:
+
+```bash
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- list --site https://<site>
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- create --site https://<site> \
+  --id maintenance-2026-08 --title "Maintenance" \
+  --message "Cloud sync may be briefly unavailable." --level important --publish
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- update maintenance-2026-08 \
+  --site https://<site> --message "Maintenance is complete."
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- archive maintenance-2026-08 --site https://<site>
+```
+
+Editing increments the notice version, so clients see the revision as unread.
+Published notices must be archived before deletion, and critical/price notices
+cannot be hard-deleted. `MOUNTLET_NOTICES_JSON` remains a read-only emergency
+fallback.
 
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and

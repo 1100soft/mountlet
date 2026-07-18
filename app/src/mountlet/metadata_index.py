@@ -264,6 +264,49 @@ class MetadataIndex:
             )
             connection.commit()
 
+    def rename_path(self, remote_name: str, old_path: str, new_path: str) -> None:
+        old = normalize_browser_path(old_path)
+        new = normalize_browser_path(new_path)
+        if not old or not new or old == new:
+            return
+        old_prefix = f"{old}/"
+        new_prefix = f"{new}/"
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT path FROM entries
+                WHERE remote_name = ? AND (path = ? OR substr(path, 1, ?) = ?)
+                ORDER BY length(path) ASC
+                """,
+                (remote_name, old, len(old_prefix), old_prefix),
+            ).fetchall()
+            connection.execute(
+                """
+                DELETE FROM entries
+                WHERE remote_name = ? AND (path = ? OR substr(path, 1, ?) = ?)
+                """,
+                (remote_name, new, len(new_prefix), new_prefix),
+            )
+            for row in rows:
+                current = str(row["path"])
+                renamed = new if current == old else f"{new}/{current[len(old_prefix):]}"
+                connection.execute(
+                    """
+                    UPDATE entries
+                    SET path = ?, parent_path = ?, name = ?, name_folded = ?
+                    WHERE remote_name = ? AND path = ?
+                    """,
+                    (
+                        renamed,
+                        parent_browser_path(renamed),
+                        PurePosixPath(renamed).name,
+                        PurePosixPath(renamed).name.casefold(),
+                        remote_name,
+                        current,
+                    ),
+                )
+            connection.commit()
+
 
 def _indexed_entry_from_row(row: sqlite3.Row) -> IndexedEntry:
     return IndexedEntry(

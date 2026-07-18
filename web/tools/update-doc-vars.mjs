@@ -7,10 +7,7 @@ const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const vars = PUBLIC_VARS;
 
 const generated = {
-  root: [
-    `- Production website: ${vars.productionSiteUrl}`,
-    `- Source repository: ${vars.githubUrl}`,
-  ].join("\n"),
+  root: `- Production website: ${vars.productionSiteUrl}`,
   app: [
     `- Paid downloads and license purchases: ${vars.productionSiteUrl}`,
     `- Default license API: ${vars.productionSiteUrl}${vars.licenseApiPath}`,

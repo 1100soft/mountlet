@@ -318,6 +318,56 @@ class CloudBrowserTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "single folder name"):
                 backend.create_folder(_remote(), "", "one/two")
 
+    def test_rename_entry_moves_remote_cache_manifest_and_index(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            entry = BrowserEntry("Old", "Reports/Old", True)
+            cached = backend.offline_path(remote.name, entry.path)
+            cached.mkdir(parents=True)
+            (cached / "child.txt").write_text("cached", encoding="utf-8")
+            backend._record_offline_tree(remote.name, entry, cached)
+            backend.index.upsert_folder(remote, "Reports", [entry])
+            backend.index.upsert_folder(
+                remote,
+                entry.path,
+                [BrowserEntry("child.txt", f"{entry.path}/child.txt", False, 6)],
+            )
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    renamed = backend.rename_entry(remote, entry, "New")
+
+            old_cached = backend.offline_path(remote.name, "Reports/Old")
+            new_cached = backend.offline_path(remote.name, "Reports/New")
+            old_cached_exists = old_cached.exists()
+            child_cached_exists = (new_cached / "child.txt").is_file()
+            indexed_parent = backend.cached_entries(remote, "Reports")
+            indexed_children = backend.cached_entries(remote, "Reports/New")
+            offline_paths = set(backend._offline_records[remote.name])
+
+        self.assertEqual(renamed, "Reports/New")
+        run.assert_called_once_with("rclone", "moveto", "Docs:/Reports/Old", "Docs:/Reports/New")
+        self.assertFalse(old_cached_exists)
+        self.assertTrue(child_cached_exists)
+        self.assertNotIn("Reports/Old", offline_paths)
+        self.assertIn("Reports/New/child.txt", offline_paths)
+        self.assertEqual([item.path for item in indexed_parent], ["Reports/New"])
+        self.assertEqual([item.path for item in indexed_children], ["Reports/New/child.txt"])
+
+    def test_rename_entry_rejects_nested_name(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with self.assertRaisesRegex(RuntimeError, "single file or folder name"):
+                backend.rename_entry(_remote(), BrowserEntry("a.txt", "a.txt", False), "nested/a.txt")
+
     def test_rclone_file_operation_uses_timeout(self):
         response = SimpleNamespace(returncode=0, stderr="")
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2188,6 +2238,53 @@ class CloudBrowserTests(unittest.TestCase):
         browser.backend.remember_path.assert_called_once_with("Docs", "")
         browser.refresh.assert_called_once_with()
 
+    def test_rename_selected_runs_backend_operation_for_current_folder(self):
+        browser = object.__new__(CompactCloudBrowser)
+        remote = _remote()
+        entry = BrowserEntry("old.txt", "Reports/old.txt", False)
+        browser.remote = remote
+        browser.entries = [entry]
+        browser.window = mock.Mock()
+        browser.backend = mock.Mock()
+        browser._operation_pending = False
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser._selected_entries = mock.Mock(return_value=[entry])
+        browser._notify = mock.Mock()
+        browser._run_operation = mock.Mock()
+        browser.qt = SimpleNamespace(
+            QInputDialog=SimpleNamespace(getText=mock.Mock(return_value=("new.txt", True))),
+            QLineEdit=SimpleNamespace(EchoMode=SimpleNamespace(Normal="normal")),
+        )
+
+        browser.rename_selected()
+
+        self.assertEqual(browser._run_operation.call_args.args[0], "Renaming…")
+        self.assertEqual(browser._run_operation.call_args.kwargs["invalidate_keys"], {(remote.name, "Reports")})
+        browser._run_operation.call_args.args[1]()
+        browser.backend.rename_entry.assert_called_once_with(remote, entry, "new.txt")
+
+    def test_rename_selected_rejects_duplicate_sibling_name(self):
+        browser = object.__new__(CompactCloudBrowser)
+        entry = BrowserEntry("old.txt", "Reports/old.txt", False)
+        browser.remote = _remote()
+        browser.entries = [entry, BrowserEntry("new.txt", "Reports/new.txt", False)]
+        browser.window = mock.Mock()
+        browser.backend = mock.Mock()
+        browser._operation_pending = False
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser._selected_entries = mock.Mock(return_value=[entry])
+        browser._notify = mock.Mock()
+        browser._run_operation = mock.Mock()
+        browser.qt = SimpleNamespace(
+            QInputDialog=SimpleNamespace(getText=mock.Mock(return_value=("NEW.TXT", True))),
+            QLineEdit=SimpleNamespace(EchoMode=SimpleNamespace(Normal="normal")),
+        )
+
+        browser.rename_selected()
+
+        browser._notify.assert_called_once()
+        browser._run_operation.assert_not_called()
+
     def test_recursive_entries_populate_folder_cache_for_navigation(self):
         browser = object.__new__(CompactCloudBrowser)
         browser._folder_cache = {}
@@ -2981,6 +3078,36 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._open_local_folder.assert_called_once_with(Path("/cache/Docs/Reports"))
         browser._notify.assert_not_called()
+
+    def test_open_remote_root_uses_mount_when_remote_is_mounted(self):
+        browser = object.__new__(CompactCloudBrowser)
+        remote = _remote()
+        browser._open_mount = mock.Mock()
+
+        with mock.patch.object(core, "is_mounted", return_value=True):
+            browser.open_remote_root(remote)
+
+        browser._open_mount.assert_called_once_with(remote, "")
+
+    def test_open_remote_root_creates_and_opens_cache_when_unmounted(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            cache_root = Path(tempdir) / "Docs"
+            browser = object.__new__(CompactCloudBrowser)
+            remote = _remote()
+            browser.backend = mock.Mock()
+            browser.backend.offline_path.return_value = cache_root
+            browser.backend.prepare_offline_open.return_value = cache_root
+            browser._open_local_folder = mock.Mock(return_value=True)
+            browser._notify = mock.Mock()
+            browser.qt = SimpleNamespace(QDesktopServices=mock.Mock(), QUrl=mock.Mock())
+
+            with mock.patch.object(core, "is_mounted", return_value=False):
+                browser.open_remote_root(remote)
+
+            self.assertTrue(cache_root.is_dir())
+            browser.backend.prepare_offline_open.assert_called_once_with(remote.name, "")
+            browser._open_local_folder.assert_called_once_with(cache_root)
+            browser._notify.assert_not_called()
 
     def test_open_folder_button_keeps_standard_color_for_offline_snapshot(self):
         with tempfile.TemporaryDirectory() as tempdir:

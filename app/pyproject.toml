@@ -64,7 +64,7 @@ mountlet = "mountlet.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-mountlet = ["assets/*.png", "assets/*.icns", "assets/*.svg"]
+mountlet = ["assets/*.png", "assets/*.icns", "assets/*.svg", "assets/providers/*.png", "assets/providers/*.svg", "assets/providers/*.md"]
 
 [tool.ruff]
 line-length = 120
