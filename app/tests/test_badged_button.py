@@ -35,15 +35,20 @@ class _Action:
     def setEnabled(self, enabled: bool) -> None:
         self.enabled = enabled
 
+    def setIcon(self, icon) -> None:
+        self.icon = icon
+
 
 class _Menu:
     last = None
 
     def __init__(self, _parent) -> None:
         self.actions = []
-        self.active = None
-        self.executed_at = None
+        self.popup_at = None
         type(self).last = self
+
+    def clear(self) -> None:
+        self.actions.clear()
 
     def addAction(self, label: str) -> _Action:
         action = _Action(label)
@@ -53,11 +58,8 @@ class _Menu:
     def addSeparator(self) -> None:
         self.actions.append(None)
 
-    def setActiveAction(self, action: _Action) -> None:
-        self.active = action
-
-    def exec(self, position) -> None:
-        self.executed_at = position
+    def popup(self, position) -> None:
+        self.popup_at = position
 
 
 class _PushButton:
@@ -114,8 +116,8 @@ class BadgedButtonTests(unittest.TestCase):
 
         self.assertTrue(event.accepted)
         self.assertEqual([action.label if action else None for action in menu.actions], ["Open settings", None, "View online"])
-        self.assertIs(menu.active, menu.actions[0])
-        self.assertEqual(menu.executed_at, (42, 24))
+        self.assertEqual(menu.popup_at, (42, 24))
+        self.assertEqual(button.clicked_count, 0)
 
         menu.actions[0].triggered.emit()
         menu.actions[2].triggered.emit()
@@ -130,6 +132,16 @@ class BadgedButtonTests(unittest.TestCase):
         button.contextMenuEvent(_ContextEvent())
 
         self.assertFalse(_Menu.last.actions[0].enabled)
+
+    def test_context_option_accepts_an_icon(self):
+        qt = SimpleNamespace(QPushButton=_PushButton, QMenu=_Menu)
+        button = create_badged_button(qt)
+        icon = object()
+        button.addContextMenuOption("View all", lambda: None, icon=lambda: icon)
+
+        button.contextMenuEvent(_ContextEvent())
+
+        self.assertIs(_Menu.last.actions[0].icon, icon)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,17 @@ a {
   color: inherit;
 }
 
+.external-link::after {
+  background: currentColor;
+  content: "";
+  display: inline-block;
+  height: 0.95em;
+  margin-left: 0.28em;
+  mask: url("assets/ui-external-link.svg") center / contain no-repeat;
+  vertical-align: -0.1em;
+  width: 0.95em;
+}
+
 .inline-link {
   background: transparent;
   border: 0;

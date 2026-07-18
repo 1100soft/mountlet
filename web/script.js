@@ -611,7 +611,7 @@ function renderNotifications(notices) {
 
     if (notice.url) {
       const link = document.createElement("a");
-      link.className = "website-notice-link";
+      link.className = "website-notice-link external-link";
       link.href = String(notice.url);
       link.rel = "noreferrer";
       link.textContent = "Read more";
