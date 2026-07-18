@@ -25,6 +25,9 @@ class NoticeControlTests(unittest.TestCase):
         patcher = mock.patch.dict("os.environ", env, clear=False)
         patcher.start()
         self.addCleanup(patcher.stop)
+        state_path_patcher = mock.patch.object(notice_control, "_seen_path", return_value=root / "notices.json")
+        state_path_patcher.start()
+        self.addCleanup(state_path_patcher.stop)
 
     def test_notice_requires_core_fields_and_tracks_version(self):
         with mock.patch.object(
