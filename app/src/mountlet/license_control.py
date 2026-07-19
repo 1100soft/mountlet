@@ -6,8 +6,10 @@ import hmac
 import json
 import os
 import platform
+import re
 import secrets
 import socket
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -40,7 +42,8 @@ LICENSE_PUBLIC_KEY_FILE_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY_FILE"
 TRIAL_DURABLE_DIR_ENV = "MOUNTLET_TRIAL_DURABLE_DIR"
 
 _TRIAL_SALT = b"mountlet trial state v1"
-_TRIAL_VERSION = 1
+_TRIAL_VERSION = 2
+_LEGACY_TRIAL_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -302,34 +305,77 @@ def device_fingerprint() -> str:
 
 
 def machine_hint() -> str:
+    identifier = _stable_machine_identifier()
     material = "|".join(
         [
             platform.system(),
             platform.machine(),
-            platform.node(),
-            str(uuid.getnode()),
+            identifier,
             str(Path.home()),
         ]
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _stable_machine_identifier() -> str:
+    system = platform.system()
+    if system == "Linux":
+        for path in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if value:
+                return f"machine-id:{value}"
+    elif system == "Windows":
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+                value, _ = winreg.QueryValueEx(key, "MachineGuid")
+            if str(value).strip():
+                return f"machine-guid:{str(value).strip()}"
+        except (ImportError, OSError):
+            pass
+    elif system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', result.stdout)
+            if match:
+                return f"platform-uuid:{match.group(1)}"
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # uuid.getnode() sets the multicast bit when it had to invent a random
+    # value. Never persist that random fallback as a machine identity.
+    node = uuid.getnode()
+    hardware = f"node:{node:012x}" if not node & (1 << 40) else ""
+    return "|".join(part for part in (platform.node(), socket.gethostname(), hardware) if part)
+
+
 def load_or_create_trial(now: float | None = None) -> dict[str, Any]:
     ensure_app_directories()
-    records = [_decode_trial_record(path) for path in _trial_paths()]
+    paths = _trial_paths()
+    records = [_decode_trial_record(path) for path in paths]
     valid = [record for record in records if record is not None]
     now_value = _now(now)
     if valid:
         selected = min(valid, key=lambda item: _float_value(item.get("started_at"), now_value))
         selected["last_seen_at"] = max(_float_value(selected.get("last_seen_at"), now_value), now_value)
     else:
-        selected = {
-            "version": _TRIAL_VERSION,
+        selected = _recover_replicated_legacy_trial(paths, now_value) or {
             "install_id": secrets.token_urlsafe(24),
-            "machine_hint": machine_hint(),
             "started_at": now_value,
             "last_seen_at": now_value,
         }
+    selected["version"] = _TRIAL_VERSION
+    selected["machine_hint"] = machine_hint()
     _write_trial_record(selected)
     return selected
 
@@ -552,6 +598,47 @@ def _decode_trial_record(path: Path) -> dict[str, Any] | None:
     return record
 
 
+def _recover_replicated_legacy_trial(paths: tuple[Path, ...], now_value: float) -> dict[str, Any] | None:
+    encoded_records: dict[str, int] = {}
+    for path in paths:
+        try:
+            encoded = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if encoded:
+            encoded_records[encoded] = encoded_records.get(encoded, 0) + 1
+
+    # A legacy record used uuid.getnode() in its machine key. On systems where
+    # Python generated a random fallback, it cannot be matched next launch.
+    # Require matching replicas and its original self-consistent signature
+    # before migrating it to the stable v2 machine identity.
+    for encoded, count in sorted(encoded_records.items(), key=lambda item: item[1], reverse=True):
+        if count < 2:
+            continue
+        try:
+            envelope = json.loads(_b64decode(encoded).decode("utf-8"))
+            payload = str(envelope["payload"])
+            signature = str(envelope["signature"])
+            record = json.loads(_b64decode(payload).decode("utf-8"))
+            legacy_hint = str(record["machine_hint"])
+            expected = _trial_signature(payload, machine=legacy_hint)
+            started_at = float(record["started_at"])
+            last_seen_at = float(record["last_seen_at"])
+        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            continue
+        if (
+            record.get("version") != _LEGACY_TRIAL_VERSION
+            or not re.fullmatch(r"[0-9a-f]{64}", legacy_hint)
+            or not hmac.compare_digest(signature, expected)
+            or started_at > now_value + 86_400
+            or last_seen_at < started_at
+        ):
+            continue
+        record["last_seen_at"] = max(last_seen_at, now_value)
+        return record
+    return None
+
+
 def _write_trial_record(record: dict[str, Any]) -> None:
     payload = _b64encode(json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     envelope = {
@@ -568,8 +655,8 @@ def _write_trial_record(record: dict[str, Any]) -> None:
             continue
 
 
-def _trial_signature(payload: str) -> str:
-    key = hashlib.sha256(_TRIAL_SALT + machine_hint().encode("utf-8")).digest()
+def _trial_signature(payload: str, *, machine: str | None = None) -> str:
+    key = hashlib.sha256(_TRIAL_SALT + (machine or machine_hint()).encode("utf-8")).digest()
     return hmac.new(key, payload.encode("ascii"), hashlib.sha256).hexdigest()
 
 

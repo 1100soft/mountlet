@@ -74,6 +74,50 @@ class LicenseControlTests(unittest.TestCase):
         self.assertEqual(status.state, "trial")
         self.assertLessEqual(status.trial_days_remaining, 4)
 
+    def test_machine_hint_uses_stable_linux_machine_id(self):
+        with (
+            mock.patch("mountlet.license_control.platform.system", return_value="Linux"),
+            mock.patch("mountlet.license_control.platform.machine", return_value="x86_64"),
+            mock.patch("mountlet.license_control.Path.read_text", return_value="stable-machine-id\n"),
+            mock.patch("mountlet.license_control.uuid.getnode", side_effect=AssertionError("not stable")),
+        ):
+            first = license_control.machine_hint()
+            second = license_control.machine_hint()
+
+        self.assertEqual(first, second)
+
+    def test_replicated_legacy_trial_migrates_to_stable_machine_id(self):
+        start = 1_700_000_000.0
+        legacy_hint = "a" * 64
+        record = {
+            "version": 1,
+            "install_id": "legacy-install",
+            "machine_hint": legacy_hint,
+            "started_at": start,
+            "last_seen_at": start,
+        }
+        payload = license_control._b64encode(
+            json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        envelope = {
+            "payload": payload,
+            "signature": license_control._trial_signature(payload, machine=legacy_hint),
+        }
+        encoded = license_control._b64encode(
+            json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        paths = license_control._trial_paths()
+        for path in paths[:2]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(encoded + "\n", encoding="utf-8")
+
+        with mock.patch("mountlet.license_control.machine_hint", return_value="b" * 64):
+            migrated = license_control.load_or_create_trial(now=start + 86_400)
+
+        self.assertEqual(migrated["started_at"], start)
+        self.assertEqual(migrated["version"], 2)
+        self.assertEqual(migrated["machine_hint"], "b" * 64)
+
     def test_trial_uses_earliest_valid_start(self):
         start = 1_700_000_000.0
         license_control.load_or_create_trial(now=start)
