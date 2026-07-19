@@ -8,18 +8,44 @@ const MAX_ISSUE_BODY_CHARS = 60_000;
 export {jsonResponse, readJson};
 
 export function normalizedReport(payload) {
-  const kind = clean(payload.kind || "bug", 40);
-  const metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
+  const requestedKind = clean(payload.kind || "bug", 40).toLowerCase();
+  const kind = ["bug", "crash", "support"].includes(requestedKind) ? requestedKind : "support";
+  const metadata = normalizedMetadata(payload.metadata);
   const logs = payload.logs && typeof payload.logs === "object" ? payload.logs : {};
   return {
     kind,
-    subject: kind === "crash" ? "Mountlet crash report" : "Mountlet bug report",
+    subject: {
+      crash: "Mountlet crash report",
+      bug: "Mountlet bug report",
+      support: "Mountlet support request",
+    }[kind],
     message: clean(payload.message || "", MAX_FIELD_CHARS),
     contact: clean(payload.contact || "", 240),
     metadata,
     runtimeLog: redact(clean(logs.runtime || "", MAX_FIELD_CHARS)),
     rcloneLog: redact(clean(logs.rclone || "", MAX_FIELD_CHARS)),
   };
+}
+
+function normalizedMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const result = {};
+  for (const [rawKey, rawValue] of Object.entries(value).slice(0, 24)) {
+    const key = clean(rawKey, 80);
+    if (!key) {
+      continue;
+    }
+    if (rawValue === null || ["boolean", "number"].includes(typeof rawValue)) {
+      result[key] = rawValue;
+    } else if (typeof rawValue === "string") {
+      result[key] = clean(rawValue, 1000);
+    } else {
+      result[key] = clean(JSON.stringify(rawValue), 1000);
+    }
+  }
+  return result;
 }
 
 export async function createReportIssue(env, report) {
@@ -153,6 +179,10 @@ function githubHeaders(token) {
 
 function issueTitle(report) {
   const metadata = report.metadata || {};
+  if (report.kind === "support") {
+    const category = clean(metadata.category || "request", 40);
+    return `[support] Mountlet ${category}`;
+  }
   const version = clean(metadata.appVersion || "unknown", 40);
   const platform = clean(metadata.platform || "unknown platform", 80);
   return `[${report.kind}] Mountlet ${version} on ${platform}`;
@@ -185,9 +215,10 @@ function reportLabels(env, kind) {
   }
   if (kind === "crash" && !labels.includes("crash")) {
     labels.push("crash");
-  }
-  if (kind !== "crash" && !labels.includes("bug")) {
+  } else if (kind === "bug" && !labels.includes("bug")) {
     labels.push("bug");
+  } else if (kind === "support" && !labels.includes("support")) {
+    labels.push("support");
   }
   return labels;
 }

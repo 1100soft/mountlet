@@ -286,25 +286,30 @@ Then set these environment variables:
 - `EMAIL_REPLY_TO` or `RESEND_REPLY_TO`: optional reply-to address for license
   emails.
 - `MOUNTLET_NOTICES_JSON`: optional emergency fallback notices served from `/api/notices`.
-- `REPORT_TO`: optional recipient for in-app crash and bug reports. If unset,
-  reports fall back to the reply-to or sender address.
-- `REPORT_FROM`: optional verified sender for in-app crash and bug reports. If
-  unset, reports fall back to the license email sender.
+- `REPORT_TO`: optional recipient for app reports and website support requests.
+  If unset, reports fall back to the reply-to or sender address.
+- `REPORT_FROM`: optional verified sender for reports and support requests. If
+  unset, messages fall back to the license email sender.
 - `REPORT_GITHUB_TOKEN`: optional fine-grained GitHub token for creating private
-  crash and bug report issues.
+  app report and support-request issues.
 - `REPORT_GITHUB_REPO`: optional GitHub repository target in `owner/repo`
   format.
 - `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
-  those labels in GitHub first. Mountlet adds `bug` or `crash` to the list and
-  retries without labels if GitHub rejects the configured labels.
+  those labels in GitHub first. Mountlet adds `bug`, `crash`, or `support` as
+  appropriate and retries without labels if GitHub rejects the labels.
 
 The report endpoint creates GitHub issues directly. Email through Resend is only
 an optional secondary notification path. For GitHub reporting, create a private
 support repository, create a fine-grained personal access token limited to that
 repository with Issues read/write permission, then set `REPORT_GITHUB_TOKEN` as
 a Pages secret and `REPORT_GITHUB_REPO` as an environment variable. The Function
-redacts obvious tokens and secrets, but reports can still include paths and
-filenames because users review them before sending.
+redacts obvious tokens and secrets, but app reports can still include paths and
+filenames because users review them before sending. Website support requests do
+not include diagnostic logs.
+
+The website form includes a honeypot and field limits. For public deployment,
+also apply a Cloudflare rate-limit rule to `POST /api/report` to contain spam
+without adding report storage or customer accounts.
 
 If in-app reports return Cloudflare error 1010 or another 403 before reaching
 the Function, add a Cloudflare security/WAF skip or allow rule for `/api/report`

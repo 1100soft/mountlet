@@ -17,7 +17,14 @@ export async function onRequestPost({request, env}) {
     return jsonResponse({ok: false, error: "Invalid JSON."}, 400);
   }
 
+  if (String(payload.website || "").trim()) {
+    return jsonResponse({ok: true, id: ""});
+  }
+
   const report = normalizedReport(payload);
+  if (report.kind === "support" && report.message.trim().length < 10) {
+    return jsonResponse({ok: false, error: "Please provide a little more detail."}, 400);
+  }
   const sinks = [];
   const failures = [];
   const githubState = githubConfig(env);
@@ -41,10 +48,10 @@ export async function onRequestPost({request, env}) {
   }
 
   if (!githubState.present && !resendConfigured(env)) {
-    return jsonResponse({ok: false, error: "Bug reports are not configured."}, 503);
+    return jsonResponse({ok: false, error: "Report delivery is not configured."}, 503);
   }
   if (sinks.length === 0) {
-    return jsonResponse({ok: false, error: failures.join("\n") || "Bug report delivery failed."}, 502);
+    return jsonResponse({ok: false, error: failures.join("\n") || "Report delivery failed."}, 502);
   }
   return jsonResponse({
     ok: true,

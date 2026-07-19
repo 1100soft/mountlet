@@ -6630,9 +6630,6 @@ class MountletWindow:
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(4)
 
-        header = self.qt.QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(6)
         title = self.qt.QLabel()
         title_font = title.font()
         title_font.setBold(True)
@@ -6641,26 +6638,27 @@ class MountletWindow:
             self.qt.QFontMetrics(title_font).elidedText(
                 notice.title,
                 self.qt.Qt.TextElideMode.ElideRight,
-                230,
+                344,
             )
         )
         title.setFixedHeight(self.qt.QFontMetrics(title_font).lineSpacing() + 2)
-        date = self.qt.QLabel(_notice_display_time(notice))
-        date.setStyleSheet("color: palette(mid); font-size: 10px;")
-        date.setFixedWidth(108)
+        content_layout.addWidget(title)
+
+        display_time = _notice_display_time(notice)
+        date = self.qt.QLabel(f"Sent {display_time}" if display_time else "Date unavailable")
+        date.setStyleSheet("color: palette(text); font-size: 10px;")
+        date.setFixedHeight(date.fontMetrics().lineSpacing() + 1)
         with suppress(Exception):
-            date.setAlignment(self.qt.Qt.AlignmentFlag.AlignRight | self.qt.Qt.AlignmentFlag.AlignVCenter)
-        header.addWidget(title, 1)
-        header.addWidget(date)
-        content_layout.addLayout(header)
+            date.setAlignment(self.qt.Qt.AlignmentFlag.AlignLeft | self.qt.Qt.AlignmentFlag.AlignVCenter)
+        content_layout.addWidget(date)
 
         message = self.qt.QLabel()
         message_font = message.font()
         if message_font.pointSize() > 0:
             message_font.setPointSize(max(message_font.pointSize() - 1, 8))
         message.setFont(message_font)
-        message.setText(_elide_notice_lines(self.qt, notice.message, message_font, 344, 3))
-        message.setFixedHeight(self.qt.QFontMetrics(message_font).lineSpacing() * 3 + 2)
+        message.setText(_elide_notice_lines(self.qt, notice.message, message_font, 344, 2))
+        message.setFixedHeight(self.qt.QFontMetrics(message_font).lineSpacing() * 2 + 2)
         message.setStyleSheet("color: palette(text);")
         with suppress(Exception):
             message.setAlignment(self.qt.Qt.AlignmentFlag.AlignLeft | self.qt.Qt.AlignmentFlag.AlignTop)

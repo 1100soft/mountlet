@@ -1,5 +1,6 @@
 let releaseFilesPromise = null;
 let notificationsPromise = null;
+let loadedNotifications = [];
 
 async function openConfiguredLink(group, key) {
   if (group === "downloads") {
@@ -564,7 +565,8 @@ async function loadNotifications({force = false} = {}) {
   }
   try {
     const notices = await notificationsPromise;
-    renderNotifications(notices);
+    loadedNotifications = notices;
+    renderNotifications(notices, document.querySelector("#notification-search")?.value || "");
     if (status) {
       status.textContent = notices.length ? "" : "There are no current notifications.";
       status.hidden = Boolean(notices.length);
@@ -582,75 +584,100 @@ async function loadNotifications({force = false} = {}) {
   }
 }
 
-function renderNotifications(notices) {
+function renderNotifications(notices, query = "") {
   const list = document.querySelector("#notifications-list");
   if (!list) {
     return;
   }
   list.replaceChildren();
-  const ordered = [...notices].sort((left, right) => {
+  const searchText = String(query || "").trim().toLocaleLowerCase();
+  const ordered = notices.filter((notice) => {
+    if (!searchText) {
+      return true;
+    }
+    return [notice.title, notice.message, notice.type, formatNoticeDate(notice.updatedAt)]
+      .some((value) => String(value || "").toLocaleLowerCase().includes(searchText));
+  }).sort((left, right) => {
     const lifecycle = Number(Boolean(left.archived)) - Number(Boolean(right.archived));
     return lifecycle || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
   });
-  let archiveHeadingAdded = false;
-  for (const notice of ordered) {
-    if (notice.archived && !archiveHeadingAdded) {
-      const heading = document.createElement("h3");
-      heading.className = "notification-group-title";
-      heading.textContent = "Archive";
-      list.append(heading);
-      archiveHeadingAdded = true;
-    }
-    const article = document.createElement("article");
-    const level = ["critical", "important"].includes(String(notice.level || "").toLowerCase())
-      ? String(notice.level).toLowerCase()
-      : "info";
-    article.className = `website-notice notice-${level}${notice.archived ? " archived" : " active"}`;
-    article.tabIndex = 0;
-    article.setAttribute("role", "button");
-    article.setAttribute("aria-expanded", "false");
-
-    const accent = document.createElement("span");
-    accent.className = "website-notice-accent";
-    accent.setAttribute("aria-hidden", "true");
-
-    const header = document.createElement("div");
-    header.className = "website-notice-header";
-    const title = document.createElement("h3");
-    title.textContent = String(notice.title || "Notification");
-    const date = document.createElement("time");
-    date.dateTime = String(notice.updatedAt || "");
-    date.textContent = formatNoticeDate(notice.updatedAt);
-    header.append(title, date);
-
-    const message = document.createElement("p");
-    message.className = "website-notice-message";
-    message.textContent = String(notice.message || "");
-    const footer = document.createElement("div");
-    footer.className = "website-notice-footer";
-    article.append(accent, header, message, footer);
-
-    if (notice.url) {
-      const link = document.createElement("a");
-      link.className = "website-notice-link external-link";
-      link.href = String(notice.url);
-      link.rel = "noreferrer";
-      link.textContent = "Read more";
-      footer.append(link);
-    }
-    article.addEventListener("click", (event) => {
-      if (!event.target.closest("a")) {
-        toggleExpandedNotification(article);
-      }
-    });
-    article.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        toggleExpandedNotification(article);
-      }
-    });
-    list.append(article);
+  const active = ordered.filter((notice) => !notice.archived);
+  const archived = ordered.filter((notice) => notice.archived);
+  for (const notice of active) {
+    list.append(createNotificationCard(notice));
   }
+  if (archived.length) {
+    const archive = document.createElement("details");
+    archive.className = "notification-archive";
+    const summary = document.createElement("summary");
+    summary.textContent = `Archive (${archived.length})`;
+    const archiveList = document.createElement("div");
+    archiveList.className = "notification-archive-list";
+    for (const notice of archived) {
+      archiveList.append(createNotificationCard(notice));
+    }
+    archive.append(summary, archiveList);
+    archive.open = Boolean(searchText);
+    list.append(archive);
+  }
+  if (!ordered.length) {
+    const empty = document.createElement("p");
+    empty.className = "filter-status";
+    empty.textContent = searchText ? "No matching notifications." : "There are no notifications.";
+    list.append(empty);
+  }
+}
+
+function createNotificationCard(notice) {
+  const article = document.createElement("article");
+  const level = ["critical", "important"].includes(String(notice.level || "").toLowerCase())
+    ? String(notice.level).toLowerCase()
+    : "info";
+  article.className = `website-notice notice-${level}${notice.archived ? " archived" : " active"}`;
+  article.tabIndex = 0;
+  article.setAttribute("role", "button");
+  article.setAttribute("aria-expanded", "false");
+
+  const accent = document.createElement("span");
+  accent.className = "website-notice-accent";
+  accent.setAttribute("aria-hidden", "true");
+
+  const header = document.createElement("div");
+  header.className = "website-notice-header";
+  const title = document.createElement("h3");
+  title.textContent = String(notice.title || "Notification");
+  const date = document.createElement("time");
+  date.dateTime = String(notice.updatedAt || "");
+  date.textContent = formatNoticeDate(notice.updatedAt);
+  header.append(title, date);
+
+  const message = document.createElement("p");
+  message.className = "website-notice-message";
+  message.textContent = String(notice.message || "");
+  const footer = document.createElement("div");
+  footer.className = "website-notice-footer";
+  article.append(accent, header, message, footer);
+
+  if (notice.url) {
+    const link = document.createElement("a");
+    link.className = "website-notice-link external-link";
+    link.href = String(notice.url);
+    link.rel = "noreferrer";
+    link.textContent = "Read more";
+    footer.append(link);
+  }
+  article.addEventListener("click", (event) => {
+    if (!event.target.closest("a")) {
+      toggleExpandedNotification(article);
+    }
+  });
+  article.addEventListener("keydown", (event) => {
+    if (!event.target.closest("a") && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      toggleExpandedNotification(article);
+    }
+  });
+  return article;
 }
 
 function toggleExpandedNotification(selected) {
@@ -677,6 +704,69 @@ function formatNoticeDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function filterFaq(query) {
+  const panel = document.querySelector("#panel-faq");
+  if (!panel) {
+    return;
+  }
+  const searchText = String(query || "").trim().toLocaleLowerCase();
+  const entries = [...panel.querySelectorAll(":scope > details")];
+  let visible = 0;
+  for (const entry of entries) {
+    const matches = !searchText || entry.textContent.toLocaleLowerCase().includes(searchText);
+    entry.hidden = !matches;
+    visible += Number(matches);
+  }
+  const status = document.querySelector("#faq-search-status");
+  if (status) {
+    status.textContent = searchText && !visible ? "No matching answers." : "";
+  }
+}
+
+async function submitSupportRequest(form) {
+  const button = form.querySelector('button[type="submit"]');
+  const status = document.querySelector("#support-status");
+  const data = new FormData(form);
+  const message = String(data.get("message") || "").trim();
+  if (message.length < 10) {
+    status.textContent = "Please provide a little more detail.";
+    status.className = "inline-status invalid";
+    return;
+  }
+  button.disabled = true;
+  status.textContent = "Sending...";
+  status.className = "inline-status";
+  try {
+    const response = await fetch("/api/report", {
+      method: "POST",
+      headers: {"content-type": "application/json", accept: "application/json"},
+      body: JSON.stringify({
+        kind: "support",
+        message,
+        contact: String(data.get("contact") || "").trim(),
+        website: String(data.get("website") || ""),
+        metadata: {
+          source: "website",
+          category: String(data.get("category") || "question"),
+          page: window.location.origin,
+        },
+      }),
+    });
+    const result = await readJsonResponse(response, "Support request");
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "The support request could not be sent.");
+    }
+    form.reset();
+    status.textContent = "Request sent.";
+    status.className = "inline-status valid";
+  } catch (error) {
+    status.textContent = error.message || "The support request could not be sent.";
+    status.className = "inline-status invalid";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function setDownloadPlatform(nextPlatform) {
@@ -807,6 +897,12 @@ async function emailLicenseKey(button) {
 }
 
 document.addEventListener("input", (event) => {
+  if (event.target.matches("#notification-search")) {
+    renderNotifications(loadedNotifications, event.target.value);
+  }
+  if (event.target.matches("#faq-search")) {
+    filterFaq(event.target.value);
+  }
   if (event.target.matches("#add-device-count")) {
     updateAddDevicePrice();
   }
@@ -827,6 +923,13 @@ document.addEventListener("input", (event) => {
     if (LICENSE_KEY_PATTERN.test(normalized.trim())) {
       validateTimer = setTimeout(validateLicenseKey, 250);
     }
+  }
+});
+
+document.addEventListener("submit", (event) => {
+  if (event.target.matches("#support-form")) {
+    event.preventDefault();
+    submitSupportRequest(event.target);
   }
 });
 

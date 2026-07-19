@@ -50,6 +50,9 @@
         <button class="tab-link" type="button" id="tab-faq" role="tab" data-tab="faq" aria-controls="panel-faq" aria-selected="false">
           FAQ
         </button>
+        <button class="tab-link" type="button" id="tab-support" role="tab" data-tab="support" aria-controls="panel-support" aria-selected="false">
+          Support
+        </button>
       </nav>
     </header>
 
@@ -344,6 +347,10 @@
           </div>
           <button class="button secondary compact" type="button" id="refresh-notifications">Refresh</button>
         </div>
+        <label class="site-search" for="notification-search">
+          <span class="sr-only">Search notifications</span>
+          <input id="notification-search" type="search" placeholder="Search notifications" autocomplete="off" />
+        </label>
         <p class="notice-load-status" id="notifications-status" role="status">Loading notifications...</p>
         <div class="notifications-list" id="notifications-list" aria-live="polite"></div>
       </section>
@@ -353,6 +360,11 @@
           <p class="eyebrow">FAQ</p>
           <h2>Short answers before you install.</h2>
         </div>
+        <label class="site-search" for="faq-search">
+          <span class="sr-only">Search frequently asked questions</span>
+          <input id="faq-search" type="search" placeholder="Search FAQ" autocomplete="off" />
+        </label>
+        <p class="filter-status" id="faq-search-status" role="status"></p>
         <details>
           <summary>Can Mountlet replace provider desktop apps?</summary>
           <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
@@ -387,13 +399,57 @@
           </ul>
           <p>Do not disable SmartScreen, Gatekeeper, or other system protection globally.</p>
         </details>
+        <details>
+          <summary>How do I get help?</summary>
+          <p>Search this FAQ first. If it does not answer your question, send a support request. Mountlet is independently maintained, so replies may take time.</p>
+        </details>
+      </section>
+
+      <section class="tab-panel support-panel" id="panel-support" role="tabpanel" aria-labelledby="tab-support" data-panel="support" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Support</p>
+          <h2>Start with the FAQ.</h2>
+          <p class="lede">Most common questions are answered there. Mountlet is independently maintained, so individual replies may take time.</p>
+        </div>
+        <div class="button-row">
+          <button class="button secondary tab-action" type="button" data-tab="faq">Search FAQ</button>
+        </div>
+        <form class="support-form" id="support-form">
+          <label>
+            Request type
+            <select id="support-category" name="category">
+              <option value="question">Question</option>
+              <option value="problem">Problem</option>
+              <option value="feature">Feature request</option>
+              <option value="billing">License or billing</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            Email <span class="field-note">Optional, needed for a reply</span>
+            <input id="support-contact" name="contact" type="email" autocomplete="email" maxlength="240" />
+          </label>
+          <label>
+            Message
+            <textarea id="support-message" name="message" rows="7" minlength="10" maxlength="12000" required></textarea>
+          </label>
+          <label class="support-honeypot" aria-hidden="true">
+            Website
+            <input name="website" type="text" tabindex="-1" autocomplete="off" />
+          </label>
+          <div class="button-row">
+            <button class="button primary" type="submit">Send request</button>
+            <span class="inline-status" id="support-status" role="status"></span>
+          </div>
+          <p class="note">Do not include passwords, access keys, tokens, or other secrets.</p>
+        </form>
       </section>
     </main>
 
     <footer class="site-footer">
       <span>© 2026 Mountlet</span>
       <a class="external-link" href="#" data-config-link="repository">GitHub</a>
-      <a class="external-link" href="#" data-config-link="support">Support</a>
+      <button class="footer-link tab-action" type="button" data-tab="support">Support</button>
     </footer>
   </body>
 </html>
