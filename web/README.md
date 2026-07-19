@@ -308,8 +308,10 @@ filenames because users review them before sending. Website support requests do
 not include diagnostic logs.
 
 The website form includes a honeypot and field limits. For public deployment,
-also apply a Cloudflare rate-limit rule to `POST /api/report` to contain spam
-without adding report storage or customer accounts.
+also apply a Cloudflare rate-limit rule to the exact `/api/report` path to
+contain spam without adding report storage or customer accounts. This endpoint
+is submission-only; Mountlet never retrieves reports through it, so a rule that
+counts every HTTP method on that path is safe.
 
 If in-app reports return Cloudflare error 1010 or another 403 before reaching
 the Function, add a Cloudflare security/WAF skip or allow rule for `/api/report`
