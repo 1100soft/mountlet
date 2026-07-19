@@ -23,12 +23,82 @@ class _FakeWindow:
     def __init__(self) -> None:
         self.show_calls = 0
         self.toggle_calls = 0
+        self.tray_click_anchors: list[object] = []
 
     def show(self) -> None:
         self.show_calls += 1
 
     def toggle_from_tray(self) -> None:
         self.toggle_calls += 1
+
+    def remember_tray_click_anchor(self, point: object) -> None:
+        self.tray_click_anchors.append(point)
+
+
+class _FakeAction:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._enabled = True
+        self.triggered = SimpleNamespace(connect=lambda _callback: None)
+
+    def text(self) -> str:
+        return self._text
+
+    def isSeparator(self) -> bool:
+        return False
+
+    def setEnabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+
+
+class _FakeSeparator(_FakeAction):
+    def __init__(self) -> None:
+        super().__init__("")
+
+    def isSeparator(self) -> bool:
+        return True
+
+
+class _FakeMenu:
+    def __init__(self, text: str = "", *, visible: bool = False) -> None:
+        self._text = text
+        self.items: list[_FakeAction | _FakeMenu] = []
+        self._visible = visible
+        self.executed_at: object | None = None
+
+    def text(self) -> str:
+        return self._text
+
+    def isSeparator(self) -> bool:
+        return False
+
+    def isVisible(self) -> bool:
+        return self._visible
+
+    def clear(self) -> None:
+        self.items.clear()
+
+    def addAction(self, action: _FakeAction | str) -> _FakeAction:
+        if isinstance(action, str):
+            action = _FakeAction(action)
+        self.items.append(action)
+        return action
+
+    def addMenu(self, text: str) -> "_FakeMenu":
+        menu = _FakeMenu(text)
+        self.items.append(menu)
+        return menu
+
+    def addSeparator(self) -> _FakeSeparator:
+        separator = _FakeSeparator()
+        self.items.append(separator)
+        return separator
+
+    def actions(self) -> list[_FakeAction | "_FakeMenu"]:
+        return self.items
+
+    def exec(self, position: object) -> None:
+        self.executed_at = position
 
 
 class TrayTests(unittest.TestCase):
@@ -115,6 +185,31 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(tray._is_google_drive_remote(drive))
         self.assertFalse(tray._is_google_drive_remote(s3))
 
+    def test_notice_preview_elides_at_the_last_visible_line(self):
+        class Metrics:
+            def horizontalAdvance(self, text):
+                return len(text)
+
+            def elidedText(self, text, _mode, width):
+                return text if len(text) <= width else f"{text[: max(width - 1, 0)]}…"
+
+        qt = SimpleNamespace(
+            QFontMetrics=lambda _font: Metrics(),
+            Qt=SimpleNamespace(TextElideMode=SimpleNamespace(ElideRight="right")),
+        )
+
+        preview = tray._elide_notice_lines(
+            qt,
+            "one two three four five six seven eight",
+            object(),
+            13,
+            2,
+        )
+
+        self.assertEqual(preview.splitlines()[0], "one two three")
+        self.assertTrue(preview.splitlines()[1].endswith("…"))
+        self.assertEqual(len(preview.splitlines()), 2)
+
     def test_popup_position_clamps_full_window_to_available_screen(self):
         position = tray._popup_position(
             890,
@@ -123,7 +218,29 @@ class TrayTests(unittest.TestCase):
             (400, 300),
         )
 
-        self.assertEqual(position, (500, 332))
+        self.assertEqual(position, (482, 350))
+
+    def test_popup_position_centers_fallback_anchor(self):
+        position = tray._popup_position(
+            890,
+            640,
+            (100, 50, 800, 600),
+            (400, 300),
+            center_on_anchor=True,
+        )
+
+        self.assertEqual(position, (500, 350))
+
+    def test_popup_position_uses_explicit_tray_edge(self):
+        position = tray._popup_position(
+            800,
+            640,
+            (100, 50, 800, 600),
+            (400, 300),
+            edge="right",
+        )
+
+        self.assertEqual(position, (392, 350))
 
     def test_provider_status_colors_follow_light_system_palette(self):
         foreground = SimpleNamespace(name=lambda: "#202020")
@@ -137,6 +254,19 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
         self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
+
+    def test_system_theme_uses_fusion_standard_palette_consistently(self):
+        palette = object()
+        style = mock.Mock()
+        style.standardPalette.return_value = palette
+        app = mock.Mock()
+        app.style.return_value = style
+        qt = SimpleNamespace()
+
+        tray._apply_theme(qt, app, settings.THEME_SYSTEM)
+
+        app.setStyle.assert_called_once_with("Fusion")
+        app.setPalette.assert_called_once_with(palette)
 
     def test_platform_without_driver_config_hides_config_action(self):
         platform = mock.Mock()
@@ -219,6 +349,84 @@ class TrayTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {tray.LICENSE_REQUIRE_ENV: "1"}, clear=True):
             self.assertTrue(tray._license_required())
 
+    def test_license_lock_allows_trial_without_paid_build_flag(self):
+        status = tray.license_control.LicenseStatus("trial", "Trial: 1 day remaining")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(tray.license_control, "current_status", return_value=status):
+                self.assertFalse(tray._license_locked())
+
+    def test_license_lock_blocks_expired_trial_without_paid_build_flag(self):
+        status = tray.license_control.LicenseStatus("expired", "Trial expired")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(tray.license_control, "current_status", return_value=status):
+                self.assertTrue(tray._license_locked())
+
+    def test_license_lock_blocks_required_unlicensed_build(self):
+        status = tray.license_control.LicenseStatus("missing", "No license")
+        with mock.patch.dict("os.environ", {tray.LICENSE_REQUIRE_ENV: "1"}, clear=True):
+            with mock.patch.object(tray.license_control, "current_status", return_value=status):
+                self.assertTrue(tray._license_locked())
+
+    def test_effective_window_mode_forces_single_on_wayland(self):
+        config = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
+
+        self.assertEqual(tray._effective_window_mode(config, is_wayland=True), settings.WINDOW_MODE_SINGLE)
+
+    def test_effective_window_mode_uses_setting_off_wayland(self):
+        config = settings.AppSettings(window_mode=settings.WINDOW_MODE_SINGLE)
+
+        self.assertEqual(tray._effective_window_mode(config, is_wayland=False), settings.WINDOW_MODE_SINGLE)
+
+    def test_single_window_managed_size_detects_full_height_docking(self):
+        class Rect:
+            def __init__(self, width: int, height: int) -> None:
+                self._width = width
+                self._height = height
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = SimpleNamespace(_embedded=True)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowState=SimpleNamespace()))
+        window.window = SimpleNamespace(
+            isMaximized=lambda: False,
+            isFullScreen=lambda: False,
+            windowState=lambda: 0,
+            frameGeometry=lambda: Rect(760, 800),
+        )
+        screen = SimpleNamespace(availableGeometry=lambda: Rect(1200, 804))
+
+        self.assertTrue(window._single_window_size_managed(screen))
+
+    def test_single_window_managed_size_detects_quarter_tiling(self):
+        class Rect:
+            def __init__(self, width: int, height: int) -> None:
+                self._width = width
+                self._height = height
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = SimpleNamespace(_embedded=True)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(WindowState=SimpleNamespace()))
+        window.window = SimpleNamespace(
+            isMaximized=lambda: False,
+            isFullScreen=lambda: False,
+            windowState=lambda: 0,
+            frameGeometry=lambda: Rect(600, 402),
+        )
+        screen = SimpleNamespace(availableGeometry=lambda: Rect(1200, 804))
+
+        self.assertTrue(window._single_window_size_managed(screen))
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -284,6 +492,7 @@ class TrayTests(unittest.TestCase):
         fake_qt = mock.Mock()
         fake_qt.QSystemTrayIcon.ActivationReason.Trigger = "trigger"
         fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick = "double"
+        fake_qt.QCursor.pos.return_value = "tray-click"
         tray_app = object.__new__(tray.MountletTray)
         tray_app.qt = fake_qt
         tray_app.main_window = fake_window
@@ -294,13 +503,16 @@ class TrayTests(unittest.TestCase):
         rebuild.assert_not_called()
         fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 1)
+        self.assertEqual(fake_window.tray_click_anchors, ["tray-click"])
 
         fake_qt.QTimer.singleShot.reset_mock()
+        fake_qt.QCursor.pos.return_value = "tray-double-click"
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
         fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
         self.assertEqual(fake_window.toggle_calls, 2)
+        self.assertEqual(fake_window.tray_click_anchors, ["tray-click", "tray-double-click"])
 
     def test_gnome_wayland_detection(self):
         environment = {
@@ -331,9 +543,61 @@ class TrayTests(unittest.TestCase):
         tray_app._handle_activation(trigger)
         tray_app._handle_activation(context)
 
+        tray_app.main_window.remember_tray_click_anchor.assert_called_once_with("cursor-position")
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.app_menu.popup.assert_called_once_with("cursor-position")
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_tray_context_menu_keeps_short_top_level_with_cascades(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.remote_menu = _FakeMenu("remote")
+        tray_app.app_menu = _FakeMenu("app")
+        tray_app.tray = mock.Mock()
+        tray_app.qt = SimpleNamespace(QAction=lambda label, _menu: _FakeAction(label))
+        main_window = mock.Mock()
+        main_window.is_visible.return_value = False
+        main_window._add_open_config_files_menu.side_effect = lambda menu: menu.addMenu("Open config file")
+        tray_app.main_window = main_window
+
+        with mock.patch.object(tray, "_license_locked", return_value=False):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[]):
+                tray_app.rebuild_menus()
+
+        top_level = [item.text() for item in tray_app.app_menu.items if not item.isSeparator()]
+        self.assertEqual(top_level, ["Open Mountlet", "More", "Quit"])
+        more_menu = next(item for item in tray_app.app_menu.items if item.text() == "More")
+        more_items = [item.text() for item in more_menu.items if not item.isSeparator()]
+        self.assertEqual(more_items, ["App", "Mount", "Config"])
+
+    def test_rebuild_menus_does_not_clear_visible_context_menu(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app.remote_menu = _FakeMenu("remote")
+        tray_app.app_menu = _FakeMenu("app", visible=True)
+        existing = tray_app.app_menu.addAction("Existing")
+        tray_app.tray = mock.Mock()
+        tray_app.main_window = mock.Mock()
+
+        tray_app.rebuild_menus()
+
+        self.assertEqual(tray_app.app_menu.items, [existing])
+        tray_app.tray.setToolTip.assert_not_called()
+
+    def test_rebuild_menus_does_not_clear_context_menu_open_flag(self):
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app._context_menu_open = True
+        tray_app.remote_menu = _FakeMenu("remote")
+        tray_app.app_menu = _FakeMenu("app")
+        existing = tray_app.app_menu.addAction("Existing")
+        tray_app.tray = mock.Mock()
+        tray_app.main_window = mock.Mock()
+
+        tray_app.rebuild_menus()
+
+        self.assertEqual(tray_app.app_menu.items, [existing])
+        tray_app.tray.setToolTip.assert_not_called()
 
     def test_macos_accessory_mode_hides_dock_application(self):
         application = mock.Mock()
@@ -352,11 +616,13 @@ class TrayTests(unittest.TestCase):
     def test_macos_main_window_uses_normal_window_type(self):
         self.assertEqual(tray._main_window_type_name(True), "Window")
         self.assertEqual(tray._main_window_type_name(False), "Tool")
+        self.assertEqual(tray._main_window_type_name(False, False, True), "Window")
 
     def test_wayland_main_window_uses_normal_window_type(self):
         self.assertEqual(tray._main_window_type_name(False, True), "Window")
         self.assertTrue(tray._main_window_uses_native_frame(True))
         self.assertFalse(tray._main_window_uses_native_frame(False))
+        self.assertTrue(tray._main_window_uses_native_frame(False, True))
 
     def test_mountlet_window_save_remote_order_preserves_existing_settings(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -437,6 +703,60 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(dialog.renamed_to, "New__Drive")
         self.assertTrue(dialog.remount_after_rename)
         dialog.dialog.accept.assert_called_once_with()
+
+    def test_mount_config_detects_authentication_changes_only(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Archive__CloudflareR2", "Archive", "Cloudflare R2", "s3", "/mnt/r2")
+        dialog._original_rclone_values = {
+            "access_key_id": "old-key",
+            "secret_access_key": "old-secret",
+            "storage_class": "STANDARD",
+        }
+
+        changed = dialog._changed_auth_fields(
+            {
+                "access_key_id": "new-key",
+                "secret_access_key": "old-secret",
+                "storage_class": "GLACIER",
+            }
+        )
+
+        self.assertEqual(changed, ["access_key_id"])
+
+    def test_mount_config_treats_empty_and_false_boolean_as_equal(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Archive__CloudflareR2", "Archive", "Cloudflare R2", "s3", "/mnt/r2")
+        dialog._original_rclone_values = {"env_auth": ""}
+
+        self.assertEqual(dialog._changed_auth_fields({"env_auth": "false"}), [])
+
+    def test_mount_config_masks_protected_credentials(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        field = mock.Mock()
+        dialog._line = mock.Mock(return_value=field)
+        dialog.qt = SimpleNamespace(
+            QLineEdit=SimpleNamespace(EchoMode=SimpleNamespace(Password="password")),
+        )
+
+        kind, returned = dialog._rclone_config_field("secret_access_key", "secret")
+
+        self.assertEqual(kind, "text")
+        self.assertIs(returned, field)
+        field.setEchoMode.assert_called_once_with("password")
+
+    def test_mount_config_authentication_confirmation_defaults_to_no(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.dialog = mock.Mock()
+        question = mock.Mock(return_value=2)
+        dialog.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=1, No=2),
+                question=question,
+            )
+        )
+
+        self.assertFalse(dialog._confirm_authentication_changes(["secret_access_key"]))
+        self.assertEqual(question.call_args.args[-1], 2)
 
     def test_mount_config_delete_unmounts_mounted_remote_after_single_confirmation(self):
         dialog = object.__new__(tray.MountConfigDialog)
@@ -1278,27 +1598,55 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(window._can_move_remote("Beta", -1))
 
-    def test_mountlet_window_remote_title_colors_provider(self):
+    def test_mountlet_window_remote_title_uses_alias_only(self):
         window = object.__new__(tray.MountletWindow)
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
         title = window._display_remote_name(remote)
 
-        self.assertIn("Docs", title)
-        self.assertIn("(Drive)", title)
-        self.assertIn(tray.PROVIDER_COLORS["drive"], title)
+        self.assertEqual(title, "Docs")
+        self.assertNotIn("Drive", title)
 
-    def test_mountlet_window_browser_button_uses_provider_color(self):
+    def test_mountlet_window_provider_icon_opens_web_ui(self):
         window = object.__new__(tray.MountletWindow)
-        button = mock.Mock()
+        window.qt = mock.Mock()
+        window.qt.Qt.MouseButton.LeftButton = 1
+        event = mock.Mock()
+        event.button.return_value = 1
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
 
-        with mock.patch.object(tray, "_shortcut_hint", return_value=""):
-            window._update_browser_button(button, remote)
+        with mock.patch.object(window, "_open_remote_in_browser") as open_browser:
+            window._handle_provider_icon_click(event, remote)
 
-        button.setEnabled.assert_called_once_with(True)
-        button.setStyleSheet.assert_called_once_with(f"color: {tray.PROVIDER_COLORS['drive']};")
-        button.setToolTip.assert_called_once_with("Open Drive in browser")
+        open_browser.assert_called_once_with(remote)
+        event.accept.assert_called_once_with()
+
+    def test_remote_context_menu_exposes_remote_operations(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        menu = _FakeMenu()
+        event = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(QMenu=lambda _parent: menu)
+        window.window = mock.Mock()
+        window._action_pending = set()
+        window._license_locked = mock.Mock(return_value=False)
+        window._can_move_remote = mock.Mock(side_effect=lambda _name, delta: delta > 0)
+        window._event_global_point = mock.Mock(return_value="cursor-position")
+
+        with mock.patch.object(tray.core, "is_mounted", return_value=True):
+            with mock.patch.object(tray, "_file_manager_label", return_value="Dolphin"):
+                window._show_remote_context_menu(event, remote)
+
+        labels = [item.text() for item in menu.items if not item.isSeparator()]
+        self.assertEqual(
+            labels,
+            ["Unmount", "Open in Dolphin", "Open in web", "Config", "Move up", "Move down", "Reauthenticate"],
+        )
+        enabled = {item.text(): item._enabled for item in menu.items if not item.isSeparator()}
+        self.assertFalse(enabled["Move up"])
+        self.assertTrue(enabled["Move down"])
+        self.assertEqual(menu.executed_at, "cursor-position")
+        event.accept.assert_called_once_with()
 
     def test_mountlet_window_remote_status_icon_symbols_match_states(self):
         class Label:
@@ -1318,8 +1666,14 @@ class TrayTests(unittest.TestCase):
             def setStyleSheet(self, style: str) -> None:
                 self.style = style
 
+            def setCursor(self, _cursor: object) -> None:
+                return
+
         window = object.__new__(tray.MountletWindow)
-        window.qt = SimpleNamespace(QCursor=SimpleNamespace(pos=mock.Mock(return_value=None)))
+        window.qt = SimpleNamespace(
+            QCursor=mock.Mock(pos=mock.Mock(return_value=None)),
+            Qt=SimpleNamespace(CursorShape=SimpleNamespace(PointingHandCursor=1, ArrowCursor=2)),
+        )
         window._connection_cache = {}
         window._show_immediate_tooltip = mock.Mock()
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
@@ -1482,6 +1836,94 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(mountlet_window._offline_reconcile_scheduled, {"Docs"})
         self.assertEqual(len(callbacks), 1)
         self.assertEqual(callbacks[0][0], 500)
+
+    def test_mountlet_window_disables_remote_polling_for_frozen_linux_x11_by_default(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._remote_change_poll_timer = None
+        mountlet_window.qt = SimpleNamespace(QTimer=mock.Mock())
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                mountlet_window._setup_remote_change_polling()
+
+        mountlet_window.qt.QTimer.assert_not_called()
+
+    def test_mountlet_window_allows_remote_polling_override_for_frozen_linux_x11(self):
+        timer = mock.Mock()
+        timer_type = mock.Mock(return_value=timer)
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._remote_change_poll_timer = None
+        mountlet_window.window = mock.Mock()
+        mountlet_window.qt = SimpleNamespace(QTimer=timer_type)
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0", tray.REMOTE_CHANGE_POLLING_ENV: "1"}, clear=True):
+                with mock.patch.object(tray, "load_app_settings", return_value=SimpleNamespace(remote_sync_interval_seconds=30)):
+                    mountlet_window._setup_remote_change_polling()
+
+        timer_type.assert_called_once_with(mountlet_window.window)
+        timer.setInterval.assert_called_once_with(30_000)
+        timer.timeout.connect.assert_called_once_with(mountlet_window._scan_remote_cache_changes)
+        timer.start.assert_called_once_with()
+
+    def test_mountlet_window_disables_background_storage_checks_for_frozen_linux_x11_by_default(self):
+        remote = SimpleNamespace(name="Docs")
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._usage_cache = {}
+        mountlet_window._connection_cache = {}
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                    with mock.patch.object(mountlet_window, "_license_locked", return_value=False):
+                        mountlet_window._schedule_storage_load(remote)
+
+        self.assertEqual(mountlet_window._usage_cache["Docs"].text, "?")
+        self.assertFalse(mountlet_window._connection_cache["Docs"])
+
+    def test_frozen_linux_x11_disables_custom_keyboard_shortcuts_by_default(self):
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                self.assertFalse(tray._custom_keyboard_shortcuts_enabled())
+
+    def test_frozen_linux_x11_allows_custom_keyboard_shortcut_override(self):
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0", tray.CUSTOM_KEYBOARD_SHORTCUTS_ENV: "1"}, clear=True):
+                self.assertTrue(tray._custom_keyboard_shortcuts_enabled())
+
+    def test_main_key_handler_ignores_packaged_x11_when_shortcuts_disabled(self):
+        event = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray, "_custom_keyboard_shortcuts_enabled", return_value=False):
+            self.assertFalse(mountlet_window._handle_main_key(event))
+
+        event.accept.assert_not_called()
+
+    def test_remote_row_key_handler_ignores_packaged_x11_when_shortcuts_disabled(self):
+        event = mock.Mock()
+        mountlet_window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray, "_custom_keyboard_shortcuts_enabled", return_value=False):
+            mountlet_window._handle_remote_row_key(event, mock.Mock(), mock.Mock())
+
+        event.ignore.assert_called_once_with()
+        event.accept.assert_not_called()
+
+    def test_mountlet_window_disables_config_sync_metadata_check_for_frozen_linux_x11_by_default(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window._remote_sync_check_pending = False
+        mountlet_window._remote_sync_metadata = {"config_hash": "old"}
+        mountlet_window._update_config_sync_buttons = mock.Mock()
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+
+        with mock.patch.object(sys, "frozen", True, create=True):
+            with mock.patch.dict("os.environ", {"DISPLAY": ":0"}, clear=True):
+                mountlet_window._request_config_sync_metadata_check([])
+
+        self.assertIsNone(mountlet_window._remote_sync_metadata)
+        mountlet_window._update_config_sync_buttons.assert_called_once_with()
 
     def test_mountlet_window_local_cache_change_schedules_remote_reconcile(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -1962,6 +2404,29 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.raise_.assert_called_once_with()
         mountlet_window.window.activateWindow.assert_called_once_with()
 
+    def test_mountlet_window_show_positions_main_before_browser_stack_after_fit(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.isVisible.return_value = False
+        mountlet_window.desktop = mock.Mock()
+        mountlet_window.desktop.window_is_on_current_workspace.return_value = True
+        mountlet_window._last_tray_anchor = object()
+        mountlet_window._file_browser_restore_request = mock.Mock(return_value=("remote", False))
+        mountlet_window.refresh = mock.Mock()
+        mountlet_window._position_near_tray = mock.Mock()
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+        mountlet_window._focus_window = mock.Mock()
+        mountlet_window._show_file_browser_for_remote_name = mock.Mock()
+
+        mountlet_window.show()
+
+        mountlet_window._file_browser_restore_request.assert_called_once_with(include_visible=False)
+        mountlet_window._show_file_browser_for_remote_name.assert_called_once_with("remote", focus_browser=False)
+        mountlet_window._position_near_tray.assert_called_once_with()
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_not_called()
+        self.assertTrue(mountlet_window._position_after_fit)
+        self.assertTrue(mountlet_window._prefer_remembered_tray_anchor_once)
+
     def test_mountlet_window_show_restores_minimized_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.window = mock.Mock()
@@ -2005,7 +2470,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.show.assert_called_once_with()
         mountlet_window.window.raise_.assert_not_called()
         mountlet_window.window.activateWindow.assert_not_called()
-        self.assertEqual(single_shot.call_count, 9)
+        self.assertEqual(single_shot.call_count, 6)
 
     def test_activate_main_window_skips_when_window_still_on_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -2303,6 +2768,150 @@ class TrayTests(unittest.TestCase):
         fit.assert_called_once_with(root, scroll, container)
         position.assert_not_called()
 
+    def test_completed_content_resize_positions_after_final_resize_with_stable_anchor(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        root = mock.Mock()
+        scroll = mock.Mock()
+        container = mock.Mock()
+        mountlet_window.window = mock.Mock()
+        mountlet_window.window.centralWidget.return_value = root
+        mountlet_window._position_after_fit = True
+        mountlet_window._tray_is_quitting = mock.Mock(return_value=False)
+        mountlet_window._fit_to_content = mock.Mock()
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+        mountlet_window._reposition_file_browser = mock.Mock()
+
+        mountlet_window._finish_content_fit(root, scroll, container)
+
+        mountlet_window._fit_to_content.assert_called_once_with(root, scroll, container)
+        mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_called_once_with()
+        mountlet_window._reposition_file_browser.assert_not_called()
+        self.assertFalse(mountlet_window._position_after_fit)
+
+    def test_file_browser_show_settles_main_position_before_showing(self):
+        remote = SimpleNamespace(name="remote")
+        row = SimpleNamespace(frame=object())
+        file_browser = mock.Mock()
+        file_browser._embedded = False
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._row_widgets = {"remote": row}
+        window._license_locked = mock.Mock(return_value=False)
+        window._set_browser_selected = mock.Mock()
+        window._settle_pending_main_position = mock.Mock()
+
+        window._show_file_browser_for_remote(remote, row.frame, focus_browser=True)
+
+        window._settle_pending_main_position.assert_called_once_with()
+        file_browser.show_remote.assert_called_once_with(remote, row.frame, show_browser=True, focus_browser=True)
+
+    def test_settle_pending_main_position_fits_and_positions_synchronously(self):
+        root = object()
+        scroll = object()
+        container = object()
+        window = object.__new__(tray.MountletWindow)
+        window._position_after_fit = True
+        window._content_fit_widgets = (root, scroll, container)
+        window._fit_to_content = mock.Mock()
+        window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+
+        window._settle_pending_main_position()
+
+        window._fit_to_content.assert_called_once_with(root, scroll, container)
+        window._position_window_stack_near_tray_with_stable_anchor.assert_called_once_with()
+        self.assertFalse(window._position_after_fit)
+
+    def test_hidden_window_stack_restore_request_keeps_previous_file_browser(self):
+        remote = SimpleNamespace(name="remote")
+        file_browser = SimpleNamespace(
+            remote=remote,
+            _embedded=False,
+            _closed_until_selected=False,
+            is_visible=lambda: False,
+        )
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._window_stack_hidden = True
+        window._focus_owner = "browser"
+
+        request = window._file_browser_restore_request()
+
+        self.assertEqual(request, ("remote", True))
+
+    def test_hidden_window_stack_restore_request_ignores_user_closed_file_browser(self):
+        remote = SimpleNamespace(name="remote")
+        file_browser = SimpleNamespace(
+            remote=remote,
+            _embedded=False,
+            _closed_until_selected=True,
+            is_visible=lambda: False,
+        )
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._window_stack_hidden = True
+        window._focus_owner = "browser"
+
+        request = window._file_browser_restore_request()
+
+        self.assertIsNone(request)
+
+    def test_reposition_file_browser_only_moves_existing_browser_window(self):
+        remote = SimpleNamespace(name="remote")
+        row = SimpleNamespace(frame=object())
+        file_browser = mock.Mock()
+        file_browser.is_visible.return_value = True
+        file_browser.remote = remote
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = file_browser
+        window._row_widgets = {"remote": row}
+
+        window._reposition_file_browser()
+
+        file_browser.reposition.assert_called_once_with(row.frame)
+        file_browser.show_remote.assert_not_called()
+
+    def test_resize_anchored_preserves_only_explicit_right_tray_edge(self):
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x = x
+                self._y = y
+                self._width = width
+                self._height = height
+
+            def left(self) -> int:
+                return self._x
+
+            def right(self) -> int:
+                return self._x + self._width
+
+            def top(self) -> int:
+                return self._y
+
+            def bottom(self) -> int:
+                return self._y + self._height
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+        moves: list[tuple[int, int]] = []
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_edge = "right"
+        window.window = SimpleNamespace(
+            resize=mock.Mock(),
+            frameGeometry=lambda: Rect(880, 500, 320, 280),
+            move=lambda x, y: moves.append((x, y)),
+        )
+        window.is_visible = mock.Mock(return_value=True)
+        window._clamp_to_screen = mock.Mock()
+        screen = SimpleNamespace(availableGeometry=lambda: Rect(0, 0, 1200, 800))
+
+        window._resize_anchored(260, 200, screen)
+
+        self.assertEqual(moves, [(941, 500)])
+
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
@@ -2312,10 +2921,12 @@ class TrayTests(unittest.TestCase):
         tray_app.app = mock.Mock()
 
         with mock.patch.object(tray.rclone_wizard, "cancel_all_remote_configs") as cancel_configs:
-            tray_app.request_quit()
+            with mock.patch.object(tray.report_control, "mark_clean_shutdown") as mark_clean:
+                tray_app.request_quit()
 
         self.assertTrue(tray_app._quitting)
         cancel_configs.assert_called_once_with()
+        mark_clean.assert_called_once_with()
         tray_app.timer.stop.assert_called_once_with()
         tray_app.main_window.prepare_quit.assert_called_once_with()
         tray_app.tray.hide.assert_called_once_with()
@@ -2805,64 +3416,43 @@ class TrayTests(unittest.TestCase):
 
         tray_app.main_window._open_folder.assert_called_once_with(remote)
 
-    def test_window_folder_open_uses_mount_status_instead_of_directory_probe(self):
+    def test_window_folder_open_delegates_to_shared_browser_root_opener(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
         window = object.__new__(tray.MountletWindow)
         window.tray_app = mock.Mock()
+        window.file_browser = mock.Mock()
+        active_status = tray.license_control.LicenseStatus("trial", "Trial active")
 
-        with mock.patch.object(core, "is_mounted", return_value=False):
-            with mock.patch.object(tray.os.path, "isdir", return_value=True) as isdir:
+        with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
+            window._open_folder(remote)
+
+        window.file_browser.open_remote_root.assert_called_once_with(remote)
+
+    def test_window_folder_open_is_blocked_when_license_is_locked(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window.file_browser = mock.Mock()
+        window._show_license_dialog = mock.Mock()
+
+        with mock.patch.object(window, "_license_locked", return_value=True):
+            window._open_folder(remote)
+
+        window._show_license_dialog.assert_called_once_with()
+        window.file_browser.open_remote_root.assert_not_called()
+
+    def test_window_folder_open_uses_browser_root_opener_on_windows(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window.file_browser = mock.Mock()
+        active_status = tray.license_control.LicenseStatus("trial", "Trial active")
+
+        with mock.patch.object(tray.license_control, "current_status", return_value=active_status):
+            with mock.patch.object(tray.platform, "system", return_value="Windows"):
                 window._open_folder(remote)
 
-        isdir.assert_not_called()
-        window.tray_app._notify.assert_called_once_with(
-            "Open folder",
-            "Mount the remote before opening its folder.",
-            success=False,
-        )
-
-    def test_window_folder_open_refuses_unreachable_mount_path(self):
-        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
-        window = object.__new__(tray.MountletWindow)
-        window.tray_app = mock.Mock()
-        window.desktop = mock.Mock()
-
-        with mock.patch.object(core, "is_mounted", return_value=True):
-            with mock.patch.object(tray.platform, "system", return_value="Linux"):
-                with mock.patch.object(tray.Path, "is_dir", return_value=False):
-                    window._open_folder(remote)
-
-        window.desktop.open_folder.assert_not_called()
-        window.tray_app._notify.assert_called_once_with(
-            "Open folder",
-            "The mount folder is not reachable. Remount this remote and try again.",
-            success=False,
-        )
-
-    def test_windows_folder_open_skips_python_directory_probe_after_mount_check(self):
-        class ImmediateThread:
-            def __init__(self, target, **_kwargs):
-                self.target = target
-
-            def start(self) -> None:
-                self.target()
-
-        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", r"C:\Mountlet\Docs")
-        window = object.__new__(tray.MountletWindow)
-        window.tray_app = mock.Mock()
-        window.desktop = mock.Mock()
-        window._bridge = SimpleNamespace(folder_opened=SimpleNamespace(emit=mock.Mock()))
-
-        with mock.patch.object(core, "is_mounted", return_value=True):
-            with mock.patch.object(tray.platform, "system", return_value="Windows"):
-                with mock.patch.object(tray.Path, "is_dir", return_value=False) as is_dir:
-                    with mock.patch.object(tray.threading, "Thread", ImmediateThread):
-                        window.desktop.open_folder.return_value = True
-                        window._open_folder(remote)
-
-        is_dir.assert_not_called()
-        window.desktop.open_folder.assert_called_once_with(r"C:\Mountlet\Docs")
-        window._bridge.folder_opened.emit.assert_called_once_with(True)
+        window.file_browser.open_remote_root.assert_called_once_with(remote)
 
     def test_remote_row_style_keeps_border_geometry_constant(self):
         class Row:
@@ -3323,14 +3913,260 @@ class TrayTests(unittest.TestCase):
         trigger = object()
         tray_app.qt = SimpleNamespace(
             QSystemTrayIcon=SimpleNamespace(ActivationReason=SimpleNamespace(Trigger=trigger)),
+            QCursor=SimpleNamespace(pos=lambda: "tray-click"),
             QTimer=mock.Mock(),
         )
 
         tray_app._handle_activation(trigger)
 
+        tray_app.main_window.remember_tray_click_anchor.assert_called_once_with("tray-click")
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.rebuild_menus.assert_not_called()
         tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+
+    def test_main_focus_style_updates_only_registered_main_surface(self):
+        main_surface = mock.Mock()
+        other_surface = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window._main_surface = main_surface
+        window._focus_owner = "main"
+
+        window._update_main_focus_style()
+
+        main_surface.setStyleSheet.assert_called_once()
+        other_surface.setStyleSheet.assert_not_called()
+
+    def test_visual_only_refresh_skips_background_rclone_checks_once(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._skip_background_refresh_once = True
+        window._current_remote_names = [remote.name]
+        window._row_widgets = {remote.name: SimpleNamespace()}
+        window._focus_snapshot = mock.Mock(return_value=("main", remote.name))
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._license_locked = mock.Mock(return_value=False)
+        window._remote_name_width = mock.Mock(return_value=120)
+        window._update_purchase_license_button = mock.Mock()
+        window._update_remote_row = mock.Mock()
+        window._schedule_storage_load = mock.Mock()
+        window._request_config_sync_metadata_check = mock.Mock()
+        window._update_license_lock_state = mock.Mock()
+        window._browser_layout_changed = mock.Mock()
+        window._restore_focus_snapshot = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                window.refresh()
+
+        window._update_remote_row.assert_called_once_with(remote, False)
+        window._request_config_sync_metadata_check.assert_not_called()
+        window._schedule_storage_load.assert_not_called()
+        self.assertFalse(window._skip_background_refresh_once)
+
+    def test_browser_layout_change_repositions_file_browser_after_main_resize(self):
+        window = object.__new__(tray.MountletWindow)
+        root = mock.Mock()
+        scroll = mock.Mock()
+        container = mock.Mock()
+        window._content_fit_widgets = (root, scroll, container)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._invalidate_widget_tree = mock.Mock()
+        window._fit_to_content = mock.Mock()
+        window._reposition_file_browser = mock.Mock()
+        window.qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=mock.Mock(side_effect=lambda _delay, cb: cb())))
+
+        window._browser_layout_changed()
+
+        self.assertEqual(window._fit_to_content.call_count, 2)
+        self.assertEqual(window._reposition_file_browser.call_count, 2)
+
+    def test_app_settings_layout_change_reopens_through_normal_show_path(self):
+        old_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
+        new_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_SINGLE)
+        dialog = SimpleNamespace(dialog=object())
+        tray_app = SimpleNamespace(_is_wayland=False, app=object(), rebuild_menus=mock.Mock())
+        window = object.__new__(tray.MountletWindow)
+        single_shot = mock.Mock(side_effect=lambda _delay, callback: callback())
+        window.qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=single_shot))
+        window.tray_app = tray_app
+        window.window = mock.Mock()
+        window.window.isVisible.return_value = True
+        window._license_locked = mock.Mock(return_value=False)
+        window._file_browser_embedded = mock.Mock(return_value=False)
+        window._mounted_remote_names = mock.Mock(return_value=set())
+        window._rebuild_file_browser_if_layout_changed = mock.Mock()
+        window._remount_changes = mock.Mock(return_value=[])
+        window._configuration_changed = mock.Mock()
+        window._ask_remount_for_config_changes = mock.Mock()
+        window._setup_remote_change_polling = mock.Mock()
+        window.refresh = mock.Mock()
+        window.show = mock.Mock()
+        window._usage_cache = {}
+        window._connection_cache = {}
+        window._last_tray_anchor = object()
+        window._tray_anchor = mock.Mock()
+
+        def open_child_dialog(_dialog: object, on_accepted: object) -> None:
+            on_accepted()
+
+        window._open_child_dialog = mock.Mock(side_effect=open_child_dialog)
+
+        with mock.patch.object(tray, "load_app_settings", side_effect=[old_settings, new_settings]):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[]):
+                with mock.patch.object(tray.core, "ensure_base_mount_dir", return_value=(tray.core.BASE_MOUNT_DIR, "")):
+                    with mock.patch.object(tray, "_apply_theme"):
+                        with mock.patch.object(tray, "AppConfigDialog", return_value=dialog):
+                            window._show_app_config_editor()
+
+        window.window.hide.assert_called_once_with()
+        tray_app.rebuild_menus.assert_called_once_with()
+        single_shot.assert_called_once_with(0, window.show)
+        window.show.assert_called_once_with()
+        window.refresh.assert_not_called()
+        window._tray_anchor.assert_not_called()
+        self.assertTrue(window._prefer_remembered_tray_anchor_once)
+
+    def test_layout_reposition_prefers_remembered_tray_anchor_over_cursor(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+        class Geometry:
+            def isValid(self) -> bool:
+                return False
+
+        class Screen:
+            def availableGeometry(self) -> object:
+                return SimpleNamespace(left=lambda: 0, top=lambda: 0)
+
+        remembered = Point(780, 580)
+        cursor = Point(100, 100)
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_anchor = remembered
+        window._prefer_remembered_tray_anchor_once = True
+        window.tray_app = SimpleNamespace(tray=SimpleNamespace(geometry=lambda: Geometry()))
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: Screen(), screenAt=lambda _point: Screen()),
+            QCursor=SimpleNamespace(pos=mock.Mock(return_value=cursor)),
+        )
+
+        anchor, geometry_valid = window._tray_anchor()
+
+        self.assertIs(anchor, remembered)
+        self.assertFalse(geometry_valid)
+        self.assertFalse(window._prefer_remembered_tray_anchor_once)
+        window.qt.QCursor.pos.assert_not_called()
+
+    def test_layout_reposition_prefers_remembered_anchor_over_valid_tray_geometry(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+        class Geometry:
+            def isValid(self) -> bool:
+                return True
+
+            def width(self) -> int:
+                return 24
+
+            def height(self) -> int:
+                return 24
+
+            def center(self) -> Point:
+                return Point(1040, 580)
+
+        class Screen:
+            def availableGeometry(self) -> object:
+                return SimpleNamespace(left=lambda: 0, top=lambda: 0)
+
+        remembered = Point(1200, 580)
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_anchor = remembered
+        window._prefer_remembered_tray_anchor_once = True
+        window.tray_app = SimpleNamespace(tray=SimpleNamespace(geometry=lambda: Geometry()))
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: Screen(), screenAt=lambda _point: Screen()),
+            QCursor=SimpleNamespace(pos=mock.Mock()),
+        )
+
+        anchor, geometry_valid = window._tray_anchor()
+
+        self.assertIs(anchor, remembered)
+        self.assertFalse(geometry_valid)
+        window.qt.QCursor.pos.assert_not_called()
+
+    def test_tray_click_anchor_remembers_click_point_and_edge(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+        class Available:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x = x
+                self._y = y
+                self._width = width
+                self._height = height
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+            def left(self) -> int:
+                return self._x
+
+            def right(self) -> int:
+                return self._x + self._width
+
+            def top(self) -> int:
+                return self._y
+
+            def bottom(self) -> int:
+                return self._y + self._height
+
+        available = Available(0, 0, 1200, 800)
+        anchor = Point(1220, 780)
+        screen = SimpleNamespace(availableGeometry=lambda: available)
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: screen, screenAt=lambda _point: screen),
+            QCursor=SimpleNamespace(pos=mock.Mock()),
+        )
+
+        window.remember_tray_click_anchor(anchor)
+
+        self.assertIs(window._last_tray_anchor, anchor)
+        self.assertEqual(window._last_tray_edge, "right")
+        self.assertTrue(window._prefer_remembered_tray_anchor_once)
+        window.qt.QCursor.pos.assert_not_called()
 
     def test_tray_app_settings_shows_main_window_before_dialog(self):
         tray_app = object.__new__(tray.MountletTray)
@@ -3841,11 +4677,47 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray.threading, "Thread") as thread:
             worker_holder = {}
             thread.side_effect = lambda target, daemon: worker_holder.setdefault("thread", mock.Mock(start=lambda: target()))
-            with mock.patch.object(tray.core, "reconnect_remote", return_value=(True, "reauthenticated")):
-                with mock.patch.object(tray.core, "mount_remote", return_value=(True, "mounted")):
-                    window._run_remote_reauthentication(remote, remount=True)
+            with mock.patch.object(tray.core, "is_mounted", return_value=False):
+                with mock.patch.object(tray.core, "reconnect_remote", return_value=(True, "reauthenticated")):
+                    with mock.patch.object(tray.core, "mount_remote", return_value=(True, "mounted")):
+                        window._run_remote_reauthentication(remote, remount=True)
 
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "reauthenticated\nmounted")
+
+    def test_remote_reauthentication_unmounts_before_reconnecting(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        window = object.__new__(tray.MountletWindow)
+        window._action_pending = set()
+        window._request_refresh = mock.Mock()
+        window._bridge = SimpleNamespace(action_finished=SimpleNamespace(emit=mock.Mock()))
+        calls: list[str] = []
+
+        with mock.patch.object(tray.threading, "Thread") as thread:
+            thread.side_effect = lambda target, daemon: mock.Mock(start=target)
+            with mock.patch.object(tray.core, "is_mounted", return_value=True):
+                with mock.patch.object(
+                    tray.core,
+                    "unmount_remote",
+                    side_effect=lambda _remote: (calls.append("unmount") or True, "unmounted"),
+                ):
+                    with mock.patch.object(
+                        tray.core,
+                        "reconnect_remote",
+                        side_effect=lambda _remote: (calls.append("reauthenticate") or True, "reauthenticated"),
+                    ):
+                        with mock.patch.object(
+                            tray.core,
+                            "mount_remote",
+                            side_effect=lambda _remote: (calls.append("mount") or True, "mounted"),
+                        ):
+                            window._run_remote_reauthentication(remote, remount=True)
+
+        self.assertEqual(calls, ["unmount", "reauthenticate", "mount"])
+        window._bridge.action_finished.emit.assert_called_once_with(
+            "Docs",
+            True,
+            "unmounted\nreauthenticated\nmounted",
+        )
 
     def test_bulk_action_finish_invalidates_pending_file_browser_caches(self):
         tray_app = mock.Mock()

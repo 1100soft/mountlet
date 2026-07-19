@@ -18,13 +18,20 @@ environment overrides.
 <!-- mountlet-vars:start -->
 - Production website: https://mountlet.app
 - Production license API: https://mountlet.app/api/license
+- Production report API: https://mountlet.app/api/report
 - Relocated app API override: `MOUNTLET_LICENSE_API_URL`
 - Relocated purchase-site override: `MOUNTLET_LICENSE_SITE_URL`
+- Relocated report API override: `MOUNTLET_REPORT_API_URL`
 - Resend API key: `RESEND_API_KEY`
 - Resend sender: `RESEND_FROM`
 - Optional Resend reply-to: `RESEND_REPLY_TO`
 - Resend sender alias: `EMAIL_FROM`
 - Optional Resend reply-to alias: `EMAIL_REPLY_TO`
+- Optional report sender: `REPORT_FROM`
+- Optional report recipient: `REPORT_TO`
+- GitHub report token: `REPORT_GITHUB_TOKEN`
+- GitHub report repository: `REPORT_GITHUB_REPO`
+- Optional GitHub report labels: `REPORT_GITHUB_LABELS`
 - Stripe secret key: `STRIPE_SECRET_KEY`
 - Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
 <!-- mountlet-vars:end -->
@@ -225,6 +232,11 @@ S3-compatible API instead.
 The `wip` branch uploads to the preview bucket. `main` and version tags upload
 to the production bucket.
 
+Preview app builds also embed the preview license and report API defaults:
+`https://wip.mountlet.pages.dev/api/license` and
+`https://wip.mountlet.pages.dev/api/report`. Production builds keep the
+relocatable production defaults under `https://mountlet.app`.
+
 These keys are the public download API names. Keep them in
 `web/release-files.json` so the website, deployment check, and R2 upload tool
 use the same list.
@@ -251,13 +263,15 @@ Paid installers should set `MOUNTLET_REQUIRE_LICENSE=1` and provide the
 matching public signing key to the app through `MOUNTLET_LICENSE_PUBLIC_KEY` or
 `MOUNTLET_LICENSE_PUBLIC_KEY_FILE`.
 
-Create a D1 database and apply `schema.sql`:
+Create a D1 database and bind it to Pages as `DB`. After deployment, initialize
+or upgrade the bound database through the admin endpoint:
 
 ```bash
-wrangler d1 execute mountlet-license --file web/schema.sql
+curl -X POST https://<site>/api/license/admin/init \
+  -H "Authorization: Bearer $LICENSE_ADMIN_TOKEN"
 ```
 
-Bind the D1 database to Pages as `DB`, then set these environment variables:
+Then set these environment variables:
 
 - `LICENSE_KEY_PEPPER`: private salt for hashing license keys in D1.
 - `LICENSE_SIGNING_PRIVATE_KEY`: ECDSA P-256 private key in PKCS8 PEM format.
@@ -271,6 +285,66 @@ Bind the D1 database to Pages as `DB`, then set these environment variables:
   `Mountlet <licenses@example.com>`.
 - `EMAIL_REPLY_TO` or `RESEND_REPLY_TO`: optional reply-to address for license
   emails.
+- `MOUNTLET_NOTICES_JSON`: optional emergency fallback notices served from `/api/notices`.
+- `REPORT_TO`: optional recipient for app reports and website support requests.
+  If unset, reports fall back to the reply-to or sender address.
+- `REPORT_FROM`: optional verified sender for reports and support requests. If
+  unset, messages fall back to the license email sender.
+- `REPORT_GITHUB_TOKEN`: optional fine-grained GitHub token for creating private
+  app report and support-request issues.
+- `REPORT_GITHUB_REPO`: optional GitHub repository target in `owner/repo`
+  format.
+- `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
+  those labels in GitHub first. Mountlet adds `bug`, `crash`, or `support` as
+  appropriate and retries without labels if GitHub rejects the labels.
+
+The report endpoint creates GitHub issues directly. Email through Resend is only
+an optional secondary notification path. For GitHub reporting, create a private
+support repository, create a fine-grained personal access token limited to that
+repository with Issues read/write permission, then set `REPORT_GITHUB_TOKEN` as
+a Pages secret and `REPORT_GITHUB_REPO` as an environment variable. The Function
+redacts obvious tokens and secrets, but app reports can still include paths and
+filenames because users review them before sending. Website support requests do
+not include diagnostic logs.
+
+The website form includes a honeypot and field limits. For public deployment,
+also apply a Cloudflare rate-limit rule to the exact `/api/report` path to
+contain spam without adding report storage or customer accounts. This endpoint
+is submission-only; Mountlet never retrieves reports through it, so a rule that
+counts every HTTP method on that path is safe.
+
+If in-app reports return Cloudflare error 1010 or another 403 before reaching
+the Function, add a Cloudflare security/WAF skip or allow rule for `/api/report`
+or for the `Mountlet/...` user agent. The report Function still validates JSON
+and sends only through configured report sinks.
+
+## App notices
+
+Notices are stored in the bound D1 database and become visible as soon as they
+are published. The same `LICENSE_ADMIN_TOKEN` protects management actions.
+Initialize the current environment once after deploying this schema:
+
+```bash
+curl -X POST https://<site>/api/license/admin/init \
+  -H "Authorization: Bearer $LICENSE_ADMIN_TOKEN"
+```
+
+Manage notices without editing Cloudflare variables or redeploying:
+
+```bash
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- list --site https://<site>
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- create --site https://<site> \
+  --id maintenance-2026-08 --title "Maintenance" \
+  --message "Cloud sync may be briefly unavailable." --level important --publish
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- update maintenance-2026-08 \
+  --site https://<site> --message "Maintenance is complete."
+LICENSE_ADMIN_TOKEN=... npm run web:notices -- archive maintenance-2026-08 --site https://<site>
+```
+
+Editing increments the notice version, so clients see the revision as unread.
+Published notices must be archived before deletion, and critical/price notices
+cannot be hard-deleted. `MOUNTLET_NOTICES_JSON` remains a read-only emergency
+fallback.
 
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and
@@ -351,8 +425,19 @@ curl -X POST https://<site>/api/license/admin/create \
 
 The response contains the raw key. Store or send it immediately.
 
-If the database already existed before beta support, apply:
+Notices are a JSON array. Critical notices, including price notices, are always
+shown in the app:
 
-```bash
-wrangler d1 execute mountlet-license --file web/migrations/0002_license_kind.sql
+```json
+[
+  {
+    "id": "price-2026-09",
+    "version": "1",
+    "type": "price",
+    "level": "critical",
+    "title": "Subscription price change",
+    "message": "Subscription prices will change on September 1. You can cancel before renewal.",
+    "url": "https://mountlet.app/#pricing"
+  }
+]
 ```

@@ -16,16 +16,20 @@ from .cloud_browser import (
     normalize_browser_path,
     parent_browser_path,
 )
+from .metadata_index import IndexedEntry
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
-from .ui_icons import apply_button_icon, mountlet_icon
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
+EMBEDDED_BROWSER_MAX_HEIGHT = 460
+EMBEDDED_BROWSER_MAX_VISIBLE_ROWS = 8
 FILE_BROWSER_MIN_HEIGHT = 240
 FILE_BROWSER_MAX_VISIBLE_ROWS = 14
 FILE_BROWSER_CONTEXT_ROWS = 1
+FILE_BROWSER_STATUS_MAX_CHARS = 140
 RCLONE_OUTPUT_TAIL_LINES = 10
 RCLONE_OUTPUT_MIN_LINES = 8
 RCLONE_OUTPUT_MAX_LINES = 16
@@ -104,6 +108,7 @@ class CompactCloudBrowser:
         toggle_mount: Callable[[str, bool], None] | None = None,
         sync_paths: Callable[[core.RemoteInfo, list[tuple[str, bool]]], None] | None = None,
         embedded: bool = False,
+        keyboard_shortcuts_enabled: bool = True,
         layout_changed: Callable[[], None] | None = None,
         local_files_changed: Callable[[], None] | None = None,
     ) -> None:
@@ -116,6 +121,7 @@ class CompactCloudBrowser:
         self._open_local_folder = open_local_folder
         self._toggle_mount = toggle_mount
         self._sync_paths = sync_paths
+        self._keyboard_shortcuts_enabled = keyboard_shortcuts_enabled
         self._file_manager_name = file_manager_label
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
@@ -137,14 +143,24 @@ class CompactCloudBrowser:
         self._rclone_output_dialog: Any | None = None
         self._rclone_output_text: Any | None = None
         self._rclone_raw_output_text: Any | None = None
+        self._search_dialog: Any | None = None
+        self._search_tree: Any | None = None
+        self._search_results: list[IndexedEntry] = []
+        self._search_pending = False
+        self._search_verify_pending = False
+        self._search_timer: Any | None = None
+        self._search_filters: list[Any] = []
         self._rclone_output_lines: list[str] = []
         self._rclone_progress_block: list[str] = []
         self._offline_jobs_running = 0
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
         ] = []
+        self._indexing_remote_names: set[str] = set()
+        self._auto_index_requested = False
         self._pending_select_path = ""
         self._closed_until_selected = False
+        self._disposed = False
         self._load_slots = threading.BoundedSemaphore(4)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
@@ -154,6 +170,8 @@ class CompactCloudBrowser:
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
         self._bridge.rclone_output_ready.connect(self._append_rclone_output)
         self._bridge.rclone_raw_log_changed.connect(self._raw_rclone_log_changed)
+        self._bridge.search_ready.connect(self._search_ready)
+        self._bridge.index_finished.connect(self._index_finished)
         self.backend.operation_output_callback = lambda text: self._bridge.rclone_output_ready.emit(text)
         self._unsubscribe_rclone_log = rclone_log.subscribe(
             lambda _text: self._bridge.rclone_raw_log_changed.emit()
@@ -161,6 +179,7 @@ class CompactCloudBrowser:
         self.window = self._make_window()
         self._file_icon_provider = self._make_file_icon_provider()
         self._build()
+        self._setup_search_timer()
         self._setup_working_animation()
 
     def _make_bridge(self) -> Any:
@@ -174,6 +193,8 @@ class CompactCloudBrowser:
             offline_job_finished = qt.Signal(str, object, str, bool, str)
             rclone_output_ready = qt.Signal(str)
             rclone_raw_log_changed = qt.Signal()
+            search_ready = qt.Signal(str, object, str)
+            index_finished = qt.Signal(str, int, str)
 
         return Bridge()
 
@@ -187,6 +208,7 @@ class CompactCloudBrowser:
                 super().mousePressEvent(event)
 
             def keyPressEvent(self, event: Any) -> None:
+                outer._release_main_hover_suppression()
                 if outer._handle_key(event):
                     return
                 super().keyPressEvent(event)
@@ -231,10 +253,14 @@ class CompactCloudBrowser:
         root = qt.QWidget()
         root.setObjectName("fileBrowserSurface")
         root.setMinimumSize(EMBEDDED_BROWSER_MIN_WIDTH, EMBEDDED_BROWSER_MIN_HEIGHT)
+        root.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
+        root.enterEvent = lambda event: self._release_main_hover_suppression()
         self.root = root
         layout = qt.QVBoxLayout(root)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(5)
+        with suppress(Exception):
+            layout.setAlignment(qt.Qt.AlignmentFlag.AlignTop)
 
         header = qt.QHBoxLayout()
         self.title = qt.QLabel("Files")
@@ -317,6 +343,33 @@ class CompactCloudBrowser:
         )
         navigation.addWidget(self.open_folder_button)
         layout.addLayout(navigation)
+
+        search_layout = qt.QHBoxLayout()
+        self.search_field = qt.QLineEdit()
+        self.search_field.setPlaceholderText("Search this remote")
+        self._style_search_field(self.search_field)
+        self.search_field.textChanged.connect(self._search_text_changed)
+        self.search_field.returnPressed.connect(self._open_current_search_result)
+        self.search_field.installEventFilter(self._make_search_key_filter())
+        search_layout.addWidget(self.search_field, 1)
+        layout.addLayout(search_layout)
+
+        self.search_results = qt.QTreeWidget()
+        self.search_results.setColumnCount(3)
+        self.search_results.setHeaderLabels(["Name", "Path", "Modified"])
+        self.search_results.setRootIsDecorated(False)
+        self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        with suppress(Exception):
+            self.search_results.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.search_results.setMaximumHeight(0)
+        self.search_results.setMinimumHeight(0)
+        self.search_results.setVisible(False)
+        self.search_results.itemClicked.connect(self._open_search_result)
+        self.search_results.itemDoubleClicked.connect(self._open_search_result)
+        self.search_results.currentItemChanged.connect(self._preview_search_result)
+        self.search_results.installEventFilter(self._make_search_key_filter())
+        layout.addWidget(self.search_results)
 
         item_actions = qt.QHBoxLayout()
         self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True, icon_name="ui-copy")
@@ -450,7 +503,20 @@ class CompactCloudBrowser:
         self.tree.setColumnWidth(1, 72)
         self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
         layout.addWidget(self.tree, 1)
-        self.status = qt.QLabel("")
+        class StatusLabel(qt.QLabel):
+            def setText(self, text: str) -> None:
+                full_text = str(text or "").replace("\n", " ").strip()
+                display_text = full_text
+                if len(display_text) > FILE_BROWSER_STATUS_MAX_CHARS:
+                    display_text = f"{display_text[: FILE_BROWSER_STATUS_MAX_CHARS - 1].rstrip()}…"
+                super().setText(display_text)
+                self.setToolTip(full_text)
+
+        self.status = StatusLabel("")
+        self.status.setMinimumWidth(0)
+        self.status.setSizePolicy(qt.QSizePolicy.Policy.Ignored, qt.QSizePolicy.Policy.Fixed)
+        with suppress(Exception):
+            self.status.setFixedHeight(self.status.fontMetrics().height() + 8)
         layout.addWidget(self.status)
         self.window.setCentralWidget(root)
         self._update_actions()
@@ -669,6 +735,43 @@ class CompactCloudBrowser:
         button.setToolTip(tooltip)
         button.clicked.connect(lambda _checked=False: callback())
         return button
+
+    def _style_search_field(self, field: Any) -> None:
+        with suppress(Exception):
+            field.setFixedHeight(28)
+            field.setClearButtonEnabled(True)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=self._widget_text_color(field))
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if icon is not None and leading_position is not None:
+            with suppress(Exception):
+                action = field.addAction(icon, leading_position)
+                setattr(field, "_mountlet_search_icon_action", action)
+        field.setStyleSheet(
+            """
+            QLineEdit {
+                border: 1px solid rgba(107, 114, 128, 130);
+                border-radius: 14px;
+                padding: 2px 8px;
+                background: palette(base);
+                color: palette(text);
+            }
+            QLineEdit:focus {
+                border: 1px solid #3b82f6;
+            }
+            """
+        )
+
+    def _widget_text_color(self, widget: Any) -> str | None:
+        try:
+            palette = widget.palette()
+            role = widget.foregroundRole()
+            color = palette.color(role)
+            if color.isValid():
+                return color.name()
+        except Exception:
+            return None
+        return None
 
     def _mount_switch(self) -> Any:
         qt = self.qt
@@ -1085,14 +1188,72 @@ class CompactCloudBrowser:
         else:
             self.window.close()
 
+    def dispose(self) -> None:
+        self._disposed = True
+        for timer_name in ("_working_timer", "_search_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+        unsubscribe = getattr(self, "_unsubscribe_rclone_log", None)
+        if unsubscribe is not None:
+            with suppress(Exception):
+                unsubscribe()
+            self._unsubscribe_rclone_log = None
+        with suppress(Exception):
+            self.close()
+
     def embed_into(self, layout: Any) -> None:
         if not self._embedded:
             return
         if self.window.centralWidget() is self.root:
             self.window.takeCentralWidget()
         self.root.setParent(layout.parentWidget())
-        layout.addWidget(self.root)
+        layout.addWidget(self.root, 1)
         self.root.hide()
+
+    def owns_focus_widget(self, widget: Any | None = None) -> bool:
+        if widget is None:
+            application = getattr(self.qt, "QApplication", None)
+            widget = application.focusWidget() if application is not None else None
+        current = widget
+        while current is not None:
+            if current is getattr(self, "root", None) or current is getattr(self, "window", None):
+                return True
+            try:
+                current = current.parentWidget()
+            except Exception:
+                return False
+        return False
+
+    def focus_snapshot(self) -> str:
+        application = getattr(self.qt, "QApplication", None)
+        widget = application.focusWidget() if application is not None else None
+        if widget is getattr(self, "search_field", None):
+            return "search"
+        if widget is getattr(self, "search_results", None):
+            return "search_results"
+        return "tree"
+
+    def restore_focus_snapshot(self, target: str) -> None:
+        if not self.is_visible():
+            return
+        self._set_focus_owner("browser")
+        if target == "search" and getattr(self, "search_field", None) is not None:
+            with suppress(Exception):
+                self.search_field.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        if (
+            target == "search_results"
+            and getattr(self, "search_results", None) is not None
+            and self.search_results.isVisible()
+        ):
+            with suppress(Exception):
+                self.search_results.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        with suppress(Exception):
+            self.tree.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            self._ensure_tree_selection()
 
     def preload(self, remotes: list[core.RemoteInfo]) -> None:
         for remote in remotes:
@@ -1100,6 +1261,21 @@ class CompactCloudBrowser:
             key = (remote.name, path)
             if key not in self._folder_cache and key not in self._loads_pending:
                 self._load_folder(remote, path)
+        self._start_missing_index(remotes)
+
+    def _start_missing_index(self, remotes: list[core.RemoteInfo]) -> None:
+        if self._auto_index_requested:
+            return
+        self._auto_index_requested = True
+        missing: list[core.RemoteInfo] = []
+        for remote in remotes:
+            try:
+                if not self.backend.remote_fully_indexed(remote.name):
+                    missing.append(remote)
+            except Exception:
+                continue
+        if missing:
+            self._index_remotes(missing, "Indexing metadata for search…")
 
     def invalidate(self, remote_name: str | None = None) -> None:
         if remote_name is None:
@@ -1148,6 +1324,10 @@ class CompactCloudBrowser:
         if changed or show_browser:
             self.refresh(force=False)
 
+    def reposition(self, row: Any) -> None:
+        if not self._embedded:
+            self._position(row)
+
     def focus(self) -> None:
         self._set_focus_owner("browser")
         if self._embedded:
@@ -1168,6 +1348,7 @@ class CompactCloudBrowser:
         self.qt.QTimer.singleShot(0, lambda: self._set_focus_owner("browser"))
 
     def _activate_from_mouse(self) -> None:
+        self._release_main_hover_suppression()
         self._set_focus_owner("browser")
         if self._embedded:
             with suppress(Exception):
@@ -1184,6 +1365,11 @@ class CompactCloudBrowser:
         timer = getattr(self.qt, "QTimer", None)
         if timer is not None:
             timer.singleShot(0, lambda: self._set_focus_owner("browser"))
+
+    def _release_main_hover_suppression(self) -> None:
+        callback = getattr(self.main_window, "release_remote_hover_suppression", None)
+        if callable(callback):
+            callback()
 
     def focus_main_window(self) -> None:
         self._set_focus_owner("main")
@@ -1235,10 +1421,14 @@ class CompactCloudBrowser:
         root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
     def _handle_key(self, event: Any) -> bool:
+        if not getattr(self, "_keyboard_shortcuts_enabled", True):
+            return False
         key = event.key()
         modifiers = event.modifiers()
         control = bool(modifiers & self.qt.Qt.KeyboardModifier.ControlModifier)
-        if control and key == self.qt.Qt.Key.Key_C:
+        if self._matches_shortcut(event, "common_search"):
+            self.focus_search()
+        elif control and key == self.qt.Qt.Key.Key_C:
             if not self._edits_enabled():
                 return self._edit_disabled()
             self.copy_selected()
@@ -1322,6 +1512,11 @@ class CompactCloudBrowser:
     def _is_fixed_zoom_out(self, key: Any, control: bool) -> bool:
         return bool(control and key == getattr(self.qt.Qt.Key, "Key_Minus", None))
 
+    def _matches_shortcut(self, event: Any, action: str) -> bool:
+        with suppress(Exception):
+            return matches_shortcut(self.qt, event, action)
+        return False
+
     def _direction_points_to_main(self, key: Any) -> bool:
         if self._side == "left":
             return key == self.qt.Qt.Key.Key_Right
@@ -1339,8 +1534,17 @@ class CompactCloudBrowser:
         self.root_button.setEnabled(bool(path))
         key = (remote.name, path)
         cached = self._folder_cache.get(key)
+        if cached is None and not force:
+            indexed: list[BrowserEntry] = []
+            with suppress(Exception):
+                indexed = self.backend.cached_entries(remote, path)
+            if indexed:
+                cached = indexed
+                self._folder_cache[key] = indexed
         if cached is not None and not force:
             self._display_entries(cached)
+            if key not in self._loads_pending:
+                self._load_folder(remote, path)
             return
         if key in self._loads_pending:
             if cached is not None:
@@ -1387,6 +1591,387 @@ class CompactCloudBrowser:
         if self.remote is None or (self.remote.name, self.path) != key:
             return
         self._display_entries(entries)
+
+    def _setup_search_timer(self) -> None:
+        timer = self.qt.QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        timer.timeout.connect(self._verify_visible_search_results)
+        self._search_timer = timer
+
+    def _make_search_key_filter(self) -> Any:
+        outer = self
+
+        class SearchKeyFilter(self.qt.QObject):
+            def eventFilter(self, watched: object, event: object) -> bool:
+                try:
+                    if event.type() != outer.qt.QEvent.Type.KeyPress:
+                        return False
+                    if watched is not outer.search_field and outer._matches_shortcut(event, "common_search"):
+                        outer.focus_search()
+                        event.accept()
+                        return True
+                    key = event.key()
+                    if key == outer.qt.Qt.Key.Key_Down:
+                        outer._move_search_selection(1)
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Up:
+                        outer._move_search_selection(-1)
+                        event.accept()
+                        return True
+                    if key in {outer.qt.Qt.Key.Key_Return, outer.qt.Qt.Key.Key_Enter}:
+                        outer._open_current_search_result()
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Escape:
+                        outer._clear_search_results()
+                        event.accept()
+                        return True
+                except Exception:
+                    return False
+                return False
+
+        event_filter = SearchKeyFilter()
+        self._search_filters.append(event_filter)
+        return event_filter
+
+    def _search_text_changed(self, _text: str) -> None:
+        self.search_index()
+        timer = getattr(self, "_search_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def search_index(self) -> None:
+        query = self.search_field.text().strip()
+        if not query:
+            self._clear_search_results()
+            return
+        remote = self.remote
+        if remote is None:
+            self._clear_search_results()
+            return
+        self._search_pending = True
+        self.status.setText("Searching index…")
+        try:
+            results = self.backend.search_index(query, remotes=[remote], limit=50)
+        except Exception as exc:
+            self._search_ready(query, None, str(exc))
+            return
+        self._search_ready(query, results, "")
+
+    def _search_ready(self, query: str, results: object, error: str) -> None:
+        if query != self.search_field.text().strip():
+            return
+        self._search_pending = False
+        if error or not isinstance(results, list):
+            self.status.setText(error or "Search failed")
+            return
+        self._search_results = results
+        self._display_search_results(results)
+        suffix = "Checking…" if self._search_verify_pending else ""
+        self.status.setText(
+            f"{len(results)} indexed result{'s' if len(results) != 1 else ''} {suffix}".strip()
+        )
+
+    def _display_search_results(self, results: list[IndexedEntry]) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None:
+            return
+        previous_index = 0
+        previous_path = ""
+        previous_scroll = 0
+        current = tree.currentItem()
+        if current is not None:
+            previous = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(previous, IndexedEntry):
+                previous_path = previous.path
+            with suppress(Exception):
+                previous_index = max(tree.indexOfTopLevelItem(current), 0)
+        with suppress(Exception):
+            previous_scroll = int(tree.verticalScrollBar().value())
+        tree.clear()
+        selected_item = None
+        fallback_item = None
+        for result in results:
+            path_text = result.parent_path or "Remote root"
+            item = self.qt.QTreeWidgetItem([result.name, path_text, result.modified])
+            item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
+            tree.addTopLevelItem(item)
+            if previous_path and result.path == previous_path:
+                selected_item = item
+            if fallback_item is None and tree.topLevelItemCount() - 1 >= previous_index:
+                fallback_item = item
+        target = selected_item or fallback_item or (tree.topLevelItem(0) if results else None)
+        if target is not None:
+            tree.setCurrentItem(target)
+            target.setSelected(True)
+        visible_rows = min(max(len(results), 1), 8)
+        try:
+            row_height = tree.sizeHintForRow(0)
+            if row_height <= 0:
+                row_height = tree.fontMetrics().height() + 8
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            row_height = 24
+            header_height = 28
+        height = int(header_height + row_height * visible_rows + 8) if results else 0
+        tree.setMaximumHeight(height)
+        tree.setMinimumHeight(height)
+        tree.setVisible(bool(results))
+        self._fit_search_result_columns()
+        with suppress(Exception):
+            tree.verticalScrollBar().setValue(previous_scroll)
+        self._resize_to_rendered_items()
+        self._layout_changed()
+
+    def _preview_search_result(self, item: Any, _previous: Any | None = None) -> None:
+        if item is None:
+            return
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(result, IndexedEntry):
+            return
+        remote = next((candidate for candidate in self._remotes() if candidate.name == result.remote_name), None)
+        if remote is None:
+            self.status.setText("That remote is no longer configured")
+            return
+        self.show_search_result(remote, None, result, show_browser=True, focus_browser=False)
+
+    def _open_search_result(self, item: Any, _column: int | None = None) -> None:
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole) if item is not None else None
+        if isinstance(result, IndexedEntry):
+            remote = next((candidate for candidate in self._remotes() if candidate.name == result.remote_name), None)
+            if remote is not None:
+                self.show_search_result(remote, None, result, show_browser=True, focus_browser=True)
+            else:
+                self._preview_search_result(item)
+        else:
+            self._preview_search_result(item)
+        self._release_main_hover_suppression()
+
+    def _open_current_search_result(self) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None or not tree.isVisible():
+            return
+        item = tree.currentItem() or tree.topLevelItem(0)
+        if item is not None:
+            self._open_search_result(item)
+
+    def _move_search_selection(self, delta: int) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None or not tree.isVisible() or tree.topLevelItemCount() <= 0:
+            return
+        current = tree.currentItem() or tree.topLevelItem(0)
+        index = tree.indexOfTopLevelItem(current) if current is not None else 0
+        index = min(max(index + delta, 0), tree.topLevelItemCount() - 1)
+        target = tree.topLevelItem(index)
+        tree.setCurrentItem(target)
+        with suppress(Exception):
+            tree.scrollToItem(target)
+
+    def _clear_search_results(self) -> None:
+        self._search_results = []
+        tree = getattr(self, "search_results", None)
+        if tree is not None:
+            tree.clear()
+            tree.setMaximumHeight(0)
+            tree.setMinimumHeight(0)
+            tree.setVisible(False)
+        self._resize_to_rendered_items()
+        self._layout_changed()
+
+    def focus_search(self) -> None:
+        field = getattr(self, "search_field", None)
+        if field is None:
+            return
+        with suppress(Exception):
+            field.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            field.selectAll()
+
+    def show_search_result(
+        self,
+        remote: core.RemoteInfo,
+        row: Any | None,
+        result: IndexedEntry,
+        *,
+        show_browser: bool,
+        focus_browser: bool,
+    ) -> None:
+        previous_remote_name = self.remote.name if self.remote is not None else ""
+        previous_path = self.path
+        self.remote = remote
+        self.path = result.parent_path
+        self._pending_select_path = result.path
+        self.backend.remember_path(remote.name, result.parent_path)
+        if not self._embedded and row is not None:
+            self._position(row)
+        if show_browser:
+            if self._embedded:
+                was_visible = self.root.isVisible()
+                self.root.show()
+                if not was_visible:
+                    self._layout_changed()
+            else:
+                with suppress(Exception):
+                    self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
+                self.window.show()
+                self.window.raise_()
+        if previous_remote_name == remote.name and previous_path == result.parent_path and self._select_visible_entry(result.path):
+            self._pending_select_path = ""
+            if focus_browser:
+                self.focus()
+            return
+        if self._display_cached_search_parent(remote, result):
+            if focus_browser:
+                self.focus()
+            return
+        self.refresh(force=False)
+        if focus_browser:
+            self.focus()
+
+    def _display_cached_search_parent(self, remote: core.RemoteInfo, result: IndexedEntry) -> bool:
+        key = (remote.name, result.parent_path)
+        entries = self._folder_cache.get(key)
+        if entries is None:
+            with suppress(Exception):
+                entries = self.backend.cached_entries(remote, result.parent_path)
+            if entries:
+                self._folder_cache[key] = entries
+        if not entries or not any(entry.path == result.path for entry in entries):
+            return False
+        self._display_entries(entries)
+        return self._select_visible_entry(result.path)
+
+    def _select_visible_entry(self, path: str) -> bool:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return False
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(entry, BrowserEntry) and entry.path == path:
+                with suppress(Exception):
+                    tree.clearSelection()
+                tree.setCurrentItem(item)
+                item.setSelected(True)
+                with suppress(Exception):
+                    tree.scrollToItem(item)
+                self._ensure_tree_selection()
+                self._refresh_selection_backgrounds()
+                self._update_actions()
+                return True
+        return False
+
+    def _fit_search_result_columns(self) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None:
+            return
+        with suppress(Exception):
+            tree.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        try:
+            width = tree.viewport().width()
+            if width <= 0:
+                width = tree.width()
+        except Exception:
+            width = 0
+        if width <= 0:
+            return
+        widths = (0.46, 0.38, 0.16)
+        for column, fraction in enumerate(widths):
+            with suppress(Exception):
+                tree.setColumnWidth(column, max(56, int(width * fraction)))
+
+    def _verify_visible_search_results(self) -> None:
+        if not self._search_results or self.remote is None:
+            self._search_verify_pending = False
+            return
+        query = self.search_field.text().strip()
+        remote = self.remote
+        parents: list[str] = []
+        seen: set[str] = set()
+        for result in self._search_results:
+            parent = result.parent_path
+            if parent in seen:
+                continue
+            seen.add(parent)
+            parents.append(parent)
+            if len(parents) >= 5:
+                break
+        self._search_verify_pending = True
+        self.status.setText("Checking search results…")
+
+        def worker() -> None:
+            for parent in parents:
+                try:
+                    self.backend.list_entries(remote, parent)
+                except Exception:
+                    continue
+            try:
+                results = self.backend.search_index(query, remotes=[remote], limit=50)
+            except Exception as exc:
+                self._search_verify_pending = False
+                self._bridge.search_ready.emit(query, None, str(exc))
+                return
+            self._search_verify_pending = False
+            self._bridge.search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_search_verification(self) -> None:
+        self._search_verify_pending = False
+        if self._search_results:
+            self.status.setText(f"{len(self._search_results)} indexed result{'s' if len(self._search_results) != 1 else ''}")
+
+    def index_current_remote(self) -> None:
+        if self.remote is None:
+            self.status.setText("Select a remote to index")
+            return
+        self._index_remotes([self.remote], "Indexing remote metadata…")
+
+    def index_all_remotes(self) -> None:
+        remotes = list(self._remotes())
+        if not remotes:
+            self.status.setText("No remotes to index")
+            return
+        self._index_remotes(remotes, "Indexing all remote metadata…")
+
+    def _index_remotes(self, remotes: list[core.RemoteInfo], message: str) -> None:
+        runnable = [remote for remote in remotes if remote.name not in self._indexing_remote_names]
+        if not runnable:
+            self.status.setText("Indexing is already running")
+            return
+        for remote in runnable:
+            self._indexing_remote_names.add(remote.name)
+        self.status.setText(message)
+        self._update_actions()
+
+        def worker() -> None:
+            total = 0
+            errors: list[str] = []
+            last_name = ""
+            try:
+                for remote in runnable:
+                    last_name = remote.name
+                    try:
+                        total += self.backend.index_remote_tree(remote)
+                    except Exception as exc:
+                        errors.append(f"{remote.display_name}: {exc}")
+            finally:
+                for remote in runnable:
+                    self._indexing_remote_names.discard(remote.name)
+            self._bridge.index_finished.emit(last_name or "all", total, "\n".join(errors))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _index_finished(self, remote_name: str, count: int, error: str) -> None:
+        if self._is_disposed():
+            return
+        self._update_actions()
+        if error:
+            first_error = error.splitlines()[0]
+            self.status.setText(f"Indexed {count} item{'s' if count != 1 else ''}; {first_error}")
+            return
+        self.status.setText(f"Indexed {count} item{'s' if count != 1 else ''}")
 
     def _display_entries(self, entries: list[BrowserEntry]) -> None:
         previous_path = ""
@@ -1465,7 +2050,8 @@ class CompactCloudBrowser:
         entries = getattr(self, "entries", [])
         count = len(entries) if entries else tree.topLevelItemCount()
         count = max(1, int(count))
-        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, FILE_BROWSER_MAX_VISIBLE_ROWS + FILE_BROWSER_CONTEXT_ROWS)
+        max_visible_rows = EMBEDDED_BROWSER_MAX_VISIBLE_ROWS if self._embedded else FILE_BROWSER_MAX_VISIBLE_ROWS
+        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, max_visible_rows + FILE_BROWSER_CONTEXT_ROWS)
         try:
             row_height = tree.sizeHintForRow(0)
         except Exception:
@@ -1484,12 +2070,17 @@ class CompactCloudBrowser:
             tree.setMinimumHeight(tree_height)
             tree.setMaximumHeight(tree_height)
         try:
-            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
-            if not self._embedded:
+            if self._embedded:
+                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
+                root.setMaximumHeight(16_777_215)
+            else:
+                root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
                 with suppress(Exception):
                     self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
             hint = root.sizeHint()
             desired_height = max(FILE_BROWSER_MIN_HEIGHT, hint.height())
+            if self._embedded:
+                desired_height = min(max(EMBEDDED_BROWSER_MIN_HEIGHT, desired_height), EMBEDDED_BROWSER_MAX_HEIGHT)
             root.setMinimumHeight(desired_height)
             if not self._embedded:
                 self.window.resize(max(self.window.width(), hint.width()), desired_height)
@@ -1611,11 +2202,18 @@ class CompactCloudBrowser:
                 return
 
     def _selected_entries(self) -> list[BrowserEntry]:
+        if self._is_disposed():
+            return []
         result: list[BrowserEntry] = []
-        for item in self.tree.selectedItems():
-            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
-            if isinstance(entry, BrowserEntry):
-                result.append(entry)
+        try:
+            selected_items = self.tree.selectedItems()
+        except RuntimeError:
+            return []
+        for item in selected_items:
+            with suppress(RuntimeError):
+                entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+                if isinstance(entry, BrowserEntry):
+                    result.append(entry)
         return result
 
     def selected_transfer_items(self) -> list[TransferItem]:
@@ -1688,6 +2286,35 @@ class CompactCloudBrowser:
         remote, parent = self.remote, self.path
         self._run_operation("Creating folder…", lambda: self.backend.create_folder(remote, parent, name.strip()))
 
+    def rename_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        entries = self._selected_entries()
+        if len(entries) != 1 or self.remote is None or self._operation_pending:
+            return
+        entry = entries[0]
+        name, accepted = self.qt.QInputDialog.getText(
+            self.window,
+            "Rename",
+            "New name",
+            self.qt.QLineEdit.EchoMode.Normal,
+            entry.name,
+        )
+        new_name = name.strip()
+        if not accepted or not new_name or new_name == entry.name:
+            return
+        if any(candidate.path != entry.path and candidate.name.casefold() == new_name.casefold() for candidate in self.entries):
+            self._notify("Rename", f"An item named {new_name} already exists in this folder.", False)
+            return
+        remote = self.remote
+        parent = parent_browser_path(entry.path)
+        self._run_operation(
+            "Renaming…",
+            lambda: self.backend.rename_entry(remote, entry, new_name),
+            invalidate_keys={(remote.name, parent)},
+        )
+
     def _show_tree_menu(self, point: Any) -> None:
         item = self.tree.itemAt(point)
         if item is None:
@@ -1723,6 +2350,12 @@ class CompactCloudBrowser:
         edits_enabled = self._edits_enabled()
         self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
         self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
+        self._menu_action(
+            menu,
+            "Rename",
+            self.rename_selected,
+            enabled=edits_enabled and len(self._selected_entries()) == 1 and not self._operation_pending,
+        )
         self._add_offline_menu_actions(menu, entry)
         self._menu_action(
             menu,
@@ -2403,10 +3036,15 @@ class CompactCloudBrowser:
         return brush_factory(qt_color) if brush_factory is not None else qt_color
 
     def _update_actions(self) -> None:
-        selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
-        edits_enabled = self._edits_enabled()
-        operation_pending = bool(getattr(self, "_operation_pending", False))
-        self.tree.setDragEnabled(edits_enabled and selected)
+        if self._is_disposed():
+            return
+        try:
+            selected = bool(self._selected_entries()) if hasattr(self, "tree") else False
+            edits_enabled = self._edits_enabled()
+            operation_pending = bool(getattr(self, "_operation_pending", False))
+            self.tree.setDragEnabled(edits_enabled and selected)
+        except RuntimeError:
+            return
         edit_action_enabled = selected and edits_enabled and not operation_pending
         edit_disabled_reason = self._edit_action_disabled_reason(
             selected=selected,
@@ -2610,6 +3248,39 @@ class CompactCloudBrowser:
             return
         self.offline_button.setIcon(self._dimmed_icon(icon))
 
+    def refresh_theme_icons(self) -> None:
+        if self._is_disposed():
+            return
+        refresh_widget_icons(self.qt, getattr(self, "root", None))
+        self._refresh_search_icon(getattr(self, "search_field", None))
+        save_icon = self._offline_icon()
+        self._offline_base_icon = save_icon
+        if save_icon is not None:
+            with suppress(Exception):
+                self.offline_button.setIcon(save_icon)
+            self._update_snapshot_button_icon(getattr(self.offline_button, "isEnabled", lambda: True)())
+
+    def _refresh_search_icon(self, field: Any | None) -> None:
+        if field is None:
+            return
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if leading_position is None:
+            return
+        old_action = getattr(field, "_mountlet_search_icon_action", None)
+        if old_action is not None:
+            with suppress(Exception):
+                field.removeAction(old_action)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=self._widget_text_color(field))
+        if icon is None:
+            return
+        with suppress(Exception):
+            action = field.addAction(icon, leading_position)
+            setattr(field, "_mountlet_search_icon_action", action)
+
+    def _is_disposed(self) -> bool:
+        return bool(getattr(self, "_disposed", False))
+
     def _dimmed_icon(self, icon: Any) -> Any:
         try:
             size = self.qt.QSize(22, 22)
@@ -2786,21 +3457,29 @@ class CompactCloudBrowser:
     def _open_external_folder(self, path: str) -> None:
         if self.remote is None:
             return
-        if not core.is_mounted(self.remote):
-            offline = self.backend.offline_path(self.remote.name, path)
-            if offline.is_dir():
-                local_folder = self.backend.prepare_offline_open(self.remote.name, path)
-                if self._open_local_folder and self._open_local_folder(local_folder):
-                    return
-                if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local_folder))):
-                    return
-            self._notify(
-                "Open folder",
-                "Open or cache a file in this folder before opening it in the system file manager.",
-                False,
-            )
+        self._open_remote_folder(self.remote, path)
+
+    def open_remote_root(self, remote: core.RemoteInfo) -> None:
+        self._open_remote_folder(remote, "", create_cache_root=True)
+
+    def _open_remote_folder(self, remote: core.RemoteInfo, path: str, *, create_cache_root: bool = False) -> None:
+        if core.is_mounted(remote):
+            self._open_mount(remote, path)
             return
-        self._open_mount(self.remote, path)
+        offline = self.backend.offline_path(remote.name, path)
+        if create_cache_root:
+            offline.mkdir(parents=True, exist_ok=True)
+        if offline.is_dir():
+            local_folder = self.backend.prepare_offline_open(remote.name, path)
+            if self._open_local_folder and self._open_local_folder(local_folder):
+                return
+            if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local_folder))):
+                return
+        self._notify(
+            "Open folder",
+            "Open or cache a file in this folder before opening it in the system file manager.",
+            False,
+        )
 
     def _position(self, row: Any) -> None:
         try:

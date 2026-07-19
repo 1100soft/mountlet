@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import tempfile
 import unittest
@@ -16,6 +17,17 @@ def _load_stage_rclone():
     spec = importlib.util.spec_from_file_location("mountlet_stage_rclone_test", path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Could not load stage_rclone.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_build_linux_bundle():
+    root = Path(__file__).resolve().parents[1]
+    path = root / "packaging" / "build_linux_bundle.py"
+    spec = importlib.util.spec_from_file_location("mountlet_build_linux_bundle_test", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load build_linux_bundle.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -112,6 +124,41 @@ class StageRcloneTests(unittest.TestCase):
             self.assertEqual(binary.read_bytes(), b"official")
             self.assertTrue(binary.stat().st_mode & 0o755)
             self.assertIn("rclone-current-osx-amd64.zip", download.call_args.args[0])
+
+
+class BuildLinuxBundleTests(unittest.TestCase):
+    def test_launcher_uses_system_python_and_app_local_library_path(self):
+        build_linux_bundle = _load_build_linux_bundle()
+        with tempfile.TemporaryDirectory() as tempdir:
+            launcher = Path(tempdir) / "Mountlet"
+
+            build_linux_bundle.write_launcher(launcher)
+
+            text = launcher.read_text(encoding="utf-8")
+            self.assertIn('PYTHON_BIN="${MOUNTLET_PYTHON:-python3}"', text)
+            self.assertIn('PYTHONPATH="$APP_DIR/lib', text)
+            self.assertIn('-m mountlet.desktop "$@"', text)
+            if os.name != "nt":
+                self.assertTrue(launcher.stat().st_mode & 0o111)
+
+    def test_preview_build_info_defaults_to_preview_report_api(self):
+        build_linux_bundle = _load_build_linux_bundle()
+        with mock.patch.dict(build_linux_bundle.os.environ, {"GITHUB_REF_NAME": "wip"}, clear=True):
+            data = build_linux_bundle.build_info_data()
+
+        self.assertEqual(data["licenseApiUrl"], "https://wip.mountlet.pages.dev/api/license")
+        self.assertEqual(data["licenseSiteUrl"], "https://wip.mountlet.pages.dev")
+        self.assertEqual(data["reportApiUrl"], "https://wip.mountlet.pages.dev/api/report")
+
+    def test_install_build_info_writes_to_installed_package(self):
+        build_linux_bundle = _load_build_linux_bundle()
+        with tempfile.TemporaryDirectory() as tempdir:
+            package = Path(tempdir) / "mountlet"
+            package.mkdir()
+
+            build_linux_bundle.install_build_info(Path(tempdir))
+
+            self.assertTrue((package / "mountlet-build-info.json").is_file())
 
 
 if __name__ == "__main__":

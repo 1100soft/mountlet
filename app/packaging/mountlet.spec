@@ -2,6 +2,7 @@
 
 import sys
 import os
+import json
 import subprocess
 import tomllib
 from pathlib import Path
@@ -11,6 +12,7 @@ root = Path.cwd()
 project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 version = project["project"]["version"]
 assets_dir = root / "src" / "mountlet" / "assets"
+build_dir = root / "build"
 icon_png = assets_dir / "icon.png"
 icon = assets_dir / ("icon.icns" if sys.platform == "darwin" else "icon.png")
 hidden_imports = ["AppKit", "Foundation", "objc"] if sys.platform == "darwin" else []
@@ -18,6 +20,42 @@ rclone_name = "rclone.exe" if sys.platform == "win32" else "rclone"
 rclone_path = os.environ.get("MOUNTLET_BUNDLED_RCLONE_PATH")
 bundled_rclone = Path(rclone_path) if rclone_path else root / "vendor" / "rclone" / rclone_name
 binaries = [(str(bundled_rclone), "vendor/rclone")] if bundled_rclone.is_file() else []
+
+
+def build_channel():
+    configured = os.environ.get("MOUNTLET_BUILD_CHANNEL", "").strip().lower()
+    if configured:
+        return configured
+    ref_name = os.environ.get("GITHUB_REF_NAME", "").strip()
+    if ref_name == "wip":
+        return "preview"
+    if ref_name == "main" or ref_name.startswith("v"):
+        return "production"
+    return "local"
+
+
+def build_info_data():
+    channel = build_channel()
+    report_api_url = os.environ.get("MOUNTLET_DEFAULT_REPORT_API_URL", "").strip()
+    license_api_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_API_URL", "").strip()
+    license_site_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_SITE_URL", "").strip()
+    if not report_api_url and channel == "preview":
+        report_api_url = "https://wip.mountlet.pages.dev/api/report"
+    if not license_api_url and channel == "preview":
+        license_api_url = "https://wip.mountlet.pages.dev/api/license"
+    if not license_site_url and channel == "preview":
+        license_site_url = "https://wip.mountlet.pages.dev"
+    return {
+        "channel": channel,
+        "licenseApiUrl": license_api_url,
+        "licenseSiteUrl": license_site_url,
+        "reportApiUrl": report_api_url,
+    }
+
+
+build_info_path = build_dir / "mountlet-build-info.json"
+build_info_path.parent.mkdir(parents=True, exist_ok=True)
+build_info_path.write_text(json.dumps(build_info_data(), sort_keys=True), encoding="utf-8")
 
 
 def macos_openssl_binaries():
@@ -49,7 +87,7 @@ a = Analysis(
     [str(root / "packaging" / "mountlet_desktop.py")],
     pathex=[str(root / "src")],
     binaries=binaries,
-    datas=[(str(assets_dir), "mountlet/assets")],
+    datas=[(str(assets_dir), "mountlet/assets"), (str(build_info_path), "mountlet")],
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

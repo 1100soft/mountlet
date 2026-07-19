@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1 - 2026-07-19
+
+- Added an app notification inbox with server-managed active/archive lifecycle,
+  notification cards, timestamps, unread state, and website history.
+- Added searchable website notices and FAQ entries, archived-notice grouping,
+  and a private FAQ-first support request form backed by the report pipeline.
+- Added provider icons, remote context actions, and configurable S3-compatible
+  remote credentials for key rotation.
+- Improved bundled installer reliability, current rclone staging, Linux/X11
+  stability, and automated preview/production installer uploads to R2.
+
 ## 0.6.0 - 2026-07-12
 
 - Added paid-license enforcement for expired trials: Mountlet now opens the
@@ -20,6 +31,9 @@
 - Fixed a packaged Linux/X11 focus-change crash by removing an accidental
   close-event call from the main-window activation handler, and added persistent
   runtime crash logging for frozen desktop builds.
+- Switched Linux `.deb` packaging from a PyInstaller-frozen Qt app to a
+  system-Python bundle with app-local Python libraries, avoiding the bundled
+  Qt/X11 key-input crash seen on Plasma.
 
 ## 0.5.1 - 2026-07-05
 

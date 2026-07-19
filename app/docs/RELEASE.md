@@ -45,7 +45,7 @@ On Linux, the native packaging path can be smoke-tested locally:
 
 ```bash
 python -m pip install -e ".[desktop,packaging]"
-python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
+python packaging/build_linux_bundle.py
 python packaging/verify_bundle.py
 python packaging/archive_bundle.py --name mountlet-local-system-rclone
 python packaging/build_installer.py --name mountlet-local-system-rclone.deb

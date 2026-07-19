@@ -133,6 +133,7 @@ OAUTH_BACKEND_TYPES = {"drive", "gphotos", "dropbox", "onedrive", "box", "pcloud
 RCLONE_STATUS_TIMEOUT_SECONDS = 20
 RCLONE_CONNECT_TIMEOUT_SECONDS = 20
 RCLONE_RECONNECT_TIMEOUT_SECONDS = 300
+RCLONE_OBSCURE_TIMEOUT_SECONDS = 10
 
 
 TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
@@ -196,12 +197,37 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
     "drive": ("client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
     "gphotos": ("client_id", "client_secret", "read_only", "read_size", "include_archived", "start_year"),
     "onedrive": ("drive_type", "region", "drive_id"),
-    "webdav": ("url", "vendor"),
-    "s3": ("provider", "region", "endpoint", "env_auth", "storage_class", "acl"),
-    "koofr": ("provider", "user", "mountid"),
-    "protondrive": ("username", "2fa", "mailbox_password", "enable_caching"),
-    "iclouddrive": ("service", "apple_id"),
+    "webdav": ("url", "vendor", "user", "pass", "bearer_token"),
+    "s3": (
+        "provider",
+        "region",
+        "endpoint",
+        "env_auth",
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "storage_class",
+        "acl",
+    ),
+    "koofr": ("provider", "user", "password", "mountid"),
+    "protondrive": (
+        "username",
+        "password",
+        "2fa",
+        "otp_secret_key",
+        "mailbox_password",
+        "enable_caching",
+    ),
+    "iclouddrive": ("service", "apple_id", "password", "trust_token", "cookies"),
 }
+OBSCURED_RCLONE_CONFIG_KEYS = {
+    "secret_access_key",
+    "pass",
+    "password",
+    "otp_secret_key",
+    "mailbox_password",
+}
+BOOLEAN_RCLONE_CONFIG_KEYS = frozenset({"shared_with_me", "env_auth", "enable_caching"})
 S3_PROVIDER_DISPLAY_NAMES = {
     "cloudflare": "Cloudflare R2",
     "minio": "MinIO",
@@ -324,15 +350,54 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
         return
     backend_type = config[remote_name].get("type", "").lower()
     allowed = set(_safe_rclone_keys(backend_type))
+    prepared: Dict[str, str] = {}
     for key, value in updates.items():
         if key not in allowed:
             continue
         text = value.strip()
+        current = config[remote_name].get(key, "").strip()
+        if text == current or (
+            key in BOOLEAN_RCLONE_CONFIG_KEYS
+            and _rclone_config_bool(text) == _rclone_config_bool(current)
+        ):
+            continue
+        if text and key in OBSCURED_RCLONE_CONFIG_KEYS:
+            text = _obscure_rclone_secret(text)
+        prepared[key] = text
+    if not prepared:
+        return
+    for key, text in prepared.items():
         if text:
             config[remote_name][key] = text
         else:
             config.remove_option(remote_name, key)
     _save_config(config)
+
+
+def _rclone_config_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _obscure_rclone_secret(value: str) -> str:
+    binary = find_rclone()
+    if not binary:
+        raise RuntimeError("rclone is required to update protected credentials.")
+    try:
+        result = subprocess.run(
+            [binary, "obscure", value],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=RCLONE_OBSCURE_TIMEOUT_SECONDS,
+            **PLATFORM.command_process_options(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"Could not protect the credential: {exc}") from exc
+    obscured = result.stdout.strip()
+    if result.returncode != 0 or not obscured:
+        detail = result.stderr.strip() or "rclone obscure failed."
+        raise RuntimeError(f"Could not protect the credential: {detail}")
+    return obscured
 
 
 def drive_oauth_credentials() -> List[DriveOAuthCredentials]:

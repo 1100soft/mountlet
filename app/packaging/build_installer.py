@@ -120,6 +120,7 @@ def _build_linux(root: Path, dist: Path, output: Path, version: str) -> None:
             f"Installed-Size: {_installed_size_kib(app_dir)}",
             "Section: utils",
             "Priority: optional",
+            "Depends: python3 (>= 3.10)",
         ]
         if not _bundle_has_rclone(app_dir, "Linux"):
             control_lines.append("Recommends: rclone")

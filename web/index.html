@@ -44,8 +44,14 @@
         <button class="tab-link" type="button" id="tab-platforms" role="tab" data-tab="platforms" aria-controls="panel-platforms" aria-selected="false">
           Platforms
         </button>
+        <button class="tab-link" type="button" id="tab-notifications" role="tab" data-tab="notifications" aria-controls="panel-notifications" aria-selected="false">
+          Notifications
+        </button>
         <button class="tab-link" type="button" id="tab-faq" role="tab" data-tab="faq" aria-controls="panel-faq" aria-selected="false">
           FAQ
+        </button>
+        <button class="tab-link" type="button" id="tab-support" role="tab" data-tab="support" aria-controls="panel-support" aria-selected="false">
+          Support
         </button>
       </nav>
     </header>
@@ -153,8 +159,9 @@
         <p class="note">
           Mountlet can browse and open files immediately. Add FUSE, WinFsp, or macFUSE
           to also mount cloud accounts as folders in the system file manager.
-          Source code is available on
-          <a href="#" data-config-link="repository">GitHub</a>.
+          Current beta installers are unsigned and may show an operating-system
+          warning. See the <button class="inline-link tab-action" type="button" data-tab="faq">FAQ</button>
+          before installing.
         </p>
       </section>
 
@@ -227,7 +234,8 @@
           Mountlet starts with a 7-day trial, then unlocks with one online
           activation. Lifetime licenses keep working offline; subscriptions
           work offline until the current paid period ends. The license key is
-          your support identity; keep it somewhere safe.
+          your support identity; keep it somewhere safe. Subscription prices
+          may change for future renewals with advance notice.
         </p>
       </section>
 
@@ -331,11 +339,32 @@
         </div>
       </section>
 
+      <section class="tab-panel notifications-panel" id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" data-panel="notifications" hidden>
+        <div class="notifications-heading">
+          <div class="panel-heading">
+            <p class="eyebrow">Notifications</p>
+            <h2>Mountlet notices.</h2>
+          </div>
+          <button class="button secondary compact" type="button" id="refresh-notifications">Refresh</button>
+        </div>
+        <label class="site-search" for="notification-search">
+          <span class="sr-only">Search notifications</span>
+          <input id="notification-search" type="search" placeholder="Search notifications" autocomplete="off" />
+        </label>
+        <p class="notice-load-status" id="notifications-status" role="status">Loading notifications...</p>
+        <div class="notifications-list" id="notifications-list" aria-live="polite"></div>
+      </section>
+
       <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>
         <div class="panel-heading">
           <p class="eyebrow">FAQ</p>
           <h2>Short answers before you install.</h2>
         </div>
+        <label class="site-search" for="faq-search">
+          <span class="sr-only">Search frequently asked questions</span>
+          <input id="faq-search" type="search" placeholder="Search FAQ" autocomplete="off" />
+        </label>
+        <p class="filter-status" id="faq-search-status" role="status"></p>
         <details>
           <summary>Can Mountlet replace provider desktop apps?</summary>
           <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
@@ -356,13 +385,71 @@
           <summary>Does Mountlet need to stay online for licensing?</summary>
           <p>No. Paid builds use a 7-day trial and online activation. Lifetime licenses keep working offline. Subscriptions store a signed local license through the current paid period.</p>
         </details>
+        <details>
+          <summary>Can subscription prices change?</summary>
+          <p>Yes. Price changes apply only to future renewals, with notice before renewal. You can cancel before the new price applies.</p>
+        </details>
+        <details>
+          <summary>Why does the installer show a security warning?</summary>
+          <p>Current beta builds are not code-signed or Apple-notarized. Only install Mountlet from this site or Mountlet's GitHub release/build artifacts.</p>
+          <ul>
+            <li><strong>Windows:</strong> if SmartScreen shows <em>Windows protected your PC</em>, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+            <li><strong>macOS:</strong> in Finder, Control-click <strong>Mountlet</strong>, choose <strong>Open</strong>, then confirm. If macOS still blocks it, use <strong>System Settings > Privacy & Security > Open Anyway</strong> for Mountlet.</li>
+            <li><strong>Linux:</strong> install the `.deb` normally. For an extracted portable build, mark the launcher executable if your file manager refuses to run it.</li>
+          </ul>
+          <p>Do not disable SmartScreen, Gatekeeper, or other system protection globally.</p>
+        </details>
+        <details>
+          <summary>How do I get help?</summary>
+          <p>Search this FAQ first. If it does not answer your question, send a support request. Mountlet is independently maintained, so replies may take time.</p>
+        </details>
+      </section>
+
+      <section class="tab-panel support-panel" id="panel-support" role="tabpanel" aria-labelledby="tab-support" data-panel="support" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Support</p>
+          <h2>Start with the FAQ.</h2>
+          <p class="lede">Most common questions are answered there. Mountlet is independently maintained, so individual replies may take time.</p>
+        </div>
+        <div class="button-row">
+          <button class="button secondary tab-action" type="button" data-tab="faq">Search FAQ</button>
+        </div>
+        <form class="support-form" id="support-form">
+          <label>
+            Request type
+            <select id="support-category" name="category">
+              <option value="question">Question</option>
+              <option value="problem">Problem</option>
+              <option value="feature">Feature request</option>
+              <option value="billing">License or billing</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            Email <span class="field-note">Optional, needed for a reply</span>
+            <input id="support-contact" name="contact" type="email" autocomplete="email" maxlength="240" />
+          </label>
+          <label>
+            Message
+            <textarea id="support-message" name="message" rows="7" minlength="10" maxlength="12000" required></textarea>
+          </label>
+          <label class="support-honeypot" aria-hidden="true">
+            Website
+            <input name="website" type="text" tabindex="-1" autocomplete="off" />
+          </label>
+          <div class="button-row">
+            <button class="button primary" type="submit">Send request</button>
+            <span class="inline-status" id="support-status" role="status"></span>
+          </div>
+          <p class="note">Do not include passwords, access keys, tokens, or other secrets.</p>
+        </form>
       </section>
     </main>
 
     <footer class="site-footer">
       <span>© 2026 Mountlet</span>
-      <a href="#" data-config-link="repository">GitHub</a>
-      <a href="#" data-config-link="support">Support</a>
+      <a class="external-link" href="#" data-config-link="repository">GitHub</a>
+      <button class="footer-link tab-action" type="button" data-tab="support">Support</button>
     </footer>
   </body>
 </html>

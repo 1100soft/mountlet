@@ -103,28 +103,32 @@ python -m pytest
 python -m build
 ```
 
-Native packaging uses PyInstaller separately on each target operating system.
-These bundles intentionally include a Python runtime. Technical users who want
-to use their system Python should install with `pipx` from a source checkout
-instead.
+Native packaging uses a Linux system-Python bundle and PyInstaller on Windows
+and macOS. The Linux `.deb` uses `/usr/bin/python3` with app-local Python
+libraries to avoid frozen Qt/X11 instability. Windows and macOS bundles include
+their own Python runtime.
 
 ```bash
 python -m pip install -e ".[desktop,packaging]"
-python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
+python packaging/build_linux_bundle.py
 python packaging/verify_bundle.py
 python packaging/archive_bundle.py --name mountlet-local
 ```
 
-By default this produces the lean variant: Mountlet includes its Python runtime
-but uses a system `rclone`. To produce a bundled-rclone variant, stage a
-platform-matching rclone binary first:
+On Windows and macOS, replace `build_linux_bundle.py` with PyInstaller:
 
 ```bash
-python packaging/stage_rclone.py /path/to/rclone
 python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 ```
 
-The staged binary is copied into `vendor/rclone/`, included in the PyInstaller
+By default this produces the lean variant, which uses a system `rclone`. To
+produce a bundled-rclone variant, stage a platform-matching rclone binary first:
+
+```bash
+python packaging/stage_rclone.py /path/to/rclone
+```
+
+The staged binary is copied into `vendor/rclone/`, included in the native
 bundle, and ignored by git. On Windows, the staging script rejects
 package-manager shim executables and requires the real `rclone.exe`. The app
 still honors `RCLONE_PATH` first for users who explicitly choose another

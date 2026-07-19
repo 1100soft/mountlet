@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import faulthandler
+import os
+import platform
 import sys
 import threading
 import time
@@ -12,6 +14,11 @@ from . import __version__
 
 FAST_EXIT_SECONDS = 5.0
 _RUNTIME_LOG_HANDLE = None
+_FROZEN_LINUX_QT_NOTE = (
+    "Frozen Linux build: using bundled-Qt-safe defaults "
+    "(QT_IM_MODULE=xim on X11, QT_STYLE_OVERRIDE=Fusion, no host QT_QPA_PLATFORMTHEME/QT_PLUGIN_PATH). "
+    "Set MOUNTLET_QT_IM_MODULE, MOUNTLET_QT_STYLE_OVERRIDE, or MOUNTLET_QT_PLATFORMTHEME to override."
+)
 
 
 def _write_startup_log(message: str) -> None:
@@ -79,6 +86,42 @@ def _install_runtime_logging() -> None:
         threading.excepthook = threading_excepthook
 
 
+def _prepare_frozen_linux_qt_environment() -> None:
+    if platform.system() != "Linux" or not getattr(sys, "frozen", False):
+        return
+    _set_qt_env("QT_IM_MODULE", "MOUNTLET_QT_IM_MODULE", _default_frozen_linux_input_method(), replace=True)
+    _set_qt_env("QT_STYLE_OVERRIDE", "MOUNTLET_QT_STYLE_OVERRIDE", "Fusion", replace=False)
+    _set_qt_env("QT_QPA_PLATFORMTHEME", "MOUNTLET_QT_PLATFORMTHEME", "", replace=True)
+    os.environ.setdefault("QT_ACCESSIBILITY", "0")
+    os.environ.setdefault("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "0")
+    os.environ.pop("QT_PLUGIN_PATH", None)
+    os.environ.pop("QML2_IMPORT_PATH", None)
+    _append_runtime_log(_FROZEN_LINUX_QT_NOTE)
+
+
+def _default_frozen_linux_input_method() -> str:
+    if os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return "xim"
+    return "compose"
+
+
+def _set_qt_env(target: str, override: str, default: str, *, replace: bool) -> None:
+    if override in os.environ:
+        value = os.environ.get(override, "")
+        if value:
+            os.environ[target] = value
+        else:
+            os.environ.pop(target, None)
+        return
+    if not default:
+        os.environ.pop(target, None)
+        return
+    if replace:
+        os.environ[target] = default
+    else:
+        os.environ.setdefault(target, default)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args == ["--packaging-smoke-test"]:
@@ -97,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if version.startswith("rclone v") else 1
 
     _install_runtime_logging()
+    _prepare_frozen_linux_qt_environment()
     started = time.monotonic()
     try:
         from . import tray

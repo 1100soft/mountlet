@@ -15,6 +15,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ LICENSE_API_URL_ENV = "MOUNTLET_LICENSE_API_URL"
 LICENSE_SITE_URL_ENV = "MOUNTLET_LICENSE_SITE_URL"
 LICENSE_PUBLIC_KEY_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY"
 LICENSE_PUBLIC_KEY_FILE_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY_FILE"
+TRIAL_DURABLE_DIR_ENV = "MOUNTLET_TRIAL_DURABLE_DIR"
 
 _TRIAL_SALT = b"mountlet trial state v1"
 _TRIAL_VERSION = 1
@@ -75,6 +77,21 @@ def current_status(now: float | None = None) -> LicenseStatus:
             token_payload = verify_license_token(token)
         except RuntimeError as exc:
             if "expired" in str(exc).lower():
+                expired_payload = _unverified_license_payload(token)
+                key = load_license_key()
+                if str(expired_payload.get("licenseKind") or "") == "beta" or key.upper().startswith("MTB-"):
+                    if key:
+                        try:
+                            return activate_license(key)
+                        except RuntimeError:
+                            pass
+                    clear_license_token()
+                    clear_license_key()
+                    return LicenseStatus(
+                        "expired",
+                        "Public beta access has ended. Buy a license to continue.",
+                        license_kind="beta",
+                    )
                 clear_license_token()
                 clear_license_key()
                 reset_trial(now=now)
@@ -131,7 +148,10 @@ def license_site_url(*, api_url: str | None = None) -> str:
     configured = os.environ.get(LICENSE_SITE_URL_ENV, "").strip()
     if configured:
         return configured.rstrip("/")
-    api_base = (api_url or os.environ.get(LICENSE_API_URL_ENV) or DEFAULT_LICENSE_API_URL).strip()
+    packaged_site = _packaged_license_site_url()
+    if packaged_site:
+        return packaged_site.rstrip("/")
+    api_base = (api_url or _license_api_base()).strip()
     if api_base:
         parsed = urllib.parse.urlsplit(api_base)
         path = parsed.path.rstrip("/")
@@ -154,6 +174,38 @@ def license_purchase_url(*, add_devices: bool = False, license_key: str = "", ap
         query["license_key"] = key
     suffix = f"?{urllib.parse.urlencode(query)}" if query else ""
     return f"{base}/{suffix}#pricing"
+
+
+def is_beta_status(status: LicenseStatus | None = None) -> bool:
+    status = status or current_status()
+    return status.license_kind == "beta" or status.license_key.upper().startswith("MTB-")
+
+
+def _packaged_build_info() -> dict[str, Any]:
+    try:
+        resource = files("mountlet").joinpath("mountlet-build-info.json")
+        if not resource.is_file():
+            return {}
+        data = json.loads(resource.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _packaged_license_api_url() -> str:
+    return str(_packaged_build_info().get("licenseApiUrl") or "").strip()
+
+
+def _packaged_license_site_url() -> str:
+    return str(_packaged_build_info().get("licenseSiteUrl") or "").strip()
+
+
+def _license_api_base() -> str:
+    return (
+        os.environ.get(LICENSE_API_URL_ENV, "").strip()
+        or _packaged_license_api_url()
+        or DEFAULT_LICENSE_API_URL
+    ).rstrip("/")
 
 
 def activate_license(license_key: str, *, device_label: str = "", api_url: str | None = None) -> LicenseStatus:
@@ -212,6 +264,7 @@ def license_devices(api_url: str | None = None) -> dict[str, Any]:
         "maxDevices": _int_value(response.get("maxDevices"), current_status().max_devices),
         "expiresAt": str(response.get("expiresAt") or ""),
         "billingModel": str(response.get("billingModel") or ""),
+        "licenseKind": str(response.get("licenseKind") or ""),
         "plan": str(response.get("plan") or ""),
     }
 
@@ -288,6 +341,19 @@ def reset_trial(now: float | None = None) -> dict[str, Any]:
         "install_id": secrets.token_urlsafe(24),
         "machine_hint": machine_hint(),
         "started_at": now_value,
+        "last_seen_at": now_value,
+    }
+    _write_trial_record(selected)
+    return selected
+
+
+def expire_trial_for_debug(now: float | None = None) -> dict[str, Any]:
+    now_value = _now(now)
+    selected = {
+        "version": _TRIAL_VERSION,
+        "install_id": secrets.token_urlsafe(24),
+        "machine_hint": machine_hint(),
+        "started_at": now_value - TRIAL_SECONDS - 60,
         "last_seen_at": now_value,
     }
     _write_trial_record(selected)
@@ -398,6 +464,17 @@ def verify_license_token(token: str) -> dict[str, Any]:
     return payload
 
 
+def _unverified_license_payload(token: str) -> dict[str, Any]:
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {}
+    try:
+        payload = json.loads(_b64decode(parts[1]).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _load_public_key() -> ec.EllipticCurvePublicKey:
     pem = os.environ.get(LICENSE_PUBLIC_KEY_ENV, "").strip()
     key_file = os.environ.get(LICENSE_PUBLIC_KEY_FILE_ENV, "").strip()
@@ -415,7 +492,7 @@ def _load_public_key() -> ec.EllipticCurvePublicKey:
 
 
 def _api_endpoint(api_url: str | None, action: str) -> str:
-    base = (api_url or os.environ.get(LICENSE_API_URL_ENV) or DEFAULT_LICENSE_API_URL).rstrip("/")
+    base = (api_url or _license_api_base()).rstrip("/")
     return f"{base}/{action}"
 
 
@@ -501,7 +578,31 @@ def _trial_paths() -> tuple[Path, ...]:
         app_state_dir() / "license" / "trial.dat",
         app_config_dir() / ".license-trial",
         app_cache_dir() / ".license-trial",
+        *_durable_trial_paths(),
     )
+
+
+def _durable_trial_paths() -> tuple[Path, ...]:
+    override = os.environ.get(TRIAL_DURABLE_DIR_ENV, "").strip()
+    if override:
+        root = Path(override).expanduser()
+        return (root / ".mountlet-trial", root / ".mountlet-trial-backup")
+
+    paths = [Path.home() / ".mountlet-license-trial"]
+    system = platform.system()
+    if system == "Windows":
+        for value in (os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA")):
+            if value:
+                paths.append(Path(value) / "Microsoft" / "MountletTrial.dat")
+    elif system == "Darwin":
+        paths.append(Path.home() / "Library" / "Preferences" / ".mountlet-license-trial")
+        paths.append(Path.home() / "Library" / "Application Support" / ".mountlet-license-trial")
+    else:
+        state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        paths.append(state_home / ".mountlet-license-trial")
+        paths.append(config_home / ".mountlet-license-trial")
+    return tuple(dict.fromkeys(paths))
 
 
 def _license_token_paths() -> tuple[Path, ...]:
@@ -579,6 +680,7 @@ __all__ = [
     "LICENSE_API_URL_ENV",
     "LICENSE_SITE_URL_ENV",
     "LICENSE_PUBLIC_KEY_ENV",
+    "TRIAL_DURABLE_DIR_ENV",
     "LicenseStatus",
     "activate_license",
     "clear_license_key",
@@ -588,10 +690,12 @@ __all__ = [
     "display_timestamp",
     "default_device_label",
     "device_fingerprint",
+    "expire_trial_for_debug",
     "list_devices",
     "license_devices",
     "license_purchase_url",
     "license_site_url",
+    "is_beta_status",
     "load_license_key",
     "load_license_payload",
     "load_or_create_trial",

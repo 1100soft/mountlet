@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -32,6 +33,7 @@ class LicenseControlTests(unittest.TestCase):
             "XDG_CONFIG_HOME": str(root / "config"),
             "XDG_STATE_HOME": str(root / "state"),
             "XDG_CACHE_HOME": str(root / "cache"),
+            license_control.TRIAL_DURABLE_DIR_ENV: str(root / "durable"),
         }
         env_patcher = mock.patch.dict("os.environ", env, clear=False)
         env_patcher.start()
@@ -50,10 +52,27 @@ class LicenseControlTests(unittest.TestCase):
             Path(self.tempdir.name) / "state" / "mountlet" / "license" / "trial.dat",
             Path(self.tempdir.name) / "config" / "mountlet" / ".license-trial",
             Path(self.tempdir.name) / "cache" / "mountlet" / ".license-trial",
+            Path(self.tempdir.name) / "durable" / ".mountlet-trial",
+            Path(self.tempdir.name) / "durable" / ".mountlet-trial-backup",
         ):
             self.assertTrue(path.exists())
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("install_id", text)
+
+    def test_trial_survives_app_state_removal_when_durable_marker_exists(self):
+        start = 1_700_000_000.0
+        license_control.load_or_create_trial(now=start)
+        for path in (
+            Path(self.tempdir.name) / "state" / "mountlet" / "license" / "trial.dat",
+            Path(self.tempdir.name) / "config" / "mountlet" / ".license-trial",
+            Path(self.tempdir.name) / "cache" / "mountlet" / ".license-trial",
+        ):
+            path.unlink()
+
+        status = license_control.current_status(now=start + 3 * 24 * 60 * 60)
+
+        self.assertEqual(status.state, "trial")
+        self.assertLessEqual(status.trial_days_remaining, 4)
 
     def test_trial_uses_earliest_valid_start(self):
         start = 1_700_000_000.0
@@ -73,6 +92,16 @@ class LicenseControlTests(unittest.TestCase):
         self.assertEqual(status.state, "expired")
         self.assertFalse(status.allowed)
         self.assertIn("Trial expired ", status.summary)
+
+    def test_expire_trial_for_debug_ends_trial_immediately(self):
+        now = 1_700_000_000.0
+        license_control.load_or_create_trial(now=now)
+
+        license_control.expire_trial_for_debug(now=now)
+        status = license_control.current_status(now=now)
+
+        self.assertEqual(status.state, "expired")
+        self.assertFalse(status.allowed)
 
     def test_license_token_signature_is_verified(self):
         private_key = ec.generate_private_key(ec.SECP256R1())
@@ -184,6 +213,31 @@ class LicenseControlTests(unittest.TestCase):
         license_control.clear_license_key()
 
         self.assertEqual(license_control.load_license_key(), "")
+
+    def test_packaged_license_urls_use_build_info(self):
+        encodings: list[str] = []
+
+        class FakeResource:
+            def is_file(self) -> bool:
+                return True
+
+            def read_text(self, *, encoding: str) -> str:
+                encodings.append(encoding)
+                return (
+                    '{"licenseApiUrl":"https://wip.mountlet.pages.dev/api/license",'
+                    '"licenseSiteUrl":"https://wip.mountlet.pages.dev"}'
+                )
+
+        fake_files = mock.Mock(return_value=SimpleNamespace(joinpath=mock.Mock(return_value=FakeResource())))
+        with mock.patch("mountlet.license_control.files", fake_files):
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertEqual(license_control.license_site_url(), "https://wip.mountlet.pages.dev")
+                self.assertEqual(
+                    license_control._api_endpoint(None, "activate"),
+                    "https://wip.mountlet.pages.dev/api/license/activate",
+                )
+
+        self.assertEqual(encodings, ["utf-8", "utf-8"])
 
     def test_invalid_license_token_is_rejected(self):
         private_key = ec.generate_private_key(ec.SECP256R1())

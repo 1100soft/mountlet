@@ -15,10 +15,22 @@ from .platform_services.file_managers import default_file_manager_id
 APP_FOLDER_NAME = "Mountlet"
 MOUNTED_FOLDER_NAME = "mounted"
 OFFLINE_FOLDER_NAME = "offline"
+WINDOW_MODE_SINGLE = "single"
+WINDOW_MODE_MULTIPLE = "multiple"
+THEME_SYSTEM = "system"
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+NOTICE_DISPLAY_OFF = "off"
+NOTICE_DISPLAY_TRAY = "tray"
+NOTICE_DISPLAY_DIALOG = "dialog"
+WINDOW_MODES = {WINDOW_MODE_SINGLE, WINDOW_MODE_MULTIPLE}
+THEMES = {THEME_SYSTEM, THEME_LIGHT, THEME_DARK}
+NOTICE_DISPLAYS = {NOTICE_DISPLAY_OFF, NOTICE_DISPLAY_TRAY, NOTICE_DISPLAY_DIALOG}
 
 DEFAULT_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "common_previous": (),
     "common_next": (),
+    "common_search": ("F",),
     "remote_enter_browser": ("Space",),
     "remote_move_up": ("Shift+Up",),
     "remote_move_down": ("Shift+Down",),
@@ -49,8 +61,13 @@ class AppSettings:
     file_manager: str = ""
     open_folder_behavior: str = "current_desktop"
     focus_file_manager: bool = True
+    window_mode: str = WINDOW_MODE_MULTIPLE
+    theme: str = THEME_SYSTEM
     integrated_file_edits: bool = False
     remote_sync_interval_seconds: float = 30.0
+    notice_info_display: str = NOTICE_DISPLAY_TRAY
+    notice_important_display: str = NOTICE_DISPLAY_DIALOG
+    notice_check_interval_seconds: float = 14_400.0
     config_sync_remote: str = ""
     config_sync_path: str = "Mountlet/config.mountlet"
     shortcuts: dict[str, tuple[str, ...]] = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
@@ -88,10 +105,22 @@ file_manager = ""
 open_folder_behavior = "current_desktop"
 focus_file_manager = true
 
+[ui]
+# multiple keeps Mountlet Files in a separate window. single docks it beside the remote list.
+# Wayland always uses single because separate tray-style windows are restricted.
+window_mode = "multiple"
+theme = "system"
+
 [sync]
 # Seconds between background checks for cloud-side changes in cached/offline files.
 # Set to 0 for manual sync only.
 remote_check_interval = 30
+
+[notices]
+# Critical notices are always shown as dialogs.
+info = "tray"
+important = "dialog"
+check_interval = 14400
 
 # Optional encrypted config-bundle location, stored as an rclone remote and path.
 config_remote = ""
@@ -248,6 +277,11 @@ def _bool_value(value: Any, default: bool) -> bool:
     return default
 
 
+def _choice_value(value: Any, default: str, choices: set[str]) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in choices else default
+
+
 def _float_value(value: Any, default: float) -> float:
     try:
         return float(value)
@@ -314,7 +348,9 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
     data = _read_simple_toml(source)
     app = data.get("app", {})
     tray = data.get("tray", {})
+    ui = data.get("ui", {})
     sync = data.get("sync", {})
+    notices = data.get("notices", {})
     shortcuts = _shortcut_values(data.get("shortcuts", {}))
     return AppSettings(
         mount_base=_string_value(app.get("mount_base")),
@@ -325,7 +361,20 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         file_manager=str(tray.get("file_manager", "")).strip() or default_file_manager_id(get_platform()),
         open_folder_behavior=str(tray.get("open_folder_behavior", "current_desktop")).strip() or "current_desktop",
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
+        window_mode=_choice_value(ui.get("window_mode"), WINDOW_MODE_MULTIPLE, WINDOW_MODES),
+        theme=_choice_value(ui.get("theme"), THEME_SYSTEM, THEMES),
         remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
+        notice_info_display=_choice_value(
+            notices.get("info", notices.get("display")),
+            NOTICE_DISPLAY_TRAY,
+            NOTICE_DISPLAYS,
+        ),
+        notice_important_display=_choice_value(
+            notices.get("important"),
+            NOTICE_DISPLAY_DIALOG,
+            NOTICE_DISPLAYS,
+        ),
+        notice_check_interval_seconds=max(_float_value(notices.get("check_interval"), 14_400.0), 0.0),
         config_sync_remote=str(sync.get("config_remote", "")).strip(),
         config_sync_path=str(sync.get("config_path", "Mountlet/config.mountlet")).strip() or "Mountlet/config.mountlet",
         shortcuts=shortcuts,
@@ -442,6 +491,12 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             f"open_folder_behavior = {_toml_string(settings.open_folder_behavior)}",
             f"focus_file_manager = {_toml_bool(settings.focus_file_manager)}",
             "",
+            "[ui]",
+            "# multiple keeps Mountlet Files in a separate window. single docks it beside the remote list.",
+            "# Wayland always uses single because separate tray-style windows are restricted.",
+            f"window_mode = {_toml_string(settings.window_mode if settings.window_mode in WINDOW_MODES else WINDOW_MODE_MULTIPLE)}",
+            f"theme = {_toml_string(settings.theme if settings.theme in THEMES else THEME_SYSTEM)}",
+            "",
             "[sync]",
             "# Seconds between background checks for cloud-side changes in cached/offline files.",
             "# Set to 0 for manual sync only.",
@@ -450,6 +505,12 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# Optional encrypted config-bundle location, stored as an rclone remote and path.",
             f"config_remote = {_toml_string(settings.config_sync_remote)}",
             f"config_path = {_toml_string(settings.config_sync_path)}",
+            "",
+            "[notices]",
+            "# Critical notices are always shown as dialogs.",
+            f"info = {_toml_string(settings.notice_info_display if settings.notice_info_display in NOTICE_DISPLAYS else NOTICE_DISPLAY_TRAY)}",
+            f"important = {_toml_string(settings.notice_important_display if settings.notice_important_display in NOTICE_DISPLAYS else NOTICE_DISPLAY_DIALOG)}",
+            f"check_interval = {settings.notice_check_interval_seconds:g}",
             "",
             "[shortcuts]",
             *(
@@ -514,7 +575,15 @@ __all__ = [
     "APP_FOLDER_NAME",
     "DEFAULT_SHORTCUTS",
     "MOUNTED_FOLDER_NAME",
+    "NOTICE_DISPLAY_DIALOG",
+    "NOTICE_DISPLAY_OFF",
+    "NOTICE_DISPLAY_TRAY",
     "OFFLINE_FOLDER_NAME",
+    "THEME_DARK",
+    "THEME_LIGHT",
+    "THEME_SYSTEM",
+    "WINDOW_MODE_MULTIPLE",
+    "WINDOW_MODE_SINGLE",
     "AppSettings",
     "MountSettings",
     "app_folder",

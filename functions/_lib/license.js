@@ -1,4 +1,5 @@
 const TOKEN_HEADER = {alg: "ES256", typ: "Mountlet-License"};
+const BETA_TOKEN_SECONDS = 24 * 60 * 60;
 
 export function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -58,8 +59,12 @@ export function generateLicenseKey(prefix = "MNT") {
   return `${prefix}-${raw.slice(0, 5)}-${raw.slice(5, 10)}-${raw.slice(10, 15)}-${raw.slice(15, 20)}`;
 }
 
+export function normalizeLicenseKey(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
 export async function licenseKeyHash(env, licenseKey) {
-  const normalized = String(licenseKey || "").trim().toUpperCase();
+  const normalized = normalizeLicenseKey(licenseKey);
   if (!normalized) {
     throw new HttpError(400, "License key is required.");
   }
@@ -123,16 +128,21 @@ export async function activeDeviceCount(env, licenseId) {
 }
 
 export function tokenPayload(license, device) {
+  const licenseKind = license.license_kind || "paid";
   return {
     licenseId: license.id,
     deviceId: device.id,
     plan: license.plan || "Mountlet License",
-    licenseKind: license.license_kind || "paid",
+    licenseKind,
     maxDevices: Number(license.max_devices || 0),
     deviceLabel: device.device_label || "",
     issuedAt: nowIso(),
-    expiresAt: license.expires_at || ""
+    expiresAt: licenseKind === "beta" ? betaTokenExpiresAt() : license.expires_at || ""
   };
+}
+
+export function betaTokenExpiresAt() {
+  return new Date(Date.now() + BETA_TOKEN_SECONDS * 1000).toISOString();
 }
 
 export async function sha256Hex(value) {
@@ -174,6 +184,7 @@ async function importPublicKey(pem) {
 }
 
 function pemToBytes(pem) {
-  const body = pem.replace(/-----BEGIN [^-]+-----/g, "").replace(/-----END [^-]+-----/g, "").replace(/\s+/g, "");
+  const normalized = String(pem || "").replace(/\\n/g, "\n").trim();
+  const body = normalized.replace(/-----BEGIN [^-]+-----/g, "").replace(/-----END [^-]+-----/g, "").replace(/\s+/g, "");
   return bytesFromBase64Url(body.replace(/\+/g, "-").replace(/\//g, "_"));
 }

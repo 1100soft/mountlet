@@ -7,26 +7,31 @@ const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const vars = PUBLIC_VARS;
 
 const generated = {
-  root: [
-    `- Production website: ${vars.productionSiteUrl}`,
-    `- Source repository: ${vars.githubUrl}`,
-  ].join("\n"),
+  root: `- Production website: ${vars.productionSiteUrl}`,
   app: [
     `- Paid downloads and license purchases: ${vars.productionSiteUrl}`,
     `- Default license API: ${vars.productionSiteUrl}${vars.licenseApiPath}`,
     `- Override license API: \`${vars.env.licenseApiUrl}\``,
     `- Override public purchase site: \`${vars.env.licenseSiteUrl}\``,
+    `- Override crash/bug report API: \`${vars.env.reportApiUrl}\``,
   ].join("\n"),
   web: [
     `- Production website: ${vars.productionSiteUrl}`,
     `- Production license API: ${vars.productionSiteUrl}${vars.licenseApiPath}`,
+    `- Production report API: ${vars.productionSiteUrl}${vars.reportApiPath}`,
     `- Relocated app API override: \`${vars.env.licenseApiUrl}\``,
     `- Relocated purchase-site override: \`${vars.env.licenseSiteUrl}\``,
+    `- Relocated report API override: \`${vars.env.reportApiUrl}\``,
     `- Resend API key: \`${vars.env.resendApiKey}\``,
     `- Resend sender: \`${vars.env.resendFrom}\``,
     `- Optional Resend reply-to: \`${vars.env.resendReplyTo}\``,
     `- Resend sender alias: \`${vars.env.emailFrom}\``,
     `- Optional Resend reply-to alias: \`${vars.env.emailReplyTo}\``,
+    `- Optional report sender: \`${vars.env.reportFrom}\``,
+    `- Optional report recipient: \`${vars.env.reportTo}\``,
+    `- GitHub report token: \`${vars.env.reportGithubToken}\``,
+    `- GitHub report repository: \`${vars.env.reportGithubRepo}\``,
+    `- Optional GitHub report labels: \`${vars.env.reportGithubLabels}\``,
     `- Stripe secret key: \`${vars.env.stripeSecretKey}\``,
     `- Stripe webhook secret: \`${vars.env.stripeWebhookSecret}\``,
   ].join("\n"),

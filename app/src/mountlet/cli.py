@@ -70,6 +70,29 @@ def run_tray(argv: list[str] | None = None) -> int:
     return _run_module_main(tray, argv)
 
 
+def run_debug(argv: list[str] | None = None) -> int:
+    args = list(argv or [])
+    if args in (["-h"], ["--help"]):
+        print("Usage:")
+        print("  mountlet debug expire-trial")
+        print()
+        print("Debug commands:")
+        print("  expire-trial  End the local trial immediately for license-flow testing.")
+        return 0
+    if args == ["expire-trial"]:
+        from . import license_control
+
+        status_before = license_control.current_status()
+        license_control.expire_trial_for_debug()
+        status_after = license_control.current_status()
+        print(f"Before: {status_before.summary}")
+        print(f"After:  {status_after.summary}")
+        return 0
+    print("[!] Unknown debug command.", file=sys.stderr)
+    print("Run 'mountlet debug --help'.", file=sys.stderr)
+    return 2
+
+
 COMMANDS: dict[str, tuple[str, Command]] = {
     "menu": ("Open the interactive mount menu.", run_menu),
     "tray": ("Open the desktop tray app. This is also the default.", run_tray),
@@ -79,6 +102,7 @@ COMMANDS: dict[str, tuple[str, Command]] = {
     "reconnect": ("Refresh credentials for one or more remotes.", run_reconnect),
     "export": ("Export an rclone configuration backup bundle.", run_export),
     "import": ("Import an rclone configuration backup bundle.", run_import),
+    "debug": ("Run developer/debug helpers.", run_debug),
 }
 
 ALIASES = {
