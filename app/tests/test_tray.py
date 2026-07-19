@@ -185,6 +185,31 @@ class TrayTests(unittest.TestCase):
         self.assertTrue(tray._is_google_drive_remote(drive))
         self.assertFalse(tray._is_google_drive_remote(s3))
 
+    def test_notice_preview_elides_at_the_last_visible_line(self):
+        class Metrics:
+            def horizontalAdvance(self, text):
+                return len(text)
+
+            def elidedText(self, text, _mode, width):
+                return text if len(text) <= width else f"{text[: max(width - 1, 0)]}…"
+
+        qt = SimpleNamespace(
+            QFontMetrics=lambda _font: Metrics(),
+            Qt=SimpleNamespace(TextElideMode=SimpleNamespace(ElideRight="right")),
+        )
+
+        preview = tray._elide_notice_lines(
+            qt,
+            "one two three four five six seven eight",
+            object(),
+            13,
+            2,
+        )
+
+        self.assertEqual(preview.splitlines()[0], "one two three")
+        self.assertTrue(preview.splitlines()[1].endswith("…"))
+        self.assertEqual(len(preview.splitlines()), 2)
+
     def test_popup_position_clamps_full_window_to_available_screen(self):
         position = tray._popup_position(
             890,
@@ -678,6 +703,60 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(dialog.renamed_to, "New__Drive")
         self.assertTrue(dialog.remount_after_rename)
         dialog.dialog.accept.assert_called_once_with()
+
+    def test_mount_config_detects_authentication_changes_only(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Archive__CloudflareR2", "Archive", "Cloudflare R2", "s3", "/mnt/r2")
+        dialog._original_rclone_values = {
+            "access_key_id": "old-key",
+            "secret_access_key": "old-secret",
+            "storage_class": "STANDARD",
+        }
+
+        changed = dialog._changed_auth_fields(
+            {
+                "access_key_id": "new-key",
+                "secret_access_key": "old-secret",
+                "storage_class": "GLACIER",
+            }
+        )
+
+        self.assertEqual(changed, ["access_key_id"])
+
+    def test_mount_config_treats_empty_and_false_boolean_as_equal(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Archive__CloudflareR2", "Archive", "Cloudflare R2", "s3", "/mnt/r2")
+        dialog._original_rclone_values = {"env_auth": ""}
+
+        self.assertEqual(dialog._changed_auth_fields({"env_auth": "false"}), [])
+
+    def test_mount_config_masks_protected_credentials(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        field = mock.Mock()
+        dialog._line = mock.Mock(return_value=field)
+        dialog.qt = SimpleNamespace(
+            QLineEdit=SimpleNamespace(EchoMode=SimpleNamespace(Password="password")),
+        )
+
+        kind, returned = dialog._rclone_config_field("secret_access_key", "secret")
+
+        self.assertEqual(kind, "text")
+        self.assertIs(returned, field)
+        field.setEchoMode.assert_called_once_with("password")
+
+    def test_mount_config_authentication_confirmation_defaults_to_no(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.dialog = mock.Mock()
+        question = mock.Mock(return_value=2)
+        dialog.qt = SimpleNamespace(
+            QMessageBox=SimpleNamespace(
+                StandardButton=SimpleNamespace(Yes=1, No=2),
+                question=question,
+            )
+        )
+
+        self.assertFalse(dialog._confirm_authentication_changes(["secret_access_key"]))
+        self.assertEqual(question.call_args.args[-1], 2)
 
     def test_mount_config_delete_unmounts_mounted_remote_after_single_confirmation(self):
         dialog = object.__new__(tray.MountConfigDialog)

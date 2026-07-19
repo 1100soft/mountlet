@@ -99,6 +99,10 @@ EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
 EMBEDDED_BROWSER_MAX_HEIGHT = 460
 REMOTE_CACHE_CHECK_BATCH_SIZE = 20
+NOTIFICATION_CARD_WIDTH = 390
+NOTIFICATION_CARD_HEIGHT = 126
+NOTIFICATION_MENU_WIDTH = 414
+NOTIFICATION_MENU_MAX_HEIGHT = 540
 FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Common",
@@ -175,14 +179,47 @@ RCLONE_FIELD_TOOLTIPS = {
     "provider": "Storage provider name. rclone uses it for provider-specific behavior.",
     "env_auth": "Use provider credentials from the environment instead of values in rclone.conf.",
     "endpoint": "Provider endpoint URL. rclone uses it for S3-compatible services.",
+    "access_key_id": "Access key ID used to authenticate this S3-compatible remote.",
+    "secret_access_key": "Secret access key used to authenticate this S3-compatible remote.",
+    "session_token": "Optional temporary session token used with S3 credentials.",
     "acl": "Default access-control setting used by the remote provider.",
     "storage_class": "Default storage class used by the remote provider.",
+    "user": "Account name used to authenticate this remote.",
+    "pass": "Password used to authenticate this WebDAV remote.",
+    "password": "Password used to authenticate this remote.",
+    "bearer_token": "Bearer token used instead of a WebDAV username and password.",
     "username": "Proton account username used by this remote.",
     "2fa": "Current Proton 2FA code. Usually only needed while configuring the remote.",
+    "otp_secret_key": "Proton OTP secret used to generate authentication codes.",
     "mailbox_password": "Mailbox password for two-password Proton accounts.",
+    "apple_id": "Apple ID used to authenticate this iCloud remote.",
+    "trust_token": "iCloud trusted-session token. Usually refreshed during reauthentication.",
+    "cookies": "iCloud session cookies. Usually refreshed during reauthentication.",
     "enable_caching": "Proton Drive metadata cache. Mountlet disables it by default to avoid stale mounted folders.",
 }
-RCLONE_BOOLEAN_FIELDS = {"shared_with_me", "env_auth", "enable_caching"}
+RCLONE_SECRET_FIELDS = {
+    "client_secret",
+    "secret_access_key",
+    "session_token",
+    "pass",
+    "password",
+    "bearer_token",
+    "otp_secret_key",
+    "mailbox_password",
+    "trust_token",
+    "cookies",
+}
+RCLONE_AUTH_FIELDS = {
+    "drive": {"client_id", "client_secret", "scope"},
+    "gphotos": {"client_id", "client_secret", "read_only"},
+    "onedrive": {"region", "drive_id", "drive_type"},
+    "s3": {"provider", "region", "env_auth", "endpoint", "access_key_id", "secret_access_key", "session_token"},
+    "webdav": {"url", "vendor", "user", "pass", "bearer_token"},
+    "koofr": {"provider", "user", "password"},
+    "protondrive": {"username", "password", "2fa", "otp_secret_key", "mailbox_password"},
+    "iclouddrive": {"service", "apple_id", "password", "trust_token", "cookies"},
+}
+RCLONE_BOOLEAN_FIELDS = core.BOOLEAN_RCLONE_CONFIG_KEYS
 RCLONE_SELECT_FIELDS = {
     "scope": (
         ("drive", "Full Drive access"),
@@ -560,6 +597,7 @@ def _load_qt_bindings() -> SimpleNamespace:
             QCursor,
             QDesktopServices,
             QDrag,
+            QFontMetrics,
             QIcon,
             QKeySequence,
             QPainter,
@@ -631,6 +669,7 @@ def _load_qt_bindings() -> SimpleNamespace:
         QDesktopServices=QDesktopServices,
         QFileDialog=QFileDialog,
         QDrag=QDrag,
+        QFontMetrics=QFontMetrics,
         QFormLayout=QFormLayout,
         QFrame=QFrame,
         QGridLayout=QGridLayout,
@@ -2423,12 +2462,29 @@ def _notice_accent(notice: notice_control.Notice) -> str:
     return "#3b82f6"
 
 
-def _notice_preview_text(message: str, limit: int = 220) -> str:
-    text = " ".join(str(message).split())
-    if len(text) <= limit:
-        return text
-    shortened = text[: max(limit - 1, 1)].rsplit(" ", 1)[0].rstrip()
-    return f"{shortened or text[: max(limit - 1, 1)]}…"
+def _elide_notice_lines(qt: SimpleNamespace, message: str, font: Any, width: int, max_lines: int) -> str:
+    words = " ".join(str(message).split()).split()
+    if not words or width <= 0 or max_lines <= 0:
+        return ""
+    metrics = qt.QFontMetrics(font)
+    mode = qt.Qt.TextElideMode.ElideRight
+    lines: list[str] = []
+    while words and len(lines) < max_lines:
+        if len(lines) == max_lines - 1:
+            lines.append(metrics.elidedText(" ".join(words), mode, width))
+            break
+        line = words.pop(0)
+        if metrics.horizontalAdvance(line) > width:
+            lines.append(metrics.elidedText(line, mode, width))
+            continue
+        while words:
+            candidate = f"{line} {words[0]}"
+            if metrics.horizontalAdvance(candidate) > width:
+                break
+            line = candidate
+            words.pop(0)
+        lines.append(line)
+    return "\n".join(lines)
 
 
 class AppConfigDialog(_ConfigDialogBase):
@@ -3258,6 +3314,7 @@ class MountConfigDialog(_ConfigDialogBase):
         self.dialog.resize(520, 220)
         self.fields: dict[str, Any] = {}
         self.rclone_fields: dict[str, tuple[str, Any]] = {}
+        self._original_rclone_values: dict[str, str] = {}
         self.deleted = False
         self.renamed_from = ""
         self.renamed_to = remote.name
@@ -3348,15 +3405,16 @@ class MountConfigDialog(_ConfigDialogBase):
         form.addRow("Options", options_frame)
 
         rclone_fields = core.editable_rclone_fields(self.remote)
+        self._original_rclone_values = dict(rclone_fields)
         if rclone_fields:
             rclone_frame = self.qt.QFrame()
             rclone_form = self.qt.QFormLayout(rclone_frame)
             for key, value in rclone_fields.items():
                 kind, field = self._rclone_config_field(key, value)
-                field.setToolTip(f"{_rclone_field_tooltip(key)} Leave blank to remove this optional value.")
+                field.setToolTip(f"{_rclone_field_tooltip(key)} Leave blank to remove the value.")
                 self.rclone_fields[key] = (kind, field)
                 rclone_form.addRow(_field_label(key), field)
-            form.addRow("Advanced rclone", rclone_frame)
+            form.addRow("Remote configuration", rclone_frame)
 
         root.addWidget(frame)
         root.addWidget(self._buttons())
@@ -3376,6 +3434,13 @@ class MountConfigDialog(_ConfigDialogBase):
             new_remote_name = core.remote_name_with_alias(remote_name, alias)
         except ValueError as exc:
             self.qt.QMessageBox.warning(self.dialog, "Remote name", str(exc))
+            return
+        rclone_updates = {
+            key: self._rclone_config_value(kind, field)
+            for key, (kind, field) in self.rclone_fields.items()
+        }
+        changed_auth_fields = self._changed_auth_fields(rclone_updates)
+        if changed_auth_fields and not self._confirm_authentication_changes(changed_auth_fields):
             return
         if new_remote_name != remote_name:
             if core.is_mounted(self.remote):
@@ -3418,10 +3483,11 @@ class MountConfigDialog(_ConfigDialogBase):
         )
         save_mount_settings(settings)
         if self.rclone_fields:
-            core.save_rclone_fields(
-                new_remote_name,
-                {key: self._rclone_config_value(kind, field) for key, (kind, field) in self.rclone_fields.items()},
-            )
+            try:
+                core.save_rclone_fields(new_remote_name, rclone_updates)
+            except RuntimeError as exc:
+                self.qt.QMessageBox.warning(self.dialog, "Remote settings", str(exc))
+                return
         self.dialog.accept()
 
     def _buttons(self) -> Any:
@@ -3485,13 +3551,39 @@ class MountConfigDialog(_ConfigDialogBase):
         if key in RCLONE_SELECT_FIELDS:
             return "combo", self._editable_config_combo(RCLONE_SELECT_FIELDS[key], value)
         field = self._line(value)
-        if key == "client_secret":
+        if key in RCLONE_SECRET_FIELDS:
             field.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
         return "text", field
 
+    def _changed_auth_fields(self, updates: dict[str, str]) -> list[str]:
+        auth_fields = RCLONE_AUTH_FIELDS.get(self.remote.backend_type.lower(), set())
+        original = getattr(self, "_original_rclone_values", {})
+        return [
+            key
+            for key in updates
+            if key in auth_fields
+            and not self._rclone_values_equal(key, updates[key], original.get(key, ""))
+        ]
+
+    def _rclone_values_equal(self, key: str, current: str, original: str) -> bool:
+        if key in RCLONE_BOOLEAN_FIELDS:
+            return _config_bool(current) == _config_bool(original)
+        return current.strip() == original.strip()
+
+    def _confirm_authentication_changes(self, changed_fields: list[str]) -> bool:
+        labels = ", ".join(_field_label(key) for key in changed_fields)
+        reply = self.qt.QMessageBox.question(
+            self.dialog,
+            "Change authentication settings?",
+            f"Change {labels}?\n\nThe remote may need to be authenticated again after saving.",
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        return reply == self.qt.QMessageBox.StandardButton.Yes
+
     def _rclone_config_value(self, kind: str, field: Any) -> str:
         if kind == "bool":
-            return "true" if field.isChecked() else ""
+            return "true" if field.isChecked() else "false"
         if kind == "combo":
             return field.currentText().strip()
         return field.text().strip()
@@ -6459,11 +6551,11 @@ class MountletWindow:
             return
         menu.clear()
         history = notice_control.notification_history()
-        for notice in history[:5]:
+        if history:
             action = self.qt.QWidgetAction(menu)
-            action.setDefaultWidget(self._notification_menu_card(menu, action, notice))
+            action.setDefaultWidget(self._notification_history_panel(menu, history))
             menu.addAction(action)
-        if not history:
+        else:
             action = self.qt.QWidgetAction(menu)
             action.setDefaultWidget(self._notification_empty_card(menu))
             menu.addAction(action)
@@ -6473,13 +6565,37 @@ class MountletWindow:
         if icon is not None:
             view_all.setIcon(icon)
         if history:
-            notice_control.mark_seen_many(history[:5])
+            notice_control.mark_seen_many(history)
             self._update_notification_button()
+
+    def _notification_history_panel(self, menu: Any, history: list[notice_control.Notice]) -> Any:
+        scroll = self.qt.QScrollArea(menu)
+        scroll.setFrameShape(self.qt.QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        content = self.qt.QWidget(scroll)
+        layout = self.qt.QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(6)
+        for notice in history:
+            layout.addWidget(self._notification_menu_card(menu, notice))
+        scroll.setWidget(content)
+
+        preferred_height = len(history) * (NOTIFICATION_CARD_HEIGHT + layout.spacing()) + 8
+        max_height = NOTIFICATION_MENU_MAX_HEIGHT
+        with suppress(Exception):
+            screen = self.qt.QApplication.screenAt(self.qt.QCursor.pos()) or self.qt.QApplication.primaryScreen()
+            if screen is not None:
+                max_height = min(max_height, max(180, screen.availableGeometry().height() - 180))
+        scroll.setFixedSize(NOTIFICATION_MENU_WIDTH, min(preferred_height, max_height))
+        return scroll
 
     def _notification_empty_card(self, menu: Any) -> Any:
         card = self.qt.QFrame(menu)
         card.setObjectName("notificationEmptyCard")
-        card.setFixedWidth(390)
+        card.setFixedWidth(NOTIFICATION_CARD_WIDTH)
         card.setStyleSheet(
             "QFrame#notificationEmptyCard { background: palette(window); "
             "border: 1px solid palette(mid); border-radius: 4px; }"
@@ -6492,10 +6608,10 @@ class MountletWindow:
         layout.addWidget(label, 1)
         return card
 
-    def _notification_menu_card(self, menu: Any, action: Any, notice: notice_control.Notice) -> Any:
+    def _notification_menu_card(self, menu: Any, notice: notice_control.Notice) -> Any:
         card = self.qt.QFrame(menu)
         card.setObjectName("notificationCard")
-        card.setFixedWidth(390)
+        card.setFixedSize(NOTIFICATION_CARD_WIDTH, NOTIFICATION_CARD_HEIGHT)
         card.setStyleSheet(
             "QFrame#notificationCard { background: palette(window); border: 1px solid palette(mid); "
             "border-radius: 4px; }"
@@ -6517,18 +6633,37 @@ class MountletWindow:
         header = self.qt.QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(6)
-        title = self.qt.QLabel(notice.title)
-        title.setWordWrap(True)
+        title = self.qt.QLabel()
+        title_font = title.font()
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setText(
+            self.qt.QFontMetrics(title_font).elidedText(
+                notice.title,
+                self.qt.Qt.TextElideMode.ElideRight,
+                230,
+            )
+        )
+        title.setFixedHeight(self.qt.QFontMetrics(title_font).lineSpacing() + 2)
         date = self.qt.QLabel(_notice_display_time(notice))
         date.setStyleSheet("color: palette(mid); font-size: 10px;")
+        date.setFixedWidth(108)
+        with suppress(Exception):
+            date.setAlignment(self.qt.Qt.AlignmentFlag.AlignRight | self.qt.Qt.AlignmentFlag.AlignVCenter)
         header.addWidget(title, 1)
         header.addWidget(date)
         content_layout.addLayout(header)
 
-        message = self.qt.QLabel(_notice_preview_text(notice.message))
-        message.setWordWrap(True)
-        message.setMaximumHeight(58)
-        message.setStyleSheet("color: palette(text); font-size: 11px;")
+        message = self.qt.QLabel()
+        message_font = message.font()
+        if message_font.pointSize() > 0:
+            message_font.setPointSize(max(message_font.pointSize() - 1, 8))
+        message.setFont(message_font)
+        message.setText(_elide_notice_lines(self.qt, notice.message, message_font, 344, 3))
+        message.setFixedHeight(self.qt.QFontMetrics(message_font).lineSpacing() * 3 + 2)
+        message.setStyleSheet("color: palette(text);")
+        with suppress(Exception):
+            message.setAlignment(self.qt.Qt.AlignmentFlag.AlignLeft | self.qt.Qt.AlignmentFlag.AlignTop)
         content_layout.addWidget(message)
 
         controls = self.qt.QHBoxLayout()
@@ -6552,7 +6687,7 @@ class MountletWindow:
         def delete_notice() -> None:
             if not notice_control.delete_notice(notice):
                 return
-            action.setVisible(False)
+            menu.close()
             self._update_notification_button()
 
         delete_button.clicked.connect(lambda _checked=False: delete_notice())

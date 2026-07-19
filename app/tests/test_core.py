@@ -482,6 +482,73 @@ token = REDACTED
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
             self.assertEqual(remote.extra_info["token"], "REDACTED")
 
+    def test_s3_credentials_are_editable_and_new_secrets_are_obscured(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Archive__CloudflareR2]
+type = s3
+provider = Cloudflare
+endpoint = https://example.r2.cloudflarestorage.com
+access_key_id = old-key
+secret_access_key = obscured-old-secret
+""".strip(),
+            )
+            remote = core.load_remotes()[0]
+
+            fields = core.editable_rclone_fields(remote)
+
+            self.assertEqual(fields["access_key_id"], "old-key")
+            self.assertEqual(fields["secret_access_key"], "obscured-old-secret")
+            self.assertIn("session_token", fields)
+            completed = mock.Mock(returncode=0, stdout="obscured-new-secret\n", stderr="")
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.subprocess, "run", return_value=completed) as run:
+                    core.save_rclone_fields(
+                        remote.name,
+                        {
+                            "access_key_id": "new-key",
+                            "secret_access_key": "new-secret",
+                        },
+                    )
+
+            updated = core.load_remotes()[0]
+            self.assertEqual(updated.extra_info["access_key_id"], "new-key")
+            self.assertEqual(updated.extra_info["secret_access_key"], "obscured-new-secret")
+            self.assertEqual(
+                run.call_args.args[0],
+                ["/usr/bin/rclone", "obscure", "new-secret"],
+            )
+            self.assertEqual(run.call_args.kwargs["timeout"], core.RCLONE_OBSCURE_TIMEOUT_SECONDS)
+
+    def test_unchanged_s3_secret_is_not_obscured_again(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                "[Archive__CloudflareR2]\ntype = s3\nsecret_access_key = obscured-secret\n",
+            )
+
+            with mock.patch.object(core, "_obscure_rclone_secret") as obscure:
+                core.save_rclone_fields(
+                    "Archive__CloudflareR2",
+                    {"secret_access_key": "obscured-secret"},
+                )
+
+            obscure.assert_not_called()
+
+    def test_equivalent_false_rclone_boolean_does_not_rewrite_config(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                "[Archive__CloudflareR2]\ntype = s3\nprovider = Cloudflare\nenv_auth = false\n",
+            )
+
+            with mock.patch.object(core, "_save_config") as save:
+                core.save_rclone_fields("Archive__CloudflareR2", {"env_auth": ""})
+
+            save.assert_not_called()
+
     def test_delete_rclone_remote_removes_config_section(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(

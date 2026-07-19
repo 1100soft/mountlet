@@ -594,6 +594,13 @@ function renderNotifications(notices) {
       ? String(notice.level).toLowerCase()
       : "info";
     article.className = `website-notice notice-${level}`;
+    article.tabIndex = 0;
+    article.setAttribute("role", "button");
+    article.setAttribute("aria-expanded", "false");
+
+    const accent = document.createElement("span");
+    accent.className = "website-notice-accent";
+    accent.setAttribute("aria-hidden", "true");
 
     const header = document.createElement("div");
     header.className = "website-notice-header";
@@ -607,7 +614,9 @@ function renderNotifications(notices) {
     const message = document.createElement("p");
     message.className = "website-notice-message";
     message.textContent = String(notice.message || "");
-    article.append(header, message);
+    const footer = document.createElement("div");
+    footer.className = "website-notice-footer";
+    article.append(accent, header, message, footer);
 
     if (notice.url) {
       const link = document.createElement("a");
@@ -615,9 +624,32 @@ function renderNotifications(notices) {
       link.href = String(notice.url);
       link.rel = "noreferrer";
       link.textContent = "Read more";
-      article.append(link);
+      footer.append(link);
     }
+    article.addEventListener("click", (event) => {
+      if (!event.target.closest("a")) {
+        toggleExpandedNotification(article);
+      }
+    });
+    article.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleExpandedNotification(article);
+      }
+    });
     list.append(article);
+  }
+}
+
+function toggleExpandedNotification(selected) {
+  const shouldExpand = !selected.classList.contains("expanded");
+  document.querySelectorAll(".website-notice.expanded").forEach((notice) => {
+    notice.classList.remove("expanded");
+    notice.setAttribute("aria-expanded", "false");
+  });
+  if (shouldExpand) {
+    selected.classList.add("expanded");
+    selected.setAttribute("aria-expanded", "true");
   }
 }
 
