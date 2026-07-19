@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1 - 2026-07-19
+
+- Added an app notification inbox with server-managed active/archive lifecycle,
+  notification cards, timestamps, unread state, and website history.
+- Added searchable website notices and FAQ entries, archived-notice grouping,
+  and a private FAQ-first support request form backed by the report pipeline.
+- Added provider icons, remote context actions, and configurable S3-compatible
+  remote credentials for key rotation.
+- Improved bundled installer reliability, current rclone staging, Linux/X11
+  stability, and automated preview/production installer uploads to R2.
+
 ## 0.6.0 - 2026-07-12
 
 - Added paid-license enforcement for expired trials: Mountlet now opens the
