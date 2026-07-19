@@ -77,6 +77,58 @@ class NoticeControlTests(unittest.TestCase):
         self.assertEqual(notice_control.unseen_notices([original]), [])
         self.assertEqual(notice_control.unseen_notices([revised]), [revised])
 
+    def test_archived_notice_is_retained_but_never_delivered(self):
+        active = notice_control.Notice(id="release", title="Release", message="Current", version="1")
+        archived = notice_control.Notice(
+            id="release",
+            title="Release",
+            message="Previous",
+            version="2",
+            archived=True,
+        )
+        notice_control.remember_notices([active])
+        notice_control.remember_notices([archived])
+
+        history = notice_control.notification_history()
+        self.assertEqual(history, [archived])
+        self.assertEqual(notice_control.unseen_notices(history), [])
+        self.assertTrue(notice_control.is_seen(archived))
+
+    def test_fetch_parses_archived_notice(self):
+        with mock.patch.object(
+            notice_control,
+            "_get_json",
+            return_value={
+                "notices": [
+                    {"id": "old", "title": "Old notice", "message": "Archived", "archived": True}
+                ]
+            },
+        ):
+            notices = notice_control.fetch_notices()
+
+        self.assertTrue(notices[0].archived)
+        self.assertEqual(notice_control.unseen_notices(notices), [])
+
+    def test_expired_archived_notice_remains_in_public_history(self):
+        with mock.patch.object(
+            notice_control,
+            "_get_json",
+            return_value={
+                "notices": [
+                    {
+                        "id": "old",
+                        "title": "Old notice",
+                        "message": "Archived",
+                        "archived": True,
+                        "endsAt": "2000-01-01T00:00:00Z",
+                    }
+                ]
+            },
+        ):
+            notices = notice_control.fetch_notices()
+
+        self.assertEqual([notice.id for notice in notices], ["old"])
+
     def test_expired_notice_remains_in_history(self):
         notice = notice_control.Notice(id="expired", title="Old notice", message="Still useful")
         notice_control.remember_notices([notice])

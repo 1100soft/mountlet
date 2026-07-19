@@ -33,6 +33,7 @@ class Notice:
     url: str = ""
     version: str = "1"
     updated_at: str = ""
+    archived: bool = False
 
     @property
     def key(self) -> str:
@@ -64,7 +65,11 @@ def fetch_notices(api_url: str | None = None) -> list[Notice]:
 
 def unseen_notices(notices: list[Notice]) -> list[Notice]:
     state = _load_state()
-    return [notice for notice in notices if notice.key not in state["seen"] and notice.key not in state["deleted"]]
+    return [
+        notice
+        for notice in notices
+        if not notice.archived and notice.key not in state["seen"] and notice.key not in state["deleted"]
+    ]
 
 
 def mark_seen(notice: Notice) -> None:
@@ -90,7 +95,17 @@ def remember_notices(notices: list[Notice]) -> None:
         state = _load_state()
         now = int(time.time())
         for notice in notices:
-            current = state["history"].get(notice.key, {})
+            previous_keys = [
+                key
+                for key, raw in state["history"].items()
+                if isinstance(raw, dict) and str(raw.get("id") or "") == notice.id
+            ]
+            previous = next((state["history"][key] for key in previous_keys), {})
+            for key in previous_keys:
+                if key == notice.key:
+                    continue
+                state["history"].pop(key, None)
+            current = state["history"].get(notice.key, previous)
             state["history"][notice.key] = {
                 **_notice_to_dict(notice),
                 "receivedAt": int(current.get("receivedAt") or now),
@@ -112,7 +127,7 @@ def notification_history() -> list[Notice]:
 
 
 def is_seen(notice: Notice) -> bool:
-    return notice.key in _load_state()["seen"]
+    return notice.archived or notice.key in _load_state()["seen"]
 
 
 def delete_notice(notice: Notice) -> bool:
@@ -156,11 +171,12 @@ def _notice_from_dict(raw: dict[str, Any], *, now: float, active_only: bool = Tr
     message = str(raw.get("message") or "").strip()
     if not notice_id or not title or not message:
         return None
+    archived = bool(raw.get("archived")) or str(raw.get("status") or "").strip().lower() == "archived"
     starts_at = _parse_time(raw.get("startsAt") or raw.get("starts_at"))
     ends_at = _parse_time(raw.get("endsAt") or raw.get("ends_at"))
-    if active_only and starts_at and now < starts_at:
+    if active_only and not archived and starts_at and now < starts_at:
         return None
-    if active_only and ends_at and now > ends_at:
+    if active_only and not archived and ends_at and now > ends_at:
         return None
     level = str(raw.get("level") or NOTICE_LEVEL_INFO).strip().lower()
     if level not in {NOTICE_LEVEL_INFO, NOTICE_LEVEL_IMPORTANT, NOTICE_LEVEL_CRITICAL}:
@@ -175,6 +191,7 @@ def _notice_from_dict(raw: dict[str, Any], *, now: float, active_only: bool = Tr
         url=str(raw.get("url") or "").strip(),
         version=str(raw.get("version") or "1").strip() or "1",
         updated_at=str(raw.get("updatedAt") or raw.get("updated_at") or "").strip(),
+        archived=archived,
     )
 
 
@@ -255,7 +272,7 @@ def _save_state(state: dict[str, dict[str, Any]]) -> None:
         apply_permissions(path)
 
 
-def _notice_to_dict(notice: Notice) -> dict[str, str]:
+def _notice_to_dict(notice: Notice) -> dict[str, Any]:
     return {
         "id": notice.id,
         "title": notice.title,
@@ -265,6 +282,7 @@ def _notice_to_dict(notice: Notice) -> dict[str, str]:
         "url": notice.url,
         "version": notice.version,
         "updatedAt": notice.updated_at,
+        "archived": notice.archived,
     }
 
 

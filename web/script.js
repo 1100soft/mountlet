@@ -588,12 +588,24 @@ function renderNotifications(notices) {
     return;
   }
   list.replaceChildren();
-  for (const notice of notices) {
+  const ordered = [...notices].sort((left, right) => {
+    const lifecycle = Number(Boolean(left.archived)) - Number(Boolean(right.archived));
+    return lifecycle || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+  });
+  let archiveHeadingAdded = false;
+  for (const notice of ordered) {
+    if (notice.archived && !archiveHeadingAdded) {
+      const heading = document.createElement("h3");
+      heading.className = "notification-group-title";
+      heading.textContent = "Archive";
+      list.append(heading);
+      archiveHeadingAdded = true;
+    }
     const article = document.createElement("article");
     const level = ["critical", "important"].includes(String(notice.level || "").toLowerCase())
       ? String(notice.level).toLowerCase()
       : "info";
-    article.className = `website-notice notice-${level}`;
+    article.className = `website-notice notice-${level}${notice.archived ? " archived" : " active"}`;
     article.tabIndex = 0;
     article.setAttribute("role", "button");
     article.setAttribute("aria-expanded", "false");

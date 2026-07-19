@@ -1,8 +1,8 @@
 import {jsonResponse} from "../_lib/license.js";
-import {listPublishedNotices, noticeIsActive, publicNotice} from "../_lib/notices.js";
+import {listPublicNotices, noticeIsActive, publicNotice} from "../_lib/notices.js";
 
 export async function onRequestGet({env}) {
-  const stored = await listPublishedNotices(env);
+  const stored = await listPublicNotices(env);
   const configured = configuredNotices(env);
   const merged = new Map();
   for (const notice of [...configured, ...stored]) {
@@ -13,7 +13,10 @@ export async function onRequestGet({env}) {
   }
   return jsonResponse({
     ok: true,
-    notices: [...merged.values()].sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""))),
+    notices: [...merged.values()].sort((left, right) => {
+      const lifecycle = Number(Boolean(left.archived)) - Number(Boolean(right.archived));
+      return lifecycle || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
+    }),
   });
 }
 
@@ -27,8 +30,10 @@ function configuredNotices(env) {
     const values = Array.isArray(parsed) ? parsed : parsed.notices;
     return (Array.isArray(values) ? values : [])
       .filter((notice) => notice && typeof notice === "object")
+      .filter((notice) => String(notice.status || "published").toLowerCase() !== "draft")
       .map((notice) => publicNotice(notice))
-      .filter((notice) => notice.id && notice.title && notice.message && noticeIsActive(notice));
+      .filter((notice) => notice.id && notice.title && notice.message)
+      .filter((notice) => notice.archived || noticeIsActive(notice));
   } catch (_error) {
     return [];
   }

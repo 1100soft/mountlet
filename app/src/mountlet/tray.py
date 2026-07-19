@@ -10581,6 +10581,9 @@ class MountletTray:
         message = self.qt.QMessageBox(self.main_window.window)
         message.setWindowTitle(notice.title)
         message.setText(notice.message)
+        display_time = _notice_display_time(notice)
+        if display_time:
+            message.setInformativeText(display_time)
         message.setIcon(
             self.qt.QMessageBox.Icon.Warning
             if notice.critical or notice.level == notice_control.NOTICE_LEVEL_IMPORTANT

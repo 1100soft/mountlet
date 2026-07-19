@@ -100,6 +100,7 @@ export function normalizeNoticeInput(value, {partial = false} = {}) {
 }
 
 export function publicNotice(row) {
+  const status = String(row.status || "published").toLowerCase();
   return {
     id: String(row.id || ""),
     version: String(row.version || 1),
@@ -111,6 +112,7 @@ export function publicNotice(row) {
     startsAt: String(row.starts_at ?? row.startsAt ?? ""),
     endsAt: String(row.ends_at ?? row.endsAt ?? ""),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? ""),
+    archived: status === "archived" || row.archived === true,
   };
 }
 
@@ -129,15 +131,18 @@ export function noticeIsActive(notice, now = Date.now()) {
   return (!Number.isFinite(startsAt) || now >= startsAt) && (!Number.isFinite(endsAt) || now <= endsAt);
 }
 
-export async function listPublishedNotices(env) {
+export async function listPublicNotices(env) {
   if (!env.DB) {
     return [];
   }
   try {
     const result = await env.DB.prepare(
-      "SELECT * FROM notices WHERE status = 'published' ORDER BY updated_at DESC"
+      `SELECT * FROM notices WHERE status IN ('published', 'archived')
+       ORDER BY CASE status WHEN 'published' THEN 0 ELSE 1 END, updated_at DESC`
     ).all();
-    return (result.results || []).map(publicNotice).filter((notice) => noticeIsActive(notice));
+    return (result.results || [])
+      .map(publicNotice)
+      .filter((notice) => notice.archived || noticeIsActive(notice));
   } catch (error) {
     if (String(error?.message || error).toLowerCase().includes("no such table")) {
       return [];
@@ -145,6 +150,9 @@ export async function listPublishedNotices(env) {
     throw error;
   }
 }
+
+// Retained for callers outside this repository that used the original name.
+export const listPublishedNotices = listPublicNotices;
 
 function assignString(result, source, key, {aliases = [], required = false, max = 0, fallback} = {}) {
   const sourceKey = [key, ...aliases].find((candidate) => Object.hasOwn(source, candidate));

@@ -710,7 +710,23 @@ h3 {
   height: auto;
   min-height: 174px;
   overflow: visible;
-  grid-template-rows: auto auto 22px;
+  grid-template-rows: 46px auto 22px;
+}
+
+.website-notice.active {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
+  box-shadow: 0 5px 18px rgba(25, 35, 55, 0.08);
+}
+
+.website-notice.archived {
+  background: color-mix(in srgb, var(--panel) 92%, var(--line));
+}
+
+.notification-group-title {
+  color: var(--muted);
+  font-size: 0.9rem;
+  letter-spacing: 0;
+  margin: 10px 0 0;
 }
 
 .website-notice-accent {
@@ -775,11 +791,6 @@ h3 {
   display: block;
   overflow: visible;
   white-space: pre-wrap;
-}
-
-.website-notice.expanded .website-notice-header h3 {
-  display: block;
-  overflow: visible;
 }
 
 .website-notice-footer {
