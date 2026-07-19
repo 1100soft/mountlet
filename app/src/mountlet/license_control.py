@@ -346,7 +346,7 @@ def _stable_machine_identifier() -> str:
                 text=True,
                 timeout=3,
             )
-            match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', result.stdout)
+            match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', str(getattr(result, "stdout", "")))
             if match:
                 return f"platform-uuid:{match.group(1)}"
         except (OSError, subprocess.SubprocessError):

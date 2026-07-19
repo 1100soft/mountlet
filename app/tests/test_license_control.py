@@ -86,6 +86,18 @@ class LicenseControlTests(unittest.TestCase):
 
         self.assertEqual(first, second)
 
+    def test_macos_machine_identifier_handles_mocked_process_without_stdout(self):
+        with (
+            mock.patch("mountlet.license_control.platform.system", return_value="Darwin"),
+            mock.patch("mountlet.license_control.platform.node", return_value="test-mac"),
+            mock.patch("mountlet.license_control.socket.gethostname", return_value="test-mac"),
+            mock.patch("mountlet.license_control.subprocess.run", return_value=SimpleNamespace(returncode=0)),
+            mock.patch("mountlet.license_control.uuid.getnode", return_value=(1 << 40) | 123),
+        ):
+            identifier = license_control._stable_machine_identifier()
+
+        self.assertEqual(identifier, "test-mac|test-mac")
+
     def test_replicated_legacy_trial_migrates_to_stable_machine_id(self):
         start = 1_700_000_000.0
         legacy_hint = "a" * 64
