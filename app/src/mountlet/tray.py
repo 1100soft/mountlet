@@ -26,6 +26,7 @@ from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote
 
 from . import __version__, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
@@ -185,11 +186,11 @@ RCLONE_FIELD_TOOLTIPS = {
     "acl": "Default access-control setting used by the remote provider.",
     "storage_class": "Default storage class used by the remote provider.",
     "user": "Account name used to authenticate this remote.",
-    "pass": "Password used to authenticate this WebDAV remote.",
+    "pass": "Password used to authenticate this remote.",
     "password": "Password used to authenticate this remote.",
     "bearer_token": "Bearer token used instead of a WebDAV username and password.",
     "username": "Proton account username used by this remote.",
-    "2fa": "Current Proton 2FA code. Usually only needed while configuring the remote.",
+    "2fa": "Current two-factor authentication code. Usually only needed while configuring the remote.",
     "otp_secret_key": "Proton OTP secret used to generate authentication codes.",
     "mailbox_password": "Mailbox password for two-password Proton accounts.",
     "apple_id": "Apple ID used to authenticate this iCloud remote.",
@@ -218,6 +219,7 @@ RCLONE_AUTH_FIELDS = {
     "koofr": {"provider", "user", "password"},
     "protondrive": {"username", "password", "2fa", "otp_secret_key", "mailbox_password"},
     "iclouddrive": {"service", "apple_id", "password", "trust_token", "cookies"},
+    "mega": {"user", "pass", "2fa"},
 }
 RCLONE_BOOLEAN_FIELDS = core.BOOLEAN_RCLONE_CONFIG_KEYS
 RCLONE_SELECT_FIELDS = {
@@ -252,6 +254,8 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("iCloud Drive / Photos", "iclouddrive"),
     ("Koofr", "koofr"),
     ("Proton Drive", "protondrive"),
+    ("MEGA", "mega"),
+    ("Nextcloud", "nextcloud"),
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
     ("Other provider (rclone terminal)", EXTERNAL_RCLONE_CONFIG_PROVIDER),
@@ -266,6 +270,8 @@ REMOTE_PROVIDER_STATUSES = {
     "iclouddrive": "untested",
     "koofr": "tested",
     "protondrive": "tested",
+    "mega": "untested",
+    "nextcloud": "untested",
     "s3": "partial",
     "webdav": "untested",
     EXTERNAL_RCLONE_CONFIG_PROVIDER: "untested",
@@ -281,6 +287,8 @@ REMOTE_CONFIG_SUFFIXES = {
     "iclouddrive": "iCloud",
     "koofr": "Koofr",
     "protondrive": "Proton Drive",
+    "mega": "MEGA",
+    "nextcloud": "Nextcloud",
     "s3": "S3",
     "webdav": "WebDAV",
     EXTERNAL_RCLONE_CONFIG_PROVIDER: "Remote",
@@ -492,6 +500,8 @@ PROVIDER_COLORS = {
     "iclouddrive": "#0a84ff",
     "koofr": "#f59e0b",
     "protondrive": "#6d4aff",
+    "mega": "#d9272e",
+    "nextcloud": "#0082c9",
     "s3": "#ff9900",
     "webdav": "#64748b",
 }
@@ -505,6 +515,7 @@ REMOTE_BROWSER_URLS = {
     "iclouddrive": "https://www.icloud.com/iclouddrive/",
     "koofr": "https://app.koofr.net/",
     "protondrive": "https://drive.proton.me/",
+    "mega": "https://mega.nz/fm",
 }
 _wizard_pending_remote_names: set[str] = set()
 
@@ -749,9 +760,10 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
             if endpoint.startswith(("http://", "https://")):
                 return endpoint
     if backend_type == "webdav":
-        url = remote.extra_info.get("url", "").strip()
-        if url.startswith(("http://", "https://")):
-            return url
+        return _webdav_browser_url(
+            remote.extra_info.get("url", ""),
+            remote.extra_info.get("vendor", remote.provider),
+        )
     return None
 
 
@@ -960,6 +972,29 @@ def _fixed_webdav_urls() -> set[str]:
         for option in WEBDAV_VENDOR_OPTIONS
         if option.get("fixed_url", "").casefold() in {"true", "1", "yes"}
     }
+
+
+def _default_webdav_examples() -> set[str]:
+    return {option.get("url", "") for option in WEBDAV_VENDOR_OPTIONS}
+
+
+def _nextcloud_webdav_url(server_url: str, username: str) -> str:
+    """Return a Nextcloud DAV endpoint while accepting an existing endpoint unchanged."""
+    server = server_url.strip().rstrip("/")
+    if "/remote.php/" in server.casefold():
+        return f"{server}/"
+    return f"{server}/remote.php/dav/files/{quote(username.strip(), safe='')}/"
+
+
+def _webdav_browser_url(url: str, vendor: str) -> str | None:
+    endpoint = url.strip()
+    if not endpoint.startswith(("http://", "https://")):
+        return None
+    if vendor.strip().casefold() == "nextcloud":
+        marker = endpoint.casefold().find("/remote.php/")
+        if marker >= 0:
+            return endpoint[:marker] or None
+    return endpoint
 
 
 def _default_s3_endpoints() -> set[str]:
@@ -3869,6 +3904,27 @@ class NewRemoteWizard:
         proton_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         proton_help.setStyleSheet(_muted_text_style(proton_help))
 
+        mega_user = self.qt.QLineEdit()
+        mega_user.setPlaceholderText("MEGA email address")
+        mega_user.setToolTip("The email address used for your MEGA account.")
+        mega_pass = self.qt.QLineEdit()
+        mega_pass.setPlaceholderText("MEGA password")
+        mega_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        mega_pass.setToolTip("Your MEGA password. rclone stores it obscured in rclone.conf.")
+        mega_2fa = self.qt.QLineEdit()
+        mega_2fa.setPlaceholderText("Optional")
+        mega_2fa.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        mega_2fa.setToolTip("Enter the current MEGA 2FA code if two-factor authentication is enabled.")
+        mega_help = self.qt.QLabel(
+            "Sign in to MEGA in a browser once before setup so the account encryption keys exist. "
+            "MEGA can temporarily limit repeated rclone logins. "
+            '<a href="https://rclone.org/mega/">rclone MEGA guide</a>'
+        )
+        mega_help.setWordWrap(True)
+        mega_help.setOpenExternalLinks(True)
+        mega_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        mega_help.setStyleSheet(_muted_text_style(mega_help))
+
         icloud_service = self.qt.QComboBox()
         icloud_service.addItem("iCloud Drive", "drive")
         icloud_service.addItem("iCloud Photos", "photos")
@@ -3930,6 +3986,9 @@ class NewRemoteWizard:
             proton_pass,
             proton_2fa,
             proton_mailbox_pass,
+            mega_user,
+            mega_pass,
+            mega_2fa,
             icloud_user,
             icloud_pass,
             webdav_url,
@@ -3971,6 +4030,10 @@ class NewRemoteWizard:
             "proton_2fa": proton_2fa,
             "proton_mailbox_pass": proton_mailbox_pass,
             "proton_help": proton_help,
+            "mega_user": mega_user,
+            "mega_pass": mega_pass,
+            "mega_2fa": mega_2fa,
+            "mega_help": mega_help,
             "icloud_service": icloud_service,
             "icloud_user": icloud_user,
             "icloud_pass": icloud_pass,
@@ -4007,6 +4070,10 @@ class NewRemoteWizard:
         form.addRow("Proton 2FA code", proton_2fa)
         form.addRow("Proton mailbox password", proton_mailbox_pass)
         form.addRow(proton_help)
+        form.addRow("MEGA email", mega_user)
+        form.addRow("MEGA password", mega_pass)
+        form.addRow("MEGA 2FA code", mega_2fa)
+        form.addRow(mega_help)
         form.addRow("iCloud service", icloud_service)
         form.addRow("Apple ID", icloud_user)
         form.addRow("Apple password", icloud_pass)
@@ -4074,9 +4141,11 @@ class NewRemoteWizard:
             return self._koofr_fields_are_valid()
         if remote_type == "protondrive":
             return self._proton_fields_are_valid()
+        if remote_type == "mega":
+            return self._mega_fields_are_valid()
         if remote_type == "iclouddrive":
             return self._icloud_fields_are_valid()
-        if remote_type == "webdav":
+        if remote_type in {"nextcloud", "webdav"}:
             return self._webdav_fields_are_valid()
         return True
 
@@ -4099,12 +4168,19 @@ class NewRemoteWizard:
     def _proton_fields_are_valid(self) -> bool:
         return bool(self.fields["proton_user"].text().strip() and self.fields["proton_pass"].text().strip())
 
+    def _mega_fields_are_valid(self) -> bool:
+        return bool(self.fields["mega_user"].text().strip() and self.fields["mega_pass"].text())
+
     def _icloud_fields_are_valid(self) -> bool:
         return bool(self.fields["icloud_user"].text().strip() and self.fields["icloud_pass"].text())
 
     def _webdav_fields_are_valid(self) -> bool:
         url = self.fields["webdav_url"].text().strip()
-        return url.startswith(("http://", "https://"))
+        if not url.startswith(("http://", "https://")):
+            return False
+        if (self.fields["provider"].currentData() or "") == "nextcloud":
+            return bool(self.fields["webdav_user"].text().strip() and self.fields["webdav_pass"].text())
+        return True
 
     def _next(self) -> None:
         if self._question is None:
@@ -4121,8 +4197,10 @@ class NewRemoteWizard:
         if not self._valid_remote_name(alias):
             self._warning("Add remote", "Use a name without ':', '@', or path separators.")
             return
-        self._remote_type = self.fields["provider"].currentData() or "drive"
-        provider_name = self._selected_provider_config_name(self._remote_type)
+        selected_type = self.fields["provider"].currentData() or "drive"
+        self._provider_choice_type = selected_type
+        self._remote_type = "webdav" if selected_type == "nextcloud" else selected_type
+        provider_name = self._selected_provider_config_name(selected_type)
         existing_remotes = core.load_remotes()
         if self._display_name_exists(alias, self._remote_type, existing_remotes, provider_name=provider_name):
             self._warning("Add remote", f"{alias} already exists for {provider_name}.")
@@ -4171,6 +4249,17 @@ class NewRemoteWizard:
             self._remote_name = ""
             self._remote_alias = ""
             return
+        if self._remote_type == "mega" and not self._mega_fields_are_valid():
+            self._warning("Add remote", "Enter the MEGA email address and password before creating the remote.")
+            return
+        if self._remote_type == "mega" and rclone_wizard.backend_is_available("mega") is False:
+            self._warning(
+                "Add remote",
+                "This rclone installation does not include MEGA support.\n\nUpdate rclone, then try again.",
+            )
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
         if self._remote_type == "iclouddrive" and not self._icloud_fields_are_valid():
             self._warning("Add remote", "Enter the Apple ID and password before creating the remote.")
             return
@@ -4184,7 +4273,12 @@ class NewRemoteWizard:
             self._remote_alias = ""
             return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
-            self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
+            message = (
+                "Enter the Nextcloud server address, username, and app password."
+                if selected_type == "nextcloud"
+                else "Enter a WebDAV URL that starts with http:// or https://."
+            )
+            self._warning("Add remote", message)
             return
         if not self._browser_auth_port_ready():
             self._remote_name = ""
@@ -4426,6 +4520,8 @@ class NewRemoteWizard:
             return self._koofr_config_args()
         if self._remote_type == "protondrive":
             return self._proton_config_args()
+        if self._remote_type == "mega":
+            return self._mega_config_args()
         if self._remote_type == "iclouddrive":
             return self._icloud_config_args()
         if self._remote_type == "webdav":
@@ -4479,6 +4575,18 @@ class NewRemoteWizard:
             args.extend(["mailbox_password", mailbox_password])
         return args
 
+    def _mega_config_args(self) -> list[str]:
+        args = [
+            "user",
+            self.fields["mega_user"].text().strip(),
+            "pass",
+            self.fields["mega_pass"].text(),
+        ]
+        code = self.fields["mega_2fa"].text().strip()
+        if code:
+            args.extend(["2fa", code])
+        return args
+
     def _icloud_config_args(self) -> list[str]:
         return [
             "service",
@@ -4490,9 +4598,16 @@ class NewRemoteWizard:
         ]
 
     def _webdav_config_args(self) -> list[str]:
+        url = self.fields["webdav_url"].text().strip()
+        provider_field = self.fields.get("provider")
+        selected_type = getattr(self, "_provider_choice_type", "") or (
+            (provider_field.currentData() or "") if provider_field is not None else ""
+        )
+        if selected_type == "nextcloud":
+            url = _nextcloud_webdav_url(url, self.fields["webdav_user"].text())
         args = [
             "url",
-            self.fields["webdav_url"].text().strip(),
+            url,
             "vendor",
             self._webdav_vendor_value(),
         ]
@@ -4526,6 +4641,11 @@ class NewRemoteWizard:
         return self._s3_provider_choice().get("config_name", "S3") or "S3"
 
     def _webdav_vendor_choice(self) -> dict[str, str]:
+        selected_type = getattr(self, "_provider_choice_type", "") or (
+            self.fields["provider"].currentData() if "provider" in self.fields else ""
+        )
+        if selected_type == "nextcloud":
+            return dict(WEBDAV_VENDOR_OPTIONS[0])
         choice = self.fields["webdav_vendor"].currentData()
         if isinstance(choice, dict):
             return {str(key): str(value) for key, value in choice.items()}
@@ -4704,6 +4824,9 @@ class NewRemoteWizard:
             "proton_pass",
             "proton_2fa",
             "proton_mailbox_pass",
+            "mega_user",
+            "mega_pass",
+            "mega_2fa",
             "icloud_service",
             "icloud_user",
             "icloud_pass",
@@ -4738,15 +4861,18 @@ class NewRemoteWizard:
         if not self.fields:
             return
         remote_type = self.fields["provider"].currentData() or "drive"
-        self._remote_type = remote_type
+        self._provider_choice_type = remote_type
+        self._remote_type = "webdav" if remote_type == "nextcloud" else remote_type
         is_drive = remote_type == "drive"
         is_gphotos = remote_type == "gphotos"
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
         is_s3 = remote_type == "s3"
         is_koofr = remote_type == "koofr"
         is_proton = remote_type == "protondrive"
+        is_mega = remote_type == "mega"
         is_icloud = remote_type == "iclouddrive"
-        is_webdav = remote_type == "webdav"
+        is_nextcloud = remote_type == "nextcloud"
+        is_webdav = remote_type in {"nextcloud", "webdav"}
         is_external = remote_type == EXTERNAL_RCLONE_CONFIG_PROVIDER
         self._set_form_row_visible(self.fields["name"], not is_external)
         self._set_form_row_visible(self.fields["credential_source"], is_drive)
@@ -4783,6 +4909,13 @@ class NewRemoteWizard:
         ):
             self._set_form_row_visible(self.fields[field_name], is_proton)
         for field_name in (
+            "mega_user",
+            "mega_pass",
+            "mega_2fa",
+            "mega_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_mega)
+        for field_name in (
             "icloud_service",
             "icloud_user",
             "icloud_pass",
@@ -4791,12 +4924,12 @@ class NewRemoteWizard:
             self._set_form_row_visible(self.fields[field_name], is_icloud)
         for field_name in (
             "webdav_url",
-            "webdav_vendor",
             "webdav_help",
             "webdav_user",
             "webdav_pass",
         ):
             self._set_form_row_visible(self.fields[field_name], is_webdav)
+        self._set_form_row_visible(self.fields["webdav_vendor"], is_webdav and not is_nextcloud)
         self._set_form_row_visible(self.fields["connect_after_create"], not is_external)
         self._set_form_row_visible(self.fields["credential_help"], is_drive)
         self._set_form_row_visible(self.fields["gphotos_help"], is_gphotos)
@@ -4856,8 +4989,24 @@ class NewRemoteWizard:
         self.fields["webdav_pass"].setPlaceholderText(choice.get("password", "Optional"))
         self.fields["webdav_pass"].setToolTip(choice.get("password_tip", "Optional WebDAV password."))
         self.fields["webdav_help"].setText(choice.get("instructions", ""))
-        is_webdav = (self.fields["provider"].currentData() or "drive") == "webdav"
+        selected_type = self.fields["provider"].currentData() or "drive"
+        is_webdav = selected_type in {"nextcloud", "webdav"}
+        is_nextcloud = selected_type == "nextcloud"
+        label = self.form.labelForField(self.fields["webdav_url"])
+        if label is not None:
+            label.setText("Server address" if is_nextcloud else "WebDAV URL")
+        if is_nextcloud and self.fields["webdav_url"].text().strip() in _default_webdav_examples():
+            self.fields["webdav_url"].clear()
+        self.fields["webdav_url"].setPlaceholderText(
+            "https://cloud.example.com" if is_nextcloud else url
+        )
+        self.fields["webdav_url"].setToolTip(
+            "Your Nextcloud server address. Mountlet builds the DAV endpoint automatically."
+            if is_nextcloud
+            else choice.get("url_tip", "The WebDAV endpoint URL.")
+        )
         self._set_form_row_visible(self.fields["webdav_url"], is_webdav and not fixed_url)
+        self._set_form_row_visible(self.fields["webdav_vendor"], is_webdav and not is_nextcloud)
         self._set_form_row_visible(self.fields["webdav_help"], is_webdav)
         self._update_action_button()
 
@@ -4881,6 +5030,8 @@ class NewRemoteWizard:
             "iclouddrive": "Personal iCloud",
             "koofr": "Personal Koofr",
             "protondrive": "Personal Proton Drive",
+            "mega": "Personal MEGA",
+            "nextcloud": "Personal Nextcloud",
             "s3": "Archive S3",
             "webdav": "Nextcloud",
         }
@@ -5048,6 +5199,8 @@ class NewRemoteWizard:
 
     def _selected_provider_config_name(self, remote_type: str) -> str:
         fields = getattr(self, "fields", None)
+        if remote_type.strip().lower() == "nextcloud":
+            return "Nextcloud"
         if remote_type.strip().lower() == "s3" and fields:
             return self._s3_provider_config_name()
         if remote_type.strip().lower() == "webdav" and fields:
@@ -5131,6 +5284,8 @@ class NewRemoteWizard:
         return str(option.get("Help", "")).strip().split("\n\n", 1)[0]
 
     def _provider_label(self, remote_type: str) -> str:
+        if remote_type == "webdav" and getattr(self, "_provider_choice_type", "") == "nextcloud":
+            return "Nextcloud"
         for label, backend_type in REMOTE_PROVIDER_OPTIONS:
             if backend_type == remote_type:
                 return label

@@ -16,6 +16,7 @@ PROVIDER_ASSETS = {
     "koofr": "koofr.png",
     "protondrive": "proton-drive.svg",
     "iclouddrive": "icloud.svg",
+    "mega": "mega.svg",
     "cloudflare r2": "cloudflare-r2.svg",
     "cloudflare": "cloudflare-r2.svg",
     "amazon s3": "amazon-s3.svg",

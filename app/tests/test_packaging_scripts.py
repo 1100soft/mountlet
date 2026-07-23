@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -159,6 +160,24 @@ class BuildLinuxBundleTests(unittest.TestCase):
             build_linux_bundle.install_build_info(Path(tempdir))
 
             self.assertTrue((package / "mountlet-build-info.json").is_file())
+
+
+class WebsiteReleaseTests(unittest.TestCase):
+    def test_public_beta_entry_and_key_remain_connected(self):
+        root = Path(__file__).resolve().parents[2]
+        index = (root / "web" / "index.html").read_text(encoding="utf-8")
+        config = (root / "web" / "config.js").read_text(encoding="utf-8")
+        public_vars = (root / "functions" / "_lib" / "public-vars.js").read_text(encoding="utf-8")
+        script = (root / "web" / "script.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="use-beta-key"', index)
+        pattern = r'publicBetaKey: "(MTB-[A-Z2-9]{5}(?:-[A-Z2-9]{5}){3})"'
+        config_key = re.search(pattern, config)
+        server_key = re.search(pattern, public_vars)
+        self.assertIsNotNone(config_key)
+        self.assertIsNotNone(server_key)
+        self.assertEqual(config_key.group(1), server_key.group(1))
+        self.assertIn("window.MOUNTLET_SITE_CONFIG?.license?.publicBetaKey", script)
 
 
 if __name__ == "__main__":

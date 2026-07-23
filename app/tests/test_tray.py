@@ -1335,6 +1335,38 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_uses_mega_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "mega"
+        wizard.fields = {
+            "mega_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "mega_pass": mock.Mock(text=mock.Mock(return_value="account-password")),
+            "mega_2fa": mock.Mock(text=mock.Mock(return_value="123456")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "user",
+                "eric@example.com",
+                "pass",
+                "account-password",
+                "2fa",
+                "123456",
+            ],
+        )
+
+    def test_new_remote_wizard_requires_mega_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.fields = {
+            "mega_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "mega_pass": mock.Mock(text=mock.Mock(return_value="")),
+        }
+
+        self.assertFalse(wizard._mega_fields_are_valid())
+        wizard.fields["mega_pass"].text.return_value = "account-password"
+        self.assertTrue(wizard._mega_fields_are_valid())
+
     def test_new_remote_wizard_uses_icloud_backend_args(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "iclouddrive"
@@ -1469,6 +1501,49 @@ class TrayTests(unittest.TestCase):
                 "pass",
                 "secret",
             ],
+        )
+
+    def test_new_remote_wizard_builds_nextcloud_dav_endpoint(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "webdav"
+        wizard._provider_choice_type = "nextcloud"
+        wizard.fields = {
+            "webdav_url": mock.Mock(text=mock.Mock(return_value="https://cloud.example.com/nextcloud/")),
+            "webdav_vendor": mock.Mock(currentData=mock.Mock(return_value="other")),
+            "webdav_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "webdav_pass": mock.Mock(text=mock.Mock(return_value="secret")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "url",
+                "https://cloud.example.com/nextcloud/remote.php/dav/files/eric%40example.com/",
+                "vendor",
+                "nextcloud",
+                "user",
+                "eric@example.com",
+                "pass",
+                "secret",
+            ],
+        )
+
+    def test_nextcloud_existing_dav_endpoint_is_preserved(self):
+        self.assertEqual(
+            tray._nextcloud_webdav_url(
+                "https://cloud.example.com/remote.php/dav/files/eric",
+                "ignored",
+            ),
+            "https://cloud.example.com/remote.php/dav/files/eric/",
+        )
+
+    def test_nextcloud_browser_url_removes_dav_endpoint(self):
+        self.assertEqual(
+            tray._webdav_browser_url(
+                "https://cloud.example.com/nextcloud/remote.php/dav/files/eric/",
+                "nextcloud",
+            ),
+            "https://cloud.example.com/nextcloud",
         )
 
     def test_new_remote_wizard_failed_mount_cleans_up_remote(self):

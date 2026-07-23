@@ -211,6 +211,69 @@ class LicenseControlTests(unittest.TestCase):
         self.assertEqual(status.license_kind, "beta")
         self.assertIn("Beta license", status.summary)
 
+    def test_expired_beta_token_is_renewed_from_the_server(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(
+            private_key,
+            {
+                "licenseId": "beta_1",
+                "licenseKind": "beta",
+                "expiresAt": "2000-01-01T00:00:00Z",
+            },
+        )
+        renewed = license_control.LicenseStatus(
+            "licensed",
+            "Beta license - Public Beta",
+            license_key="MTB-BETA2-PUBLC-TRIAL-2Z26X",
+            license_kind="beta",
+        )
+
+        with (
+            mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False),
+            mock.patch("mountlet.license_control.activate_license", return_value=renewed) as activate,
+        ):
+            license_control.store_license_token(token)
+            license_control.store_license_key("MTB-BETA2-PUBLC-TRIAL-2Z26X")
+            status = license_control.current_status()
+
+        self.assertEqual(status, renewed)
+        activate.assert_called_once_with("MTB-BETA2-PUBLC-TRIAL-2Z26X")
+
+    def test_removed_beta_key_ends_beta_access(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(
+            private_key,
+            {
+                "licenseId": "beta_1",
+                "licenseKind": "beta",
+                "expiresAt": "2000-01-01T00:00:00Z",
+            },
+        )
+
+        with (
+            mock.patch.dict("os.environ", {license_control.LICENSE_PUBLIC_KEY_ENV: public_pem}, clear=False),
+            mock.patch(
+                "mountlet.license_control.activate_license",
+                side_effect=RuntimeError("License not found or inactive."),
+            ),
+        ):
+            license_control.store_license_token(token)
+            license_control.store_license_key("MTB-BETA2-PUBLC-TRIAL-2Z26X")
+            status = license_control.current_status()
+
+        self.assertEqual(status.state, "expired")
+        self.assertEqual(status.license_kind, "beta")
+        self.assertIn("Public beta access has ended", status.summary)
+        self.assertEqual(license_control.load_license_key(), "")
+
     def test_expired_license_resets_trial(self):
         start = 1_700_000_000.0
         license_control.load_or_create_trial(now=start - 20 * 24 * 60 * 60)
@@ -254,11 +317,39 @@ class LicenseControlTests(unittest.TestCase):
         )
 
         license_control.store_license_token(token)
-        status = license_control.current_status()
+        with mock.patch(
+            "mountlet.license_control._fetch_license_public_key",
+            side_effect=RuntimeError("License public key is unavailable."),
+        ):
+            status = license_control.current_status()
 
         self.assertEqual(status.state, "expired")
         self.assertIn("License cannot be verified", status.summary)
         self.assertEqual(status.expires_at, "")
+
+    def test_license_public_key_is_discovered_and_cached(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_pem = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        token = self._signed_token(private_key, {"licenseId": "lic_1"})
+
+        with mock.patch(
+            "mountlet.license_control._get_json",
+            return_value={"publicKey": public_pem},
+        ) as get_json:
+            self.assertEqual(license_control.verify_license_token(token)["licenseId"], "lic_1")
+
+        get_json.assert_called_once_with("https://mountlet.app/api/license/public-key")
+        self.assertTrue(
+            (Path(self.tempdir.name) / "state" / "mountlet" / "license" / "license-public.pem").is_file()
+        )
+        with mock.patch(
+            "mountlet.license_control._get_json",
+            side_effect=AssertionError("cached key should be used"),
+        ):
+            self.assertEqual(license_control.verify_license_token(token)["licenseId"], "lic_1")
 
     def test_license_key_is_stored_and_cleared(self):
         license_control.store_license_key("MNT-AAAAA-BBBBB-CCCCC-DDDDD")

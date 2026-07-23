@@ -20,7 +20,8 @@ web interfaces. Trademarks remain the property of their owners.
 - Koofr: app icon downloaded through the branding resources linked from
   <https://koofr.eu/press-information/>.
 - ownCloud: app icon downloaded from <https://owncloud.com/>.
-- Cloudflare, MinIO, Wasabi, and Nextcloud: product marks from the Simple Icons
-  distribution, based on each provider's published mark.
+- Cloudflare, MEGA, MinIO, Wasabi, and Nextcloud: product marks from the Simple
+  Icons distribution, based on each provider's published mark. The MEGA source
+  references <https://mega.io/corporate>.
 
 Generic WebDAV and unknown services use Mountlet's generated initial tile.

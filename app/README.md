@@ -103,10 +103,14 @@ Locally tested:
 
 Available but less tested:
 
+- MEGA. Sign in through MEGA's website once before setup so the account
+  encryption keys exist.
+- Nextcloud through its WebDAV interface. Mountlet derives the DAV endpoint
+  from the server address and username.
 - Google Photos, with a major limitation: current rclone releases can only
   download media that rclone uploaded.
 - Amazon S3, MinIO, Wasabi, and other S3-compatible storage.
-- WebDAV providers such as Nextcloud, ownCloud, SharePoint, and Fastmail Files.
+- Other WebDAV providers such as ownCloud, SharePoint, and Fastmail Files.
 - Other rclone backends through the terminal fallback.
 
 Some providers may require reconnecting on each device even when config files

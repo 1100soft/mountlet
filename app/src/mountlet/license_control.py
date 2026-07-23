@@ -491,7 +491,6 @@ def verify_license_token(token: str) -> dict[str, Any]:
         raise RuntimeError("Invalid license token data.") from exc
     if header.get("alg") not in {"ES256", "ES256-DER"}:
         raise RuntimeError("Unsupported license token signature.")
-    public_key = _load_public_key()
     signed = f"{parts[0]}.{parts[1]}".encode("ascii")
     if len(signature) == 64:
         signature = encode_dss_signature(
@@ -499,9 +498,14 @@ def verify_license_token(token: str) -> dict[str, Any]:
             int.from_bytes(signature[32:], "big"),
         )
     try:
-        public_key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+        _load_public_key().verify(signature, signed, ec.ECDSA(hashes.SHA256()))
     except InvalidSignature as exc:
-        raise RuntimeError("License token signature is not valid.") from exc
+        if _explicit_public_key_configured():
+            raise RuntimeError("License token signature is not valid.") from exc
+        try:
+            _load_public_key(refresh=True).verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+        except InvalidSignature as refreshed_exc:
+            raise RuntimeError("License token signature is not valid.") from refreshed_exc
     expires_at = str(payload.get("expiresAt") or "")
     if expires_at:
         with _suppress_time_parse_errors():
@@ -521,7 +525,7 @@ def _unverified_license_payload(token: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_public_key() -> ec.EllipticCurvePublicKey:
+def _load_public_key(*, refresh: bool = False) -> ec.EllipticCurvePublicKey:
     pem = os.environ.get(LICENSE_PUBLIC_KEY_ENV, "").strip()
     key_file = os.environ.get(LICENSE_PUBLIC_KEY_FILE_ENV, "").strip()
     if not pem and key_file:
@@ -529,12 +533,63 @@ def _load_public_key() -> ec.EllipticCurvePublicKey:
             pem = Path(key_file).expanduser().read_text(encoding="utf-8")
         except OSError as exc:
             raise RuntimeError("Could not read the license public key file.") from exc
+    if not pem and not refresh:
+        pem = str(_packaged_build_info().get("licensePublicKey") or "").strip()
+    if not pem and not refresh:
+        pem = _load_cached_public_key()
     if not pem:
-        raise RuntimeError("License public key is not configured for this build.")
-    key = serialization.load_pem_public_key(pem.encode("utf-8"))
+        pem = _fetch_license_public_key()
+        _store_cached_public_key(pem)
+    return _parse_public_key(pem)
+
+
+def _parse_public_key(pem: str) -> ec.EllipticCurvePublicKey:
+    normalized = pem.replace("\\n", "\n").strip()
+    try:
+        key = serialization.load_pem_public_key(normalized.encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("License public key is invalid.") from exc
     if not isinstance(key, ec.EllipticCurvePublicKey):
         raise RuntimeError("License public key must be an ECDSA P-256 public key.")
     return key
+
+
+def _explicit_public_key_configured() -> bool:
+    return bool(
+        os.environ.get(LICENSE_PUBLIC_KEY_ENV, "").strip()
+        or os.environ.get(LICENSE_PUBLIC_KEY_FILE_ENV, "").strip()
+    )
+
+
+def _fetch_license_public_key() -> str:
+    response = _get_json(_api_endpoint(None, "public-key"))
+    pem = str(response.get("publicKey") or "").strip()
+    if not pem:
+        raise RuntimeError("The license server did not return its public key.")
+    _parse_public_key(pem)
+    return pem
+
+
+def _load_cached_public_key() -> str:
+    for path in _license_public_key_paths():
+        try:
+            pem = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if pem:
+            return pem
+    return ""
+
+
+def _store_cached_public_key(pem: str) -> None:
+    normalized = pem.replace("\\n", "\n").strip()
+    for path in _license_public_key_paths():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(normalized + "\n", encoding="utf-8")
+            apply_permissions(path)
+        except OSError:
+            continue
 
 
 def _api_endpoint(api_url: str | None, action: str) -> str:
@@ -550,6 +605,19 @@ def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
+    return _read_json_response(request)
+
+
+def _get_json(url: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    return _read_json_response(request)
+
+
+def _read_json_response(request: urllib.request.Request) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             data = response.read()
@@ -703,6 +771,13 @@ def _license_key_paths() -> tuple[Path, ...]:
     return (
         app_state_dir() / "license" / "license-key.txt",
         app_config_dir() / "license-key.txt",
+    )
+
+
+def _license_public_key_paths() -> tuple[Path, ...]:
+    return (
+        app_state_dir() / "license" / "license-public.pem",
+        app_config_dir() / "license-public.pem",
     )
 
 

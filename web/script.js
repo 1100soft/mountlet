@@ -102,7 +102,7 @@ async function startCheckout(button) {
 }
 
 const LICENSE_KEY_PATTERN = /^(MNT|MTB)-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/;
-const PUBLIC_BETA_KEY = "MTB-BETA2-PUBLC-TRIAL-2Z26X";
+const PUBLIC_BETA_KEY = String(window.MOUNTLET_SITE_CONFIG?.license?.publicBetaKey || "").trim();
 const LICENSE_PLANS = {
   monthly: {
     label: "Monthly",
