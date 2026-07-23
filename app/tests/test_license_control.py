@@ -351,6 +351,32 @@ class LicenseControlTests(unittest.TestCase):
         ):
             self.assertEqual(license_control.verify_license_token(token)["licenseId"], "lic_1")
 
+    def test_license_public_key_accepts_server_der_format(self):
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_der = private_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        token = self._signed_token(private_key, {"licenseId": "lic_der"})
+
+        with mock.patch(
+            "mountlet.license_control._get_json",
+            return_value={"publicKey": base64.b64encode(public_der).decode("ascii")},
+        ):
+            payload = license_control.verify_license_token(token)
+
+        self.assertEqual(payload["licenseId"], "lic_der")
+
+    def test_license_requests_identify_mountlet(self):
+        with mock.patch("mountlet.license_control._read_json_response", return_value={}) as read:
+            license_control._get_json("https://example.test/public-key")
+            get_request = read.call_args.args[0]
+            license_control._post_json("https://example.test/activate", {"licenseKey": "key"})
+            post_request = read.call_args.args[0]
+
+        self.assertEqual(get_request.get_header("User-agent"), license_control.LICENSE_USER_AGENT)
+        self.assertEqual(post_request.get_header("User-agent"), license_control.LICENSE_USER_AGENT)
+
     def test_license_key_is_stored_and_cleared(self):
         license_control.store_license_key("MNT-AAAAA-BBBBB-CCCCC-DDDDD")
 

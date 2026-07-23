@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -35,6 +36,7 @@ HTTP_TIMEOUT_SECONDS = 12
 
 DEFAULT_LICENSE_API_URL = "https://mountlet.app/api/license"
 DEFAULT_LICENSE_SITE_URL = "https://mountlet.app"
+LICENSE_USER_AGENT = f"Mountlet/{__version__} (+{DEFAULT_LICENSE_SITE_URL})"
 LICENSE_API_URL_ENV = "MOUNTLET_LICENSE_API_URL"
 LICENSE_SITE_URL_ENV = "MOUNTLET_LICENSE_SITE_URL"
 LICENSE_PUBLIC_KEY_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY"
@@ -546,10 +548,15 @@ def _load_public_key(*, refresh: bool = False) -> ec.EllipticCurvePublicKey:
 def _parse_public_key(pem: str) -> ec.EllipticCurvePublicKey:
     normalized = pem.replace("\\n", "\n").strip()
     try:
-        key = serialization.load_pem_public_key(normalized.encode("utf-8"))
-    except (TypeError, ValueError) as exc:
+        if normalized.startswith("-----BEGIN"):
+            key = serialization.load_pem_public_key(normalized.encode("utf-8"))
+        else:
+            key = serialization.load_der_public_key(base64.b64decode("".join(normalized.split()), validate=True))
+    except (TypeError, ValueError, binascii.Error) as exc:
         raise RuntimeError("License public key is invalid.") from exc
     if not isinstance(key, ec.EllipticCurvePublicKey):
+        raise RuntimeError("License public key must be an ECDSA P-256 public key.")
+    if not isinstance(key.curve, ec.SECP256R1):
         raise RuntimeError("License public key must be an ECDSA P-256 public key.")
     return key
 
@@ -602,7 +609,11 @@ def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": LICENSE_USER_AGENT,
+        },
         method="POST",
     )
     return _read_json_response(request)
@@ -611,7 +622,7 @@ def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
 def _get_json(url: str) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
-        headers={"Accept": "application/json"},
+        headers={"Accept": "application/json", "User-Agent": LICENSE_USER_AGENT},
         method="GET",
     )
     return _read_json_response(request)
