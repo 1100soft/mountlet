@@ -4,8 +4,12 @@ import sys
 import os
 import json
 import subprocess
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 root = Path.cwd()
