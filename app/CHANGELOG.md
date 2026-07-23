@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.2 - 2026-07-23
+
+- Added guided MEGA and Nextcloud setup, and marked Google Photos, iCloud, and
+  MEGA as locally tested.
+- Repaired production and preview license verification, live activation, public
+  beta keys, and public-key loading across packaged builds.
+- Kept trial expiration across Linux reinstalls and improved stable device
+  identification on macOS.
+- Made remote reordering incremental and keyboard-repeat friendly, while
+  removing unnecessary periodic window fitting, icon rendering, and event
+  handler recreation.
+
 ## 0.6.1 - 2026-07-19
 
 - Added an app notification inbox with server-managed active/archive lifecycle,

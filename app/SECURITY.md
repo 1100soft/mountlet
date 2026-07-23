@@ -24,4 +24,4 @@ can be reviewed before public disclosure.
 ## Supported Versions
 
 Mountlet is still pre-1.0. Security fixes are intended for the latest public
-0.2.x release line.
+0.6.x release line.
