@@ -5,8 +5,12 @@ import platform
 import shutil
 import subprocess
 import tempfile
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 def _project_version(root: Path) -> str:
