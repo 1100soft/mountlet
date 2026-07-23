@@ -189,6 +189,12 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
         "--buffer-size",
         "16M",
     ],
+    "mega": [
+        "--vfs-cache-mode",
+        "full",
+        "--buffer-size",
+        "16M",
+    ],
 }
 
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
@@ -219,6 +225,7 @@ SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
         "enable_caching",
     ),
     "iclouddrive": ("service", "apple_id", "password", "trust_token", "cookies"),
+    "mega": ("user", "pass", "2fa"),
 }
 OBSCURED_RCLONE_CONFIG_KEYS = {
     "secret_access_key",
@@ -533,6 +540,8 @@ def _remote_section_is_configured(backend_type: str, values: Dict[str, str]) -> 
             return bool(user and password)
         if backend_type == "iclouddrive":
             return bool(values.get("apple_id", "").strip() and values.get("password", "").strip())
+        if backend_type == "mega":
+            return bool(values.get("user", "").strip() and values.get("pass", "").strip())
         return bool(backend_type)
     if backend_type == "onedrive":
         return bool(values.get("token") and values.get("drive_id") and values.get("drive_type"))

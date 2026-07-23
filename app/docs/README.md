@@ -184,13 +184,17 @@ Locally tested:
 - Cloudflare R2
 - Koofr
 - Proton Drive
+- Google Photos
+- iCloud Drive and iCloud Photos
+- MEGA
 
 Available but untested:
 
+- Nextcloud through its guided WebDAV setup
 - Amazon S3
 - MinIO and other S3-compatible storage
 - Wasabi
-- WebDAV providers including Nextcloud, ownCloud, SharePoint, and Fastmail Files
+- Other WebDAV providers including ownCloud, SharePoint, and Fastmail Files
 
 Box has been observed to require platform-specific reauthentication even after
 syncing the complete Mountlet config bundle.

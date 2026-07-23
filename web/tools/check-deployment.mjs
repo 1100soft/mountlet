@@ -6,8 +6,16 @@ const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY |
 
 let health;
 let download;
+let publicKey;
+let beta;
 try {
   health = await readJson(`${baseUrl}/api/health`);
+  publicKey = await readJson(`${baseUrl}/api/license/public-key`);
+  const siteConfig = await fetch(`${baseUrl}/config.js`).then((response) => response.text());
+  const betaKey = siteConfig.match(/publicBetaKey:\s*"([^"]+)"/)?.[1] || "";
+  beta = betaKey
+    ? await postJson(`${baseUrl}/api/license/validate`, {licenseKey: betaKey})
+    : {ok: false, error: "Public beta key is missing from config.js."};
   download = await fetch(`${baseUrl}/api/download/${encodeURIComponent(downloadKey)}`, {redirect: "manual"});
 } catch (error) {
   console.error(error.message || String(error));
@@ -17,6 +25,10 @@ try {
 const result = {
   site: baseUrl,
   health,
+  license: {
+    publicKey: Boolean(publicKey.publicKey),
+    publicBeta: beta,
+  },
   download: {
     key: downloadKey,
     status: download.status,
@@ -38,6 +50,12 @@ if (!health.downloadsBound) {
 if (!health.stripeConfigured) {
   fail("STRIPE_SECRET_KEY is missing.");
 }
+if (!publicKey.publicKey) {
+  fail("The license public-key endpoint is unavailable.");
+}
+if (!beta.ok || beta.licenseKind !== "beta") {
+  fail(`The public beta key is unavailable: ${beta.error || "unexpected response"}`);
+}
 if (download.status === 404) {
   fail(`Download object is missing from the bound R2 bucket: ${downloadKey}`);
 }
@@ -47,6 +65,20 @@ if (download.status >= 400 || (download.headers.get("content-type") || "").inclu
 
 async function readJson(url) {
   const response = await fetch(url, {headers: {accept: "application/json"}});
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    throw new Error(`${url} did not return JSON. Status ${response.status}. Body: ${text.slice(0, 200)}`);
+  }
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {"content-type": "application/json", accept: "application/json"},
+    body: JSON.stringify(body),
+  });
   const text = await response.text();
   try {
     return JSON.parse(text);

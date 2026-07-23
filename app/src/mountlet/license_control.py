@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
 import os
 import platform
+import re
 import secrets
 import socket
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -33,6 +36,7 @@ HTTP_TIMEOUT_SECONDS = 12
 
 DEFAULT_LICENSE_API_URL = "https://mountlet.app/api/license"
 DEFAULT_LICENSE_SITE_URL = "https://mountlet.app"
+LICENSE_USER_AGENT = f"Mountlet/{__version__} (+{DEFAULT_LICENSE_SITE_URL})"
 LICENSE_API_URL_ENV = "MOUNTLET_LICENSE_API_URL"
 LICENSE_SITE_URL_ENV = "MOUNTLET_LICENSE_SITE_URL"
 LICENSE_PUBLIC_KEY_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY"
@@ -40,7 +44,8 @@ LICENSE_PUBLIC_KEY_FILE_ENV = "MOUNTLET_LICENSE_PUBLIC_KEY_FILE"
 TRIAL_DURABLE_DIR_ENV = "MOUNTLET_TRIAL_DURABLE_DIR"
 
 _TRIAL_SALT = b"mountlet trial state v1"
-_TRIAL_VERSION = 1
+_TRIAL_VERSION = 2
+_LEGACY_TRIAL_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -302,34 +307,77 @@ def device_fingerprint() -> str:
 
 
 def machine_hint() -> str:
+    identifier = _stable_machine_identifier()
     material = "|".join(
         [
             platform.system(),
             platform.machine(),
-            platform.node(),
-            str(uuid.getnode()),
+            identifier,
             str(Path.home()),
         ]
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _stable_machine_identifier() -> str:
+    system = platform.system()
+    if system == "Linux":
+        for path in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if value:
+                return f"machine-id:{value}"
+    elif system == "Windows":
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+                value, _ = winreg.QueryValueEx(key, "MachineGuid")
+            if str(value).strip():
+                return f"machine-guid:{str(value).strip()}"
+        except (ImportError, OSError):
+            pass
+    elif system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', str(getattr(result, "stdout", "")))
+            if match:
+                return f"platform-uuid:{match.group(1)}"
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # uuid.getnode() sets the multicast bit when it had to invent a random
+    # value. Never persist that random fallback as a machine identity.
+    node = uuid.getnode()
+    hardware = f"node:{node:012x}" if not node & (1 << 40) else ""
+    return "|".join(part for part in (platform.node(), socket.gethostname(), hardware) if part)
+
+
 def load_or_create_trial(now: float | None = None) -> dict[str, Any]:
     ensure_app_directories()
-    records = [_decode_trial_record(path) for path in _trial_paths()]
+    paths = _trial_paths()
+    records = [_decode_trial_record(path) for path in paths]
     valid = [record for record in records if record is not None]
     now_value = _now(now)
     if valid:
         selected = min(valid, key=lambda item: _float_value(item.get("started_at"), now_value))
         selected["last_seen_at"] = max(_float_value(selected.get("last_seen_at"), now_value), now_value)
     else:
-        selected = {
-            "version": _TRIAL_VERSION,
+        selected = _recover_replicated_legacy_trial(paths, now_value) or {
             "install_id": secrets.token_urlsafe(24),
-            "machine_hint": machine_hint(),
             "started_at": now_value,
             "last_seen_at": now_value,
         }
+    selected["version"] = _TRIAL_VERSION
+    selected["machine_hint"] = machine_hint()
     _write_trial_record(selected)
     return selected
 
@@ -445,7 +493,6 @@ def verify_license_token(token: str) -> dict[str, Any]:
         raise RuntimeError("Invalid license token data.") from exc
     if header.get("alg") not in {"ES256", "ES256-DER"}:
         raise RuntimeError("Unsupported license token signature.")
-    public_key = _load_public_key()
     signed = f"{parts[0]}.{parts[1]}".encode("ascii")
     if len(signature) == 64:
         signature = encode_dss_signature(
@@ -453,9 +500,14 @@ def verify_license_token(token: str) -> dict[str, Any]:
             int.from_bytes(signature[32:], "big"),
         )
     try:
-        public_key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+        _load_public_key().verify(signature, signed, ec.ECDSA(hashes.SHA256()))
     except InvalidSignature as exc:
-        raise RuntimeError("License token signature is not valid.") from exc
+        if _explicit_public_key_configured():
+            raise RuntimeError("License token signature is not valid.") from exc
+        try:
+            _load_public_key(refresh=True).verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+        except InvalidSignature as refreshed_exc:
+            raise RuntimeError("License token signature is not valid.") from refreshed_exc
     expires_at = str(payload.get("expiresAt") or "")
     if expires_at:
         with _suppress_time_parse_errors():
@@ -475,7 +527,7 @@ def _unverified_license_payload(token: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_public_key() -> ec.EllipticCurvePublicKey:
+def _load_public_key(*, refresh: bool = False) -> ec.EllipticCurvePublicKey:
     pem = os.environ.get(LICENSE_PUBLIC_KEY_ENV, "").strip()
     key_file = os.environ.get(LICENSE_PUBLIC_KEY_FILE_ENV, "").strip()
     if not pem and key_file:
@@ -483,12 +535,68 @@ def _load_public_key() -> ec.EllipticCurvePublicKey:
             pem = Path(key_file).expanduser().read_text(encoding="utf-8")
         except OSError as exc:
             raise RuntimeError("Could not read the license public key file.") from exc
+    if not pem and not refresh:
+        pem = str(_packaged_build_info().get("licensePublicKey") or "").strip()
+    if not pem and not refresh:
+        pem = _load_cached_public_key()
     if not pem:
-        raise RuntimeError("License public key is not configured for this build.")
-    key = serialization.load_pem_public_key(pem.encode("utf-8"))
+        pem = _fetch_license_public_key()
+        _store_cached_public_key(pem)
+    return _parse_public_key(pem)
+
+
+def _parse_public_key(pem: str) -> ec.EllipticCurvePublicKey:
+    normalized = pem.replace("\\n", "\n").strip()
+    try:
+        if normalized.startswith("-----BEGIN"):
+            key = serialization.load_pem_public_key(normalized.encode("utf-8"))
+        else:
+            key = serialization.load_der_public_key(base64.b64decode("".join(normalized.split()), validate=True))
+    except (TypeError, ValueError, binascii.Error) as exc:
+        raise RuntimeError("License public key is invalid.") from exc
     if not isinstance(key, ec.EllipticCurvePublicKey):
         raise RuntimeError("License public key must be an ECDSA P-256 public key.")
+    if not isinstance(key.curve, ec.SECP256R1):
+        raise RuntimeError("License public key must be an ECDSA P-256 public key.")
     return key
+
+
+def _explicit_public_key_configured() -> bool:
+    return bool(
+        os.environ.get(LICENSE_PUBLIC_KEY_ENV, "").strip()
+        or os.environ.get(LICENSE_PUBLIC_KEY_FILE_ENV, "").strip()
+    )
+
+
+def _fetch_license_public_key() -> str:
+    response = _get_json(_api_endpoint(None, "public-key"))
+    pem = str(response.get("publicKey") or "").strip()
+    if not pem:
+        raise RuntimeError("The license server did not return its public key.")
+    _parse_public_key(pem)
+    return pem
+
+
+def _load_cached_public_key() -> str:
+    for path in _license_public_key_paths():
+        try:
+            pem = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if pem:
+            return pem
+    return ""
+
+
+def _store_cached_public_key(pem: str) -> None:
+    normalized = pem.replace("\\n", "\n").strip()
+    for path in _license_public_key_paths():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(normalized + "\n", encoding="utf-8")
+            apply_permissions(path)
+        except OSError:
+            continue
 
 
 def _api_endpoint(api_url: str | None, action: str) -> str:
@@ -501,9 +609,26 @@ def _post_json(url: str, body: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": LICENSE_USER_AGENT,
+        },
         method="POST",
     )
+    return _read_json_response(request)
+
+
+def _get_json(url: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": LICENSE_USER_AGENT},
+        method="GET",
+    )
+    return _read_json_response(request)
+
+
+def _read_json_response(request: urllib.request.Request) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             data = response.read()
@@ -552,6 +677,47 @@ def _decode_trial_record(path: Path) -> dict[str, Any] | None:
     return record
 
 
+def _recover_replicated_legacy_trial(paths: tuple[Path, ...], now_value: float) -> dict[str, Any] | None:
+    encoded_records: dict[str, int] = {}
+    for path in paths:
+        try:
+            encoded = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if encoded:
+            encoded_records[encoded] = encoded_records.get(encoded, 0) + 1
+
+    # A legacy record used uuid.getnode() in its machine key. On systems where
+    # Python generated a random fallback, it cannot be matched next launch.
+    # Require matching replicas and its original self-consistent signature
+    # before migrating it to the stable v2 machine identity.
+    for encoded, count in sorted(encoded_records.items(), key=lambda item: item[1], reverse=True):
+        if count < 2:
+            continue
+        try:
+            envelope = json.loads(_b64decode(encoded).decode("utf-8"))
+            payload = str(envelope["payload"])
+            signature = str(envelope["signature"])
+            record = json.loads(_b64decode(payload).decode("utf-8"))
+            legacy_hint = str(record["machine_hint"])
+            expected = _trial_signature(payload, machine=legacy_hint)
+            started_at = float(record["started_at"])
+            last_seen_at = float(record["last_seen_at"])
+        except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            continue
+        if (
+            record.get("version") != _LEGACY_TRIAL_VERSION
+            or not re.fullmatch(r"[0-9a-f]{64}", legacy_hint)
+            or not hmac.compare_digest(signature, expected)
+            or started_at > now_value + 86_400
+            or last_seen_at < started_at
+        ):
+            continue
+        record["last_seen_at"] = max(last_seen_at, now_value)
+        return record
+    return None
+
+
 def _write_trial_record(record: dict[str, Any]) -> None:
     payload = _b64encode(json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     envelope = {
@@ -568,8 +734,8 @@ def _write_trial_record(record: dict[str, Any]) -> None:
             continue
 
 
-def _trial_signature(payload: str) -> str:
-    key = hashlib.sha256(_TRIAL_SALT + machine_hint().encode("utf-8")).digest()
+def _trial_signature(payload: str, *, machine: str | None = None) -> str:
+    key = hashlib.sha256(_TRIAL_SALT + (machine or machine_hint()).encode("utf-8")).digest()
     return hmac.new(key, payload.encode("ascii"), hashlib.sha256).hexdigest()
 
 
@@ -616,6 +782,13 @@ def _license_key_paths() -> tuple[Path, ...]:
     return (
         app_state_dir() / "license" / "license-key.txt",
         app_config_dir() / "license-key.txt",
+    )
+
+
+def _license_public_key_paths() -> tuple[Path, ...]:
+    return (
+        app_state_dir() / "license" / "license-public.pem",
+        app_config_dir() / "license-public.pem",
     )
 
 

@@ -4,6 +4,7 @@ export const PUBLIC_VARS = {
   licenseApiPath: "/api/license",
   reportApiPath: "/api/report",
   githubUrl: "https://github.com/eric-holt/mountlet",
+  publicBetaKey: "MTB-BETA2-PUBLC-TRIAL-2Z26X",
   env: {
     licenseApiUrl: "MOUNTLET_LICENSE_API_URL",
     licenseSiteUrl: "MOUNTLET_LICENSE_SITE_URL",

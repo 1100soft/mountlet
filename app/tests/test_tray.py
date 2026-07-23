@@ -1335,6 +1335,38 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_uses_mega_backend_args(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "mega"
+        wizard.fields = {
+            "mega_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "mega_pass": mock.Mock(text=mock.Mock(return_value="account-password")),
+            "mega_2fa": mock.Mock(text=mock.Mock(return_value="123456")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "user",
+                "eric@example.com",
+                "pass",
+                "account-password",
+                "2fa",
+                "123456",
+            ],
+        )
+
+    def test_new_remote_wizard_requires_mega_credentials(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard.fields = {
+            "mega_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "mega_pass": mock.Mock(text=mock.Mock(return_value="")),
+        }
+
+        self.assertFalse(wizard._mega_fields_are_valid())
+        wizard.fields["mega_pass"].text.return_value = "account-password"
+        self.assertTrue(wizard._mega_fields_are_valid())
+
     def test_new_remote_wizard_uses_icloud_backend_args(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_type = "iclouddrive"
@@ -1471,6 +1503,49 @@ class TrayTests(unittest.TestCase):
             ],
         )
 
+    def test_new_remote_wizard_builds_nextcloud_dav_endpoint(self):
+        wizard = object.__new__(tray.NewRemoteWizard)
+        wizard._remote_type = "webdav"
+        wizard._provider_choice_type = "nextcloud"
+        wizard.fields = {
+            "webdav_url": mock.Mock(text=mock.Mock(return_value="https://cloud.example.com/nextcloud/")),
+            "webdav_vendor": mock.Mock(currentData=mock.Mock(return_value="other")),
+            "webdav_user": mock.Mock(text=mock.Mock(return_value="eric@example.com")),
+            "webdav_pass": mock.Mock(text=mock.Mock(return_value="secret")),
+        }
+
+        self.assertEqual(
+            wizard._initial_config_args(),
+            [
+                "url",
+                "https://cloud.example.com/nextcloud/remote.php/dav/files/eric%40example.com/",
+                "vendor",
+                "nextcloud",
+                "user",
+                "eric@example.com",
+                "pass",
+                "secret",
+            ],
+        )
+
+    def test_nextcloud_existing_dav_endpoint_is_preserved(self):
+        self.assertEqual(
+            tray._nextcloud_webdav_url(
+                "https://cloud.example.com/remote.php/dav/files/eric",
+                "ignored",
+            ),
+            "https://cloud.example.com/remote.php/dav/files/eric/",
+        )
+
+    def test_nextcloud_browser_url_removes_dav_endpoint(self):
+        self.assertEqual(
+            tray._webdav_browser_url(
+                "https://cloud.example.com/nextcloud/remote.php/dav/files/eric/",
+                "nextcloud",
+            ),
+            "https://cloud.example.com/nextcloud",
+        )
+
     def test_new_remote_wizard_failed_mount_cleans_up_remote(self):
         wizard = object.__new__(tray.NewRemoteWizard)
         wizard._remote_name = "Broken__WebDAV"
@@ -1597,6 +1672,42 @@ class TrayTests(unittest.TestCase):
         window._current_remote_names = ["Alpha", "Beta"]
 
         self.assertTrue(window._can_move_remote("Beta", -1))
+
+    def test_mountlet_window_moves_existing_remote_row_without_rebuilding(self):
+        alpha = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/tmp/alpha")
+        beta = core.RemoteInfo("Beta", "Beta", "Dropbox", "dropbox", "/tmp/beta")
+        alpha_row = SimpleNamespace(frame=object(), remote=alpha, up_button=object(), down_button=object())
+        beta_row = SimpleNamespace(frame=object(), remote=beta, up_button=object(), down_button=object())
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta"]
+        window._row_widgets = {"Alpha": alpha_row, "Beta": beta_row}
+        window._remote_rows_layout = mock.Mock()
+        window._update_remote_move_buttons = mock.Mock()
+        window._ensure_remote_row_visible = mock.Mock()
+        window._queue_remote_order_save = mock.Mock()
+        window.tray_app = mock.Mock()
+
+        window._move_remote("Beta", -1)
+
+        self.assertEqual(window._current_remote_names, ["Beta", "Alpha"])
+        window._remote_rows_layout.removeWidget.assert_called_once_with(beta_row.frame)
+        window._remote_rows_layout.insertWidget.assert_called_once_with(0, beta_row.frame)
+        window._update_remote_move_buttons.assert_called_once_with({"Alpha", "Beta"})
+        window._ensure_remote_row_visible.assert_called_once_with(beta_row.frame)
+        window._queue_remote_order_save.assert_called_once_with(["Beta", "Alpha"])
+        window.tray_app.rebuild_menus.assert_not_called()
+
+    def test_mountlet_window_ignores_superseded_remote_order_save(self):
+        window = object.__new__(tray.MountletWindow)
+        window._remote_order_save_generation = 3
+        window._current_remote_names = ["Beta", "Alpha"]
+        window._save_remote_order = mock.Mock()
+        window.tray_app = mock.Mock()
+
+        window._save_queued_remote_order(2, ["Alpha", "Beta"])
+
+        window._save_remote_order.assert_not_called()
+        window.tray_app.rebuild_menus.assert_not_called()
 
     def test_mountlet_window_remote_title_uses_alias_only(self):
         window = object.__new__(tray.MountletWindow)
@@ -3942,11 +4053,13 @@ class TrayTests(unittest.TestCase):
         window._skip_background_refresh_once = True
         window._current_remote_names = [remote.name]
         window._row_widgets = {remote.name: SimpleNamespace()}
+        window._name_column_width = 120
+        window._last_license_locked = False
         window._focus_snapshot = mock.Mock(return_value=("main", remote.name))
         window._tray_is_quitting = mock.Mock(return_value=False)
         window._license_locked = mock.Mock(return_value=False)
         window._remote_name_width = mock.Mock(return_value=120)
-        window._update_purchase_license_button = mock.Mock()
+        window._update_purchase_license_button = mock.Mock(return_value=False)
         window._update_remote_row = mock.Mock()
         window._schedule_storage_load = mock.Mock()
         window._request_config_sync_metadata_check = mock.Mock()
@@ -3961,6 +4074,7 @@ class TrayTests(unittest.TestCase):
         window._update_remote_row.assert_called_once_with(remote, False)
         window._request_config_sync_metadata_check.assert_not_called()
         window._schedule_storage_load.assert_not_called()
+        window._browser_layout_changed.assert_not_called()
         self.assertFalse(window._skip_background_refresh_once)
 
     def test_browser_layout_change_repositions_file_browser_after_main_resize(self):

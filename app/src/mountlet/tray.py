@@ -26,6 +26,7 @@ from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote
 
 from . import __version__, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
@@ -185,11 +186,11 @@ RCLONE_FIELD_TOOLTIPS = {
     "acl": "Default access-control setting used by the remote provider.",
     "storage_class": "Default storage class used by the remote provider.",
     "user": "Account name used to authenticate this remote.",
-    "pass": "Password used to authenticate this WebDAV remote.",
+    "pass": "Password used to authenticate this remote.",
     "password": "Password used to authenticate this remote.",
     "bearer_token": "Bearer token used instead of a WebDAV username and password.",
     "username": "Proton account username used by this remote.",
-    "2fa": "Current Proton 2FA code. Usually only needed while configuring the remote.",
+    "2fa": "Current two-factor authentication code. Usually only needed while configuring the remote.",
     "otp_secret_key": "Proton OTP secret used to generate authentication codes.",
     "mailbox_password": "Mailbox password for two-password Proton accounts.",
     "apple_id": "Apple ID used to authenticate this iCloud remote.",
@@ -218,6 +219,7 @@ RCLONE_AUTH_FIELDS = {
     "koofr": {"provider", "user", "password"},
     "protondrive": {"username", "password", "2fa", "otp_secret_key", "mailbox_password"},
     "iclouddrive": {"service", "apple_id", "password", "trust_token", "cookies"},
+    "mega": {"user", "pass", "2fa"},
 }
 RCLONE_BOOLEAN_FIELDS = core.BOOLEAN_RCLONE_CONFIG_KEYS
 RCLONE_SELECT_FIELDS = {
@@ -252,20 +254,24 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("iCloud Drive / Photos", "iclouddrive"),
     ("Koofr", "koofr"),
     ("Proton Drive", "protondrive"),
+    ("MEGA", "mega"),
+    ("Nextcloud", "nextcloud"),
     ("S3-compatible storage", "s3"),
     ("WebDAV", "webdav"),
     ("Other provider (rclone terminal)", EXTERNAL_RCLONE_CONFIG_PROVIDER),
 )
 REMOTE_PROVIDER_STATUSES = {
     "drive": "tested",
-    "gphotos": "untested",
+    "gphotos": "tested",
     "dropbox": "tested",
     "onedrive": "tested",
     "box": "tested",
     "pcloud": "tested",
-    "iclouddrive": "untested",
+    "iclouddrive": "tested",
     "koofr": "tested",
     "protondrive": "tested",
+    "mega": "tested",
+    "nextcloud": "untested",
     "s3": "partial",
     "webdav": "untested",
     EXTERNAL_RCLONE_CONFIG_PROVIDER: "untested",
@@ -281,6 +287,8 @@ REMOTE_CONFIG_SUFFIXES = {
     "iclouddrive": "iCloud",
     "koofr": "Koofr",
     "protondrive": "Proton Drive",
+    "mega": "MEGA",
+    "nextcloud": "Nextcloud",
     "s3": "S3",
     "webdav": "WebDAV",
     EXTERNAL_RCLONE_CONFIG_PROVIDER: "Remote",
@@ -492,6 +500,8 @@ PROVIDER_COLORS = {
     "iclouddrive": "#0a84ff",
     "koofr": "#f59e0b",
     "protondrive": "#6d4aff",
+    "mega": "#d9272e",
+    "nextcloud": "#0082c9",
     "s3": "#ff9900",
     "webdav": "#64748b",
 }
@@ -505,6 +515,7 @@ REMOTE_BROWSER_URLS = {
     "iclouddrive": "https://www.icloud.com/iclouddrive/",
     "koofr": "https://app.koofr.net/",
     "protondrive": "https://drive.proton.me/",
+    "mega": "https://mega.nz/fm",
 }
 _wizard_pending_remote_names: set[str] = set()
 
@@ -749,9 +760,10 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
             if endpoint.startswith(("http://", "https://")):
                 return endpoint
     if backend_type == "webdav":
-        url = remote.extra_info.get("url", "").strip()
-        if url.startswith(("http://", "https://")):
-            return url
+        return _webdav_browser_url(
+            remote.extra_info.get("url", ""),
+            remote.extra_info.get("vendor", remote.provider),
+        )
     return None
 
 
@@ -960,6 +972,29 @@ def _fixed_webdav_urls() -> set[str]:
         for option in WEBDAV_VENDOR_OPTIONS
         if option.get("fixed_url", "").casefold() in {"true", "1", "yes"}
     }
+
+
+def _default_webdav_examples() -> set[str]:
+    return {option.get("url", "") for option in WEBDAV_VENDOR_OPTIONS}
+
+
+def _nextcloud_webdav_url(server_url: str, username: str) -> str:
+    """Return a Nextcloud DAV endpoint while accepting an existing endpoint unchanged."""
+    server = server_url.strip().rstrip("/")
+    if "/remote.php/" in server.casefold():
+        return f"{server}/"
+    return f"{server}/remote.php/dav/files/{quote(username.strip(), safe='')}/"
+
+
+def _webdav_browser_url(url: str, vendor: str) -> str | None:
+    endpoint = url.strip()
+    if not endpoint.startswith(("http://", "https://")):
+        return None
+    if vendor.strip().casefold() == "nextcloud":
+        marker = endpoint.casefold().find("/remote.php/")
+        if marker >= 0:
+            return endpoint[:marker] or None
+    return endpoint
 
 
 def _default_s3_endpoints() -> set[str]:
@@ -3869,6 +3904,27 @@ class NewRemoteWizard:
         proton_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         proton_help.setStyleSheet(_muted_text_style(proton_help))
 
+        mega_user = self.qt.QLineEdit()
+        mega_user.setPlaceholderText("MEGA email address")
+        mega_user.setToolTip("The email address used for your MEGA account.")
+        mega_pass = self.qt.QLineEdit()
+        mega_pass.setPlaceholderText("MEGA password")
+        mega_pass.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        mega_pass.setToolTip("Your MEGA password. rclone stores it obscured in rclone.conf.")
+        mega_2fa = self.qt.QLineEdit()
+        mega_2fa.setPlaceholderText("Optional")
+        mega_2fa.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
+        mega_2fa.setToolTip("Enter the current MEGA 2FA code if two-factor authentication is enabled.")
+        mega_help = self.qt.QLabel(
+            "Sign in to MEGA in a browser once before setup so the account encryption keys exist. "
+            "MEGA can temporarily limit repeated rclone logins. "
+            '<a href="https://rclone.org/mega/">rclone MEGA guide</a>'
+        )
+        mega_help.setWordWrap(True)
+        mega_help.setOpenExternalLinks(True)
+        mega_help.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        mega_help.setStyleSheet(_muted_text_style(mega_help))
+
         icloud_service = self.qt.QComboBox()
         icloud_service.addItem("iCloud Drive", "drive")
         icloud_service.addItem("iCloud Photos", "photos")
@@ -3930,6 +3986,9 @@ class NewRemoteWizard:
             proton_pass,
             proton_2fa,
             proton_mailbox_pass,
+            mega_user,
+            mega_pass,
+            mega_2fa,
             icloud_user,
             icloud_pass,
             webdav_url,
@@ -3971,6 +4030,10 @@ class NewRemoteWizard:
             "proton_2fa": proton_2fa,
             "proton_mailbox_pass": proton_mailbox_pass,
             "proton_help": proton_help,
+            "mega_user": mega_user,
+            "mega_pass": mega_pass,
+            "mega_2fa": mega_2fa,
+            "mega_help": mega_help,
             "icloud_service": icloud_service,
             "icloud_user": icloud_user,
             "icloud_pass": icloud_pass,
@@ -4007,6 +4070,10 @@ class NewRemoteWizard:
         form.addRow("Proton 2FA code", proton_2fa)
         form.addRow("Proton mailbox password", proton_mailbox_pass)
         form.addRow(proton_help)
+        form.addRow("MEGA email", mega_user)
+        form.addRow("MEGA password", mega_pass)
+        form.addRow("MEGA 2FA code", mega_2fa)
+        form.addRow(mega_help)
         form.addRow("iCloud service", icloud_service)
         form.addRow("Apple ID", icloud_user)
         form.addRow("Apple password", icloud_pass)
@@ -4074,9 +4141,11 @@ class NewRemoteWizard:
             return self._koofr_fields_are_valid()
         if remote_type == "protondrive":
             return self._proton_fields_are_valid()
+        if remote_type == "mega":
+            return self._mega_fields_are_valid()
         if remote_type == "iclouddrive":
             return self._icloud_fields_are_valid()
-        if remote_type == "webdav":
+        if remote_type in {"nextcloud", "webdav"}:
             return self._webdav_fields_are_valid()
         return True
 
@@ -4099,12 +4168,19 @@ class NewRemoteWizard:
     def _proton_fields_are_valid(self) -> bool:
         return bool(self.fields["proton_user"].text().strip() and self.fields["proton_pass"].text().strip())
 
+    def _mega_fields_are_valid(self) -> bool:
+        return bool(self.fields["mega_user"].text().strip() and self.fields["mega_pass"].text())
+
     def _icloud_fields_are_valid(self) -> bool:
         return bool(self.fields["icloud_user"].text().strip() and self.fields["icloud_pass"].text())
 
     def _webdav_fields_are_valid(self) -> bool:
         url = self.fields["webdav_url"].text().strip()
-        return url.startswith(("http://", "https://"))
+        if not url.startswith(("http://", "https://")):
+            return False
+        if (self.fields["provider"].currentData() or "") == "nextcloud":
+            return bool(self.fields["webdav_user"].text().strip() and self.fields["webdav_pass"].text())
+        return True
 
     def _next(self) -> None:
         if self._question is None:
@@ -4121,8 +4197,10 @@ class NewRemoteWizard:
         if not self._valid_remote_name(alias):
             self._warning("Add remote", "Use a name without ':', '@', or path separators.")
             return
-        self._remote_type = self.fields["provider"].currentData() or "drive"
-        provider_name = self._selected_provider_config_name(self._remote_type)
+        selected_type = self.fields["provider"].currentData() or "drive"
+        self._provider_choice_type = selected_type
+        self._remote_type = "webdav" if selected_type == "nextcloud" else selected_type
+        provider_name = self._selected_provider_config_name(selected_type)
         existing_remotes = core.load_remotes()
         if self._display_name_exists(alias, self._remote_type, existing_remotes, provider_name=provider_name):
             self._warning("Add remote", f"{alias} already exists for {provider_name}.")
@@ -4171,6 +4249,17 @@ class NewRemoteWizard:
             self._remote_name = ""
             self._remote_alias = ""
             return
+        if self._remote_type == "mega" and not self._mega_fields_are_valid():
+            self._warning("Add remote", "Enter the MEGA email address and password before creating the remote.")
+            return
+        if self._remote_type == "mega" and rclone_wizard.backend_is_available("mega") is False:
+            self._warning(
+                "Add remote",
+                "This rclone installation does not include MEGA support.\n\nUpdate rclone, then try again.",
+            )
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
         if self._remote_type == "iclouddrive" and not self._icloud_fields_are_valid():
             self._warning("Add remote", "Enter the Apple ID and password before creating the remote.")
             return
@@ -4184,7 +4273,12 @@ class NewRemoteWizard:
             self._remote_alias = ""
             return
         if self._remote_type == "webdav" and not self._webdav_fields_are_valid():
-            self._warning("Add remote", "Enter a WebDAV URL that starts with http:// or https://.")
+            message = (
+                "Enter the Nextcloud server address, username, and app password."
+                if selected_type == "nextcloud"
+                else "Enter a WebDAV URL that starts with http:// or https://."
+            )
+            self._warning("Add remote", message)
             return
         if not self._browser_auth_port_ready():
             self._remote_name = ""
@@ -4426,6 +4520,8 @@ class NewRemoteWizard:
             return self._koofr_config_args()
         if self._remote_type == "protondrive":
             return self._proton_config_args()
+        if self._remote_type == "mega":
+            return self._mega_config_args()
         if self._remote_type == "iclouddrive":
             return self._icloud_config_args()
         if self._remote_type == "webdav":
@@ -4479,6 +4575,18 @@ class NewRemoteWizard:
             args.extend(["mailbox_password", mailbox_password])
         return args
 
+    def _mega_config_args(self) -> list[str]:
+        args = [
+            "user",
+            self.fields["mega_user"].text().strip(),
+            "pass",
+            self.fields["mega_pass"].text(),
+        ]
+        code = self.fields["mega_2fa"].text().strip()
+        if code:
+            args.extend(["2fa", code])
+        return args
+
     def _icloud_config_args(self) -> list[str]:
         return [
             "service",
@@ -4490,9 +4598,16 @@ class NewRemoteWizard:
         ]
 
     def _webdav_config_args(self) -> list[str]:
+        url = self.fields["webdav_url"].text().strip()
+        provider_field = self.fields.get("provider")
+        selected_type = getattr(self, "_provider_choice_type", "") or (
+            (provider_field.currentData() or "") if provider_field is not None else ""
+        )
+        if selected_type == "nextcloud":
+            url = _nextcloud_webdav_url(url, self.fields["webdav_user"].text())
         args = [
             "url",
-            self.fields["webdav_url"].text().strip(),
+            url,
             "vendor",
             self._webdav_vendor_value(),
         ]
@@ -4526,6 +4641,11 @@ class NewRemoteWizard:
         return self._s3_provider_choice().get("config_name", "S3") or "S3"
 
     def _webdav_vendor_choice(self) -> dict[str, str]:
+        selected_type = getattr(self, "_provider_choice_type", "") or (
+            self.fields["provider"].currentData() if "provider" in self.fields else ""
+        )
+        if selected_type == "nextcloud":
+            return dict(WEBDAV_VENDOR_OPTIONS[0])
         choice = self.fields["webdav_vendor"].currentData()
         if isinstance(choice, dict):
             return {str(key): str(value) for key, value in choice.items()}
@@ -4704,6 +4824,9 @@ class NewRemoteWizard:
             "proton_pass",
             "proton_2fa",
             "proton_mailbox_pass",
+            "mega_user",
+            "mega_pass",
+            "mega_2fa",
             "icloud_service",
             "icloud_user",
             "icloud_pass",
@@ -4738,15 +4861,18 @@ class NewRemoteWizard:
         if not self.fields:
             return
         remote_type = self.fields["provider"].currentData() or "drive"
-        self._remote_type = remote_type
+        self._provider_choice_type = remote_type
+        self._remote_type = "webdav" if remote_type == "nextcloud" else remote_type
         is_drive = remote_type == "drive"
         is_gphotos = remote_type == "gphotos"
         uses_browser_auth = remote_type in OAUTH_REMOTE_TYPES
         is_s3 = remote_type == "s3"
         is_koofr = remote_type == "koofr"
         is_proton = remote_type == "protondrive"
+        is_mega = remote_type == "mega"
         is_icloud = remote_type == "iclouddrive"
-        is_webdav = remote_type == "webdav"
+        is_nextcloud = remote_type == "nextcloud"
+        is_webdav = remote_type in {"nextcloud", "webdav"}
         is_external = remote_type == EXTERNAL_RCLONE_CONFIG_PROVIDER
         self._set_form_row_visible(self.fields["name"], not is_external)
         self._set_form_row_visible(self.fields["credential_source"], is_drive)
@@ -4783,6 +4909,13 @@ class NewRemoteWizard:
         ):
             self._set_form_row_visible(self.fields[field_name], is_proton)
         for field_name in (
+            "mega_user",
+            "mega_pass",
+            "mega_2fa",
+            "mega_help",
+        ):
+            self._set_form_row_visible(self.fields[field_name], is_mega)
+        for field_name in (
             "icloud_service",
             "icloud_user",
             "icloud_pass",
@@ -4791,12 +4924,12 @@ class NewRemoteWizard:
             self._set_form_row_visible(self.fields[field_name], is_icloud)
         for field_name in (
             "webdav_url",
-            "webdav_vendor",
             "webdav_help",
             "webdav_user",
             "webdav_pass",
         ):
             self._set_form_row_visible(self.fields[field_name], is_webdav)
+        self._set_form_row_visible(self.fields["webdav_vendor"], is_webdav and not is_nextcloud)
         self._set_form_row_visible(self.fields["connect_after_create"], not is_external)
         self._set_form_row_visible(self.fields["credential_help"], is_drive)
         self._set_form_row_visible(self.fields["gphotos_help"], is_gphotos)
@@ -4856,8 +4989,24 @@ class NewRemoteWizard:
         self.fields["webdav_pass"].setPlaceholderText(choice.get("password", "Optional"))
         self.fields["webdav_pass"].setToolTip(choice.get("password_tip", "Optional WebDAV password."))
         self.fields["webdav_help"].setText(choice.get("instructions", ""))
-        is_webdav = (self.fields["provider"].currentData() or "drive") == "webdav"
+        selected_type = self.fields["provider"].currentData() or "drive"
+        is_webdav = selected_type in {"nextcloud", "webdav"}
+        is_nextcloud = selected_type == "nextcloud"
+        label = self.form.labelForField(self.fields["webdav_url"])
+        if label is not None:
+            label.setText("Server address" if is_nextcloud else "WebDAV URL")
+        if is_nextcloud and self.fields["webdav_url"].text().strip() in _default_webdav_examples():
+            self.fields["webdav_url"].clear()
+        self.fields["webdav_url"].setPlaceholderText(
+            "https://cloud.example.com" if is_nextcloud else url
+        )
+        self.fields["webdav_url"].setToolTip(
+            "Your Nextcloud server address. Mountlet builds the DAV endpoint automatically."
+            if is_nextcloud
+            else choice.get("url_tip", "The WebDAV endpoint URL.")
+        )
         self._set_form_row_visible(self.fields["webdav_url"], is_webdav and not fixed_url)
+        self._set_form_row_visible(self.fields["webdav_vendor"], is_webdav and not is_nextcloud)
         self._set_form_row_visible(self.fields["webdav_help"], is_webdav)
         self._update_action_button()
 
@@ -4881,6 +5030,8 @@ class NewRemoteWizard:
             "iclouddrive": "Personal iCloud",
             "koofr": "Personal Koofr",
             "protondrive": "Personal Proton Drive",
+            "mega": "Personal MEGA",
+            "nextcloud": "Personal Nextcloud",
             "s3": "Archive S3",
             "webdav": "Nextcloud",
         }
@@ -5048,6 +5199,8 @@ class NewRemoteWizard:
 
     def _selected_provider_config_name(self, remote_type: str) -> str:
         fields = getattr(self, "fields", None)
+        if remote_type.strip().lower() == "nextcloud":
+            return "Nextcloud"
         if remote_type.strip().lower() == "s3" and fields:
             return self._s3_provider_config_name()
         if remote_type.strip().lower() == "webdav" and fields:
@@ -5131,6 +5284,8 @@ class NewRemoteWizard:
         return str(option.get("Help", "")).strip().split("\n\n", 1)[0]
 
     def _provider_label(self, remote_type: str) -> str:
+        if remote_type == "webdav" and getattr(self, "_provider_choice_type", "") == "nextcloud":
+            return "Nextcloud"
         for label, backend_type in REMOTE_PROVIDER_OPTIONS:
             if backend_type == remote_type:
                 return label
@@ -5224,6 +5379,8 @@ class MountletWindow:
         self._action_pending: set[str] = set()
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
+        self._remote_rows_layout: Any | None = None
+        self._remote_order_save_generation = 0
         self._selected_remote_name = ""
         self._name_column_width = 160
         self._refresh_pending = False
@@ -5241,6 +5398,7 @@ class MountletWindow:
         self._purchase_license_button: Any | None = None
         self._license_lock_banner: Any | None = None
         self._license_prompted_for_lock = False
+        self._last_license_locked: bool | None = None
         self._sort_button: Any | None = None
         self._reverse_button: Any | None = None
         self._all_cache_sync_button: Any | None = None
@@ -6302,14 +6460,18 @@ class MountletWindow:
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
+            geometry_changed = name_width != getattr(self, "_name_column_width", name_width)
+            lock_changed = locked != getattr(self, "_last_license_locked", locked)
             self._name_column_width = name_width
-            self._update_purchase_license_button()
+            purchase_visibility_changed = self._update_purchase_license_button() is True
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if not locked and not skip_background:
                     self._schedule_storage_load(remote)
             self._update_license_lock_state()
-            self._browser_layout_changed()
+            self._last_license_locked = locked
+            if geometry_changed or lock_changed or purchase_visibility_changed:
+                self._browser_layout_changed()
             self._restore_focus_snapshot(focus_snapshot)
             return
 
@@ -6332,6 +6494,7 @@ class MountletWindow:
         rows.setSpacing(2)
         rows.setAlignment(self.qt.Qt.AlignmentFlag.AlignTop)
         self._row_widgets = {}
+        self._remote_rows_layout = rows
         self._current_remote_names = remote_names
         self._remote_scroll = scroll
         if self._selected_remote_name not in remote_names:
@@ -6371,6 +6534,7 @@ class MountletWindow:
         if not locked:
             self.file_browser.preload(remotes)
         self._update_license_lock_state()
+        self._last_license_locked = locked
         self._fit_to_content(root, scroll, container)
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
         self._update_app_cache_buttons(remotes)
@@ -6881,11 +7045,14 @@ class MountletWindow:
     def _configuration_changed(self) -> None:
         self._update_config_sync_buttons()
 
-    def _update_purchase_license_button(self) -> None:
+    def _update_purchase_license_button(self) -> bool:
         button = getattr(self, "_purchase_license_button", None)
         if button is None:
-            return
-        button.setVisible(license_control.current_status().state != "licensed")
+            return False
+        visible = license_control.current_status().state != "licensed"
+        changed = button.isVisible() != visible
+        button.setVisible(visible)
+        return changed
 
     def _open_purchase_page(self) -> None:
         _open_external_url(
@@ -7720,6 +7887,8 @@ class MountletWindow:
         layout.addWidget(config_button, 0, 4)
         layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
+            remote=remote,
+            remote_signature=self._remote_row_signature(remote),
             frame=frame,
             status_icon=status_icon,
             provider_label=provider_label,
@@ -7765,6 +7934,10 @@ class MountletWindow:
         row = self._row_widgets.get(remote.name)
         if not row:
             return
+        remote_signature = self._remote_row_signature(remote)
+        remote_changed = remote_signature != getattr(row, "remote_signature", None)
+        row.remote = remote
+        row.remote_signature = remote_signature
         usage = self._row_usage(remote, mounted)
         checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
@@ -7772,44 +7945,48 @@ class MountletWindow:
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         row.frame.setProperty("mounted", mounted)
-        row.frame.setToolTip(open_tooltip)
-        row.frame.setAcceptDrops(True)
-        row.frame.mouseReleaseEvent = lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
-            event,
-            frame,
-            selected,
-        )
-        row.frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
-        row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
-            frame,
-            highlighted=True,
-            tooltip=tooltip,
-            remote=remote,
-        )
-        row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
-            event, frame, selected
-        )
-        row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
-        row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
-        row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
-            event, frame, selected, focused=True
-        )
-        row.frame.focusOutEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
-            event, frame, selected, focused=False
-        )
-        row.frame.keyPressEvent = lambda event, selected=remote, frame=row.frame: self._handle_remote_row_key(
-            event, selected, frame
-        )
+        if remote_changed:
+            row.frame.setToolTip(open_tooltip)
+            row.frame.setAcceptDrops(True)
+            row.frame.mouseReleaseEvent = (
+                lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
+                    event,
+                    frame,
+                    selected,
+                )
+            )
+            row.frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
+            row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
+                frame,
+                highlighted=True,
+                tooltip=tooltip,
+                remote=remote,
+            )
+            row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
+                event, frame, selected
+            )
+            row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+            row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
+            row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
+                event, frame, selected, focused=True
+            )
+            row.frame.focusOutEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
+                event, frame, selected, focused=False
+            )
+            row.frame.keyPressEvent = lambda event, selected=remote, frame=row.frame: self._handle_remote_row_key(
+                event, selected, frame
+            )
         row.frame.setStyleSheet(self._remote_row_style(row.frame, highlighted=False))
 
-        row.title.setText(self._display_remote_name(remote))
-        row.title.setToolTip(title_tooltip)
+        if remote_changed:
+            row.title.setText(self._display_remote_name(remote))
+            row.title.setToolTip(title_tooltip)
+            row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
+                widget,
+                tooltip,
+            )
+            self._update_provider_label(row.provider_label, remote)
         row.title.setFixedWidth(self._name_column_width)
-        row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
-            widget,
-            tooltip,
-        )
-        self._update_provider_label(row.provider_label, remote)
 
         self._apply_remote_status_icon(row.status_icon, remote, mounted, checking=checking_usage)
         row.usage_indicator.setEnabled(True)
@@ -7817,13 +7994,27 @@ class MountletWindow:
 
         self._set_status_text(row.status, usage, action_pending=action_pending)
         row.config_button.setEnabled(not action_pending)
-        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
-        row.config_button.setToolTip(config_tooltip)
-        row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
-            self._show_immediate_tooltip(widget, tooltip)
-        )
+        if remote_changed:
+            config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
+            row.config_button.setToolTip(config_tooltip)
+            row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
+                self._show_immediate_tooltip(widget, tooltip)
+            )
         self._update_move_button(row.up_button, remote, -1)
         self._update_move_button(row.down_button, remote, 1)
+
+    def _remote_row_signature(self, remote: core.RemoteInfo) -> tuple[object, ...]:
+        return (
+            remote.name,
+            remote.alias,
+            remote.provider,
+            remote.backend_type,
+            remote.mount_path,
+            tuple(remote.flags),
+            tuple(sorted(remote.extra_info.items())),
+            remote.auto_mount,
+            remote.remote_path,
+        )
 
     def _update_provider_label(self, label: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
@@ -7885,7 +8076,7 @@ class MountletWindow:
         return 0 <= target < len(self._current_remote_names)
 
     def _move_remote(self, remote_name: str, delta: int) -> None:
-        names = [remote.name for remote in _load_visible_remotes()]
+        names = list(self._current_remote_names)
         try:
             index = names.index(remote_name)
         except ValueError:
@@ -7893,9 +8084,45 @@ class MountletWindow:
         target = index + delta
         if not 0 <= target < len(names):
             return
+        displaced_name = names[target]
         names[index], names[target] = names[target], names[index]
-        self._save_remote_order(names)
-        self._current_remote_names = []
+        row = self._row_widgets.get(remote_name)
+        layout = self._remote_rows_layout
+        if row is None or layout is None:
+            self._current_remote_names = []
+            self.tray_app.rebuild_menus()
+            return
+
+        layout.removeWidget(row.frame)
+        layout.insertWidget(target, row.frame)
+        self._current_remote_names = names
+        self._update_remote_move_buttons({remote_name, displaced_name})
+        self._ensure_remote_row_visible(row.frame)
+        self._queue_remote_order_save(names)
+
+    def _update_remote_move_buttons(self, remote_names: set[str]) -> None:
+        for remote_name in remote_names:
+            row = self._row_widgets.get(remote_name)
+            if row is None:
+                continue
+            self._update_move_button(row.up_button, row.remote, -1)
+            self._update_move_button(row.down_button, row.remote, 1)
+
+    def _queue_remote_order_save(self, remote_names: list[str]) -> None:
+        self._remote_order_save_generation += 1
+        generation = self._remote_order_save_generation
+        names = list(remote_names)
+        self.qt.QTimer.singleShot(
+            180,
+            lambda: self._save_queued_remote_order(generation, names),
+        )
+
+    def _save_queued_remote_order(self, generation: int, remote_names: list[str]) -> None:
+        if generation != self._remote_order_save_generation:
+            return
+        if remote_names != self._current_remote_names:
+            return
+        self._save_remote_order(remote_names)
         self.tray_app.rebuild_menus()
 
     def _save_remote_order(self, remote_names: list[str]) -> None:

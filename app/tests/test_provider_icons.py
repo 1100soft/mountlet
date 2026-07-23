@@ -15,6 +15,8 @@ class ProviderIconTests(unittest.TestCase):
         self.assertEqual(PROVIDER_ASSETS["gphotos"], "google-photos.svg")
         self.assertEqual(PROVIDER_ASSETS["iclouddrive"], "icloud.svg")
         self.assertEqual(PROVIDER_ASSETS["protondrive"], "proton-drive.svg")
+        self.assertEqual(PROVIDER_ASSETS["mega"], "mega.svg")
+        self.assertEqual(PROVIDER_ASSETS["nextcloud"], "nextcloud.svg")
 
     def test_generic_s3_uses_aws_asset(self) -> None:
         self.assertEqual(PROVIDER_ASSETS["s3"], "amazon-s3.svg")
