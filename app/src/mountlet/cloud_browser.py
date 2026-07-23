@@ -1020,7 +1020,7 @@ class CloudBrowserBackend:
         prefix = f"{normalized}/" if normalized else ""
         protected = full_offline
         temporary = False
-        for record_path, candidate in records.items():
+        for record_path, candidate in list(records.items()):
             if record_path == normalized:
                 if not bool(candidate.get("is_dir")) or bool(candidate.get("complete", True)):
                     protected = protected or bool(candidate.get("protected"))

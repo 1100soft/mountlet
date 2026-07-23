@@ -521,6 +521,12 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
         ]
     )
     destination.write_text(content, encoding="utf-8")
+    try:
+        from .shortcuts import invalidate_shortcut_cache
+    except ImportError:
+        pass
+    else:
+        invalidate_shortcut_cache()
 
 
 def _autostart_file() -> Path:

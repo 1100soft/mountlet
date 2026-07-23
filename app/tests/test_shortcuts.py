@@ -56,6 +56,9 @@ def _fake_qt() -> SimpleNamespace:
 
 
 class ShortcutTests(unittest.TestCase):
+    def setUp(self):
+        shortcuts.invalidate_shortcut_cache()
+
     def test_matches_configured_shortcut(self):
         qt = _fake_qt()
         event = SimpleNamespace(
@@ -99,6 +102,17 @@ class ShortcutTests(unittest.TestCase):
 
         with mock.patch.object(shortcuts, "load_app_settings", return_value=settings):
             self.assertTrue(shortcuts.matches_shortcut(qt, event, "remote_move_up"))
+
+    def test_shortcuts_are_loaded_once_until_invalidated(self):
+        settings = AppSettings(shortcuts={**DEFAULT_SHORTCUTS, "browser_root": ("Alt+Home",)})
+        with mock.patch.object(shortcuts, "load_app_settings", return_value=settings) as load:
+            self.assertEqual(shortcuts.shortcut_values("browser_root"), ("Alt+Home",))
+            self.assertEqual(shortcuts.shortcut_values("browser_root"), ("Alt+Home",))
+            load.assert_called_once_with()
+
+            shortcuts.invalidate_shortcut_cache()
+            self.assertEqual(shortcuts.shortcut_values("browser_root"), ("Alt+Home",))
+            self.assertEqual(load.call_count, 2)
 
 
 if __name__ == "__main__":

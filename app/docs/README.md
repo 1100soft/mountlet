@@ -44,6 +44,13 @@ and broader end-to-end testing are complete.
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
 paths, and offline snapshots. `cloud_browser_ui.py` owns the compact Qt view
 and must keep every rclone operation off the UI thread.
+UI responsiveness is a release requirement. Pointer and keyboard handlers may
+change selection, focus, and already-cached visuals only; they must not wait on
+rclone, subprocesses, filesystem scans, settings reads, license verification,
+or remote mount probes. Run those operations in bounded background workers,
+discard stale results, and update only the affected rows or controls. Avoid
+periodic menu reconstruction, full-window repainting, and repeated parsing on
+hot input paths.
 Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
