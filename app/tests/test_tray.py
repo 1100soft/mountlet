@@ -501,7 +501,7 @@ class TrayTests(unittest.TestCase):
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.Trigger)
 
         rebuild.assert_not_called()
-        fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
+        fake_qt.QTimer.singleShot.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 1)
         self.assertEqual(fake_window.tray_click_anchors, ["tray-click"])
 
@@ -510,7 +510,7 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray_app, "rebuild_menus") as rebuild:
             tray_app._handle_activation(fake_qt.QSystemTrayIcon.ActivationReason.DoubleClick)
 
-        fake_qt.QTimer.singleShot.assert_called_once_with(25, rebuild)
+        fake_qt.QTimer.singleShot.assert_not_called()
         self.assertEqual(fake_window.toggle_calls, 2)
         self.assertEqual(fake_window.tray_click_anchors, ["tray-click", "tray-double-click"])
 
@@ -546,7 +546,7 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window.remember_tray_click_anchor.assert_called_once_with("cursor-position")
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.app_menu.popup.assert_called_once_with("cursor-position")
-        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+        tray_app.qt.QTimer.singleShot.assert_not_called()
 
     def test_tray_context_menu_keeps_short_top_level_with_cascades(self):
         tray_app = object.__new__(tray.MountletTray)
@@ -569,6 +569,7 @@ class TrayTests(unittest.TestCase):
         more_menu = next(item for item in tray_app.app_menu.items if item.text() == "More")
         more_items = [item.text() for item in more_menu.items if not item.isSeparator()]
         self.assertEqual(more_items, ["App", "Mount", "Config"])
+        main_window.refresh.assert_not_called()
 
     def test_rebuild_menus_does_not_clear_visible_context_menu(self):
         tray_app = object.__new__(tray.MountletTray)
@@ -1740,13 +1741,13 @@ class TrayTests(unittest.TestCase):
         window.qt = SimpleNamespace(QMenu=lambda _parent: menu)
         window.window = mock.Mock()
         window._action_pending = set()
+        window._mount_state_cache = {remote.name: True}
         window._license_locked = mock.Mock(return_value=False)
         window._can_move_remote = mock.Mock(side_effect=lambda _name, delta: delta > 0)
         window._event_global_point = mock.Mock(return_value="cursor-position")
 
-        with mock.patch.object(tray.core, "is_mounted", return_value=True):
-            with mock.patch.object(tray, "_file_manager_label", return_value="Dolphin"):
-                window._show_remote_context_menu(event, remote)
+        with mock.patch.object(tray, "_file_manager_label", return_value="Dolphin"):
+            window._show_remote_context_menu(event, remote)
 
         labels = [item.text() for item in menu.items if not item.isSeparator()]
         self.assertEqual(
@@ -2063,11 +2064,13 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_file_browser_mount_state = mock.Mock()
         mountlet_window._schedule_offline_reconcile = mock.Mock()
 
-        mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
+        with mock.patch.object(Path, "exists", return_value=True):
+            mountlet_window._handle_local_cache_file_changed("/tmp/cache/Docs/a.txt")
 
         watcher.removePath.assert_called_once_with("/tmp/cache/Docs/a.txt")
-        self.assertEqual(mountlet_window._offline_watched_paths, set())
-        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        watcher.addPath.assert_called_once_with("/tmp/cache/Docs/a.txt")
+        self.assertEqual(mountlet_window._offline_watched_paths, {"/tmp/cache/Docs/a.txt"})
+        mountlet_window._refresh_offline_file_watches.assert_not_called()
         mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
         mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs", delay_ms=500)
 
@@ -2115,6 +2118,8 @@ class TrayTests(unittest.TestCase):
     def test_mountlet_window_local_cache_scan_schedules_changed_unmounted_remotes(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._local_change_scan_running = True
+        mountlet_window._local_change_scan_requested = False
         mountlet_window._action_pending = set()
         mountlet_window._offline_reconcile_scheduled = set()
         mountlet_window._offline_reconcile_running = set()
@@ -2124,14 +2129,42 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_offline_file_watches = mock.Mock()
         mountlet_window._schedule_offline_reconcile = mock.Mock()
 
-        mountlet_window._scan_local_cache_changes()
+        mountlet_window._handle_local_cache_scan_ready(["Docs"], "")
 
-        mountlet_window._refresh_offline_file_watches.assert_called_once_with()
+        mountlet_window._refresh_offline_file_watches.assert_not_called()
         mountlet_window._schedule_offline_reconcile.assert_called_once_with("Docs")
+
+    def test_mountlet_window_local_cache_scan_runs_backend_work_off_ui_thread(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._local_change_scan_running = False
+        mountlet_window._local_change_scan_requested = False
+        changed = mock.Mock(return_value=["Docs"])
+        mountlet_window.file_browser = SimpleNamespace(
+            backend=SimpleNamespace(changed_managed_remote_names=changed)
+        )
+        mountlet_window._license_locked = mock.Mock(return_value=False)
+        mountlet_window._bridge = SimpleNamespace(
+            local_cache_scan_ready=SimpleNamespace(emit=mock.Mock())
+        )
+
+        with mock.patch.object(tray.threading, "Thread") as thread_type:
+            thread = mock.Mock()
+            thread_type.return_value = thread
+            mountlet_window._scan_local_cache_changes()
+
+        changed.assert_not_called()
+        thread.start.assert_called_once_with()
+        worker = thread_type.call_args.kwargs["target"]
+        worker()
+        changed.assert_called_once_with()
+        mountlet_window._bridge.local_cache_scan_ready.emit.assert_called_once_with(["Docs"], "")
 
     def test_mountlet_window_local_cache_scan_skips_running_reconcile(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._local_change_scan_running = True
+        mountlet_window._local_change_scan_requested = False
         mountlet_window._action_pending = set()
         mountlet_window._offline_reconcile_scheduled = set()
         mountlet_window._offline_reconcile_running = {"Docs"}
@@ -2142,7 +2175,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_file_browser_mount_state = mock.Mock()
         mountlet_window._schedule_offline_reconcile = mock.Mock()
 
-        mountlet_window._scan_local_cache_changes()
+        mountlet_window._handle_local_cache_scan_ready(["Docs"], "")
 
         self.assertEqual(mountlet_window._offline_reconcile_scheduled, {"Docs"})
         mountlet_window._refresh_file_browser_mount_state.assert_called_once_with("Docs")
@@ -2151,6 +2184,8 @@ class TrayTests(unittest.TestCase):
     def test_mountlet_window_local_cache_scan_does_not_repaint_already_queued_running_reconcile(self):
         mountlet_window = object.__new__(tray.MountletWindow)
         mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window._local_change_scan_running = True
+        mountlet_window._local_change_scan_requested = False
         mountlet_window._action_pending = set()
         mountlet_window._offline_reconcile_scheduled = {"Docs"}
         mountlet_window._offline_reconcile_running = {"Docs"}
@@ -2161,7 +2196,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window._refresh_file_browser_mount_state = mock.Mock()
         mountlet_window._schedule_offline_reconcile = mock.Mock()
 
-        mountlet_window._scan_local_cache_changes()
+        mountlet_window._handle_local_cache_scan_ready(["Docs"], "")
 
         mountlet_window._refresh_file_browser_mount_state.assert_not_called()
         mountlet_window._schedule_offline_reconcile.assert_not_called()
@@ -3939,6 +3974,37 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(row.focus_reason, "mouse")
         select_remote.assert_called_once_with(remote, row)
 
+    def test_remote_preview_coalesces_rapid_selection_changes(self):
+        first = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/tmp/alpha")
+        second = core.RemoteInfo("Beta", "Beta", "Drive", "drive", "/tmp/beta")
+        timer = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window._remote_preview_timer = timer
+        window._pending_browser_remote_name = ""
+        window._set_browser_selected = mock.Mock()
+        window._show_file_browser_for_remote = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._license_locked = mock.Mock(return_value=False)
+        window._row_widgets = {
+            first.name: SimpleNamespace(remote=first, frame="first-row"),
+            second.name: SimpleNamespace(remote=second, frame="second-row"),
+        }
+
+        window._select_browser_remote(first, "first-row")
+        window._select_browser_remote(second, "second-row")
+
+        window._show_file_browser_for_remote.assert_not_called()
+        self.assertEqual(window._pending_browser_remote_name, second.name)
+        self.assertEqual(timer.start.call_count, 2)
+
+        window._flush_remote_preview()
+
+        window._show_file_browser_for_remote.assert_called_once_with(
+            second,
+            "second-row",
+            focus_browser=False,
+        )
+
     def test_shortcut_conflicts_are_scoped_to_context(self):
         dialog = object.__new__(tray.ShortcutConfigDialog)
         shortcuts = {
@@ -4016,7 +4082,7 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window._mount_all.assert_called_once_with()
         tray_app.main_window._unmount_all.assert_called_once_with()
 
-    def test_tray_activation_opens_window_before_scheduling_menu_refresh(self):
+    def test_tray_activation_does_not_rebuild_menu(self):
         tray_app = object.__new__(tray.MountletTray)
         tray_app._quitting = False
         tray_app.main_window = mock.Mock()
@@ -4033,7 +4099,7 @@ class TrayTests(unittest.TestCase):
         tray_app.main_window.remember_tray_click_anchor.assert_called_once_with("tray-click")
         tray_app.main_window.toggle_from_tray.assert_called_once_with()
         tray_app.rebuild_menus.assert_not_called()
-        tray_app.qt.QTimer.singleShot.assert_called_once_with(25, tray_app.rebuild_menus)
+        tray_app.qt.QTimer.singleShot.assert_not_called()
 
     def test_main_focus_style_updates_only_registered_main_surface(self):
         main_surface = mock.Mock()
@@ -4046,6 +4112,20 @@ class TrayTests(unittest.TestCase):
 
         main_surface.setStyleSheet.assert_called_once()
         other_surface.setStyleSheet.assert_not_called()
+
+    def test_window_license_state_is_cached_between_ui_events(self):
+        window = object.__new__(tray.MountletWindow)
+        window._license_locked_cache = None
+        window._license_locked_cache_until = 0.0
+
+        with mock.patch.object(tray, "_license_locked", return_value=False) as check:
+            self.assertFalse(window._license_locked())
+            self.assertFalse(window._license_locked())
+            check.assert_called_once_with()
+
+            window._invalidate_license_cache()
+            self.assertFalse(window._license_locked())
+            self.assertEqual(check.call_count, 2)
 
     def test_visual_only_refresh_skips_background_rclone_checks_once(self):
         remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
@@ -4076,6 +4156,54 @@ class TrayTests(unittest.TestCase):
         window._schedule_storage_load.assert_not_called()
         window._browser_layout_changed.assert_not_called()
         self.assertFalse(window._skip_background_refresh_once)
+
+    def test_mount_state_result_updates_only_changed_rows(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        row = SimpleNamespace(remote=remote)
+        window = object.__new__(tray.MountletWindow)
+        window._mount_state_scan_running = True
+        window._mount_state_scan_requested = False
+        window._mount_state_cache = {remote.name: False}
+        window._row_widgets = {remote.name: row}
+        window.tray_app = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window.is_visible = mock.Mock(return_value=True)
+        window._update_remote_row = mock.Mock()
+        window._refresh_file_browser_mount_state = mock.Mock()
+        window._request_refresh = mock.Mock()
+
+        window._handle_mount_states_ready({remote.name: True})
+
+        window._update_remote_row.assert_called_once_with(remote, True)
+        window._refresh_file_browser_mount_state.assert_called_once_with(remote.name)
+        window._request_refresh.assert_not_called()
+        window.tray_app.rebuild_menus.assert_called_once_with()
+
+    def test_storage_result_updates_only_affected_row(self):
+        remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
+        row = SimpleNamespace(remote=remote)
+        window = object.__new__(tray.MountletWindow)
+        window._usage_pending = {remote.name}
+        window._usage_cache = {}
+        window._connection_cache = {}
+        window._mount_state_cache = {remote.name: True}
+        window._row_widgets = {remote.name: row}
+        window._current_remote_names = [remote.name]
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window.is_visible = mock.Mock(return_value=True)
+        window._update_remote_row = mock.Mock()
+        window._request_refresh = mock.Mock()
+        usage = core.StorageUsage("1 GB")
+
+        window._handle_storage_ready(
+            remote.name,
+            SimpleNamespace(usage=usage, connected=True),
+        )
+
+        self.assertIs(window._usage_cache[remote.name], usage)
+        self.assertTrue(window._connection_cache[remote.name])
+        window._update_remote_row.assert_called_once_with(remote, True)
+        window._request_refresh.assert_not_called()
 
     def test_browser_layout_change_repositions_file_browser_after_main_resize(self):
         window = object.__new__(tray.MountletWindow)
@@ -4741,10 +4869,12 @@ class TrayTests(unittest.TestCase):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
         window.file_browser = mock.Mock(remote=remote, is_visible=mock.Mock(return_value=True))
+        window._scan_local_cache_changes = mock.Mock()
 
         window._handle_main_window_activation(active=True)
 
         window.file_browser.invalidate.assert_called_once_with("Docs")
+        window._scan_local_cache_changes.assert_called_once_with()
         window.file_browser.close.assert_not_called()
 
     def test_file_browser_is_left_open_when_app_loses_focus(self):

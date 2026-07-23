@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.3 - 2026-07-23
+
+- Made tray opening, remote hover and keyboard navigation, file selection, and
+  remote reordering update immediately without waiting for cloud, mount,
+  filesystem, settings, or license checks.
+- Moved mount probes, usage retrieval, local-file scans, entry-state scans, and
+  download completion checks off the UI thread, with bounded concurrency and
+  targeted row updates.
+- Reduced unnecessary menu rebuilds, full-window repaints, repeated shortcut
+  parsing, settings reads, file-icon lookups, and operation-state scans.
+- Added regression coverage for cached status paths, stale background results,
+  incremental selection painting, shortcut invalidation, and responsive tray
+  behavior.
+
 ## 0.6.2 - 2026-07-23
 
 - Added guided MEGA and Nextcloud setup, and marked Google Photos, iCloud, and

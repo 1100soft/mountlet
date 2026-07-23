@@ -4,13 +4,23 @@ from typing import Any
 
 from .settings import DEFAULT_SHORTCUTS, load_app_settings
 
+_shortcut_cache: dict[str, tuple[str, ...]] | None = None
+
 
 def shortcut_text(action: str) -> str:
     return ", ".join(shortcut_values(action))
 
 
 def shortcut_values(action: str) -> tuple[str, ...]:
-    return load_app_settings().shortcuts.get(action, DEFAULT_SHORTCUTS.get(action, ()))
+    global _shortcut_cache
+    if _shortcut_cache is None:
+        _shortcut_cache = dict(load_app_settings().shortcuts)
+    return _shortcut_cache.get(action, DEFAULT_SHORTCUTS.get(action, ()))
+
+
+def invalidate_shortcut_cache() -> None:
+    global _shortcut_cache
+    _shortcut_cache = None
 
 
 def matches_shortcut(qt: Any, event: Any, action: str) -> bool:
@@ -95,4 +105,10 @@ def normalize_shortcut_text(sequence: str) -> str:
     return "+".join(parts)
 
 
-__all__ = ["matches_shortcut", "normalize_shortcut_text", "shortcut_text", "shortcut_values"]
+__all__ = [
+    "invalidate_shortcut_cache",
+    "matches_shortcut",
+    "normalize_shortcut_text",
+    "shortcut_text",
+    "shortcut_values",
+]

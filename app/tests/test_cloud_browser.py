@@ -2036,6 +2036,8 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertIs(browser.tree.scrolled_to, browser.tree.current)
         browser.tree.scroll.setValue.assert_not_called()
         self.assertEqual(browser._pending_select_path, "")
+        browser.backend.offline_content_state.assert_not_called()
+        browser.backend.offline_changed.assert_not_called()
 
     def test_working_status_applies_to_parent_and_child_paths(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -2049,20 +2051,6 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep/a.txt", is_dir=False), "sync")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Downloads/b.txt", is_dir=False), "")
         self.assertEqual(browser._working_kind_for_entry("Docs", "Other", is_dir=True), "")
-
-    def test_visible_download_state_clears_completed_file(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser._working_paths = {
-            ("Docs", "Reports/a.txt"): "download",
-            ("Docs", "Reports/b.txt"): "download",
-        }
-        browser.backend = mock.Mock()
-        browser.backend.is_cached.return_value = True
-
-        browser._refresh_visible_download_state("Docs", [BrowserEntry("a.txt", "Reports/a.txt", False)])
-
-        self.assertNotIn(("Docs", "Reports/a.txt"), browser._working_paths)
-        self.assertEqual(browser._working_paths[("Docs", "Reports/b.txt")], "download")
 
     def test_animation_tick_refreshes_icons_without_rebuilding_entries(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -2080,6 +2068,45 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_phase, 1)
         browser._refresh_entry_icons.assert_called_once_with()
         browser._display_entries.assert_not_called()
+
+    def test_animation_checks_download_completion_in_worker(self):
+        started_threads = []
+
+        class Thread:
+            def __init__(self, *, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started_threads.append(self)
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {("Docs", "Reports/a.txt"): "download"}
+        browser._working_state_scan_running = False
+        browser._working_state_scan_requested = False
+        browser.backend = mock.Mock()
+        browser._bridge = SimpleNamespace(working_paths_ready=SimpleNamespace(emit=mock.Mock()))
+
+        with mock.patch("mountlet.cloud_browser_ui.threading.Thread", Thread):
+            browser._request_working_state_scan()
+
+        self.assertEqual(len(started_threads), 1)
+        browser.backend.is_cached.assert_not_called()
+        started_threads[0].target()
+        browser.backend.is_cached.assert_called_once_with("Docs", "Reports/a.txt", is_dir=False)
+
+    def test_working_directory_status_uses_precomputed_index(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._working_paths = {
+            ("Docs", "Reports/Deep/a.txt"): "download",
+            ("Docs", "Other/b.txt"): "sync",
+        }
+        browser._rebuild_working_directory_index()
+
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Reports", is_dir=True), "download")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Reports/Deep", is_dir=True), "download")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Other", is_dir=True), "sync")
+        self.assertEqual(browser._working_kind_for_entry("Docs", "Reports", is_dir=False), "")
 
     def test_rclone_output_shows_recent_line_block(self):
         class Editor:
@@ -2380,6 +2407,25 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser.root.show.call_count, 2)
         self.assertFalse(browser._closed_until_selected)
+
+    def test_showing_same_rendered_remote_does_not_refresh_or_reposition(self):
+        remote = _remote()
+        browser = object.__new__(CompactCloudBrowser)
+        browser._embedded = False
+        browser._closed_until_selected = False
+        browser.remote = remote
+        browser.path = ""
+        browser._rendered_key = (remote.name, "")
+        browser.backend = mock.Mock(current_path=mock.Mock(return_value=""))
+        browser.window = mock.Mock()
+        browser.window.isVisible.return_value = True
+        browser.refresh = mock.Mock()
+        browser._position = mock.Mock()
+
+        browser.show_remote(remote, mock.Mock(), show_browser=True, focus_browser=False)
+
+        browser.refresh.assert_not_called()
+        browser._position.assert_not_called()
 
     def test_browser_focus_uses_focused_widget_not_active_window(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -2772,6 +2818,10 @@ class CloudBrowserTests(unittest.TestCase):
         browser.backend.has_offline_content.return_value = False
         browser.backend.has_temporary_cache_content.return_value = False
         browser.backend.offline_changed.return_value = False
+        browser._entry_state_cache = {
+            (browser.remote.name, "a.txt", False): (False, False, False, False, False)
+        }
+        browser._remote_managed_cache = {}
 
         browser._update_actions()
 
@@ -2782,6 +2832,13 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser.backend.is_offline.return_value = True
         browser.backend.has_offline_content.return_value = True
+        browser._entry_state_cache[(browser.remote.name, "a.txt", False)] = (
+            True,
+            True,
+            False,
+            False,
+            False,
+        )
         browser._update_actions()
 
         browser.offline_button.setEnabled.assert_called_with(False)
@@ -2789,6 +2846,31 @@ class CloudBrowserTests(unittest.TestCase):
         browser.offline_button.setBadgeVisible.assert_called_with(False)
         browser.selection_remove_offline_button.setEnabled.assert_called_with(True)
         self.assertIn("Already available offline", browser.offline_button.setToolTip.call_args.args[0])
+        browser.backend.offline_content_state.assert_not_called()
+        browser.backend.has_offline_content.assert_not_called()
+        browser.backend.has_temporary_cache_content.assert_not_called()
+        browser.backend.is_offline.assert_not_called()
+
+    def test_selection_background_refresh_only_repaints_changed_rows(self):
+        first = mock.Mock()
+        second = mock.Mock()
+        third = mock.Mock()
+        tree = mock.Mock()
+        tree.columnCount.return_value = 3
+        tree.selectedItems.return_value = [first]
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = tree
+        browser.qt = SimpleNamespace()
+        browser._painted_selected_items = set()
+        browser._item_brush = mock.Mock(side_effect=lambda color: color or "clear")
+
+        browser._refresh_selection_backgrounds()
+        tree.selectedItems.return_value = [second]
+        browser._refresh_selection_backgrounds()
+
+        self.assertEqual(first.setBackground.call_count, 6)
+        self.assertEqual(second.setBackground.call_count, 3)
+        third.setBackground.assert_not_called()
 
     def test_offline_button_uses_standard_disabled_state_without_selection(self):
         browser = object.__new__(CompactCloudBrowser)

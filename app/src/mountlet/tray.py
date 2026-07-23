@@ -5399,6 +5399,8 @@ class MountletWindow:
         self._license_lock_banner: Any | None = None
         self._license_prompted_for_lock = False
         self._last_license_locked: bool | None = None
+        self._license_locked_cache: bool | None = None
+        self._license_locked_cache_until = 0.0
         self._sort_button: Any | None = None
         self._reverse_button: Any | None = None
         self._all_cache_sync_button: Any | None = None
@@ -5412,17 +5414,26 @@ class MountletWindow:
         self._global_search_verify_pending = False
         self._remote_hover_suppressed = False
         self._remote_hover_suppression_token = 0
+        self._pending_browser_remote_name = ""
+        self._remote_preview_timer: Any | None = None
+        self._keyboard_remote_name = ""
+        self._browser_selected_name = ""
         self._app_menu: Any | None = None
         self._mount_menu: Any | None = None
         self._config_menu: Any | None = None
         self._remote_sync_metadata: dict[str, object] | None = None
         self._remote_sync_check_pending = False
+        self._mount_state_cache: dict[str, bool] = {}
+        self._mount_state_scan_running = False
+        self._mount_state_scan_requested = False
         self._offline_reconcile_running: set[str] = set()
         self._offline_reconcile_scheduled: set[str] = set()
         self._deferred_offline_conflicts: set[tuple[str, str, float, float]] = set()
         self._offline_watched_paths: set[str] = set()
         self._offline_file_watcher: Any | None = None
         self._offline_change_poll_timer: Any | None = None
+        self._local_change_scan_running = False
+        self._local_change_scan_requested = False
         self._remote_change_poll_timer: Any | None = None
         self._remote_change_poll_offsets: dict[str, int] = {}
         self._remote_change_poll_index = 0
@@ -5445,10 +5456,14 @@ class MountletWindow:
         self._bridge.bug_report_ready.connect(self._handle_bug_report_ready)
         self._bridge.global_search_ready.connect(self._handle_global_search_ready)
         self._bridge.notices_ready.connect(self.tray_app._handle_notices_ready)
+        self._bridge.local_cache_scan_ready.connect(self._handle_local_cache_scan_ready)
+        self._bridge.mount_states_ready.connect(self._handle_mount_states_ready)
         self.window = self._make_main_window()
         self.window.setWindowTitle("Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self.file_browser = self._create_file_browser()
+        self._storage_load_slots = threading.BoundedSemaphore(2)
+        self._setup_remote_preview_timer()
         self.window.focus_remote_row = self._focus_current_remote_row
         self.window.update_focus_style = self._update_main_focus_style
         self.window.set_mountlet_focus_owner = self._set_focus_owner
@@ -5471,6 +5486,9 @@ class MountletWindow:
             open_mount=self._open_remote_path,
             open_file=self.desktop.open_file,
             open_local_folder=lambda path: self.desktop.open_folder(str(path)),
+            is_mounted=lambda remote: bool(
+                getattr(self, "_mount_state_cache", {}).get(remote.name, False)
+            ),
             toggle_mount=self._run_switch_action,
             sync_paths=self._sync_cached_paths,
             file_manager_label=self.desktop.file_manager_label,
@@ -5513,6 +5531,8 @@ class MountletWindow:
             bug_report_ready = qt.Signal(bool, str, str)
             global_search_ready = qt.Signal(str, object, str)
             notices_ready = qt.Signal(object, object)
+            local_cache_scan_ready = qt.Signal(object, str)
+            mount_states_ready = qt.Signal(object)
 
         return Bridge()
 
@@ -5640,6 +5660,16 @@ class MountletWindow:
             return
         file_browser.invalidate(remote.name)
 
+    def _setup_remote_preview_timer(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        timer = timer_type(self.window)
+        timer.setSingleShot(True)
+        timer.setInterval(45)
+        timer.timeout.connect(self._flush_remote_preview)
+        self._remote_preview_timer = timer
+
     def _setup_offline_change_tracking(self) -> None:
         self._setup_offline_file_watcher()
         self._setup_offline_change_polling()
@@ -5718,8 +5748,12 @@ class MountletWindow:
             with suppress(Exception):
                 watcher.removePath(changed_path)
             watched.discard(changed_path)
-            self._offline_watched_paths = watched
-        self._refresh_offline_file_watches()
+        candidate = Path(changed_path)
+        if candidate.exists():
+            with suppress(Exception):
+                watcher.addPath(changed_path)
+                watched.add(changed_path)
+        self._offline_watched_paths = watched
 
     def _setup_offline_change_polling(self) -> None:
         timer_type = getattr(self.qt, "QTimer", None)
@@ -5727,7 +5761,8 @@ class MountletWindow:
             return
         try:
             timer = timer_type(self.window)
-            timer.setInterval(2000)
+            interval_ms = 10_000 if getattr(self, "_offline_file_watcher", None) is not None else 2_000
+            timer.setInterval(interval_ms)
             timer.timeout.connect(self._scan_local_cache_changes)
             timer.start()
         except Exception:
@@ -5737,27 +5772,47 @@ class MountletWindow:
     def _scan_local_cache_changes(self) -> None:
         if self._tray_is_quitting() or self._license_locked():
             return
-        self._refresh_offline_file_watches()
-        try:
-            changed_remote_names = self.file_browser.backend.changed_managed_remote_names()
-        except Exception:
+        if getattr(self, "_local_change_scan_running", False):
+            self._local_change_scan_requested = True
+            return
+        self._local_change_scan_running = True
+
+        def worker() -> None:
+            try:
+                changed_remote_names = self.file_browser.backend.changed_managed_remote_names()
+                error = ""
+            except Exception as exc:
+                changed_remote_names = []
+                error = str(exc)
+            self._bridge.local_cache_scan_ready.emit(changed_remote_names, error)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_local_cache_scan_ready(self, changed_remote_names: object, _error: str) -> None:
+        self._local_change_scan_running = False
+        rerun = self._local_change_scan_requested
+        self._local_change_scan_requested = False
+        if self._tray_is_quitting():
             return
         if not isinstance(changed_remote_names, (list, tuple, set)):
-            return
-        pending = set(getattr(self, "_action_pending", set()))
-        scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
-        running = set(getattr(self, "_offline_reconcile_running", set()))
-        for remote_name in changed_remote_names:
-            if remote_name in pending:
-                continue
-            if remote_name in running:
+            changed_remote_names = []
+        else:
+            pending = set(getattr(self, "_action_pending", set()))
+            scheduled = set(getattr(self, "_offline_reconcile_scheduled", set()))
+            running = set(getattr(self, "_offline_reconcile_running", set()))
+            for remote_name in changed_remote_names:
+                if remote_name in pending:
+                    continue
+                if remote_name in running:
+                    if remote_name not in scheduled:
+                        self._offline_reconcile_scheduled.add(remote_name)
+                        self._refresh_file_browser_mount_state(remote_name)
+                    continue
                 if remote_name not in scheduled:
-                    self._offline_reconcile_scheduled.add(remote_name)
                     self._refresh_file_browser_mount_state(remote_name)
-                continue
-            if remote_name not in scheduled:
-                self._refresh_file_browser_mount_state(remote_name)
-                self._schedule_offline_reconcile(remote_name)
+                    self._schedule_offline_reconcile(remote_name)
+        if rerun:
+            self._scan_local_cache_changes()
 
     def _setup_remote_change_polling(self) -> None:
         existing = getattr(self, "_remote_change_poll_timer", None)
@@ -5964,6 +6019,7 @@ class MountletWindow:
         self._open_child_dialog(dialog)
 
     def _license_dialog_closed(self) -> None:
+        self._invalidate_license_cache()
         self.tray_app.rebuild_menus()
         self.refresh()
         self._update_purchase_license_button()
@@ -5999,7 +6055,8 @@ class MountletWindow:
             self._close_child_dialogs()
             self.window.hide()
             was_visible = False
-        self.refresh()
+        if not getattr(self, "_row_widgets", None):
+            self.refresh()
         if not was_visible:
             self._position_after_fit = True
             if getattr(self, "_last_tray_anchor", None) is not None:
@@ -6455,8 +6512,13 @@ class MountletWindow:
             self._hide_locked_file_browser()
         remotes = _load_visible_remotes()
         if not locked and not skip_background:
+            self._request_mount_state_scan(remotes)
+        if not locked and not skip_background:
             self._request_config_sync_metadata_check(remotes)
-        mounted_by_name = {remote.name: core.is_mounted(remote) for remote in remotes}
+        mounted_by_name = {
+            remote.name: bool(getattr(self, "_mount_state_cache", {}).get(remote.name, False))
+            for remote in remotes
+        }
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
@@ -6653,6 +6715,8 @@ class MountletWindow:
 
     def _set_focus_owner(self, owner: str) -> None:
         owner = "browser" if owner == "browser" else "main"
+        if getattr(self, "_focus_owner", "main") == owner:
+            return
         self._focus_owner = owner
         self._update_main_focus_style()
         file_browser = getattr(self, "file_browser", None)
@@ -7220,7 +7284,18 @@ class MountletWindow:
         self.qt.QTimer.singleShot(25, self.refresh)
 
     def _license_locked(self) -> bool:
-        return _license_locked()
+        now = time.monotonic()
+        cached = getattr(self, "_license_locked_cache", None)
+        if cached is not None and now < getattr(self, "_license_locked_cache_until", 0.0):
+            return bool(cached)
+        locked = _license_locked()
+        self._license_locked_cache = locked
+        self._license_locked_cache_until = now + 5.0
+        return locked
+
+    def _invalidate_license_cache(self) -> None:
+        self._license_locked_cache = None
+        self._license_locked_cache_until = 0.0
 
     def _license_locked_banner(self) -> Any:
         label = self.qt.QLabel(_license_lock_message())
@@ -8388,7 +8463,7 @@ class MountletWindow:
             event.accept()
             return
 
-        mounted = core.is_mounted(remote)
+        mounted = bool(getattr(self, "_mount_state_cache", {}).get(remote.name, False))
         pending = remote.name in self._action_pending
         menu = self.qt.QMenu(self.window)
         self._add_context_action(
@@ -8530,12 +8605,36 @@ class MountletWindow:
         if self._license_locked():
             self._show_license_dialog()
             return
+        self._cancel_remote_preview()
         self._show_file_browser_for_remote(remote, row, focus_browser=True)
 
     def _select_browser_remote(self, remote: core.RemoteInfo, row: Any) -> None:
         if self._license_locked():
             return
-        self._show_file_browser_for_remote(remote, row, focus_browser=False)
+        self._set_browser_selected(remote.name)
+        self._pending_browser_remote_name = remote.name
+        timer = getattr(self, "_remote_preview_timer", None)
+        if timer is None:
+            self._flush_remote_preview()
+            return
+        timer.start()
+
+    def _cancel_remote_preview(self) -> None:
+        self._pending_browser_remote_name = ""
+        timer = getattr(self, "_remote_preview_timer", None)
+        if timer is not None:
+            with suppress(Exception):
+                timer.stop()
+
+    def _flush_remote_preview(self) -> None:
+        remote_name = getattr(self, "_pending_browser_remote_name", "")
+        self._pending_browser_remote_name = ""
+        if not remote_name or self._tray_is_quitting() or self._license_locked():
+            return
+        widgets = self._row_widgets.get(remote_name)
+        if widgets is None:
+            return
+        self._show_file_browser_for_remote(widgets.remote, widgets.frame, focus_browser=False)
 
     def _show_file_browser_for_remote_name(self, remote_name: str, *, focus_browser: bool) -> None:
         if self._license_locked():
@@ -8556,9 +8655,22 @@ class MountletWindow:
         self.file_browser.show_remote(remote, row, show_browser=True, focus_browser=focus_browser)
 
     def _set_browser_selected(self, remote_name: str | None) -> None:
-        self._selected_remote_name = remote_name or ""
-        for name, widgets in self._row_widgets.items():
-            widgets.frame.setProperty("browserSelected", name == remote_name)
+        new_name = remote_name or ""
+        old_name = getattr(
+            self,
+            "_browser_selected_name",
+            getattr(self, "_selected_remote_name", ""),
+        )
+        self._browser_selected_name = new_name
+        self._selected_remote_name = new_name
+        for name in {old_name, new_name}:
+            widgets = self._row_widgets.get(name)
+            if widgets is None:
+                continue
+            selected = name == new_name
+            if bool(widgets.frame.property("browserSelected")) == selected:
+                continue
+            widgets.frame.setProperty("browserSelected", selected)
             widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
 
     def _reposition_file_browser(self) -> None:
@@ -8572,10 +8684,15 @@ class MountletWindow:
     def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
         if focused:
             self._set_focus_owner("main")
-            for widgets in self._row_widgets.values():
-                if widgets.frame is not row:
-                    widgets.frame.setProperty("keyboardFocus", False)
-                    widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+            old_name = getattr(self, "_keyboard_remote_name", "")
+            if old_name and old_name != remote.name:
+                old = self._row_widgets.get(old_name)
+                if old is not None:
+                    old.frame.setProperty("keyboardFocus", False)
+                    old.frame.setStyleSheet(self._remote_row_style(old.frame, highlighted=False))
+            self._keyboard_remote_name = remote.name
+        elif getattr(self, "_keyboard_remote_name", "") == remote.name:
+            self._keyboard_remote_name = ""
         row.setProperty("keyboardFocus", focused)
         row.setStyleSheet(self._remote_row_style(row, highlighted=False))
         if focused:
@@ -8720,12 +8837,16 @@ class MountletWindow:
     def _focus_remote_row(self, remote_name: str) -> None:
         self._set_focus_owner("main")
         self._selected_remote_name = remote_name if remote_name in self._row_widgets else ""
-        for widgets in self._row_widgets.values():
-            widgets.frame.setProperty("keyboardFocus", False)
-            widgets.frame.setProperty("hovered", False)
-            widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+        old_name = getattr(self, "_keyboard_remote_name", "")
+        if old_name and old_name != remote_name:
+            old = self._row_widgets.get(old_name)
+            if old is not None:
+                old.frame.setProperty("keyboardFocus", False)
+                old.frame.setProperty("hovered", False)
+                old.frame.setStyleSheet(self._remote_row_style(old.frame, highlighted=False))
         row = self._row_widgets.get(remote_name)
         if row is not None:
+            self._keyboard_remote_name = remote_name
             row.frame.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
             self._ensure_remote_row_visible(row.frame)
 
@@ -8755,13 +8876,17 @@ class MountletWindow:
             self._browse_remote(remote, row.frame)
 
     def _remote_by_name(self, name: str) -> core.RemoteInfo | None:
+        row = getattr(self, "_row_widgets", {}).get(name)
+        if row is not None:
+            return row.remote
         return next((item for item in _load_visible_remotes() if item.name == name), None)
 
     def _toggle_remote_mount(self, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             self._show_license_dialog()
             return
-        action = core.unmount_remote if core.is_mounted(remote) else core.mount_remote
+        mounted = bool(getattr(self, "_mount_state_cache", {}).get(remote.name, False))
+        action = core.unmount_remote if mounted else core.mount_remote
         self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
@@ -9087,6 +9212,9 @@ class MountletWindow:
 
         def worker() -> None:
             success, message = action(remote)
+            if not hasattr(self, "_mount_state_cache"):
+                self._mount_state_cache = {}
+            self._mount_state_cache[remote.name] = core.is_mounted(remote)
             self._bridge.action_finished.emit(remote.name, success, message)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -9867,6 +9995,9 @@ class MountletWindow:
                     self.window.hide()
             _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
             self._rebuild_file_browser_if_layout_changed(old_embedded)
+            file_browser = getattr(self, "file_browser", None)
+            if file_browser is not None:
+                file_browser.apply_app_settings(new_settings)
             new_base, _note = core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
             base_changed = _absolute_path(old_base) != _absolute_path(new_base)
@@ -10078,7 +10209,11 @@ class MountletWindow:
         self._open_child_dialog(dialog, on_accepted)
 
     def _mounted_remote_names(self, remotes: list[core.RemoteInfo]) -> set[str]:
-        return {remote.name for remote in remotes if core.is_mounted(remote)}
+        return {
+            remote.name
+            for remote in remotes
+            if getattr(self, "_mount_state_cache", {}).get(remote.name, False)
+        }
 
     def _remount_changes(
         self,
@@ -10607,7 +10742,10 @@ class MountletWindow:
             return
         if not self._background_rclone_checks_enabled():
             self._usage_cache.setdefault(remote.name, core.StorageUsage("?"))
-            self._connection_cache.setdefault(remote.name, core.is_mounted(remote))
+            self._connection_cache.setdefault(
+                remote.name,
+                bool(getattr(self, "_mount_state_cache", {}).get(remote.name, False)),
+            )
             return
         if remote.name in self._usage_cache and remote.name in self._connection_cache:
             return
@@ -10616,14 +10754,63 @@ class MountletWindow:
         self._usage_pending.add(remote.name)
 
         def worker() -> None:
-            connected, _message = core.check_remote_connection(remote)
-            usage = core.get_storage_usage_details(remote) if connected else core.StorageUsage("?")
+            with self._storage_load_slots:
+                connected, _message = core.check_remote_connection(remote)
+                usage = core.get_storage_usage_details(remote) if connected else core.StorageUsage("?")
             self._bridge.storage_ready.emit(
                 remote.name,
                 SimpleNamespace(usage=usage, connected=connected),
             )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _request_mount_state_scan(
+        self,
+        remotes: list[core.RemoteInfo],
+        *,
+        force: bool = False,
+    ) -> None:
+        if self._tray_is_quitting():
+            return
+        candidates = list(remotes) if force else [
+            remote for remote in remotes if remote.name not in self._mount_state_cache
+        ]
+        if not candidates:
+            return
+        if self._mount_state_scan_running:
+            self._mount_state_scan_requested = True
+            return
+        self._mount_state_scan_running = True
+
+        def worker() -> None:
+            states = {remote.name: core.is_mounted(remote) for remote in candidates}
+            self._bridge.mount_states_ready.emit(states)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_mount_states_ready(self, states: object) -> None:
+        self._mount_state_scan_running = False
+        rerun = self._mount_state_scan_requested
+        self._mount_state_scan_requested = False
+        if self._tray_is_quitting():
+            return
+        changed_names: list[str] = []
+        if isinstance(states, dict):
+            for remote_name, mounted in states.items():
+                value = bool(mounted)
+                if self._mount_state_cache.get(str(remote_name)) != value:
+                    changed_names.append(str(remote_name))
+                self._mount_state_cache[str(remote_name)] = value
+        if changed_names:
+            if self.is_visible():
+                for remote_name in changed_names:
+                    row = self._row_widgets.get(remote_name)
+                    if row is not None:
+                        self._update_remote_row(row.remote, self._mount_state_cache[remote_name])
+                    self._refresh_file_browser_mount_state(remote_name)
+            self.tray_app.rebuild_menus()
+        if rerun:
+            self._request_mount_state_scan(_load_visible_remotes(), force=True)
 
     def _handle_storage_ready(self, remote_name: str, payload: object) -> None:
         if self._tray_is_quitting():
@@ -10640,7 +10827,14 @@ class MountletWindow:
             self._connection_cache = {}
         self._connection_cache[remote_name] = connected
         if self.is_visible():
-            self._request_refresh()
+            row = self._row_widgets.get(remote_name)
+            if row is not None:
+                self._update_remote_row(
+                    row.remote,
+                    bool(self._mount_state_cache.get(remote_name, False)),
+                )
+            elif self._current_remote_names:
+                self._request_refresh()
 
     def prepare_quit(self) -> None:
         self._refresh_pending = False
@@ -10707,7 +10901,7 @@ class MountletTray:
         self.main_window = MountletWindow(self)
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
-        self.timer.timeout.connect(self.rebuild_menus)
+        self.timer.timeout.connect(self._poll_status)
         self.notice_timer = qt.QTimer()
         self.notice_timer.timeout.connect(self._check_notices)
         self._notice_check_pending = False
@@ -10739,6 +10933,8 @@ class MountletTray:
         locked = _license_locked()
         if locked:
             self.main_window.show()
+        else:
+            self.qt.QTimer.singleShot(0, self.main_window.refresh)
 
         self.rebuild_menus()
         self.timer.start(self.refresh_interval * 1000)
@@ -10755,6 +10951,11 @@ class MountletTray:
         interval = load_app_settings().notice_check_interval_seconds
         if interval > 0:
             self.notice_timer.start(int(max(interval, 60.0) * 1000))
+
+    def _poll_status(self) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        self.main_window._request_mount_state_scan(_load_visible_remotes(), force=True)
 
     def _check_notices(self) -> None:
         if getattr(self, "_quitting", False) or getattr(self, "_notice_check_pending", False):
@@ -10846,7 +11047,6 @@ class MountletTray:
         if reason in (activation_reason.Trigger, getattr(activation_reason, "DoubleClick", None)):
             self.main_window.remember_tray_click_anchor(self.qt.QCursor.pos())
             self.main_window.toggle_from_tray()
-            self.qt.QTimer.singleShot(25, self.rebuild_menus)
             return
         manual_context = getattr(self, "_manual_context_menu", getattr(self, "_is_macos", False))
         if manual_context and reason == self.qt.QSystemTrayIcon.ActivationReason.Context:
@@ -10917,7 +11117,8 @@ class MountletTray:
         self.app_menu.clear()
         locked = _license_locked()
         remotes = _load_visible_remotes()
-        mounted_names = [remote.display_name for remote in remotes if core.is_mounted(remote)]
+        mount_states = getattr(self.main_window, "_mount_state_cache", {})
+        mounted_names = [remote.display_name for remote in remotes if mount_states.get(remote.name, False)]
         self.tray.setToolTip(_status_tooltip(remotes, mounted_names))
 
         self._add_action(self.app_menu, "Open Mountlet", self.main_window.show)
@@ -10971,9 +11172,6 @@ class MountletTray:
         self.app_menu.addSeparator()
         self._add_action(self.app_menu, "Quit", self.request_quit)
 
-        if self.main_window.is_visible():
-            self.main_window.refresh()
-
     def _cascade_label(self, label: str) -> str:
         return f"{label}  " if getattr(self, "_pad_cascade_labels", False) else label
 
@@ -11007,7 +11205,7 @@ class MountletTray:
         return False
 
     def _add_remote_menu(self, remote: core.RemoteInfo, menu: Any) -> None:
-        mounted = core.is_mounted(remote)
+        mounted = bool(getattr(self.main_window, "_mount_state_cache", {}).get(remote.name, False))
         submenu = menu.addMenu(_remote_title(remote, mounted))
 
         status = submenu.addAction(f"Path: {remote.mount_path}")
@@ -11023,24 +11221,24 @@ class MountletTray:
         if browser_url:
             self._add_action(submenu, "Open in browser", lambda: self._open_remote_in_browser(remote))
         submenu.addSeparator()
-        backend = self.main_window.file_browser.backend
+        cached_state = self.main_window.file_browser.cached_remote_root_state(remote.name)
         self._add_action(
             submenu,
             "Sync cached files now",
             lambda selected=remote: self.main_window._sync_cached_paths(selected, [("", True)]),
-            enabled=bool(backend.managed_record_paths(remote.name)),
+            enabled=self.main_window.file_browser._remote_has_managed_files(remote.name),
         )
         self._add_action(
             submenu,
             "Remove offline files",
             lambda selected=remote: self.main_window.file_browser.remove_remote_offline_for(selected.name),
-            enabled=backend.has_offline_content(remote.name, "", is_dir=True),
+            enabled=cached_state[1],
         )
         self._add_action(
             submenu,
             "Clear resolved cache",
             lambda selected=remote: self.main_window.file_browser.clear_remote_cache_for(selected.name),
-            enabled=backend.has_temporary_cache_content(remote.name, "", is_dir=True),
+            enabled=cached_state[2],
         )
         submenu.addSeparator()
         self._add_action(submenu, "Settings", lambda: self.main_window._show_mount_config_editor(remote))
@@ -11071,7 +11269,7 @@ class MountletTray:
     def _schedule_auto_mounts(self) -> None:
         if getattr(self, "_quitting", False) or _license_locked():
             return
-        remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount and not core.is_mounted(remote)]
+        remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount]
         if not remotes:
             return
         delay_ms = int(load_app_settings().auto_mount_delay * 1000)

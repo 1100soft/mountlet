@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` inside `app/` first:
 
 ```bash
-VERSION=0.6.2
+VERSION=0.6.3
 python packaging/run_tests.py
 python -m unittest tests.test_tray
 python -m compileall -q src tests packaging
