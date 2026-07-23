@@ -262,15 +262,15 @@ REMOTE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 REMOTE_PROVIDER_STATUSES = {
     "drive": "tested",
-    "gphotos": "untested",
+    "gphotos": "tested",
     "dropbox": "tested",
     "onedrive": "tested",
     "box": "tested",
     "pcloud": "tested",
-    "iclouddrive": "untested",
+    "iclouddrive": "tested",
     "koofr": "tested",
     "protondrive": "tested",
-    "mega": "untested",
+    "mega": "tested",
     "nextcloud": "untested",
     "s3": "partial",
     "webdav": "untested",
@@ -5379,6 +5379,8 @@ class MountletWindow:
         self._action_pending: set[str] = set()
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
+        self._remote_rows_layout: Any | None = None
+        self._remote_order_save_generation = 0
         self._selected_remote_name = ""
         self._name_column_width = 160
         self._refresh_pending = False
@@ -5396,6 +5398,7 @@ class MountletWindow:
         self._purchase_license_button: Any | None = None
         self._license_lock_banner: Any | None = None
         self._license_prompted_for_lock = False
+        self._last_license_locked: bool | None = None
         self._sort_button: Any | None = None
         self._reverse_button: Any | None = None
         self._all_cache_sync_button: Any | None = None
@@ -6457,14 +6460,18 @@ class MountletWindow:
         remote_names = [remote.name for remote in remotes]
         name_width = self._remote_name_width(remotes)
         if self._current_remote_names == remote_names and self._row_widgets:
+            geometry_changed = name_width != getattr(self, "_name_column_width", name_width)
+            lock_changed = locked != getattr(self, "_last_license_locked", locked)
             self._name_column_width = name_width
-            self._update_purchase_license_button()
+            purchase_visibility_changed = self._update_purchase_license_button() is True
             for remote in remotes:
                 self._update_remote_row(remote, mounted_by_name[remote.name])
                 if not locked and not skip_background:
                     self._schedule_storage_load(remote)
             self._update_license_lock_state()
-            self._browser_layout_changed()
+            self._last_license_locked = locked
+            if geometry_changed or lock_changed or purchase_visibility_changed:
+                self._browser_layout_changed()
             self._restore_focus_snapshot(focus_snapshot)
             return
 
@@ -6487,6 +6494,7 @@ class MountletWindow:
         rows.setSpacing(2)
         rows.setAlignment(self.qt.Qt.AlignmentFlag.AlignTop)
         self._row_widgets = {}
+        self._remote_rows_layout = rows
         self._current_remote_names = remote_names
         self._remote_scroll = scroll
         if self._selected_remote_name not in remote_names:
@@ -6526,6 +6534,7 @@ class MountletWindow:
         if not locked:
             self.file_browser.preload(remotes)
         self._update_license_lock_state()
+        self._last_license_locked = locked
         self._fit_to_content(root, scroll, container)
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
         self._update_app_cache_buttons(remotes)
@@ -7036,11 +7045,14 @@ class MountletWindow:
     def _configuration_changed(self) -> None:
         self._update_config_sync_buttons()
 
-    def _update_purchase_license_button(self) -> None:
+    def _update_purchase_license_button(self) -> bool:
         button = getattr(self, "_purchase_license_button", None)
         if button is None:
-            return
-        button.setVisible(license_control.current_status().state != "licensed")
+            return False
+        visible = license_control.current_status().state != "licensed"
+        changed = button.isVisible() != visible
+        button.setVisible(visible)
+        return changed
 
     def _open_purchase_page(self) -> None:
         _open_external_url(
@@ -7875,6 +7887,8 @@ class MountletWindow:
         layout.addWidget(config_button, 0, 4)
         layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
+            remote=remote,
+            remote_signature=self._remote_row_signature(remote),
             frame=frame,
             status_icon=status_icon,
             provider_label=provider_label,
@@ -7920,6 +7934,10 @@ class MountletWindow:
         row = self._row_widgets.get(remote.name)
         if not row:
             return
+        remote_signature = self._remote_row_signature(remote)
+        remote_changed = remote_signature != getattr(row, "remote_signature", None)
+        row.remote = remote
+        row.remote_signature = remote_signature
         usage = self._row_usage(remote, mounted)
         checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
@@ -7927,44 +7945,48 @@ class MountletWindow:
         title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         row.frame.setProperty("mounted", mounted)
-        row.frame.setToolTip(open_tooltip)
-        row.frame.setAcceptDrops(True)
-        row.frame.mouseReleaseEvent = lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
-            event,
-            frame,
-            selected,
-        )
-        row.frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
-        row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
-            frame,
-            highlighted=True,
-            tooltip=tooltip,
-            remote=remote,
-        )
-        row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
-            event, frame, selected
-        )
-        row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
-        row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
-        row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
-            event, frame, selected, focused=True
-        )
-        row.frame.focusOutEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
-            event, frame, selected, focused=False
-        )
-        row.frame.keyPressEvent = lambda event, selected=remote, frame=row.frame: self._handle_remote_row_key(
-            event, selected, frame
-        )
+        if remote_changed:
+            row.frame.setToolTip(open_tooltip)
+            row.frame.setAcceptDrops(True)
+            row.frame.mouseReleaseEvent = (
+                lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
+                    event,
+                    frame,
+                    selected,
+                )
+            )
+            row.frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
+            row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
+                frame,
+                highlighted=True,
+                tooltip=tooltip,
+                remote=remote,
+            )
+            row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
+                event, frame, selected
+            )
+            row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+            row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
+            row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
+                event, frame, selected, focused=True
+            )
+            row.frame.focusOutEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
+                event, frame, selected, focused=False
+            )
+            row.frame.keyPressEvent = lambda event, selected=remote, frame=row.frame: self._handle_remote_row_key(
+                event, selected, frame
+            )
         row.frame.setStyleSheet(self._remote_row_style(row.frame, highlighted=False))
 
-        row.title.setText(self._display_remote_name(remote))
-        row.title.setToolTip(title_tooltip)
+        if remote_changed:
+            row.title.setText(self._display_remote_name(remote))
+            row.title.setToolTip(title_tooltip)
+            row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
+                widget,
+                tooltip,
+            )
+            self._update_provider_label(row.provider_label, remote)
         row.title.setFixedWidth(self._name_column_width)
-        row.title.enterEvent = lambda event, widget=row.title, tooltip=title_tooltip: self._show_immediate_tooltip(
-            widget,
-            tooltip,
-        )
-        self._update_provider_label(row.provider_label, remote)
 
         self._apply_remote_status_icon(row.status_icon, remote, mounted, checking=checking_usage)
         row.usage_indicator.setEnabled(True)
@@ -7972,13 +7994,27 @@ class MountletWindow:
 
         self._set_status_text(row.status, usage, action_pending=action_pending)
         row.config_button.setEnabled(not action_pending)
-        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
-        row.config_button.setToolTip(config_tooltip)
-        row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
-            self._show_immediate_tooltip(widget, tooltip)
-        )
+        if remote_changed:
+            config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
+            row.config_button.setToolTip(config_tooltip)
+            row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
+                self._show_immediate_tooltip(widget, tooltip)
+            )
         self._update_move_button(row.up_button, remote, -1)
         self._update_move_button(row.down_button, remote, 1)
+
+    def _remote_row_signature(self, remote: core.RemoteInfo) -> tuple[object, ...]:
+        return (
+            remote.name,
+            remote.alias,
+            remote.provider,
+            remote.backend_type,
+            remote.mount_path,
+            tuple(remote.flags),
+            tuple(sorted(remote.extra_info.items())),
+            remote.auto_mount,
+            remote.remote_path,
+        )
 
     def _update_provider_label(self, label: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
@@ -8040,7 +8076,7 @@ class MountletWindow:
         return 0 <= target < len(self._current_remote_names)
 
     def _move_remote(self, remote_name: str, delta: int) -> None:
-        names = [remote.name for remote in _load_visible_remotes()]
+        names = list(self._current_remote_names)
         try:
             index = names.index(remote_name)
         except ValueError:
@@ -8048,9 +8084,45 @@ class MountletWindow:
         target = index + delta
         if not 0 <= target < len(names):
             return
+        displaced_name = names[target]
         names[index], names[target] = names[target], names[index]
-        self._save_remote_order(names)
-        self._current_remote_names = []
+        row = self._row_widgets.get(remote_name)
+        layout = self._remote_rows_layout
+        if row is None or layout is None:
+            self._current_remote_names = []
+            self.tray_app.rebuild_menus()
+            return
+
+        layout.removeWidget(row.frame)
+        layout.insertWidget(target, row.frame)
+        self._current_remote_names = names
+        self._update_remote_move_buttons({remote_name, displaced_name})
+        self._ensure_remote_row_visible(row.frame)
+        self._queue_remote_order_save(names)
+
+    def _update_remote_move_buttons(self, remote_names: set[str]) -> None:
+        for remote_name in remote_names:
+            row = self._row_widgets.get(remote_name)
+            if row is None:
+                continue
+            self._update_move_button(row.up_button, row.remote, -1)
+            self._update_move_button(row.down_button, row.remote, 1)
+
+    def _queue_remote_order_save(self, remote_names: list[str]) -> None:
+        self._remote_order_save_generation += 1
+        generation = self._remote_order_save_generation
+        names = list(remote_names)
+        self.qt.QTimer.singleShot(
+            180,
+            lambda: self._save_queued_remote_order(generation, names),
+        )
+
+    def _save_queued_remote_order(self, generation: int, remote_names: list[str]) -> None:
+        if generation != self._remote_order_save_generation:
+            return
+        if remote_names != self._current_remote_names:
+            return
+        self._save_remote_order(remote_names)
         self.tray_app.rebuild_menus()
 
     def _save_remote_order(self, remote_names: list[str]) -> None:

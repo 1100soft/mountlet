@@ -184,10 +184,12 @@ Locally tested:
 - Cloudflare R2
 - Koofr
 - Proton Drive
+- Google Photos
+- iCloud Drive and iCloud Photos
+- MEGA
 
 Available but untested:
 
-- MEGA
 - Nextcloud through its guided WebDAV setup
 - Amazon S3
 - MinIO and other S3-compatible storage
