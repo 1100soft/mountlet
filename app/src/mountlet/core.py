@@ -578,6 +578,16 @@ def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, inter
     return False
 
 
+def _rollback_failed_mount(remote: RemoteInfo) -> None:
+    """Return a failed mount attempt to a known unmounted, clean state."""
+    if is_mounted(remote):
+        result = PLATFORM.unmount(remote.mount_path)
+        if result.success:
+            wait_for(remote, False, timeout=2.0)
+    if not is_mounted(remote):
+        _cleanup_mount_dir(remote.mount_path)
+
+
 def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
     rclone_log.append_raw(f"$ {shlex.join(args)}\n")
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as error_output:
@@ -611,6 +621,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
             exit_code = proc.poll()
 
         PIDS.pop(remote.name, None)
+        _rollback_failed_mount(remote)
         error_output.seek(0)
         detail = error_output.read().strip()
         if detail:
@@ -729,8 +740,11 @@ def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
 
 def refresh_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if is_mounted(remote):
-        unmount_remote(remote)
-        wait_for(remote, False)
+        success, message = unmount_remote(remote)
+        if not success:
+            return False, message
+        if not wait_for(remote, False):
+            return False, f"[!] {remote.name} did not finish unmounting. Mount was not restarted."
         time.sleep(0.5)
     return mount_remote(remote)
 

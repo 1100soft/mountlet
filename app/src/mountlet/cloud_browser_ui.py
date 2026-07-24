@@ -3671,10 +3671,10 @@ class CompactCloudBrowser:
             self.backend.remember_path(self.remote.name, self.path)
             self.refresh()
             return
-        if self._remote_is_mounted(self.remote):
-            local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
-            self._open_local_file(local)
-            return
+        # Files opened from Mountlet always use the managed cache. A FUSE path
+        # can disappear while an external editor still has it open, and native
+        # Google documents are exported by rclone but are not represented
+        # reliably by every FUSE/filesystem combination.
         self._open_cached_file(entry)
 
     def _open_cached_file(self, entry: BrowserEntry) -> None:

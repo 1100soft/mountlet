@@ -230,7 +230,7 @@ type = dropbox
                         success, message = core.mount_remote(remote)
 
             self.assertFalse(success)
-            self.assertIn("is not empty", message)
+            self.assertIn("contains local files", message)
             launch.assert_not_called()
 
     def test_launch_mount_process_preserves_complete_rclone_error(self):
@@ -259,6 +259,29 @@ type = dropbox
             self.assertIn("first diagnostic line", message)
             self.assertIn("final diagnostic line", message)
             self.assertGreaterEqual(append_raw.call_count, 2)
+
+    def test_launch_mount_process_rolls_back_a_late_partial_mount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            process = mock.Mock(pid=42)
+            process.poll.return_value = 1
+            unmount_result = mock.Mock(success=True)
+
+            with mock.patch.object(core.subprocess, "Popen", return_value=process):
+                with mock.patch.object(core, "wait_for", return_value=False):
+                    with mock.patch.object(core, "is_mounted", side_effect=(True, False)):
+                        with mock.patch.object(core.PLATFORM, "unmount", return_value=unmount_result) as unmount:
+                            with mock.patch.object(core, "_cleanup_mount_dir") as cleanup:
+                                success, _message = core._launch_mount_process(
+                                    remote,
+                                    ["rclone", "mount"],
+                                    wait_timeout=0,
+                                )
+
+            self.assertFalse(success)
+            unmount.assert_called_once_with(remote.mount_path)
+            cleanup.assert_called_once_with(remote.mount_path)
 
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -719,7 +742,7 @@ client_secret = work-secret
             self.assertTrue(success)
             self.assertEqual(run.call_args.args[0][:2], ["/usr/bin/fusermount3", "-u"])
 
-    def test_unmount_remote_falls_back_to_lazy_unmount(self):
+    def test_unmount_remote_does_not_fall_back_to_lazy_unmount(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
             remote = core.load_remotes()[0]
@@ -731,13 +754,27 @@ client_secret = work-secret
                 with mock.patch.object(core.subprocess, "run") as run:
                     run.side_effect = [
                         mock.Mock(returncode=1),
-                        mock.Mock(returncode=0),
                     ]
-                    success, _ = core.unmount_remote(remote)
+                    success, message = core.unmount_remote(remote)
 
-            self.assertTrue(success)
+            self.assertFalse(success)
+            self.assertIn("Close files or folders", message)
             self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/fusermount3", "-u", remote.mount_path])
-            self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/fusermount3", "-uz", remote.mount_path])
+            self.assertEqual(run.call_count, 1)
+
+    def test_refresh_remote_does_not_mount_after_unmount_failure(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "is_mounted", return_value=True):
+                with mock.patch.object(core, "unmount_remote", return_value=(False, "mount is busy")):
+                    with mock.patch.object(core, "mount_remote") as mount:
+                        success, message = core.refresh_remote(remote)
+
+            self.assertFalse(success)
+            self.assertEqual(message, "mount is busy")
+            mount.assert_not_called()
 
 
 if __name__ == "__main__":

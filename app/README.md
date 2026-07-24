@@ -71,13 +71,19 @@ may change for future renewals with advance notice.
 - Select a remote to show its file browser.
 - Type in the main search box to search all indexed remotes.
 - Type in the file-browser search box to search the current remote.
-- Open files directly. If the remote is not mounted, Mountlet downloads a
-  managed local cache copy and opens that file.
+- Open files directly. Mountlet opens a managed local cache copy whether or
+  not the remote is mounted. This also lets rclone export native Google
+  documents for local editing.
 - Use **Make available offline** to protect selected files or folders from cache
   cleanup.
 - Use **Sync now** to check cached/offline files immediately.
 - Enable optional native mounting from the file browser when you want Finder,
   Explorer, Dolphin, or another file manager to see the remote as a folder.
+
+Files opened through a system file manager use the live mounted folder. Close
+them before unmounting. Mountlet refuses a busy unmount rather than detaching a
+path that an editor could later recreate; empty stale directories are cleaned
+before the next mount, while actual local files are never deleted automatically.
 
 Integrated file edits are disabled by default. If enabled, copy, move, upload,
 delete, and drag-and-drop operations are direct cloud operations and are not

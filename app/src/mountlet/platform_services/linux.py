@@ -35,8 +35,8 @@ class LinuxPlatformServices(PlatformServices):
         if not command:
             return ()
         if Path(command).name == "umount":
-            return ([command, path], [command, "-l", path])
-        return ([command, "-u", path], [command, "-uz", path])
+            return ([command, path],)
+        return ([command, "-u", path],)
 
     def autostart_path(self, app_name: str) -> Path:
         config = (

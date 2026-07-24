@@ -121,20 +121,33 @@ class PlatformServices:
             return OperationResult(False, f"Mount folder {path} is not writable.")
         if not self.is_mounted(path):
             try:
+                self.remove_empty_mount_descendants(mountpoint)
                 if any(mountpoint.iterdir()):
                     return OperationResult(
                         False,
-                        f"Mount folder {path} is not empty. Choose an empty folder or move its files first.",
+                        f"Mount folder {path} contains local files, possibly saved after it was unmounted. "
+                        "Move those files elsewhere before mounting so they are not hidden.",
                     )
             except OSError as exc:
                 return OperationResult(False, f"Cannot inspect mount folder {path}: {exc}")
         return OperationResult(True)
 
+    def remove_empty_mount_descendants(self, mountpoint: Path) -> None:
+        """Remove empty real directories below a mount root without touching files."""
+        if not mountpoint.is_dir() or mountpoint.is_symlink():
+            return
+        for child in tuple(mountpoint.iterdir()):
+            if not child.is_dir() or child.is_symlink():
+                continue
+            self.remove_empty_mount_descendants(child)
+            with suppress(OSError):
+                child.rmdir()
+
     def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         command = shutil.which("umount")
         if not command:
             return ()
-        return ([command, path], [command, "-l", path])
+        return ([command, path],)
 
     def terminate_pid(self, pid: int) -> None:
         with suppress(OSError, ProcessLookupError):

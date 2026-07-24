@@ -345,7 +345,49 @@ Categories=Utility;FileManager;
             result = WindowsPlatformServices().prepare_mount_path(str(mountpoint))
 
             self.assertFalse(result.success)
-        self.assertIn("not empty", result.detail)
+        self.assertIn("contains local files", result.detail)
+
+    def test_windows_mountpoint_removes_nested_empty_stale_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            mountpoint = Path(tempdir) / "Mountlet" / "Work"
+            (mountpoint / "stale" / "nested").mkdir(parents=True)
+
+            result = WindowsPlatformServices().prepare_mount_path(str(mountpoint))
+
+            self.assertTrue(result.success)
+            self.assertFalse(mountpoint.exists())
+
+    def test_linux_mountpoint_removes_nested_empty_stale_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            mountpoint = Path(tempdir) / "Mountlet" / "Work"
+            (mountpoint / "stale" / "nested").mkdir(parents=True)
+            platform = LinuxPlatformServices()
+            platform.is_mounted = lambda _path: False
+
+            result = platform.prepare_mount_path(str(mountpoint))
+
+            self.assertTrue(result.success)
+            self.assertTrue(mountpoint.is_dir())
+            self.assertEqual(list(mountpoint.iterdir()), [])
+
+    def test_linux_unmount_does_not_fall_back_to_lazy_detach(self):
+        platform = LinuxPlatformServices()
+
+        with mock.patch("mountlet.platform_services.linux.shutil.which", return_value="/usr/bin/fusermount3"):
+            commands = platform.unmount_commands("/mnt/docs")
+
+        self.assertEqual(commands, (["/usr/bin/fusermount3", "-u", "/mnt/docs"],))
+
+    def test_macos_unmount_does_not_fall_back_to_force(self):
+        platform = MacOSPlatformServices()
+
+        with mock.patch(
+            "mountlet.platform_services.macos.shutil.which",
+            side_effect=lambda name: f"/usr/sbin/{name}",
+        ):
+            commands = platform.unmount_commands("/Users/test/Mountlet/Docs")
+
+        self.assertNotIn("force", [argument for command in commands for argument in command])
 
     def test_windows_mount_detection_uses_nonblocking_volume_api(self):
         platform = WindowsPlatformServices()

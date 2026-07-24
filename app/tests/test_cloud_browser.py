@@ -2914,21 +2914,19 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._display_entries.assert_called_once_with([BrowserEntry("a.txt", "a.txt", False)])
 
-    def test_open_file_prefers_mounted_path_over_offline_copy(self):
+    def test_open_file_uses_managed_cache_when_mounted(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")))
         browser.remote = _remote()
-        browser.backend = mock.Mock()
-        browser.backend.offline_path.return_value = Path("/cache/Docs/a.ods")
-        browser._open_local_file = mock.Mock()
-        browser._notify = mock.Mock()
+        browser._open_cached_file = mock.Mock()
         item = mock.Mock()
-        item.data.return_value = BrowserEntry("a.ods", "Reports/a.ods", False)
+        entry = BrowserEntry("a.ods", "Reports/a.ods", False)
+        item.data.return_value = entry
 
         with mock.patch.object(core, "is_mounted", return_value=True):
             browser._open_item(item)
 
-        browser._open_local_file.assert_called_once_with(Path("/mnt/Docs/Reports/a.ods"))
+        browser._open_cached_file.assert_called_once_with(entry)
 
     def test_open_item_ignores_deleted_qt_item(self):
         class DeletedItem:
