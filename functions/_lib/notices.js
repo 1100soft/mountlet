@@ -2,6 +2,7 @@ import {HttpError} from "./license.js";
 
 export const NOTICE_LEVELS = new Set(["info", "important", "critical"]);
 export const NOTICE_STATUSES = new Set(["draft", "published", "archived"]);
+export const NOTICE_AUDIENCES = new Set(["production", "preview", "local", "all"]);
 
 export async function ensureNoticeSchema(env) {
   if (!env.DB) {
@@ -18,6 +19,7 @@ export async function ensureNoticeSchema(env) {
       url TEXT NOT NULL DEFAULT '',
       starts_at TEXT NOT NULL DEFAULT '',
       ends_at TEXT NOT NULL DEFAULT '',
+      audience TEXT NOT NULL DEFAULT 'preview',
       status TEXT NOT NULL DEFAULT 'draft',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -27,6 +29,19 @@ export async function ensureNoticeSchema(env) {
     CREATE INDEX IF NOT EXISTS idx_notices_status_time
     ON notices(status, starts_at, ends_at)
   `).run();
+  const info = await env.DB.prepare("PRAGMA table_info(notices)").all();
+  const columns = new Set((info.results || []).map((row) => String(row.name || "")));
+  if (!columns.has("audience")) {
+    try {
+      await env.DB.prepare(
+        "ALTER TABLE notices ADD COLUMN audience TEXT NOT NULL DEFAULT 'preview'"
+      ).run();
+    } catch (error) {
+      if (!String(error?.message || error).toLowerCase().includes("duplicate column")) {
+        throw error;
+      }
+    }
+  }
 }
 
 export async function inspectNoticeSchema(env) {
@@ -38,7 +53,7 @@ export async function inspectNoticeSchema(env) {
     const columns = new Set((info.results || []).map((row) => String(row.name || "")));
     const required = [
       "id", "version", "title", "message", "level", "type", "url",
-      "starts_at", "ends_at", "status", "created_at", "updated_at"
+      "starts_at", "ends_at", "audience", "status", "created_at", "updated_at"
     ];
     const missing = required.filter((column) => !columns.has(column));
     return {ok: columns.size > 0 && missing.length === 0, missing};
@@ -63,6 +78,7 @@ export function normalizeNoticeInput(value, {partial = false} = {}) {
   });
   assignString(result, source, "status", {max: 16, fallback: partial ? undefined : "draft"});
   assignString(result, source, "level", {max: 16, fallback: partial ? undefined : "info"});
+  assignString(result, source, "audience", {max: 16, fallback: partial ? undefined : ""});
 
   for (const field of ["title", "message"]) {
     if (Object.hasOwn(result, field) && !result[field]) {
@@ -88,6 +104,12 @@ export function normalizeNoticeInput(value, {partial = false} = {}) {
   if (Object.hasOwn(result, "type")) {
     result.type = result.type.toLowerCase() || "general";
   }
+  if (Object.hasOwn(result, "audience") && result.audience) {
+    result.audience = result.audience.toLowerCase();
+    if (!NOTICE_AUDIENCES.has(result.audience)) {
+      throw new HttpError(400, "audience must be production, preview, local, or all.");
+    }
+  }
   for (const field of ["startsAt", "endsAt"]) {
     if (result[field] && !Number.isFinite(Date.parse(result[field]))) {
       throw new HttpError(400, `${field} must be an ISO date/time.`);
@@ -111,6 +133,7 @@ export function publicNotice(row) {
     url: String(row.url || ""),
     startsAt: String(row.starts_at ?? row.startsAt ?? ""),
     endsAt: String(row.ends_at ?? row.endsAt ?? ""),
+    audience: normalizeNoticeAudience(row.audience, "preview"),
     updatedAt: String(row.updated_at ?? row.updatedAt ?? ""),
     archived: status === "archived" || row.archived === true,
   };
@@ -131,7 +154,7 @@ export function noticeIsActive(notice, now = Date.now()) {
   return (!Number.isFinite(startsAt) || now >= startsAt) && (!Number.isFinite(endsAt) || now <= endsAt);
 }
 
-export async function listPublicNotices(env) {
+export async function listPublicNotices(env, audience = "production") {
   if (!env.DB) {
     return [];
   }
@@ -142,6 +165,7 @@ export async function listPublicNotices(env) {
     ).all();
     return (result.results || [])
       .map(publicNotice)
+      .filter((notice) => notice.audience === "all" || notice.audience === audience)
       .filter((notice) => notice.archived || noticeIsActive(notice));
   } catch (error) {
     if (String(error?.message || error).toLowerCase().includes("no such table")) {
@@ -149,6 +173,36 @@ export async function listPublicNotices(env) {
     }
     throw error;
   }
+}
+
+export function noticeAudience(request, fallback = "production") {
+  let hostname = "";
+  try {
+    hostname = new URL(request?.url || "").hostname.toLowerCase();
+  } catch (_error) {
+    hostname = "";
+  }
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
+    return "local";
+  }
+  if (hostname === "wip.mountlet.pages.dev" || hostname.includes("preview")) {
+    return "preview";
+  }
+  return normalizeNoticeAudience(fallback, "production");
+}
+
+export function requestedNoticeAudience(request) {
+  try {
+    const requested = new URL(request.url).searchParams.get("buildChannel");
+    return normalizeNoticeAudience(requested, noticeAudience(request));
+  } catch (_error) {
+    return noticeAudience(request);
+  }
+}
+
+export function normalizeNoticeAudience(value, fallback = "production") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return NOTICE_AUDIENCES.has(normalized) ? normalized : fallback;
 }
 
 // Retained for callers outside this repository that used the original name.

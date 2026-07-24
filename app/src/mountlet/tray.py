@@ -28,7 +28,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
-from . import __version__, core, license_control, notice_control, rclone_wizard, report_control
+from . import __version__, build_info, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
 from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
@@ -1128,9 +1128,14 @@ def _qt_about_line(qt: SimpleNamespace) -> str:
 
 
 def _about_text(qt: SimpleNamespace) -> str:
-    return "\n".join(
+    lines = [
+        f"Mountlet: {__version__}",
+    ]
+    build_label = build_info.visible_label()
+    if build_label:
+        lines.append(f"Build: {build_label}")
+    lines.extend(
         [
-            f"Mountlet: {__version__}",
             f"License: {license_control.status_summary()}",
             f"Python: {platform.python_version()}",
             _qt_about_line(qt),
@@ -1141,6 +1146,7 @@ def _about_text(qt: SimpleNamespace) -> str:
             f"Mount folder: {core.BASE_MOUNT_DIR}",
         ]
     )
+    return "\n".join(lines)
 
 
 def _popup_position(
@@ -5459,7 +5465,8 @@ class MountletWindow:
         self._bridge.local_cache_scan_ready.connect(self._handle_local_cache_scan_ready)
         self._bridge.mount_states_ready.connect(self._handle_mount_states_ready)
         self.window = self._make_main_window()
-        self.window.setWindowTitle("Mountlet")
+        build_label = build_info.visible_label()
+        self.window.setWindowTitle(f"Mountlet - {build_label}" if build_label else "Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self.file_browser = self._create_file_browser()
         self._storage_load_slots = threading.BoundedSemaphore(2)
@@ -7758,6 +7765,26 @@ class MountletWindow:
         self._reverse_button = reverse_button
 
         layout.addWidget(drag_handle)
+        build_label = build_info.visible_label()
+        if build_label:
+            channel = build_info.channel()
+            status = self.qt.QLabel(build_label)
+            status.setObjectName("buildStatus")
+            status.setToolTip(
+                f"Build channel: {channel}\nBuild identifier: {build_info.identifier()}\n"
+                f"Public version: {__version__}"
+            )
+            if channel == "preview":
+                status.setStyleSheet(
+                    "QLabel#buildStatus { color: #111827; background: #fbbf24; "
+                    "border: 1px solid #d97706; padding: 3px 6px; border-radius: 3px; }"
+                )
+            else:
+                status.setStyleSheet(
+                    "QLabel#buildStatus { color: #ffffff; background: #2563eb; "
+                    "border: 1px solid #1d4ed8; padding: 3px 6px; border-radius: 3px; }"
+                )
+            layout.addWidget(status)
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
@@ -10890,7 +10917,8 @@ class MountletTray:
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
-        self.tray.setToolTip("Mountlet")
+        build_label = build_info.visible_label()
+        self.tray.setToolTip(f"Mountlet\n{build_label}" if build_label else "Mountlet")
         if not self._manual_context_menu:
             self.tray.setContextMenu(self.app_menu)
         self.tray.show()

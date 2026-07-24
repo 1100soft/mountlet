@@ -1,9 +1,15 @@
 import {jsonResponse} from "../_lib/license.js";
-import {listPublicNotices, noticeIsActive, publicNotice} from "../_lib/notices.js";
+import {
+  listPublicNotices,
+  noticeIsActive,
+  publicNotice,
+  requestedNoticeAudience,
+} from "../_lib/notices.js";
 
-export async function onRequestGet({env}) {
-  const stored = await listPublicNotices(env);
-  const configured = configuredNotices(env);
+export async function onRequestGet({request, env}) {
+  const audience = requestedNoticeAudience(request);
+  const stored = await listPublicNotices(env, audience);
+  const configured = configuredNotices(env, audience);
   const merged = new Map();
   for (const notice of [...configured, ...stored]) {
     const current = merged.get(notice.id);
@@ -13,6 +19,7 @@ export async function onRequestGet({env}) {
   }
   return jsonResponse({
     ok: true,
+    audience,
     notices: [...merged.values()].sort((left, right) => {
       const lifecycle = Number(Boolean(left.archived)) - Number(Boolean(right.archived));
       return lifecycle || String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
@@ -20,7 +27,7 @@ export async function onRequestGet({env}) {
   });
 }
 
-function configuredNotices(env) {
+function configuredNotices(env, audience) {
   const text = String(env.MOUNTLET_NOTICES_JSON || env.NOTICES_JSON || "").trim();
   if (!text) {
     return [];
@@ -31,8 +38,9 @@ function configuredNotices(env) {
     return (Array.isArray(values) ? values : [])
       .filter((notice) => notice && typeof notice === "object")
       .filter((notice) => String(notice.status || "published").toLowerCase() !== "draft")
-      .map((notice) => publicNotice(notice))
+      .map((notice) => publicNotice({...notice, audience: notice.audience || audience}))
       .filter((notice) => notice.id && notice.title && notice.message)
+      .filter((notice) => notice.audience === "all" || notice.audience === audience)
       .filter((notice) => notice.archived || noticeIsActive(notice));
   } catch (_error) {
     return [];

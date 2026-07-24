@@ -11,11 +11,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from . import build_info
 from .config_tools.shared import app_state_dir, apply_permissions
 from .license_control import license_site_url
 
@@ -44,16 +44,7 @@ def report_api_url(*, site_url: str | None = None) -> str:
 
 
 def _packaged_report_api_url() -> str:
-    try:
-        resource = files("mountlet").joinpath("mountlet-build-info.json")
-        if not resource.is_file():
-            return ""
-        data = json.loads(resource.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-    if not isinstance(data, dict):
-        return ""
-    return str(data.get("reportApiUrl") or "").strip()
+    return str(build_info.data().get("reportApiUrl") or "").strip()
 
 
 def runtime_log_path() -> Path:
@@ -152,6 +143,8 @@ def report_payload(
         "contact": contact.strip()[:240],
         "metadata": {
             "appVersion": __version__,
+            "buildChannel": build_info.channel(),
+            "buildId": build_info.identifier(),
             "platform": platform.platform(),
             "python": platform.python_version(),
             "node": platform.node() or socket.gethostname(),

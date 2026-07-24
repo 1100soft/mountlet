@@ -216,6 +216,13 @@ syncing the complete Mountlet config bundle.
 - Publish native desktop packages through GitHub Releases. Keep unsigned builds
   clearly labeled until Windows code signing and Apple Developer ID
   notarization are configured.
+
+Native packages embed a build channel and build identifier separately from the
+public version. `main` and version tags produce production builds; `wip`
+produces preview builds; other local packaging runs produce local builds.
+Preview and local builds expose that identity in the main toolbar, window
+title, tray tooltip, and About dialog. Keep notice endpoints and local notice
+history channel-specific so preview messages cannot appear in production.
 - Build the desktop app as the first commercial product layer.
 - Evaluate `.deb`, AppImage, Windows installer, and macOS DMG distribution after
   the standalone bundles are stable.

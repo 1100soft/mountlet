@@ -13,6 +13,7 @@
     "web:release:check": "node web/tools/check-release-files.mjs",
     "web:license:smoke": "node web/tools/test-license-flow.mjs",
     "web:notices": "node web/tools/manage-notices.mjs",
+    "web:notices:test": "node web/tools/test-notice-audiences.mjs",
     "docs:vars": "node web/tools/update-doc-vars.mjs"
   },
   "devDependencies": {

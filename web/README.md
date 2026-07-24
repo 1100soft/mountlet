@@ -335,7 +335,8 @@ Manage notices without editing Cloudflare variables or redeploying:
 LICENSE_ADMIN_TOKEN=... npm run web:notices -- list --site https://<site>
 LICENSE_ADMIN_TOKEN=... npm run web:notices -- create --site https://<site> \
   --id maintenance-2026-08 --title "Maintenance" \
-  --message "Cloud sync may be briefly unavailable." --level important --publish
+  --message "Cloud sync may be briefly unavailable." --level important \
+  --audience production --publish
 LICENSE_ADMIN_TOKEN=... npm run web:notices -- update maintenance-2026-08 \
   --site https://<site> --message "Maintenance is complete."
 LICENSE_ADMIN_TOKEN=... npm run web:notices -- archive maintenance-2026-08 --site https://<site>
@@ -345,6 +346,13 @@ Editing increments the notice version, so clients see the revision as unread.
 Published notices must be archived before deletion, and critical/price notices
 cannot be hard-deleted. `MOUNTLET_NOTICES_JSON` remains a read-only emergency
 fallback.
+
+Notice audiences are `production`, `preview`, `local`, and `all`. New notices
+default to the environment whose admin endpoint receives the request. Use
+`--audience all` only for messages intended for every build channel. Legacy
+rows created before audience support are treated as preview notices so test
+content cannot leak into production. The app stores notification history
+separately for each channel.
 
 Production and preview deployments can use different bindings and secrets.
 Use production D1/R2 plus live Stripe keys for the production environment, and
