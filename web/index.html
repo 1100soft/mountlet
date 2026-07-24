@@ -262,66 +262,190 @@
       </section>
 
       <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>
-        <div>
+        <div class="panel-heading feature-heading">
           <p class="eyebrow">Features</p>
-          <h2>Most daily cloud work, without provider hopping.</h2>
-          <p>
-            Keep many accounts close at hand, open files through your normal apps, and decide
-            which files stay available when the network is not.
+          <h2>Every cloud account, one responsive workspace.</h2>
+          <p class="lede">
+            Mountlet keeps accounts from different providers together, then gives you two
+            complementary ways to work: a fully managed file browser and optional native folders.
           </p>
         </div>
-        <div class="feature-list">
+
+        <section class="shared-feature-band" aria-labelledby="shared-feature-title">
+          <div class="section-kicker">
+            <span>Shared core</span>
+            <h3 id="shared-feature-title">The same strengths with or without mounting</h3>
+          </div>
+          <div class="shared-feature-grid">
+            <article>
+              <strong>Unified</strong>
+              <p>See personal, work, archive, and project accounts from many providers in one compact list.</p>
+            </article>
+            <article>
+              <strong>Responsive</strong>
+              <p>Persistent metadata indexing and smart folder caching keep navigation and search fast.</p>
+            </article>
+            <article>
+              <strong>Searchable</strong>
+              <p>Search every indexed remote at once, or narrow results to the account you are browsing.</p>
+            </article>
+            <article>
+              <strong>Portable</strong>
+              <p>Move account setup and preferences between devices with encrypted config bundles.</p>
+            </article>
+          </div>
+        </section>
+
+        <div class="mode-intro">
+          <p class="eyebrow">Choose the access path</p>
+          <h3>Work entirely in Mountlet, or add native folders when they help.</h3>
+          <p>Mounting adds another route to the same remote. It does not disable Mountlet’s managed browser.</p>
+        </div>
+        <div class="mode-branch-grid">
+          <article class="mode-branch managed">
+            <img src="assets/mode-managed.svg" alt="" />
+            <div>
+              <span class="mode-label">Without a mount</span>
+              <h3>Managed in Mountlet</h3>
+              <p>Browse, open, upload, copy, move, rename, and delete through the integrated file browser. No FUSE, WinFsp, or macFUSE is required.</p>
+              <ul>
+                <li>Files open through a managed local cache in their normal desktop apps.</li>
+                <li>Selected files and folders can remain available offline.</li>
+                <li>Local edits upload automatically when the cloud copy is unchanged.</li>
+                <li>If both copies changed, Mountlet offers simple version choices.</li>
+              </ul>
+            </div>
+          </article>
+          <article class="mode-branch mounted">
+            <img src="assets/mode-mounted.svg" alt="" />
+            <div>
+              <span class="mode-label">With a mount</span>
+              <h3>Native folder access</h3>
+              <p>Expose a remote as an ordinary folder for Finder, Explorer, Dolphin, command-line tools, and other desktop software.</p>
+              <ul>
+                <li>Use familiar file-manager features and existing application workflows.</li>
+                <li>Keep Mountlet’s integrated browser available alongside the native folder.</li>
+                <li>Choose mounting per remote instead of committing every account to one mode.</li>
+                <li>Install the platform filesystem driver only when you want this route.</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+
+        <div class="feature-list feature-details">
           <details open>
-            <summary>Accounts</summary>
-            <p>Add and switch between many cloud accounts from different providers. Keep work, personal, archive, and project storage visible in one compact place.</p>
+            <summary>File operations</summary>
+            <p>Transfer files within an account or between providers, drag files in from the desktop, and queue offline downloads without waiting for a native mount.</p>
           </details>
           <details>
-            <summary>Files</summary>
-            <p>Browse cloud folders directly inside Mountlet, open files with the apps already configured on the computer, and drag files into cloud folders without first mounting the remote.</p>
+            <summary>Offline control</summary>
+            <p>Temporary cache and protected offline copies are tracked separately. Clear resolved cache globally or per item without removing files explicitly kept offline.</p>
           </details>
           <details>
-            <summary>Offline</summary>
-            <p>Keep selected files or folders available locally. Mountlet separates ordinary temporary cache from protected offline copies, so cleanup does not remove files you chose to keep.</p>
+            <summary>Account overview</summary>
+            <p>See reachability, mount state, storage usage where providers expose it, and direct links to provider web interfaces from the remote list.</p>
           </details>
           <details>
-            <summary>Sync</summary>
-            <p>When cached or offline files change locally, Mountlet can upload the edit if the cloud copy has not changed. If both sides changed, it asks which version to keep.</p>
-          </details>
-          <details>
-            <summary>Mount</summary>
-            <p>Mount cloud accounts as ordinary folders for Finder, Explorer, Dolphin, and other file managers when the platform filesystem driver is installed.</p>
-          </details>
-          <details>
-            <summary>Move</summary>
-            <p>Use encrypted config bundles to move cloud account settings between your own devices. Mountlet can also watch a chosen cloud path for newer config bundles.</p>
+            <summary>Keyboard workflow</summary>
+            <p>Navigate remotes, search results, folders, and file actions with configurable shortcuts designed for quick repeated use.</p>
           </details>
         </div>
       </section>
 
-      <section class="tab-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
+      <section class="tab-panel how-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
         <div class="panel-heading">
           <p class="eyebrow">How it works</p>
-          <h2>A friendly desktop layer over a proven cloud engine.</h2>
-          <p>
-            Mountlet uses rclone under the hood. rclone is the access layer that knows how
-            to talk to many cloud providers. Mountlet adds the desktop interface, file browser,
-            cache handling, setup helpers, and optional native mounting controls.
+          <h2>One cloud engine, two access routes.</h2>
+          <p class="lede">
+            Mountlet uses rclone as the provider access layer, then adds the responsive desktop
+            interface, metadata index, managed cache, search, setup, and mounting controls.
           </p>
         </div>
-        <div class="info-grid">
+
+        <div class="workflow-map" aria-label="Cloud providers connect through Mountlet to managed and mounted access routes">
+          <div class="workflow-stage provider-stage">
+            <span class="workflow-step">1</span>
+            <h3>Your providers</h3>
+            <div class="workflow-provider-icons" aria-hidden="true">
+              <img src="assets/providers/google-drive.png" alt="" />
+              <img src="assets/providers/dropbox.svg" alt="" />
+              <img src="assets/providers/onedrive.svg" alt="" />
+              <img src="assets/providers/icloud.svg" alt="" />
+              <img src="assets/providers/mega.svg" alt="" />
+            </div>
+            <p>Different services and multiple accounts.</p>
+          </div>
+          <span class="workflow-arrow" aria-hidden="true">→</span>
+          <div class="workflow-stage engine-stage">
+            <span class="workflow-step">2</span>
+            <img class="workflow-mountlet-icon" src="assets/mountlet-icon.png" alt="" />
+            <h3>Mountlet + rclone</h3>
+            <p>Authentication, metadata, search, cache, operations, and status in one place.</p>
+          </div>
+          <span class="workflow-arrow workflow-split" aria-hidden="true">↗<br />↘</span>
+          <div class="workflow-routes">
+            <div class="workflow-route">
+              <strong>Managed route</strong>
+              <span>Always available</span>
+            </div>
+            <div class="workflow-route">
+              <strong>Mounted route</strong>
+              <span>Optional native folder</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="access-explanation">
           <article>
-            <h3>Bundled build</h3>
-            <p>Includes an app-local rclone. This is the easiest choice for most people and does not replace a system rclone. On macOS it uses the official rclone binary for folder mounting.</p>
+            <p class="eyebrow">Integrated browser</p>
+            <h3>Mountlet manages the local copy</h3>
+            <p>Files launched from Mountlet always use its cache, even when the remote is mounted. Mountlet can therefore detect local edits, compare the cloud state, upload safe changes, and ask before resolving a conflict.</p>
           </article>
           <article>
-            <h3>Lean build</h3>
-            <p>Uses rclone already installed on the computer. This is lighter for technical users, admins, and managed machines.</p>
-          </article>
-          <article>
-            <h3>Native mounting</h3>
-            <p>Install FUSE, WinFsp, or macFUSE to make cloud accounts appear as ordinary folders in your system file manager.</p>
+            <p class="eyebrow">System file manager</p>
+            <h3>The native mount is direct</h3>
+            <p>Files opened through Finder, Explorer, Dolphin, terminals, or other apps read and write the live rclone mount. Those edits bypass Mountlet’s cache and conflict resolver; handling is left to rclone and the provider backend. Close mounted files before unmounting.</p>
           </article>
         </div>
+
+        <section class="build-explanation" aria-labelledby="build-title">
+          <div>
+            <p class="eyebrow">Installation</p>
+            <h3 id="build-title">The normal build is self-contained.</h3>
+          </div>
+          <p><strong>Recommended build:</strong> includes an app-local rclone and does not replace a system installation.</p>
+          <p><strong>Lean build:</strong> uses rclone already installed on the computer for technical users and managed environments.</p>
+        </section>
+
+        <section class="provider-section" aria-labelledby="provider-title">
+          <div class="provider-section-heading">
+            <div>
+              <p class="eyebrow">Providers</p>
+              <h3 id="provider-title">Guided setup for major cloud services</h3>
+            </div>
+            <div class="provider-legend" aria-label="Provider test status">
+              <span><i class="tested"></i>Locally tested</span>
+              <span><i class="available"></i>Available, less tested</span>
+            </div>
+          </div>
+          <div class="provider-grid">
+            <article><img src="assets/providers/google-drive.png" alt="" /><span><strong>Google Drive</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/google-photos.svg" alt="" /><span><strong>Google Photos</strong><small class="tested">Tested, limited by Google</small></span></article>
+            <article><img src="assets/providers/dropbox.svg" alt="" /><span><strong>Dropbox</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/onedrive.svg" alt="" /><span><strong>OneDrive</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/box.svg" alt="" /><span><strong>Box</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/pcloud.png" alt="" /><span><strong>pCloud</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/icloud.svg" alt="" /><span><strong>iCloud</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/koofr.png" alt="" /><span><strong>Koofr</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/proton-drive.svg" alt="" /><span><strong>Proton Drive</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/mega.svg" alt="" /><span><strong>MEGA</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/cloudflare-r2.svg" alt="" /><span><strong>Cloudflare R2</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/nextcloud.svg" alt="" /><span><strong>Nextcloud</strong><small class="available">Guided setup</small></span></article>
+            <article><img src="assets/providers/amazon-s3.svg" alt="" /><span><strong>S3-compatible</strong><small class="available">AWS, MinIO, Wasabi, and more</small></span></article>
+            <article><span class="provider-fallback">W</span><span><strong>WebDAV</strong><small class="available">Guided and terminal setup</small></span></article>
+          </div>
+          <p class="note">Other rclone backends remain available through the terminal setup fallback. Provider capabilities and quota reporting vary.</p>
+        </section>
       </section>
 
       <section class="tab-panel" id="panel-platforms" role="tabpanel" aria-labelledby="tab-platforms" data-panel="platforms" hidden>
@@ -378,6 +502,10 @@
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
           <p>Mountlet's integrated file browser works without them. Add the platform filesystem driver when you want Mountlet to mount cloud accounts as ordinary folders too.</p>
+        </details>
+        <details>
+          <summary>How are edits handled when a remote is mounted?</summary>
+          <p>Files opened from Mountlet still use its managed cache and conflict checks. Files opened from the mounted folder in Finder, Explorer, Dolphin, terminals, or other apps use the live rclone mount directly and bypass Mountlet's conflict resolver. Close those files before unmounting.</p>
         </details>
         <details>
           <summary>What is rclone?</summary>
