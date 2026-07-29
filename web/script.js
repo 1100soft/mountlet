@@ -502,6 +502,15 @@ function normalizeTabName(value) {
   return String(value || "").replace(/^#/, "") || "home";
 }
 
+function resetTabScroll() {
+  const pageFrame = document.querySelector(".page-frame");
+  if (pageFrame) {
+    pageFrame.scrollTop = 0;
+    pageFrame.scrollLeft = 0;
+  }
+  window.scrollTo(0, 0);
+}
+
 function setActiveTab(nextTab, options = {}) {
   const tabName = normalizeTabName(nextTab);
   const panel = document.querySelector(`[data-panel="${tabName}"]`);
@@ -509,6 +518,9 @@ function setActiveTab(nextTab, options = {}) {
     setActiveTab("home", options);
     return;
   }
+
+  const activePanel = document.querySelector("[data-panel].active");
+  const tabChanged = activePanel !== panel;
 
   document.querySelectorAll("[data-panel]").forEach((candidate) => {
     const isActive = candidate === panel;
@@ -528,6 +540,10 @@ function setActiveTab(nextTab, options = {}) {
     if (window.location.hash !== nextHash) {
       window.history.pushState(null, "", nextHash);
     }
+  }
+
+  if (tabChanged && options.resetScroll !== false) {
+    resetTabScroll();
   }
 
   if (tabName === "notifications") {
