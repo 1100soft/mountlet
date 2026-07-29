@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 220" role="img" aria-labelledby="title desc">
+  <title id="title">Mounted cloud folder access</title>
+  <desc id="desc">Cloud storage is mounted as a native folder used directly by desktop applications.</desc>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M82 68H49a28 28 0 0 1-2-56 42 42 0 0 1 79 16 24 24 0 0 1-4 47H82Z" fill="#dbeafe" stroke="#3387c8" stroke-width="5"/>
+    <path d="M126 54h50c22 0 38 16 38 38v19" stroke="#3387c8" stroke-width="6"/>
+    <path d="m203 101 11 12 11-12" stroke="#3387c8" stroke-width="6"/>
+    <path d="M124 123h77l14 15h87a10 10 0 0 1 10 10v44H124Z" fill="#fef3c7" stroke="#d49a25" stroke-width="5"/>
+    <path d="M124 148h188l-18 53H142Z" fill="#fde68a" stroke="#d49a25" stroke-width="5"/>
+    <path d="M218 170h-47M236 170h25M278 170h14" stroke="#9a6b19" stroke-width="5"/>
+    <rect x="256" y="19" width="80" height="76" rx="10" fill="#eef2f7" stroke="#64748b" stroke-width="5"/>
+    <path d="M273 37h46v39h-46zM273 48h46" stroke="#4b647d" stroke-width="4"/>
+    <path d="M297 95v21" stroke="#64748b" stroke-width="6"/>
+    <path d="m286 107 11 12 11-12" stroke="#64748b" stroke-width="6"/>
+  </g>
+</svg>
