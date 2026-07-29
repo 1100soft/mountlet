@@ -1,9 +1,9 @@
 # Mountlet
 
-Mountlet manages many cloud storage accounts from one desktop app. It can browse
-files without mounting, open cloud files in local apps, keep selected files
-available offline, sync safe local edits back to the cloud, search across
-remotes, and optionally mount remotes as native folders.
+Mountlet manages many cloud storage accounts from one desktop app. It provides
+two complete file-management workflows: an integrated browser with managed
+cache, offline files, and conflict checks; and mounted folders for Finder,
+Explorer, Dolphin, command-line tools, and other desktop apps.
 
 <!-- mountlet-vars:start -->
 - Paid downloads and license purchases: https://mountlet.app
@@ -20,14 +20,30 @@ yourself. The bundled build includes an app-local rclone and is the normal
 choice for most users. The lean build uses an rclone already installed on the
 computer.
 
-Native folder mounting is optional:
+Mounted folder access uses a platform filesystem driver:
 
-- Linux: install FUSE 3 if you want native mounted folders.
-- Windows: install WinFsp if you want native mounted folders.
-- macOS: install macFUSE if you want native mounted folders.
+- Linux: install FUSE 3 from the distribution package manager
+  ([libfuse](https://github.com/libfuse/libfuse)):
 
-Without those filesystem drivers, Mountlet still browses, opens, caches, and
-syncs files through the integrated file browser.
+  ```bash
+  # Debian or Ubuntu
+  sudo apt install fuse3
+
+  # Fedora
+  sudo dnf install fuse3
+
+  # Arch Linux
+  sudo pacman -S fuse3
+  ```
+- Windows: download and run the
+  [WinFsp installer](https://winfsp.dev/rel/).
+- macOS: follow the official
+  [macFUSE installation guide](https://github.com/macfuse/macfuse/wiki/Getting-Started),
+  approve its system software in **System Settings > Privacy & Security** when
+  prompted, and restart when macOS requests it.
+
+Mountlet file management runs through the integrated browser. The two workflows
+operate independently and can be used together, per remote.
 
 ### Unsigned Builds
 
@@ -77,8 +93,8 @@ may change for future renewals with advance notice.
 - Use **Make available offline** to protect selected files or folders from cache
   cleanup.
 - Use **Sync now** to check cached/offline files immediately.
-- Enable optional native mounting from the file browser when you want Finder,
-  Explorer, Dolphin, or another file manager to see the remote as a folder.
+- Mount a remote from the file browser to expose it as a native folder in
+  Finder, Explorer, Dolphin, or another file manager.
 
 Files opened through a system file manager use the live mounted folder. Close
 them before unmounting. Mountlet refuses a busy unmount rather than detaching a

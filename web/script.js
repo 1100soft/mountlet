@@ -794,6 +794,17 @@ document.addEventListener("click", (event) => {
   const tabButton = event.target.closest(".tab-link, .tab-action");
   if (tabButton && tabButton.dataset.tab) {
     setActiveTab(tabButton.dataset.tab);
+    const scrollTarget = tabButton.dataset.scrollTarget;
+    if (scrollTarget) {
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById(scrollTarget);
+        const header = document.querySelector(".site-header");
+        if (target) {
+          target.style.scrollMarginTop = `${Math.ceil((header?.getBoundingClientRect().height || 0) + 16)}px`;
+          target.scrollIntoView({block: "start"});
+        }
+      });
+    }
     return;
   }
 

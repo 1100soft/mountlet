@@ -135,7 +135,7 @@
           </article>
           <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
             <h3>macOS</h3>
-            <p>The recommended build includes Mountlet and the official cloud access engine needed for optional folder mounting.</p>
+            <p>The recommended build includes Mountlet and its official cloud access engine.</p>
             <button class="button full primary download-button" data-download="macos">Download for Apple silicon Mac</button>
             <button class="button full secondary download-button" data-download="macosX64">Download for Intel Mac</button>
             <details>
@@ -157,8 +157,9 @@
           </article>
         </div>
         <p class="note">
-          Mountlet can browse and open files immediately. Add FUSE, WinFsp, or macFUSE
-          to also mount cloud accounts as folders in the system file manager.
+          Both file-management workflows are included. Mountlet manages files directly
+          through its integrated browser; mounted folder access uses
+          <button class="inline-link tab-action" type="button" data-tab="how" data-scroll-target="mount-dependencies">a platform filesystem driver</button>.
           Current beta installers are unsigned and may show an operating-system
           warning. See the <button class="inline-link tab-action" type="button" data-tab="faq">FAQ</button>
           before installing.
@@ -266,48 +267,47 @@
           <p class="eyebrow">Features</p>
           <h2>Every cloud account, one responsive workspace.</h2>
           <p class="lede">
-            Mountlet keeps accounts from different providers together, then gives you two
-            complementary ways to work: a fully managed file browser and optional native folders.
+            Mountlet keeps accounts from different providers together, with two
+            complementary ways to work: a fully managed file browser and native mounting.
           </p>
         </div>
 
         <section class="shared-feature-band" aria-labelledby="shared-feature-title">
           <div class="section-kicker">
-            <span>Shared core</span>
-            <h3 id="shared-feature-title">The same strengths with or without mounting</h3>
+            <span id="shared-feature-title">Core features</span>
           </div>
           <div class="shared-feature-grid">
             <article>
-              <strong>Unified</strong>
-              <p>See personal, work, archive, and project accounts from many providers in one compact list.</p>
+              <strong>Unified ergonomic UI</strong>
+              <p>View files from all accounts across many providers in one integrated interface.</p>
             </article>
             <article>
-              <strong>Responsive</strong>
-              <p>Persistent metadata indexing and smart folder caching keep navigation and search fast.</p>
+              <strong>Seamless navigation</strong>
+              <p>Smart background metadata indexing and caching eliminate network latency, keeping navigation and search fast.</p>
             </article>
             <article>
-              <strong>Searchable</strong>
-              <p>Search every indexed remote at once, or narrow results to the account you are browsing.</p>
+              <strong>Flexible, instant search</strong>
+              <p>Find files instantly from every remote at once, or from a specific remote.</p>
             </article>
             <article>
-              <strong>Portable</strong>
-              <p>Move account setup and preferences between devices with encrypted config bundles.</p>
+              <strong>Portable config</strong>
+              <p>Easily share the app setup and preferences between devices with encrypted config bundles.</p>
             </article>
           </div>
         </section>
 
         <div class="mode-intro">
-          <p class="eyebrow">Choose the access path</p>
-          <h3>Work entirely in Mountlet, or add native folders when they help.</h3>
-          <p>Mounting adds another route to the same remote. It does not disable Mountlet’s managed browser.</p>
+          <p class="eyebrow">Two complete workflows</p>
+          <h3>Manage files in Mountlet and through mounted folders.</h3>
+          <p>Use either workflow for each remote and switch between them at any time.</p>
         </div>
         <div class="mode-branch-grid">
           <article class="mode-branch managed">
             <img src="assets/mode-managed.svg" alt="" />
             <div>
-              <span class="mode-label">Without a mount</span>
-              <h3>Managed in Mountlet</h3>
-              <p>Browse, open, upload, copy, move, rename, and delete through the integrated file browser. No FUSE, WinFsp, or macFUSE is required.</p>
+              <span class="mode-label">Mountlet file browser</span>
+              <h3>Mountlet file management</h3>
+              <p>Browse, open, upload, copy, move, rename, and delete through one interface across every remote.</p>
               <ul>
                 <li>Files open through a managed local cache in their normal desktop apps.</li>
                 <li>Selected files and folders can remain available offline.</li>
@@ -319,14 +319,14 @@
           <article class="mode-branch mounted">
             <img src="assets/mode-mounted.svg" alt="" />
             <div>
-              <span class="mode-label">With a mount</span>
-              <h3>Native folder access</h3>
-              <p>Expose a remote as an ordinary folder for Finder, Explorer, Dolphin, command-line tools, and other desktop software.</p>
+              <span class="mode-label">System file manager</span>
+              <h3>Mounted folder access</h3>
+              <p>Mount any remote as an ordinary folder for Finder, Explorer, Dolphin, command-line tools, and other desktop software.</p>
               <ul>
                 <li>Use familiar file-manager features and existing application workflows.</li>
-                <li>Keep Mountlet’s integrated browser available alongside the native folder.</li>
-                <li>Choose mounting per remote instead of committing every account to one mode.</li>
-                <li>Install the platform filesystem driver only when you want this route.</li>
+                <li>Let desktop apps work with remote files through standard file paths.</li>
+                <li>Mount and unmount each remote independently from Mountlet.</li>
+                <li>Keep Mountlet’s integrated browser available alongside every mounted folder.</li>
               </ul>
             </div>
           </article>
@@ -335,7 +335,7 @@
         <div class="feature-list feature-details">
           <details open>
             <summary>File operations</summary>
-            <p>Transfer files within an account or between providers, drag files in from the desktop, and queue offline downloads without waiting for a native mount.</p>
+            <p>Transfer files within an account or between providers, drag files in from the desktop, and queue offline downloads directly from the integrated browser.</p>
           </details>
           <details>
             <summary>Offline control</summary>
@@ -385,12 +385,12 @@
           <span class="workflow-arrow workflow-split" aria-hidden="true">↗<br />↘</span>
           <div class="workflow-routes">
             <div class="workflow-route">
-              <strong>Managed route</strong>
-              <span>Always available</span>
+              <strong>Mountlet file management</strong>
+              <span>Managed cache, offline files, and conflict checks</span>
             </div>
             <div class="workflow-route">
-              <strong>Mounted route</strong>
-              <span>Optional native folder</span>
+              <strong>Mounted folder access</strong>
+              <span>Native paths for the system and desktop apps</span>
             </div>
           </div>
         </div>
@@ -403,10 +403,53 @@
           </article>
           <article>
             <p class="eyebrow">System file manager</p>
-            <h3>The native mount is direct</h3>
+            <h3>Work through mounted folders</h3>
             <p>Files opened through Finder, Explorer, Dolphin, terminals, or other apps read and write the live rclone mount. Those edits bypass Mountlet’s cache and conflict resolver; handling is left to rclone and the provider backend. Close mounted files before unmounting.</p>
           </article>
         </div>
+
+        <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
+          <div class="mount-dependencies-heading">
+            <p class="eyebrow">Mounted folders</p>
+            <h3 id="mount-dependencies-title">Install the filesystem driver for your platform.</h3>
+            <p>Mountlet detects the driver and enables mounted folder access after installation.</p>
+          </div>
+          <div class="dependency-grid">
+            <article>
+              <img src="assets/platforms/windows.svg" alt="" />
+              <div>
+                <h4>Windows</h4>
+                <p>Download and run the signed WinFsp installer, then restart Mountlet.</p>
+                <a class="external-link" href="https://winfsp.dev/rel/" target="_blank" rel="noopener">Download WinFsp</a>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/macos.svg" alt="" />
+              <div>
+                <h4>macOS</h4>
+                <p>Install macFUSE. Approve its system software in Privacy &amp; Security and restart when macOS requests it.</p>
+                <a class="external-link" href="https://github.com/macfuse/macfuse/wiki/Getting-Started" target="_blank" rel="noopener">Install macFUSE</a>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/linux.svg" alt="" />
+              <div>
+                <h4>Linux</h4>
+                <p>Install FUSE 3 from the distribution package manager, then restart Mountlet.</p>
+                <div class="dependency-commands" aria-label="Common FUSE 3 installation commands">
+                  <code>sudo apt install fuse3</code>
+                  <code>sudo dnf install fuse3</code>
+                  <code>sudo pacman -S fuse3</code>
+                </div>
+                <a class="external-link" href="https://github.com/libfuse/libfuse" target="_blank" rel="noopener">FUSE project</a>
+              </div>
+            </article>
+          </div>
+          <p class="mount-reference">
+            Mountlet configures rclone’s mount automatically.
+            <a class="external-link" href="https://rclone.org/commands/rclone_mount/" target="_blank" rel="noopener">Read the rclone mount documentation</a>
+          </p>
+        </section>
 
         <section class="build-explanation" aria-labelledby="build-title">
           <div>
@@ -460,7 +503,7 @@
           </article>
           <article>
             <h3>Windows</h3>
-            <p>Works with Explorer and WinFsp for optional mounts. Unsigned beta installers can trigger SmartScreen.</p>
+            <p>Manage files in Mountlet or mount them in Explorer with WinFsp. Unsigned beta installers can trigger SmartScreen.</p>
           </article>
           <article>
             <h3>macOS</h3>
@@ -501,7 +544,8 @@
         </details>
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
-          <p>Mountlet's integrated file browser works without them. Add the platform filesystem driver when you want Mountlet to mount cloud accounts as ordinary folders too.</p>
+          <p>They provide mounted folder access: FUSE 3 on Linux, WinFsp on Windows, and macFUSE on macOS. Mountlet file management runs through the integrated browser. Both workflows operate independently and can be used together.</p>
+          <p><button class="inline-link tab-action" type="button" data-tab="how" data-scroll-target="mount-dependencies">See platform installation instructions</button>.</p>
         </details>
         <details>
           <summary>How are edits handled when a remote is mounted?</summary>
