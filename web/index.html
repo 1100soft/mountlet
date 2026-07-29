@@ -41,9 +41,6 @@
         <button class="tab-link" type="button" id="tab-how" role="tab" data-tab="how" aria-controls="panel-how" aria-selected="false">
           How it works
         </button>
-        <button class="tab-link" type="button" id="tab-platforms" role="tab" data-tab="platforms" aria-controls="panel-platforms" aria-selected="false">
-          Platforms
-        </button>
         <button class="tab-link" type="button" id="tab-notifications" role="tab" data-tab="notifications" aria-controls="panel-notifications" aria-selected="false">
           Notifications
         </button>
@@ -62,50 +59,18 @@
           <p class="eyebrow">Home</p>
           <h2>Many accounts, one app.</h2>
           <p class="lede">
-            Mountlet brings Google Drive, Dropbox, OneDrive, iCloud Drive, and other cloud services into one simple desktop app. Browse, open, sync, cache, and organize files without jumping between provider apps and web interfaces.
+            Mountlet brings cloud storage accounts from different providers into one simple desktop app. Browse, open, sync, cache, and organize files without jumping between provider apps and web interfaces.
           </p>
           <div class="hero-actions">
             <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
             <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
           </div>
         </div>
-        <div class="product-shot" aria-label="Mountlet app preview">
-          <div class="tray-card">
-            <div class="window-bar">
-              <span></span>
-              <strong>Mountlet</strong>
-              <span class="pin">⌖</span>
-            </div>
-            <div class="remote-row active">
-              <div>
-                <b>Work</b>
-                <small>Google Drive</small>
-              </div>
-              <span class="usage"><i style="width: 58%"></i></span>
-              <span class="state">Ready</span>
-            </div>
-            <div class="remote-row">
-              <div>
-                <b>Archive</b>
-                <small>Cloudflare R2</small>
-              </div>
-              <span class="usage"><i style="width: 35%"></i></span>
-              <span class="state quiet">Browse</span>
-            </div>
-            <div class="remote-row">
-              <div>
-                <b>Personal</b>
-                <small>Dropbox</small>
-              </div>
-              <span class="usage"><i style="width: 72%"></i></span>
-              <span class="state quiet">Sync</span>
-            </div>
-            <div class="file-panel">
-              <div class="path">Work / Projects / Contracts</div>
-              <div class="file-row"><span class="doc"></span> Agreement.pdf <em>cached</em></div>
-              <div class="file-row"><span class="sheet"></span> Budget.xlsx <em>offline</em></div>
-              <div class="file-row"><span class="folder"></span> Evidence <em>syncing</em></div>
-            </div>
+        <div class="demo-video" aria-label="Mountlet video demonstration placeholder">
+          <div class="demo-video-content">
+            <span class="demo-play" aria-hidden="true"></span>
+            <strong>Video demonstration</strong>
+            <small>Coming soon</small>
           </div>
         </div>
       </section>
@@ -116,6 +81,15 @@
           <h2>Download Mountlet for your desktop.</h2>
         </div>
 
+        <section class="build-explanation" aria-labelledby="build-title">
+          <div>
+            <p class="eyebrow">Builds</p>
+            <h3 id="build-title">Choose the standard or lean build.</h3>
+          </div>
+          <p><strong>Standard build:</strong> includes a current, app-local rclone. It is the recommended choice and does not replace a system installation.</p>
+          <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
+        </section>
+
         <div class="platform-picker" role="tablist" aria-label="Choose platform">
           <button class="platform-choice active" type="button" data-platform="windows" aria-selected="true">Windows</button>
           <button class="platform-choice" type="button" data-platform="macos" aria-selected="false">macOS</button>
@@ -125,41 +99,82 @@
         <div class="download-panels">
           <article class="download-card emphasized platform-panel active" data-platform-panel="windows">
             <h3>Windows</h3>
-            <p>The recommended installer includes Mountlet and the cloud access engine it needs.</p>
+            <p>For Windows 10 and 11 on Intel or AMD 64-bit systems.</p>
             <button class="button full primary download-button" data-download="windows">Download for Windows</button>
             <details>
-              <summary>Advanced lean build</summary>
-              <p>Use this if rclone is already installed and managed separately.</p>
+              <summary>Lean build</summary>
               <button class="button full secondary download-button" data-download="windowsLean">Download lean Windows build</button>
             </details>
           </article>
           <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
             <h3>macOS</h3>
-            <p>The recommended build includes Mountlet and its official cloud access engine.</p>
+            <p>Choose the build matching the Mac processor.</p>
             <button class="button full primary download-button" data-download="macos">Download for Apple silicon Mac</button>
             <button class="button full secondary download-button" data-download="macosX64">Download for Intel Mac</button>
             <details>
-              <summary>Advanced lean build</summary>
-              <p>Use this if rclone is already installed and managed separately. For macOS folder mounting, use the official rclone binary rather than Homebrew rclone.</p>
+              <summary>Lean builds</summary>
+              <p>Mounted folders require the official rclone binary; Homebrew rclone does not support mounting on macOS.</p>
               <button class="button full secondary download-button" data-download="macosLean">Download lean Apple silicon build</button>
               <button class="button full secondary download-button" data-download="macosLeanX64">Download lean Intel build</button>
             </details>
           </article>
           <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
-            <h3>Linux</h3>
-            <p>The recommended package includes Mountlet and its cloud access engine.</p>
-            <button class="button full primary download-button" data-download="linux">Download for Linux</button>
+            <h3>Linux: Debian-based</h3>
+            <p>The current <code>.deb</code> package supports Debian, Ubuntu, Linux Mint, and compatible distributions on x86-64.</p>
+            <button class="button full primary download-button" data-download="linux">Download Debian/Ubuntu package</button>
             <details>
-              <summary>Advanced lean build</summary>
-              <p>Use this if rclone is already installed through your distribution or admin tools.</p>
-              <button class="button full secondary download-button" data-download="linuxLean">Download lean Linux build</button>
+              <summary>Lean Debian-based build</summary>
+              <button class="button full secondary download-button" data-download="linuxLean">Download lean Debian/Ubuntu package</button>
             </details>
+            <div class="future-linux" aria-label="Linux packages under development">
+              <strong>Under development</strong>
+              <span>Fedora and RHEL-compatible <code>.rpm</code></span>
+              <span>Arch Linux package</span>
+              <span>openSUSE package</span>
+            </div>
           </article>
         </div>
+
+        <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
+          <div class="mount-dependencies-heading">
+            <p class="eyebrow">Mounted folders</p>
+            <h3 id="mount-dependencies-title">Install the filesystem driver for your platform.</h3>
+            <p>Mountlet detects the driver and enables mounted folder access after installation.</p>
+          </div>
+          <div class="dependency-grid">
+            <article>
+              <img src="assets/platforms/windows.svg" alt="" />
+              <div>
+                <h4>Windows</h4>
+                <p>Download and run the signed WinFsp installer, then restart Mountlet.</p>
+                <a class="external-link" href="https://winfsp.dev/rel/" target="_blank" rel="noopener">Download WinFsp</a>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/macos.svg" alt="" />
+              <div>
+                <h4>macOS</h4>
+                <p>Install macFUSE. Approve its system software in Privacy &amp; Security and restart when macOS requests it.</p>
+                <a class="external-link" href="https://github.com/macfuse/macfuse/wiki/Getting-Started" target="_blank" rel="noopener">Install macFUSE</a>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/linux.svg" alt="" />
+              <div>
+                <h4>Linux</h4>
+                <p>Install FUSE 3 with the command for the distribution.</p>
+                <div class="dependency-commands" aria-label="Distribution-specific FUSE 3 installation commands">
+                  <span><b>Debian / Ubuntu</b><code>sudo apt install fuse3</code></span>
+                  <span><b>Fedora / RHEL</b><code>sudo dnf install fuse3</code></span>
+                  <span><b>Arch Linux</b><code>sudo pacman -S fuse3</code></span>
+                </div>
+                <a class="external-link" href="https://github.com/libfuse/libfuse" target="_blank" rel="noopener">FUSE project</a>
+              </div>
+            </article>
+          </div>
+        </section>
+
         <p class="note">
-          Both file-management workflows are included. Mountlet manages files directly
-          through its integrated browser; mounted folder access uses
-          <button class="inline-link tab-action" type="button" data-tab="how" data-scroll-target="mount-dependencies">a platform filesystem driver</button>.
           Current beta installers are unsigned and may show an operating-system
           warning. See the <button class="inline-link tab-action" type="button" data-tab="faq">FAQ</button>
           before installing.
@@ -350,120 +365,11 @@
             <p>Navigate remotes, search results, folders, and file actions with configurable shortcuts designed for quick repeated use.</p>
           </details>
         </div>
-      </section>
-
-      <section class="tab-panel how-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
-        <div class="panel-heading">
-          <p class="eyebrow">How it works</p>
-          <h2>One cloud engine, two access routes.</h2>
-          <p class="lede">
-            Mountlet uses rclone as the provider access layer, then adds the responsive desktop
-            interface, metadata index, managed cache, search, setup, and mounting controls.
-          </p>
-        </div>
-
-        <div class="workflow-map" aria-label="Cloud providers connect through Mountlet to managed and mounted access routes">
-          <div class="workflow-stage provider-stage">
-            <span class="workflow-step">1</span>
-            <h3>Your providers</h3>
-            <div class="workflow-provider-icons" aria-hidden="true">
-              <img src="assets/providers/google-drive.png" alt="" />
-              <img src="assets/providers/dropbox.svg" alt="" />
-              <img src="assets/providers/onedrive.svg" alt="" />
-              <img src="assets/providers/icloud.svg" alt="" />
-              <img src="assets/providers/mega.svg" alt="" />
-            </div>
-            <p>Different services and multiple accounts.</p>
-          </div>
-          <span class="workflow-arrow" aria-hidden="true">→</span>
-          <div class="workflow-stage engine-stage">
-            <span class="workflow-step">2</span>
-            <img class="workflow-mountlet-icon" src="assets/mountlet-icon.png" alt="" />
-            <h3>Mountlet + rclone</h3>
-            <p>Authentication, metadata, search, cache, operations, and status in one place.</p>
-          </div>
-          <span class="workflow-arrow workflow-split" aria-hidden="true">↗<br />↘</span>
-          <div class="workflow-routes">
-            <div class="workflow-route">
-              <strong>Mountlet file management</strong>
-              <span>Managed cache, offline files, and conflict checks</span>
-            </div>
-            <div class="workflow-route">
-              <strong>Mounted folder access</strong>
-              <span>Native paths for the system and desktop apps</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="access-explanation">
-          <article>
-            <p class="eyebrow">Integrated browser</p>
-            <h3>Mountlet manages the local copy</h3>
-            <p>Files launched from Mountlet always use its cache, even when the remote is mounted. Mountlet can therefore detect local edits, compare the cloud state, upload safe changes, and ask before resolving a conflict.</p>
-          </article>
-          <article>
-            <p class="eyebrow">System file manager</p>
-            <h3>Work through mounted folders</h3>
-            <p>Files opened through Finder, Explorer, Dolphin, terminals, or other apps read and write the live rclone mount. Those edits bypass Mountlet’s cache and conflict resolver; handling is left to rclone and the provider backend. Close mounted files before unmounting.</p>
-          </article>
-        </div>
-
-        <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
-          <div class="mount-dependencies-heading">
-            <p class="eyebrow">Mounted folders</p>
-            <h3 id="mount-dependencies-title">Install the filesystem driver for your platform.</h3>
-            <p>Mountlet detects the driver and enables mounted folder access after installation.</p>
-          </div>
-          <div class="dependency-grid">
-            <article>
-              <img src="assets/platforms/windows.svg" alt="" />
-              <div>
-                <h4>Windows</h4>
-                <p>Download and run the signed WinFsp installer, then restart Mountlet.</p>
-                <a class="external-link" href="https://winfsp.dev/rel/" target="_blank" rel="noopener">Download WinFsp</a>
-              </div>
-            </article>
-            <article>
-              <img src="assets/platforms/macos.svg" alt="" />
-              <div>
-                <h4>macOS</h4>
-                <p>Install macFUSE. Approve its system software in Privacy &amp; Security and restart when macOS requests it.</p>
-                <a class="external-link" href="https://github.com/macfuse/macfuse/wiki/Getting-Started" target="_blank" rel="noopener">Install macFUSE</a>
-              </div>
-            </article>
-            <article>
-              <img src="assets/platforms/linux.svg" alt="" />
-              <div>
-                <h4>Linux</h4>
-                <p>Install FUSE 3 from the distribution package manager, then restart Mountlet.</p>
-                <div class="dependency-commands" aria-label="Common FUSE 3 installation commands">
-                  <code>sudo apt install fuse3</code>
-                  <code>sudo dnf install fuse3</code>
-                  <code>sudo pacman -S fuse3</code>
-                </div>
-                <a class="external-link" href="https://github.com/libfuse/libfuse" target="_blank" rel="noopener">FUSE project</a>
-              </div>
-            </article>
-          </div>
-          <p class="mount-reference">
-            Mountlet configures rclone’s mount automatically.
-            <a class="external-link" href="https://rclone.org/commands/rclone_mount/" target="_blank" rel="noopener">Read the rclone mount documentation</a>
-          </p>
-        </section>
-
-        <section class="build-explanation" aria-labelledby="build-title">
-          <div>
-            <p class="eyebrow">Installation</p>
-            <h3 id="build-title">The normal build is self-contained.</h3>
-          </div>
-          <p><strong>Recommended build:</strong> includes an app-local rclone and does not replace a system installation.</p>
-          <p><strong>Lean build:</strong> uses rclone already installed on the computer for technical users and managed environments.</p>
-        </section>
 
         <section class="provider-section" aria-labelledby="provider-title">
           <div class="provider-section-heading">
             <div>
-              <p class="eyebrow">Providers</p>
+              <p class="eyebrow">Supported providers</p>
               <h3 id="provider-title">Guided setup for major cloud services</h3>
             </div>
             <div class="provider-legend" aria-label="Provider test status">
@@ -489,27 +395,119 @@
           </div>
           <p class="note">Other rclone backends remain available through the terminal setup fallback. Provider capabilities and quota reporting vary.</p>
         </section>
+
+        <section class="platform-support" aria-labelledby="platform-support-title">
+          <div class="platform-support-heading">
+            <p class="eyebrow">Supported platforms</p>
+            <h3 id="platform-support-title">Desktop support</h3>
+          </div>
+          <div class="platform-support-grid">
+            <article>
+              <img src="assets/platforms/windows.svg" alt="" />
+              <div>
+                <h4>Windows</h4>
+                <strong class="support-state tested">Supported</strong>
+                <p>Windows 10 and 11, with Explorer mounting through WinFsp.</p>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/macos.svg" alt="" />
+              <div>
+                <h4>macOS</h4>
+                <strong class="support-state tested">Supported</strong>
+                <p>Apple silicon and Intel Macs, with Finder mounting through macFUSE.</p>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/linux.svg" alt="" />
+              <div>
+                <h4>Linux</h4>
+                <strong class="support-state tested">Debian-based distributions</strong>
+                <p>Current packages target Debian, Ubuntu, Linux Mint, and compatible x86-64 systems. Fedora, RHEL-compatible, Arch Linux, and openSUSE packages are under development.</p>
+              </div>
+            </article>
+          </div>
+        </section>
       </section>
 
-      <section class="tab-panel" id="panel-platforms" role="tabpanel" aria-labelledby="tab-platforms" data-panel="platforms" hidden>
+      <section class="tab-panel how-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
         <div class="panel-heading">
-          <p class="eyebrow">Platforms</p>
-          <h2>Desktop-first, with honest platform notes.</h2>
+          <p class="eyebrow">How it works</p>
+          <h2>One cloud engine, two access routes.</h2>
+          <p class="lede">
+            Mountlet coordinates rclone rather than reimplementing each provider protocol.
+            The same configured cloud account can be managed through Mountlet’s file browser
+            or exposed to the operating system as a mounted folder.
+          </p>
         </div>
-        <div class="platform-grid">
+
+        <div class="workflow-map" aria-label="Cloud accounts connect through Mountlet and rclone to integrated and mounted access routes">
+          <div class="workflow-stage provider-stage">
+            <span class="workflow-step">1</span>
+            <h3>Cloud accounts</h3>
+            <p>Each account is stored as an rclone remote with its provider settings and authentication data.</p>
+          </div>
+          <span class="workflow-arrow" aria-hidden="true">→</span>
+          <div class="workflow-stage engine-stage">
+            <span class="workflow-step">2</span>
+            <img class="workflow-mountlet-icon" src="assets/mountlet-icon.png" alt="" />
+            <h3>Mountlet + rclone</h3>
+            <p>Mountlet runs rclone in the background and adds indexing, cache management, search, status, and desktop controls.</p>
+          </div>
+          <span class="workflow-arrow workflow-split" aria-hidden="true">↗<br />↘</span>
+          <div class="workflow-routes">
+            <div class="workflow-route">
+              <strong>Mountlet file management</strong>
+              <span>Managed cache, offline files, and conflict checks</span>
+            </div>
+            <div class="workflow-route">
+              <strong>Mounted folder access</strong>
+              <span>Native paths for the system and desktop apps</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="access-explanation">
           <article>
-            <h3>Linux</h3>
-            <p>Primary beta platform. Plasma X11 has the fullest tray behavior; GNOME and Wayland have desktop limits.</p>
+            <p class="eyebrow">Integrated browser</p>
+            <h3>Operations run through rclone commands</h3>
+            <p>Folder listings, downloads, uploads, copies, moves, and deletions are performed by background rclone commands. Files opened from Mountlet use its managed local cache, even when the same remote is mounted. Mountlet can therefore detect local edits, compare the cloud state, upload safe changes, and ask before resolving a conflict.</p>
           </article>
           <article>
-            <h3>Windows</h3>
-            <p>Manage files in Mountlet or mount them in Explorer with WinFsp. Unsigned beta installers can trigger SmartScreen.</p>
-          </article>
-          <article>
-            <h3>macOS</h3>
-            <p>Menu-bar app with Finder support. Public distribution needs Apple Developer ID signing and notarization.</p>
+            <p class="eyebrow">Mounted filesystem</p>
+            <h3>Applications use normal file paths</h3>
+            <p>Mountlet starts <code>rclone mount</code>, which exposes the remote through FUSE on Linux, macFUSE on macOS, or WinFsp on Windows. Finder, Explorer, Dolphin, terminals, and other applications then interact with the remote through ordinary filesystem operations. Those direct edits bypass Mountlet’s cache and conflict resolver.</p>
           </article>
         </div>
+
+        <section class="technical-details" aria-labelledby="technical-details-title">
+          <div class="technical-details-heading">
+            <p class="eyebrow">Technical details</p>
+            <h3 id="technical-details-title">The layers remain separate.</h3>
+          </div>
+          <div class="technical-grid">
+            <article>
+              <h4>Configuration and authentication</h4>
+              <p>rclone stores each remote in <code>rclone.conf</code>. Mountlet uses that same configuration for browser operations and mounted folders, and provides guided setup for common backends.</p>
+            </article>
+            <article>
+              <h4>Metadata and search</h4>
+              <p>Mountlet builds a local SQLite metadata index from recursive rclone listings. Search and initial navigation use the index; current folders are refreshed against the remote in the background.</p>
+            </article>
+            <article>
+              <h4>Cache and offline files</h4>
+              <p>Files opened through Mountlet are copied into its managed local store. Temporary cache can be cleared, while protected offline files remain available and participate in change detection.</p>
+            </article>
+            <article>
+              <h4>Processes and failures</h4>
+              <p>Network operations and mounts run in background rclone processes so the interface remains responsive. Mountlet records rclone output and reports connection or mount failures without blocking unrelated remotes.</p>
+            </article>
+          </div>
+          <p class="technical-reference">
+            <a class="external-link" href="https://rclone.org/docs/" target="_blank" rel="noopener">rclone documentation</a>
+            <a class="external-link" href="https://rclone.org/commands/rclone_mount/" target="_blank" rel="noopener">rclone mount documentation</a>
+          </p>
+        </section>
       </section>
 
       <section class="tab-panel notifications-panel" id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" data-panel="notifications" hidden>
@@ -544,8 +542,8 @@
         </details>
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
-          <p>They provide mounted folder access: FUSE 3 on Linux, WinFsp on Windows, and macFUSE on macOS. Mountlet file management runs through the integrated browser. Both workflows operate independently and can be used together.</p>
-          <p><button class="inline-link tab-action" type="button" data-tab="how" data-scroll-target="mount-dependencies">See platform installation instructions</button>.</p>
+          <p>A platform filesystem driver provides mounted folder access. Mountlet file management runs independently through the integrated browser, and both workflows can be used together.</p>
+          <p><button class="inline-link tab-action" type="button" data-tab="download" data-scroll-target="mount-dependencies">See platform installation instructions</button>.</p>
         </details>
         <details>
           <summary>How are edits handled when a remote is mounted?</summary>
@@ -553,7 +551,7 @@
         </details>
         <details>
           <summary>What is rclone?</summary>
-          <p>It is the cloud access engine Mountlet uses behind the scenes. The bundled build includes it for convenience.</p>
+          <p>It is the cloud access engine Mountlet uses behind the scenes for provider access, file operations, and mounted folders.</p>
         </details>
         <details>
           <summary>Is this open source?</summary>

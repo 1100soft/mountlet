@@ -254,129 +254,63 @@ h3 {
   width: 100%;
 }
 
-.product-shot {
-  min-width: 0;
-}
-
-.tray-card {
-  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+.demo-video {
+  align-items: center;
+  aspect-ratio: 16 / 9;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--panel-soft) 86%, var(--accent) 14%), var(--panel));
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
-  margin: 0 auto;
-  max-width: 520px;
-  padding: 14px;
-}
-
-.window-bar {
-  align-items: center;
-  border-bottom: 1px solid var(--line);
   display: flex;
-  justify-content: space-between;
-  padding: 5px 4px 13px;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
 }
 
-.window-bar span:first-child,
-.pin {
-  color: var(--accent);
-  width: 24px;
+.demo-video::before {
+  background: url("assets/mountlet-icon.png") center / 42% auto no-repeat;
+  content: "";
+  inset: 0;
+  opacity: 0.08;
+  position: absolute;
 }
 
-.remote-row,
-.file-row {
+.demo-video-content {
   align-items: center;
-  border: 1px solid var(--line);
-  display: grid;
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  text-align: center;
 }
 
-.remote-row {
-  background: var(--panel);
-  grid-template-columns: minmax(0, 1fr) 110px auto;
-  margin-top: 12px;
-  padding: 12px;
+.demo-video-content strong {
+  font-size: 1.2rem;
 }
 
-.remote-row.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+.demo-video-content small {
+  color: var(--muted);
 }
 
-.remote-row small,
-.file-row em,
+.demo-play {
+  background: var(--accent);
+  height: 54px;
+  mask: url("assets/ui-play.svg") center / contain no-repeat;
+  width: 54px;
+}
+
 .note,
 .price-card p,
 .download-card p,
-.platform-grid p,
-.info-grid p,
 .faq p:not(.eyebrow),
 .feature-panel p:not(.eyebrow) {
   color: var(--muted);
 }
 
-.usage {
-  background: #dfe7ea;
-  display: block;
-  height: 8px;
-  overflow: hidden;
-}
-
-.usage i {
-  background: var(--green);
-  display: block;
-  height: 100%;
-}
-
-.state {
-  color: var(--green);
-  font-size: 0.82rem;
-  font-weight: 720;
-}
-
-.state.quiet {
-  color: var(--muted);
-}
-
-.file-panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  margin-top: 12px;
-  padding: 12px;
-}
-
-.path {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.86rem;
-  margin-bottom: 10px;
-}
-
-.file-row {
-  border-width: 0 0 1px;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  min-height: 38px;
-}
-
-.file-row span {
-  display: block;
-  height: 16px;
-  width: 16px;
-}
-
-.doc {
-  background: var(--accent);
-}
-
-.sheet {
-  background: var(--green);
-}
-
-.folder {
-  background: var(--yellow);
-}
-
 .download-grid,
-.pricing-grid,
-.platform-grid,
-.info-grid {
+.pricing-grid {
   display: grid;
   gap: 18px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -438,6 +372,10 @@ h3 {
   width: 100%;
 }
 
+#panel-download {
+  gap: 24px;
+}
+
 .platform-panel {
   display: none;
 }
@@ -460,8 +398,6 @@ h3 {
 
 .download-card,
 .price-card,
-.platform-grid article,
-.info-grid article,
 .faq details {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -472,6 +408,25 @@ h3 {
 .price-card.featured {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
   box-shadow: 0 16px 46px rgba(15, 123, 191, 0.14);
+}
+
+.future-linux {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  padding-top: 14px;
+}
+
+.future-linux strong {
+  color: var(--yellow);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
+.future-linux span {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .license-card {
@@ -838,20 +793,6 @@ h3 {
   border-top: 5px solid #3b9c72;
 }
 
-.workflow-provider-icons {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 18px 0;
-}
-
-.workflow-provider-icons img {
-  height: 28px;
-  object-fit: contain;
-  width: 28px;
-}
-
 .workflow-mountlet-icon {
   float: left;
   height: 42px;
@@ -937,8 +878,7 @@ h3 {
   margin-bottom: 8px;
 }
 
-.mount-dependencies-heading p:last-child,
-.mount-reference {
+.mount-dependencies-heading p:last-child {
   color: var(--muted);
   margin-bottom: 0;
 }
@@ -977,16 +917,25 @@ h3 {
   margin: 0 0 12px;
 }
 
-.dependency-grid a,
-.mount-reference a {
+.dependency-grid a {
   color: var(--accent);
   font-weight: 720;
 }
 
 .dependency-commands {
   display: grid;
-  gap: 5px;
+  gap: 8px;
   margin: 0 0 12px;
+}
+
+.dependency-commands span {
+  display: grid;
+  gap: 3px;
+}
+
+.dependency-commands b {
+  color: var(--muted);
+  font-size: 0.76rem;
 }
 
 .dependency-commands code {
@@ -1126,6 +1075,115 @@ h3 {
   margin-right: 6px;
   vertical-align: 0.08em;
   width: 6px;
+}
+
+.platform-support {
+  border-top: 1px solid var(--line);
+  max-width: 1180px;
+  padding-top: 30px;
+  width: 100%;
+}
+
+.platform-support-heading h3 {
+  font-size: 1.5rem;
+  margin-bottom: 20px;
+}
+
+.platform-support-grid,
+.technical-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.platform-support-grid article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 44px minmax(0, 1fr);
+  padding: 20px;
+}
+
+.platform-support-grid img {
+  background: #fff;
+  border-radius: 6px;
+  height: 38px;
+  object-fit: contain;
+  padding: 5px;
+  width: 38px;
+}
+
+.platform-support-grid h4,
+.technical-grid h4 {
+  font-size: 1.08rem;
+  margin: 0 0 5px;
+}
+
+.support-state {
+  color: var(--green);
+  display: block;
+  font-size: 0.78rem;
+  margin-bottom: 7px;
+  text-transform: uppercase;
+}
+
+.platform-support-grid p,
+.technical-grid p,
+.technical-details-heading p:last-child {
+  color: var(--muted);
+  margin-bottom: 0;
+}
+
+.technical-details {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 22px;
+  max-width: 1180px;
+  padding-top: 30px;
+  width: 100%;
+}
+
+.technical-details-heading h3 {
+  font-size: 1.5rem;
+  margin-bottom: 0;
+}
+
+.technical-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.technical-grid article {
+  border-left: 4px solid var(--line);
+  padding: 4px 18px 10px;
+}
+
+.technical-grid article:nth-child(1) {
+  border-color: #3387c8;
+}
+
+.technical-grid article:nth-child(2) {
+  border-color: #7c6eb0;
+}
+
+.technical-grid article:nth-child(3) {
+  border-color: #3b9c72;
+}
+
+.technical-grid article:nth-child(4) {
+  border-color: #d49a25;
+}
+
+.technical-reference {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+}
+
+.technical-reference a {
+  color: var(--accent);
+  font-weight: 720;
 }
 
 .faq {
@@ -1486,9 +1544,7 @@ h3 {
   .download-grid,
   .pricing-grid,
   .plan-card,
-  .info-grid,
-  .download-panels,
-  .platform-grid {
+  .download-panels {
     grid-template-columns: 1fr;
   }
 
@@ -1496,7 +1552,9 @@ h3 {
   .mode-branch-grid,
   .workflow-map,
   .build-explanation,
-  .dependency-grid {
+  .dependency-grid,
+  .platform-support-grid,
+  .technical-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1561,10 +1619,6 @@ h3 {
   .site-footer {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .remote-row {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .shared-feature-grid,
