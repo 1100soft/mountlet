@@ -2941,7 +2941,10 @@ class CloudBrowserTests(unittest.TestCase):
 
         drag = created["drag"]
         self.assertEqual(drag.executed, (copy_action, copy_action))
-        self.assertEqual(drag.mime.urls, ["/cache/a.txt", "/cache/Folder"])
+        self.assertEqual(
+            drag.mime.urls,
+            [str(Path("/cache/a.txt")), str(Path("/cache/Folder"))],
+        )
         payload = json.loads(drag.mime.data["application/x-mountlet-remote-files"].decode("utf-8"))
         self.assertEqual([item["name"] for item in payload], ["a.txt", "Folder"])
         browser._prepare_drag_export.assert_not_called()
