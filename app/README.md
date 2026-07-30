@@ -130,7 +130,10 @@ Locally tested:
 - MEGA. Sign in through MEGA's website once before setup so the account
   encryption keys exist.
 - Google Photos, with a major limitation: current rclone releases can only
-  download media that rclone uploaded.
+  download media that rclone uploaded. Mountlet sends dropped files to its
+  `upload` folder. See the
+  [rclone Google Photos guide](https://rclone.org/googlephotos/) for its
+  specialized layout and API limitations.
 
 Available but less tested:
 

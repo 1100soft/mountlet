@@ -48,6 +48,29 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(parent_browser_path("Photos/2026"), "Photos")
         self.assertEqual(remote_target(_remote(), "Photos/2026"), "Docs:/Photos/2026")
 
+    def test_transfer_rejects_copying_folder_into_itself(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "browser.json",
+                cache_root=root / "cache",
+            )
+            remote = _remote()
+            item = TransferItem(remote.name, "Reports", "Reports", True)
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation") as run:
+                    with self.assertRaisesRegex(RuntimeError, "Cannot copy Reports into itself"):
+                        backend.transfer(
+                            [item],
+                            {remote.name: remote},
+                            remote,
+                            "Reports/Archive",
+                            move=False,
+                        )
+
+            run.assert_not_called()
+
     def test_mouse_activation_claims_browser_focus(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.main_window = SimpleNamespace(set_mountlet_focus_owner=mock.Mock())
@@ -2837,6 +2860,153 @@ class CloudBrowserTests(unittest.TestCase):
             action()
             browser.backend.copy_local_paths.assert_called_once_with([path], browser.remote, "Inbox")
 
+    def test_local_file_drop_can_target_displayed_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "a.txt"
+            path.write_text("content", encoding="utf-8")
+            browser = object.__new__(CompactCloudBrowser)
+            browser._edits_enabled = mock.Mock(return_value=True)
+            browser.remote = _remote()
+            browser.path = "Inbox"
+            browser._operation_pending = False
+            browser.backend = mock.Mock()
+            browser._run_operation = mock.Mock()
+
+            browser.accept_local_paths([path], destination_path="Inbox/Reports")
+
+            _message, action = browser._run_operation.call_args.args[:2]
+            self.assertEqual(
+                browser._run_operation.call_args.kwargs["invalidate_keys"],
+                {("Docs", "Inbox/Reports")},
+            )
+            action()
+            browser.backend.copy_local_paths.assert_called_once_with(
+                [path],
+                browser.remote,
+                "Inbox/Reports",
+            )
+
+    def test_google_photos_drop_always_targets_upload_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "photo.jpg"
+            path.write_bytes(b"photo")
+            browser = object.__new__(CompactCloudBrowser)
+            browser._edits_enabled = mock.Mock(return_value=True)
+            browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+            browser.path = "media/by-year/2026"
+            browser._operation_pending = False
+            browser.backend = mock.Mock()
+            browser._run_operation = mock.Mock()
+
+            browser.accept_local_paths([path], destination_path="album/Trips")
+
+            _message, action = browser._run_operation.call_args.args[:2]
+            self.assertEqual(
+                browser._run_operation.call_args.kwargs["invalidate_keys"],
+                {("Photos", "upload")},
+            )
+            action()
+            browser.backend.copy_local_paths.assert_called_once_with(
+                [path],
+                browser.remote,
+                "upload",
+            )
+
+    def test_internal_drop_can_target_displayed_folder(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser.remote = _remote()
+        browser.path = ""
+        browser._operation_pending = False
+        browser._transfer = mock.Mock()
+        payload = json.dumps(
+            [
+                {
+                    "remote_name": "Docs",
+                    "path": "a.txt",
+                    "name": "a.txt",
+                    "is_dir": False,
+                }
+            ]
+        ).encode()
+
+        browser.accept_drop(payload, destination_path="Reports")
+
+        browser._transfer.assert_called_once()
+        self.assertEqual(
+            browser._transfer.call_args.kwargs,
+            {
+                "move": False,
+                "destination_remote": None,
+                "destination_path": "Reports",
+            },
+        )
+
+    def test_internal_google_photos_drop_is_redirected_to_upload(self):
+        source = _remote()
+        destination = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        item = TransferItem(source.name, "photo.jpg", "photo.jpg", False)
+        browser = object.__new__(CompactCloudBrowser)
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser.remote = source
+        browser.path = ""
+        browser._operation_pending = False
+        browser.backend = mock.Mock()
+        browser._remotes = mock.Mock(return_value=[source, destination])
+        browser._run_operation = mock.Mock()
+
+        browser._transfer(
+            [item],
+            move=False,
+            destination_remote=destination,
+            destination_path="media/all",
+        )
+
+        _message, action = browser._run_operation.call_args.args[:2]
+        self.assertEqual(
+            browser._run_operation.call_args.kwargs["invalidate_keys"],
+            {("Photos", "upload")},
+        )
+        action()
+        browser.backend.transfer.assert_called_once_with(
+            [item],
+            {source.name: source, destination.name: destination},
+            destination,
+            "upload",
+            move=False,
+        )
+
+    def test_drop_destination_uses_folder_under_pointer(self):
+        entry = BrowserEntry("Reports", "Inbox/Reports", True)
+        item = SimpleNamespace(data=lambda _column, _role: entry)
+        browser = object.__new__(CompactCloudBrowser)
+        browser.path = "Inbox"
+        browser.tree = SimpleNamespace(itemAt=lambda _point: item)
+        browser.qt = SimpleNamespace(
+            Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole=1))
+        )
+        event = SimpleNamespace(pos=lambda: object())
+
+        self.assertEqual(browser._drop_destination_path(event), "Inbox/Reports")
+
+    def test_drag_enter_recognizes_local_url_without_filesystem_probe(self):
+        url = SimpleNamespace(
+            isLocalFile=lambda: True,
+            toLocalFile=lambda: "/temporarily/unreachable/a.txt",
+        )
+        mime = SimpleNamespace(
+            hasFormat=lambda _value: False,
+            hasUrls=lambda: True,
+            urls=lambda: [url],
+        )
+        browser = object.__new__(CompactCloudBrowser)
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser.remote = _remote()
+        browser._operation_pending = False
+        event = SimpleNamespace(mimeData=lambda: mime)
+
+        self.assertTrue(browser._drop_event_supported(event))
+
     def test_local_paths_from_mime_uses_local_file_urls(self):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "a.txt"
@@ -3032,7 +3202,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.accept_drop = mock.Mock()
 
         self.assertTrue(browser._handle_drop_event(event))
-        browser.accept_drop.assert_called_once_with(b"[]", move=True)
+        browser.accept_drop.assert_called_once_with(b"[]", move=True, destination_path="")
 
     def test_update_actions_ignores_deleted_qt_tree_during_shutdown(self):
         class DeletedTree:

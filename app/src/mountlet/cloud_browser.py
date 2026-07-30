@@ -381,6 +381,17 @@ class CloudBrowserBackend:
             source_remote = remotes.get(item.remote_name)
             if source_remote is None:
                 raise RuntimeError(f"The source remote {item.remote_name} is no longer available")
+            source_path = normalize_browser_path(item.path)
+            normalized_destination = normalize_browser_path(destination_path)
+            if (
+                item.is_dir
+                and source_remote.name == destination.name
+                and (
+                    normalized_destination == source_path
+                    or normalized_destination.startswith(f"{source_path}/")
+                )
+            ):
+                raise RuntimeError(f"Cannot copy {item.name} into itself")
             source = remote_target(source_remote, item.path)
             target_path = join_browser_path(destination_path, item.name)
             target = remote_target(destination, target_path)

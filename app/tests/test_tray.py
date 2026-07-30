@@ -4846,6 +4846,86 @@ class TrayTests(unittest.TestCase):
         window.file_browser.close.assert_not_called()
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
 
+    def test_remote_card_accepts_local_file_drop_at_remote_root(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        local = Path("/tmp/a.txt")
+        mime = SimpleNamespace(hasFormat=lambda _value: False)
+        event = SimpleNamespace(mimeData=lambda: mime, ignore=mock.Mock())
+        browser = mock.Mock()
+        browser._mime_drop_supported.return_value = True
+        browser._local_paths_from_mime.return_value = [local]
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = browser
+        window._license_locked = mock.Mock(return_value=False)
+
+        window._remote_drop(event, remote)
+
+        browser.accept_local_paths.assert_called_once_with(
+            [local],
+            destination_remote=remote,
+            destination_path="",
+        )
+        browser._accept_drag_event.assert_called_once_with(event)
+
+    def test_remote_card_internal_drop_targets_google_photos_upload(self):
+        remote = core.RemoteInfo(
+            "Photos",
+            "Photos",
+            "Google Photos",
+            "gphotos",
+            "/mnt/photos",
+        )
+        mime = SimpleNamespace(
+            hasFormat=lambda _value: True,
+            data=lambda _value: b"[]",
+        )
+        event = SimpleNamespace(
+            mimeData=lambda: mime,
+            modifiers=lambda: 0,
+            ignore=mock.Mock(),
+        )
+        browser = mock.Mock()
+        browser._mime_drop_supported.return_value = True
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = browser
+        window._license_locked = mock.Mock(return_value=False)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                KeyboardModifier=SimpleNamespace(ShiftModifier=1),
+            )
+        )
+
+        window._remote_drop(event, remote)
+
+        browser.accept_drop.assert_called_once_with(
+            b"[]",
+            move=False,
+            destination_remote=remote,
+            destination_path="",
+        )
+        browser._accept_drag_event.assert_called_once_with(event)
+
+    def test_google_photos_usage_field_links_to_rclone_guide(self):
+        remote = core.RemoteInfo(
+            "Photos",
+            "Photos",
+            "Google Photos",
+            "gphotos",
+            "/mnt/photos",
+        )
+        label = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+
+        window._set_status_text(
+            label,
+            core.StorageUsage("?"),
+            action_pending=False,
+            remote=remote,
+        )
+
+        self.assertIn(tray.GOOGLE_PHOTOS_GUIDE_URL, label.setText.call_args.args[0])
+        label.setToolTip.assert_called_once()
+
     def test_remote_action_finish_does_not_force_reopen_browser(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         tray_app = mock.Mock()

@@ -239,6 +239,7 @@ RCLONE_SELECT_FIELDS = {
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 DRIVE_USAGE_NOTE = "Google Drive usage excludes Photos and other Google account data."
+GOOGLE_PHOTOS_GUIDE_URL = "https://rclone.org/googlephotos/"
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -794,6 +795,10 @@ def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
 
 def _is_google_drive_remote(remote: core.RemoteInfo) -> bool:
     return remote.backend_type.casefold() == "drive"
+
+
+def _is_google_photos_remote(remote: core.RemoteInfo) -> bool:
+    return remote.backend_type.casefold() == "gphotos"
 
 
 def _shortcut_hint(action: str) -> str:
@@ -3829,7 +3834,8 @@ class NewRemoteWizard:
         connect_after_create.setToolTip("Mount the new remote as an operating-system folder after setup succeeds.")
         gphotos_help = self.qt.QLabel(
             "Google Photos is limited by Google's API. Recent rclone versions can only download media uploaded "
-            'through rclone. <a href="https://rclone.org/googlephotos/#limitations">rclone Google Photos limits</a>'
+            f'through rclone. <a href="{GOOGLE_PHOTOS_GUIDE_URL}#limitations">'
+            "rclone Google Photos limits</a>"
         )
         gphotos_help.setWordWrap(True)
         gphotos_help.setOpenExternalLinks(True)
@@ -7959,7 +7965,9 @@ class MountletWindow:
 
         status = self.qt.QLabel()
         status.setFixedWidth(120)
-        self._set_status_text(status, usage, action_pending=action_pending)
+        status.setOpenExternalLinks(True)
+        status.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        self._set_status_text(status, usage, action_pending=action_pending, remote=remote)
         usage_note = self._drive_usage_note_label(remote)
         status_group = self.qt.QWidget()
         status_layout = self.qt.QHBoxLayout(status_group)
@@ -8094,7 +8102,7 @@ class MountletWindow:
         row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
 
-        self._set_status_text(row.status, usage, action_pending=action_pending)
+        self._set_status_text(row.status, usage, action_pending=action_pending, remote=remote)
         row.config_button.setEnabled(not action_pending)
         if remote_changed:
             config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
@@ -8460,11 +8468,27 @@ class MountletWindow:
             return f'<span style="{_muted_text_style(self.window).removesuffix(";")}">{usage.text}</span>'
         return ""
 
-    def _set_status_text(self, label: Any, usage: core.StorageUsage, *, action_pending: bool) -> None:
+    def _set_status_text(
+        self,
+        label: Any,
+        usage: core.StorageUsage,
+        *,
+        action_pending: bool,
+        remote: core.RemoteInfo | None = None,
+    ) -> None:
         if action_pending:
             label.setText("Working...")
             label.setStyleSheet(_muted_text_style(label))
             return
+        if remote is not None and _is_google_photos_remote(remote):
+            label.setStyleSheet("")
+            label.setToolTip("Open the rclone Google Photos usage and limitations guide")
+            label.setText(
+                f'<a href="{GOOGLE_PHOTOS_GUIDE_URL}" '
+                f'style="color:{_provider_color(remote)};">Photos guide ↗</a>'
+            )
+            return
+        label.setToolTip("")
         label.setStyleSheet("")
         label.setText(self._usage_status_html(usage, checking_usage=usage.percent is None))
 
@@ -8917,35 +8941,52 @@ class MountletWindow:
         self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        del row, remote
         if self._license_locked():
             event.ignore()
             return
-        if not event.mimeData().hasFormat(MIME_TYPE):
+        if not self.file_browser._mime_drop_supported(event.mimeData()):
             event.ignore()
             return
-        self._select_browser_remote(remote, row)
-        event.acceptProposedAction()
+        self.file_browser._accept_drag_event(event)
 
     def _remote_drag_move(self, event: Any) -> None:
         if self._license_locked():
             event.ignore()
             return
-        if event.mimeData().hasFormat(MIME_TYPE):
-            event.acceptProposedAction()
+        if self.file_browser._mime_drop_supported(event.mimeData()):
+            self.file_browser._accept_drag_event(event)
+            return
+        event.ignore()
 
     def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             event.ignore()
             return
-        if not event.mimeData().hasFormat(MIME_TYPE):
+        mime = event.mimeData()
+        if not self.file_browser._mime_drop_supported(mime):
             event.ignore()
             return
-        modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
-        move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
-        self.file_browser.remote = remote
-        self.file_browser.path = self.file_browser.backend.current_path(remote.name)
-        self.file_browser.accept_drop(bytes(event.mimeData().data(MIME_TYPE)), move=move)
-        event.acceptProposedAction()
+        if mime.hasFormat(MIME_TYPE):
+            modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+            move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
+            self.file_browser.accept_drop(
+                bytes(mime.data(MIME_TYPE)),
+                move=move,
+                destination_remote=remote,
+                destination_path="",
+            )
+        else:
+            paths = self.file_browser._local_paths_from_mime(mime)
+            if not paths:
+                event.ignore()
+                return
+            self.file_browser.accept_local_paths(
+                paths,
+                destination_remote=remote,
+                destination_path="",
+            )
+        self.file_browser._accept_drag_event(event)
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
         return html.escape(self._truncated_remote_alias(remote))

@@ -461,19 +461,19 @@ class CompactCloudBrowser:
 
             def dragEnterEvent(self, event: Any) -> None:
                 if outer._drop_event_supported(event):
-                    event.acceptProposedAction()
+                    outer._accept_drag_event(event)
                     return
                 super().dragEnterEvent(event)
 
             def dragMoveEvent(self, event: Any) -> None:
                 if outer._drop_event_supported(event):
-                    event.acceptProposedAction()
+                    outer._accept_drag_event(event)
                     return
                 super().dragMoveEvent(event)
 
             def dropEvent(self, event: Any) -> None:
                 if outer._handle_drop_event(event):
-                    event.acceptProposedAction()
+                    outer._accept_drag_event(event)
                     return
                 super().dropEvent(event)
 
@@ -2992,7 +2992,14 @@ class CompactCloudBrowser:
         except Exception:
             return "file manager"
 
-    def accept_drop(self, payload: bytes, *, move: bool = False) -> None:
+    def accept_drop(
+        self,
+        payload: bytes,
+        *,
+        move: bool = False,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
             return
@@ -3002,41 +3009,109 @@ class CompactCloudBrowser:
         except (TypeError, ValueError, json.JSONDecodeError):
             self._notify("File transfer", "The dragged files could not be read.", False)
             return
-        self._transfer(items, move=move)
+        self._transfer(
+            items,
+            move=move,
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+        )
 
-    def accept_local_paths(self, paths: list[Path]) -> None:
+    def accept_local_paths(
+        self,
+        paths: list[Path],
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
             return
-        if not paths or self.remote is None or self._operation_pending:
+        remote, resolved_path = self._resolved_drop_destination(
+            destination_remote,
+            destination_path,
+        )
+        if not paths or remote is None or self._operation_pending:
             return
-        remote, destination_path = self.remote, self.path
-        invalidate = {(remote.name, destination_path)}
+        invalidate = {(remote.name, resolved_path)}
         self._run_operation(
             f"Uploading {len(paths)} item{'s' if len(paths) != 1 else ''}…",
-            lambda: self.backend.copy_local_paths(paths, remote, destination_path),
+            lambda: self.backend.copy_local_paths(paths, remote, resolved_path),
             invalidate_keys=invalidate,
         )
 
-    def _drop_event_supported(self, event: Any) -> bool:
-        if not self._edits_enabled() or self.remote is None or self._operation_pending:
+    def _resolved_drop_destination(
+        self,
+        remote: core.RemoteInfo | None,
+        path: str | None,
+    ) -> tuple[core.RemoteInfo | None, str]:
+        destination = remote or self.remote
+        if destination is None:
+            return None, ""
+        if destination.backend_type.casefold() == "gphotos":
+            return destination, "upload"
+        current_path = self.path if path is None else path
+        return destination, normalize_browser_path(current_path)
+
+    def _drop_destination_path(self, event: Any) -> str:
+        try:
+            position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            item = self.tree.itemAt(position)
+            if item is not None:
+                entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+                if isinstance(entry, BrowserEntry) and entry.is_dir:
+                    return entry.path
+        except (AttributeError, RuntimeError, TypeError):
+            pass
+        return getattr(self, "path", "")
+
+    def _mime_drop_supported(self, mime: Any) -> bool:
+        if not self._edits_enabled() or getattr(self, "_operation_pending", False):
             return False
+        if mime.hasFormat(MIME_TYPE):
+            return True
+        if not mime.hasUrls():
+            return False
+        for url in mime.urls():
+            with suppress(Exception):
+                if url.isLocalFile() and bool(url.toLocalFile()):
+                    return True
+        return False
+
+    def _drop_event_supported(self, event: Any) -> bool:
+        if self.remote is None or self._operation_pending:
+            return False
+        return self._mime_drop_supported(event.mimeData())
+
+    def _drop_action(self, event: Any) -> Any:
         mime = event.mimeData()
-        return bool(mime.hasFormat(MIME_TYPE) or self._local_paths_from_mime(mime))
+        if mime.hasFormat(MIME_TYPE):
+            modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+            if modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier:
+                return self.qt.Qt.DropAction.MoveAction
+        return self.qt.Qt.DropAction.CopyAction
+
+    def _accept_drag_event(self, event: Any) -> None:
+        event.setDropAction(self._drop_action(event))
+        event.accept()
 
     def _handle_drop_event(self, event: Any) -> bool:
         if not self._drop_event_supported(event):
             return False
         mime = event.mimeData()
+        destination_path = self._drop_destination_path(event)
         if mime.hasFormat(MIME_TYPE):
             modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
             move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
-            self.accept_drop(bytes(mime.data(MIME_TYPE)), move=move)
+            self.accept_drop(
+                bytes(mime.data(MIME_TYPE)),
+                move=move,
+                destination_path=destination_path,
+            )
             return True
         local_paths = self._local_paths_from_mime(mime)
         if not local_paths:
             return False
-        self.accept_local_paths(local_paths)
+        self.accept_local_paths(local_paths, destination_path=destination_path)
         return True
 
     def _local_paths_from_mime(self, mime: Any) -> list[Path]:
@@ -3052,21 +3127,31 @@ class CompactCloudBrowser:
                     paths.append(path)
         return paths
 
-    def _transfer(self, items: list[TransferItem], *, move: bool) -> None:
+    def _transfer(
+        self,
+        items: list[TransferItem],
+        *,
+        move: bool,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
             return
-        if not items or self.remote is None or self._operation_pending:
+        destination, resolved_path = self._resolved_drop_destination(
+            destination_remote,
+            destination_path,
+        )
+        if not items or destination is None or self._operation_pending:
             return
-        destination, destination_path = self.remote, self.path
         remotes = {remote.name: remote for remote in self._remotes()}
         verb = "Moving" if move else "Copying"
-        invalidate = {(destination.name, destination_path)}
+        invalidate = {(destination.name, resolved_path)}
         if move:
             invalidate.update((item.remote_name, parent_browser_path(item.path)) for item in items)
         self._run_operation(
             f"{verb} {len(items)} item{'s' if len(items) != 1 else ''}…",
-            lambda: self.backend.transfer(items, remotes, destination, destination_path, move=move),
+            lambda: self.backend.transfer(items, remotes, destination, resolved_path, move=move),
             clear_clipboard=move,
             invalidate_keys=invalidate,
         )
