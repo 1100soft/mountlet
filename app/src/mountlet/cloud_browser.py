@@ -513,6 +513,77 @@ class CloudBrowserBackend:
         self._record_offline_entry(remote.name, entry, protected=False)
         return destination
 
+    def cache_for_export(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path:
+        """Materialize an entry for a copy-only drag into another application."""
+        ready = self.cached_export_path(remote.name, entry)
+        if ready is not None:
+            return ready
+        if not entry.is_dir:
+            return self.cache_file(remote, entry)
+        if self.offline_changed(remote.name, entry.path, is_dir=True):
+            raise RuntimeError(
+                f"Resolve pending local changes in {entry.name} before dragging the folder"
+            )
+
+        destination = self.offline_path(remote.name, entry.path)
+        destination.mkdir(parents=True, exist_ok=True)
+        self._run_operation(
+            self._rclone(),
+            "copy",
+            remote_target(remote, entry.path),
+            str(destination),
+            "--create-empty-src-dirs",
+            timeout=None,
+        )
+        self._record_offline_tree(remote.name, entry, destination, protected=False)
+        ready = self.cached_export_path(remote.name, entry)
+        if ready is None:
+            raise RuntimeError(f"Could not prepare {entry.name} for drag and drop")
+        return ready
+
+    def cached_export_path(self, remote_name: str, entry: BrowserEntry) -> Path | None:
+        """Return a complete managed local copy suitable for external copying."""
+        destination = self.offline_path(remote_name, entry.path)
+        if not entry.is_dir:
+            return self.prepare_offline_open(remote_name, entry.path) if destination.is_file() else None
+        if not destination.is_dir():
+            return None
+
+        normalized = normalize_browser_path(entry.path)
+        with self._offline_lock:
+            records = dict(self._offline_records.get(remote_name, {}))
+        record = records.get(normalized)
+        complete = bool(
+            record is not None
+            and bool(record.get("is_dir"))
+            and bool(record.get("complete", True))
+        )
+        marker = self._offline_marker(destination)
+        if not complete and not marker.exists():
+            return None
+        if not complete:
+            self._record_offline_tree(remote_name, entry, destination, protected=True)
+            complete = True
+
+        prefix = f"{normalized}/" if normalized else ""
+        for record_path, candidate in records.items():
+            if bool(candidate.get("is_dir")):
+                continue
+            if normalized and not record_path.startswith(prefix):
+                continue
+            if not normalized and not record_path:
+                continue
+            if not self.offline_path(remote_name, record_path).is_file():
+                return None
+
+        # Older complete-folder snapshots used an internal marker inside the
+        # exported directory. The manifest now carries that state, so do not
+        # let the marker leak into a user's drag destination.
+        if complete:
+            with suppress(OSError):
+                marker.unlink()
+        return self.prepare_offline_open(remote_name, entry.path)
+
     def offline_changed(self, remote_name: str, path: str, *, is_dir: bool = False) -> bool:
         normalized = normalize_browser_path(path)
         if is_dir:
@@ -1219,12 +1290,16 @@ class CloudBrowserBackend:
                     continue
                 if child.is_file():
                     self._make_file_writable(child)
+                existing = records.get(child_path, {})
+                preserve_protected = bool(existing.get("protected")) and (
+                    not child.is_dir() or bool(existing.get("complete", True))
+                )
                 records[child_path] = {
                     "is_dir": child.is_dir(),
                     "size": 0 if child.is_dir() else stat_result.st_size,
                     "modified": datetime.fromtimestamp(stat_result.st_mtime).astimezone().strftime("%Y-%m-%d %H:%M"),
                     "cached_at": cached_at,
-                    "protected": protected,
+                    "protected": protected or preserve_protected,
                     "complete": True,
                     **({} if child.is_dir() else self._offline_file_state(remote_name, child_path)),
                 }

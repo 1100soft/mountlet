@@ -93,6 +93,10 @@ may change for future renewals with advance notice.
 - Use **Make available offline** to protect selected files or folders from cache
   cleanup.
 - Use **Sync now** to check cached/offline files immediately.
+- Drag local files and folders into the browser to upload them. Drag browser
+  items into a system file manager to copy them out. Mountlet prepares
+  uncached items in the background first; drag them again when the status says
+  they are ready.
 - Mount a remote from the file browser to expose it as a native folder in
   Finder, Explorer, Dolphin, or another file manager.
 
@@ -103,7 +107,8 @@ before the next mount, while actual local files are never deleted automatically.
 
 Integrated file edits are disabled by default. If enabled, copy, move, upload,
 delete, and drag-and-drop operations are direct cloud operations and are not
-undoable by Mountlet.
+undoable by Mountlet. Dragging out is always copy-only, so an external file
+manager cannot move or delete Mountlet's managed cache.
 
 ## Supported Providers
 

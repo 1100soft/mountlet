@@ -11,6 +11,7 @@ from .badged_button import create_badged_button, set_badge
 from .cloud_browser import (
     BrowserEntry,
     CloudBrowserBackend,
+    DRIVE_EDITABLE_DOCUMENT_FORMATS,
     TransferItem,
     format_file_size,
     normalize_browser_path,
@@ -170,6 +171,8 @@ class CompactCloudBrowser:
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
         ] = []
+        self._drag_export_pending: set[tuple[str, str]] = set()
+        self._drag_export_slots = threading.BoundedSemaphore(2)
         self._indexing_remote_names: set[str] = set()
         self._auto_index_requested = False
         self._pending_select_path = ""
@@ -180,6 +183,7 @@ class CompactCloudBrowser:
         self._bridge.listing_ready.connect(self._listing_ready)
         self._bridge.operation_finished.connect(self._operation_finished)
         self._bridge.cached_file_ready.connect(self._cached_file_ready)
+        self._bridge.drag_export_ready.connect(self._drag_export_ready)
         self._bridge.offline_job_paths_ready.connect(self._offline_job_paths_ready)
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
         self._bridge.rclone_output_ready.connect(self._append_rclone_output)
@@ -206,6 +210,7 @@ class CompactCloudBrowser:
             listing_ready = qt.Signal(str, str, object, str)
             operation_finished = qt.Signal(bool, str)
             cached_file_ready = qt.Signal(str, str, object, str)
+            drag_export_ready = qt.Signal(str, object, str)
             offline_job_paths_ready = qt.Signal(str, object, str)
             offline_job_finished = qt.Signal(str, object, str, bool, str)
             rclone_output_ready = qt.Signal(str)
@@ -452,16 +457,7 @@ class CompactCloudBrowser:
                 super().mousePressEvent(event)
 
             def startDrag(self, _supported_actions: Any) -> None:
-                if not outer._edits_enabled():
-                    return
-                items = outer.selected_transfer_items()
-                if not items:
-                    return
-                mime = qt.QMimeData()
-                mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in items]).encode())
-                drag = qt.QDrag(self)
-                drag.setMimeData(mime)
-                drag.exec(qt.Qt.DropAction.CopyAction | qt.Qt.DropAction.MoveAction, qt.Qt.DropAction.CopyAction)
+                outer._start_file_drag(self, outer._selected_entries())
 
             def dragEnterEvent(self, event: Any) -> None:
                 if outer._drop_event_supported(event):
@@ -2440,6 +2436,126 @@ class CompactCloudBrowser:
             for entry in self._selected_entries()
         ]
 
+    def _start_file_drag(self, source: Any, entries: list[BrowserEntry]) -> None:
+        remote = self.remote
+        if remote is None or not entries or self._operation_pending:
+            return
+        pending = getattr(self, "_drag_export_pending", set())
+        keys = {(remote.name, normalize_browser_path(entry.path)) for entry in entries}
+        if pending.intersection(keys):
+            self.status.setText("Preparing selected items for drag and drop…")
+            return
+
+        local_paths: list[Path] = []
+        missing: list[BrowserEntry] = []
+        for entry in entries:
+            local = self._drag_export_path(remote, entry)
+            if local is None:
+                missing.append(entry)
+            else:
+                local_paths.append(local)
+        if missing:
+            self._prepare_drag_export(remote, missing)
+            return
+
+        items = [
+            TransferItem(remote.name, entry.path, entry.name, entry.is_dir)
+            for entry in entries
+        ]
+        mime = self.qt.QMimeData()
+        mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in items]).encode())
+        mime.setUrls([self.qt.QUrl.fromLocalFile(str(path)) for path in local_paths])
+        drag = self.qt.QDrag(source)
+        drag.setMimeData(mime)
+        # External file managers receive only a copy operation. Moving a
+        # managed cache path would break Mountlet's local-state tracking.
+        drag.exec(self.qt.Qt.DropAction.CopyAction, self.qt.Qt.DropAction.CopyAction)
+
+    def _drag_export_path(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path | None:
+        cached = self.backend.cached_export_path(remote.name, entry)
+        if cached is not None:
+            return cached
+        if entry.is_dir and self.backend.has_cached_content(remote.name, entry.path, is_dir=True):
+            return None
+        # A Drive mount can omit Google-native documents from an otherwise
+        # valid directory. Export Drive folders through rclone instead.
+        if entry.is_dir and remote.backend_type.casefold() == "drive":
+            return None
+        if not self._remote_is_mounted(remote):
+            return None
+        relative = normalize_browser_path(entry.path)
+        mounted = (
+            Path(remote.mount_path).joinpath(*relative.split("/"))
+            if relative
+            else Path(remote.mount_path)
+        )
+        if entry.is_dir:
+            return mounted if mounted.is_dir() else None
+        if not mounted.is_file():
+            return None
+        if remote.backend_type.casefold() == "drive":
+            suffix = mounted.suffix.casefold().lstrip(".")
+            if suffix in DRIVE_EDITABLE_DOCUMENT_FORMATS:
+                with suppress(OSError):
+                    if mounted.stat().st_size == 0:
+                        return None
+        return mounted
+
+    def _prepare_drag_export(self, remote: core.RemoteInfo, entries: list[BrowserEntry]) -> None:
+        keys = {(remote.name, normalize_browser_path(entry.path)) for entry in entries}
+        pending = getattr(self, "_drag_export_pending", None)
+        if pending is None:
+            pending = set()
+            self._drag_export_pending = pending
+        if pending.intersection(keys):
+            return
+        pending.update(keys)
+        paths = [entry.path for entry in entries]
+        self._start_working_paths(remote.name, paths, "download")
+        self.status.setText(
+            f"Preparing {len(entries)} item{'s' if len(entries) != 1 else ''} for drag and drop…"
+        )
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                with self._drag_export_slots:
+                    for entry in entries:
+                        self.backend.cache_for_export(remote, entry)
+            except Exception as exc:
+                self._bridge.drag_export_ready.emit(remote.name, entries, str(exc))
+                return
+            self._bridge.drag_export_ready.emit(remote.name, entries, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drag_export_ready(self, remote_name: str, entries: object, error: str) -> None:
+        if not isinstance(entries, list) or not all(isinstance(entry, BrowserEntry) for entry in entries):
+            return
+        paths = [entry.path for entry in entries]
+        pending = getattr(self, "_drag_export_pending", set())
+        pending.difference_update((remote_name, normalize_browser_path(path)) for path in paths)
+        if self._is_disposed():
+            return
+        self._finish_working_paths(remote_name, paths, "download")
+        for key in list(getattr(self, "_entry_state_cache", {})):
+            if key[0] == remote_name and _paths_overlap([key[1]], paths):
+                self._entry_state_cache.pop(key, None)
+        getattr(self, "_remote_managed_cache", {}).pop(remote_name, None)
+        self._local_files_changed()
+        self._refresh_entry_icons()
+        self._update_actions()
+        if error:
+            self._notify("Drag and drop", error, False)
+            if self.remote is not None and self.remote.name == remote_name:
+                self.status.setText(error)
+            return
+        if self.remote is not None and self.remote.name == remote_name:
+            count = len(entries)
+            self.status.setText(
+                f"{count} item{'s are' if count != 1 else ' is'} ready. Drag again to copy."
+            )
+
     def copy_selected(self) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
@@ -2913,7 +3029,8 @@ class CompactCloudBrowser:
             return False
         mime = event.mimeData()
         if mime.hasFormat(MIME_TYPE):
-            move = event.proposedAction() == self.qt.Qt.DropAction.MoveAction
+            modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+            move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
             self.accept_drop(bytes(mime.data(MIME_TYPE)), move=move)
             return True
         local_paths = self._local_paths_from_mime(mime)
@@ -3264,7 +3381,7 @@ class CompactCloudBrowser:
             selected = bool(selected_entries)
             edits_enabled = self._edits_enabled()
             operation_pending = bool(getattr(self, "_operation_pending", False))
-            drag_enabled = edits_enabled and selected
+            drag_enabled = bool(getattr(self, "remote", None)) and selected and not operation_pending
             if getattr(self, "_tree_drag_enabled", None) != drag_enabled:
                 self._tree_drag_enabled = drag_enabled
                 self.tree.setDragEnabled(drag_enabled)

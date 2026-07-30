@@ -779,6 +779,107 @@ class CloudBrowserTests(unittest.TestCase):
 
             self.assertIsNone(run.call_args.kwargs["timeout"])
 
+    def test_partial_folder_is_not_exposed_as_complete_drag_export(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            child = BrowserEntry("a.txt", "Reports/a.txt", False, 7, "2026-01-02 03:04")
+
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("offline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    backend.make_offline(_remote(), child)
+
+            folder = BrowserEntry("Reports", "Reports", True)
+            self.assertIsNone(backend.cached_export_path("Docs", folder))
+
+    def test_drag_export_does_not_overwrite_pending_changes_in_partial_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            remote = _remote()
+            child = BrowserEntry("a.txt", "Reports/a.txt", False, 7)
+
+            def copy_file(_binary: str, *_arguments: str, **_kwargs: object) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("baseline", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_file):
+                    local = backend.cache_file(remote, child)
+            local.write_text("local edit", encoding="utf-8")
+            folder = BrowserEntry("Reports", "Reports", True)
+
+            with mock.patch.object(backend, "_run_operation") as run:
+                with self.assertRaisesRegex(RuntimeError, "Resolve pending local changes"):
+                    backend.cache_for_export(remote, folder)
+
+            run.assert_not_called()
+
+    def test_drag_export_caches_complete_folder_without_downgrading_protected_children(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            remote = _remote()
+            protected = BrowserEntry("keep.txt", "Reports/keep.txt", False, 4)
+
+            def copy_protected(_binary: str, *_arguments: str, **_kwargs: object) -> None:
+                destination = Path(_arguments[-1])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("keep", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_protected):
+                    backend.make_offline(remote, protected)
+
+            folder = BrowserEntry("Reports", "Reports", True)
+
+            def copy_folder(_binary: str, *arguments: str, **_kwargs: object) -> None:
+                destination = Path(arguments[2])
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / "keep.txt").write_text("keep", encoding="utf-8")
+                (destination / "temporary.txt").write_text("temporary", encoding="utf-8")
+
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch.object(backend, "_run_operation", side_effect=copy_folder):
+                    exported = backend.cache_for_export(remote, folder)
+
+            self.assertEqual(exported, backend.offline_path("Docs", "Reports"))
+            self.assertFalse((exported / ".mountlet-offline").exists())
+            self.assertFalse(backend.is_offline("Docs", "Reports", is_dir=True))
+            self.assertTrue(backend.has_temporary_cache_content("Docs", "Reports", is_dir=True))
+            self.assertTrue(backend.is_offline("Docs", "Reports/keep.txt"))
+            self.assertFalse(backend.is_offline("Docs", "Reports/temporary.txt"))
+
+    def test_complete_cached_folder_with_missing_file_is_not_exported(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            folder = BrowserEntry("Reports", "Reports", True)
+            directory = backend.offline_path("Docs", "Reports")
+            directory.mkdir(parents=True)
+            backend._offline_records = {
+                "Docs": {
+                    "Reports": {"is_dir": True, "protected": False, "complete": True},
+                    "Reports/missing.txt": {"is_dir": False, "protected": False, "complete": True},
+                }
+            }
+
+            self.assertIsNone(backend.cached_export_path("Docs", folder))
+
     def test_legacy_ancestor_folder_records_are_loaded_as_partial(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -2760,7 +2861,7 @@ class CloudBrowserTests(unittest.TestCase):
 
             self.assertEqual(browser._local_paths_from_mime(mime), [path])
 
-    def test_drag_is_enabled_only_when_integrated_edits_are_enabled(self):
+    def test_drag_out_remains_enabled_when_integrated_edits_are_disabled(self):
         class Tree:
             def __init__(self) -> None:
                 self.drag_enabled = None
@@ -2776,15 +2877,159 @@ class CloudBrowserTests(unittest.TestCase):
         browser.offline_button = mock.Mock()
         browser._selected_entries = mock.Mock(return_value=[BrowserEntry("a.txt", "a.txt", False)])
         browser._edits_enabled = mock.Mock(return_value=False)
+        browser.remote = _remote()
+        browser._operation_pending = False
 
         browser._update_actions()
 
-        self.assertFalse(browser.tree.drag_enabled)
+        self.assertTrue(browser.tree.drag_enabled)
 
         browser._edits_enabled.return_value = True
         browser._update_actions()
 
         self.assertTrue(browser.tree.drag_enabled)
+
+    def test_ready_items_drag_as_copy_only_local_urls(self):
+        created: dict[str, object] = {}
+
+        class Mime:
+            def __init__(self) -> None:
+                self.data: dict[str, bytes] = {}
+                self.urls: list[str] = []
+
+            def setData(self, name: str, value: bytes) -> None:
+                self.data[name] = value
+
+            def setUrls(self, values: list[str]) -> None:
+                self.urls = values
+
+        class Drag:
+            def __init__(self, source: object) -> None:
+                created["source"] = source
+                created["drag"] = self
+                self.mime: Mime | None = None
+                self.executed: tuple[object, object] | None = None
+
+            def setMimeData(self, mime: Mime) -> None:
+                self.mime = mime
+
+            def exec(self, supported: object, default: object) -> None:
+                self.executed = (supported, default)
+
+        copy_action = object()
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(
+            QMimeData=Mime,
+            QDrag=Drag,
+            QUrl=SimpleNamespace(fromLocalFile=lambda path: path),
+            Qt=SimpleNamespace(DropAction=SimpleNamespace(CopyAction=copy_action)),
+        )
+        browser.remote = _remote()
+        browser._operation_pending = False
+        browser._drag_export_pending = set()
+        browser._drag_export_path = mock.Mock(
+            side_effect=[Path("/cache/a.txt"), Path("/cache/Folder")]
+        )
+        browser._prepare_drag_export = mock.Mock()
+        entries = [
+            BrowserEntry("a.txt", "a.txt", False),
+            BrowserEntry("Folder", "Folder", True),
+        ]
+        source = object()
+
+        browser._start_file_drag(source, entries)
+
+        drag = created["drag"]
+        self.assertEqual(drag.executed, (copy_action, copy_action))
+        self.assertEqual(drag.mime.urls, ["/cache/a.txt", "/cache/Folder"])
+        payload = json.loads(drag.mime.data["application/x-mountlet-remote-files"].decode("utf-8"))
+        self.assertEqual([item["name"] for item in payload], ["a.txt", "Folder"])
+        browser._prepare_drag_export.assert_not_called()
+
+    def test_uncached_drag_starts_background_preparation_instead_of_empty_drag(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser._operation_pending = False
+        browser._drag_export_pending = set()
+        browser._drag_export_path = mock.Mock(return_value=None)
+        browser._prepare_drag_export = mock.Mock()
+        entry = BrowserEntry("a.txt", "a.txt", False)
+
+        browser._start_file_drag(object(), [entry])
+
+        browser._prepare_drag_export.assert_called_once_with(browser.remote, [entry])
+
+    def test_zero_byte_drive_document_mount_path_falls_back_to_cache(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", tempdir)
+            entry = BrowserEntry("Document.docx", "Document.docx", False)
+            mounted = Path(tempdir) / entry.name
+            mounted.touch()
+            browser = object.__new__(CompactCloudBrowser)
+            browser.backend = mock.Mock()
+            browser.backend.cached_export_path.return_value = None
+            browser._remote_is_mounted = mock.Mock(return_value=True)
+
+            self.assertIsNone(browser._drag_export_path(remote, entry))
+
+            mounted.write_text("document", encoding="utf-8")
+            self.assertEqual(browser._drag_export_path(remote, entry), mounted)
+
+    def test_partially_cached_mounted_folder_is_prepared_before_drag(self):
+        remote = _remote()
+        entry = BrowserEntry("Reports", "Reports", True)
+        browser = object.__new__(CompactCloudBrowser)
+        browser.backend = mock.Mock()
+        browser.backend.cached_export_path.return_value = None
+        browser.backend.has_cached_content.return_value = True
+        browser._remote_is_mounted = mock.Mock(return_value=True)
+
+        self.assertIsNone(browser._drag_export_path(remote, entry))
+        browser._remote_is_mounted.assert_not_called()
+
+    def test_mounted_drive_folder_is_prepared_to_include_google_documents(self):
+        remote = _remote()
+        entry = BrowserEntry("Reports", "Reports", True)
+        browser = object.__new__(CompactCloudBrowser)
+        browser.backend = mock.Mock()
+        browser.backend.cached_export_path.return_value = None
+        browser.backend.has_cached_content.return_value = False
+        browser._remote_is_mounted = mock.Mock(return_value=True)
+
+        self.assertIsNone(browser._drag_export_path(remote, entry))
+        browser._remote_is_mounted.assert_not_called()
+
+    def test_late_drag_export_completion_does_not_touch_disposed_browser(self):
+        entry = BrowserEntry("a.txt", "a.txt", False)
+        browser = object.__new__(CompactCloudBrowser)
+        browser._drag_export_pending = {("Docs", "a.txt")}
+        browser._is_disposed = mock.Mock(return_value=True)
+        browser._finish_working_paths = mock.Mock()
+
+        browser._drag_export_ready("Docs", [entry], "")
+
+        self.assertEqual(browser._drag_export_pending, set())
+        browser._finish_working_paths.assert_not_called()
+
+    def test_internal_shift_drop_moves_even_when_external_drag_is_copy_only(self):
+        shift = 1
+        mime = SimpleNamespace(
+            hasFormat=lambda value: value == "application/x-mountlet-remote-files",
+            data=lambda _value: b"[]",
+        )
+        event = SimpleNamespace(
+            mimeData=lambda: mime,
+            modifiers=lambda: shift,
+        )
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(
+            Qt=SimpleNamespace(KeyboardModifier=SimpleNamespace(ShiftModifier=shift))
+        )
+        browser._drop_event_supported = mock.Mock(return_value=True)
+        browser.accept_drop = mock.Mock()
+
+        self.assertTrue(browser._handle_drop_event(event))
+        browser.accept_drop.assert_called_once_with(b"[]", move=True)
 
     def test_update_actions_ignores_deleted_qt_tree_during_shutdown(self):
         class DeletedTree:
