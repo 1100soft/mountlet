@@ -3,6 +3,120 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
+## Current Handoff (2026-08-03)
+
+### Repository state
+
+- The active repository is `/home/eh930/project/apps/mountlet`, on branch
+  `wip`. Some tool sessions still start in the deprecated
+  `cloud_mount_manager` directory; do not inspect or modify that project.
+- The public app version is `0.6.3`. No new release, tag, or commit has been
+  made for the work described below.
+- The working tree is intentionally dirty. Current changes span
+  `app/README.md`, the cloud-browser backend and UI, tray/icon code, their
+  tests, and website FAQ/script content. Treat all of them as active work and
+  never reset or replace them with `HEAD` wholesale.
+- The last committed revision at handoff was `af7e3ee` (`Support direct folder
+  and remote drops`). The uncommitted work extends that drag-and-drop design
+  and contains the Google Photos fixes below.
+
+### Current implementation
+
+- External and internal drag-and-drop can target the displayed folder, a
+  visible child folder, or a remote row. Remote-row drops use that remote's
+  remembered folder. Google Photos drops go to `upload`, except when a
+  specific `album/<name>` folder is targeted.
+- Folder loads are cancellable and isolated per remote. A stalled Google
+  Photos virtual-folder request must not block navigation or operations on
+  other remotes. Photos skips recursive auto-indexing, neighboring-folder
+  prefetch, search-result API verification, and automatic cloud-side cache
+  polling to conserve its restricted API quota.
+- Google Photos date leaves are projected from the cached `media/all` listing.
+  Media views are read-only; destructive operations are allowed only for media
+  entries in albums created through rclone.
+- rclone flags are now capability-sensitive. Mountlet probes `rclone help
+  flags` once per binary and caches the result. Older binaries receive
+  `--gphotos-read-size=false` when supported but do not receive the newer
+  `--gphotos-batch-mode=off` option. Do not revert to unconditional
+  provider-specific flags.
+- Theme refresh now regenerates toolbar icons and repaints already rendered
+  file rows. This is required because clearing the file-icon cache alone left
+  existing rows with icons from the previous or startup palette.
+- Drive and Google Photos remotes can store an optional
+  `mountlet_google_account` email. Mountlet uses it as Google's `login_hint`
+  during future authorization and as `authuser` for **Open in web**. The web
+  hint selects only an account that already has a session in the default
+  browser; it does not redirect an unsigned-in account through Google login.
+  Changing this metadata does not require reauthentication or remounting.
+
+### Website and service boundaries
+
+- `web/` is the Cloudflare Pages site and Functions backend. D1 stores license,
+  device, payment, and notice data; R2 stores installers. Stripe handles test
+  or production checkout, and Resend is optional for transactional mail.
+- `main`/version tags use production services at `https://mountlet.app`;
+  `wip` builds use `https://wip.mountlet.pages.dev`; local builds default to
+  local endpoints. Keep build-channel URLs in `build_info.py` and generated
+  build metadata instead of scattering literals through UI code.
+- Production and preview require separate Cloudflare bindings and Stripe keys.
+  Notice history and client state are channel-specific so preview notices do
+  not appear in production.
+- App support and crash reports post to `/api/report`. The backend forwards
+  reports to the configured private GitHub issue repository and optionally by
+  email; reports are not mirrored into D1. Do not reintroduce the removed D1
+  report-management workaround.
+- Release filenames come from `web/release-files.json`. The native package
+  workflow builds every platform/variant, verifies all package jobs, then
+  uploads matching installers to the preview or production R2 bucket.
+
+### Latest Google Photos diagnosis
+
+The reported symptoms were an apparent `/media` root, inaccessible albums,
+only `media/all` being visible, failed JPEG drops, and dim file-browser icons.
+The upload error was `unknown flag: --gphotos-batch-mode`.
+
+The configured remote itself has no Mountlet remote subpath. Its remembered
+browser path was under `media/all`, which explains why selection reopened that
+view. Read-only live checks established that the backend root is healthy:
+
+- both the current app-local rclone (`1.74.3`) and Ubuntu's older system rclone
+  (`1.60.1`) list `album`, `feature`, `media`, `shared-album`, and `upload` at
+  the remote root when given compatible flags;
+- current rclone lists `all`, `by-day`, `by-month`, and `by-year` under
+  `media`;
+- the album root returns the configured album normally.
+
+The root cause was therefore not a changed Photos root. The new Photos command
+policy appended `--gphotos-batch-mode=off` to every command, while rclone
+`1.60.1` does not advertise that flag. Listings failed and the UI retained
+older cached folder contents, making the namespace appear truncated. The
+capability probe fixes listings and transfers without dropping the anti-stall
+batch setting on newer rclone versions.
+
+### Verification and next steps
+
+- `PYTHONPATH=src python packaging/run_tests.py`: 662 tests passed, 1 skipped.
+- Focused cloud-browser tests: 172 passed.
+- Ruff checks and Python compilation passed for the changed cloud-browser
+  files and tests. `git diff --check` passed.
+- The capability probe was exercised against both local binaries: rclone
+  `1.60.1` receives only `--gphotos-read-size=false`; rclone `1.74.3` also
+  receives `--gphotos-batch-mode=off`.
+
+The next required step is user validation from a newly built preview installer:
+
+1. Open the Photos remote root and confirm albums and all four `media` views.
+2. Drop a JPEG and confirm it reaches `upload` without an unknown-flag error.
+3. Open a specific album and confirm a drop targets that album.
+4. Switch themes with the file list already visible and confirm existing row
+   icons repaint immediately.
+
+If a Photos folder still fails, collect the selected rclone version and raw
+rclone output before changing the namespace code. Distinguish a real listing
+failure from the remembered browser path and cached fallback. Google Photos
+also has daily API quotas; quota exhaustion must remain a bounded, explicit
+error rather than trigger broad retries or background scans.
+
 ## Development
 
 ### Platform architecture
@@ -129,18 +243,21 @@ python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
 ```
 
 By default this produces the lean variant, which uses a system `rclone`. To
-produce a bundled-rclone variant, stage a platform-matching rclone binary first:
+produce a bundled-rclone variant with the current official platform binary,
+stage rclone first:
 
 ```bash
-python packaging/stage_rclone.py /path/to/rclone
+python packaging/stage_rclone.py
 ```
 
-The staged binary is copied into `vendor/rclone/`, included in the native
-bundle, and ignored by git. On Windows, the staging script rejects
-package-manager shim executables and requires the real `rclone.exe`. The app
-still honors `RCLONE_PATH` first for users who explicitly choose another
-rclone. FUSE, WinFsp, and macFUSE are not bundled; they remain optional
-native-folder support.
+With no argument, the staging script downloads rclone's official current
+archive. An explicit `/path/to/rclone` is available only when deliberately
+testing another compatible binary. The staged binary is copied into
+`vendor/rclone/`, included in the native bundle, and ignored by git. On
+Windows, explicit staging rejects package-manager shim executables and requires
+the real `rclone.exe`. Lean installs discover `RCLONE_PATH` or a system rclone;
+bundled installs use their app-local binary. FUSE, WinFsp, and macFUSE are not
+bundled; they remain optional native-folder support.
 
 The `Native package CI` workflow builds visible `system-rclone` and
 `bundled-rclone` artifacts. Each artifact contains a portable bundle plus a
@@ -213,9 +330,9 @@ syncing the complete Mountlet config bundle.
 - Keep source-based installs available for technical users.
 - Build unsigned standalone Linux, Windows, and macOS development artifacts in
   GitHub Actions before introducing signing and notarization.
-- Publish native desktop packages through GitHub Releases. Keep unsigned builds
-  clearly labeled until Windows code signing and Apple Developer ID
-  notarization are configured.
+- Publish native desktop packages through the website's R2-backed download
+  routes. Keep unsigned builds clearly labeled until Windows code signing and
+  Apple Developer ID notarization are configured.
 
 Native packages embed a build channel and build identifier separately from the
 public version. `main` and version tags produce production builds; `wip`

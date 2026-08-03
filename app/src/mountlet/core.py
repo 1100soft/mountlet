@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import re
+from urllib.parse import urlencode
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
@@ -200,8 +201,8 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
 COMMON_SAFE_RCLONE_KEYS = ("description",)
 SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
-    "drive": ("client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
-    "gphotos": ("client_id", "client_secret", "read_only", "read_size", "include_archived", "start_year"),
+    "drive": ("mountlet_google_account", "client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "gphotos": ("mountlet_google_account", "client_id", "client_secret", "read_only", "read_size", "include_archived", "start_year"),
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor", "user", "pass", "bearer_token"),
     "s3": (
@@ -378,6 +379,13 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
             config[remote_name][key] = text
         else:
             config.remove_option(remote_name, key)
+        if key == "mountlet_google_account":
+            if text:
+                config[remote_name]["auth_url"] = (
+                    "https://accounts.google.com/o/oauth2/auth?" + urlencode({"login_hint": text})
+                )
+            elif "login_hint=" in config[remote_name].get("auth_url", ""):
+                config.remove_option(remote_name, "auth_url")
     _save_config(config)
 
 

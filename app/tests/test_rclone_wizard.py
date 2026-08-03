@@ -168,6 +168,25 @@ class RcloneWizardTests(unittest.TestCase):
         self.assertEqual(command[command.index("config_is_local") + 1], "false")
         self.assertEqual(step.option["Name"], "config_token")
 
+    def test_google_account_is_saved_as_mountlet_metadata_and_hints_oauth(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            process = FakeProcess(stdout='{"State":"next","Option":{},"Error":"","Result":""}')
+            args = rclone_wizard.google_account_config_args("person+drive@example.com")
+            with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
+                    with mock.patch.object(subprocess, "Popen", return_value=process) as popen:
+                        rclone_wizard.start_remote("Docs", "drive", args)
+
+            command = popen.call_args.args[0]
+            self.assertNotIn("mountlet_google_account", command)
+            self.assertIn("auth_url", command)
+            self.assertTrue(any("login_hint=person%2Bdrive%40example.com" in item for item in command))
+            self.assertIn(
+                "mountlet_google_account = person+drive@example.com",
+                config_path.read_text(encoding="utf-8"),
+            )
+
     def test_continue_remote_preserves_generic_backend_type(self):
         with tempfile.TemporaryDirectory() as tempdir:
             config_path = Path(tempdir) / "rclone.conf"

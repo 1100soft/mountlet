@@ -551,6 +551,20 @@ function setActiveTab(nextTab, options = {}) {
   }
 }
 
+function openLinkedFaq() {
+  const faqId = new URLSearchParams(window.location.search).get("faq");
+  if (!faqId) {
+    return;
+  }
+  const entry = document.getElementById(faqId);
+  if (!(entry instanceof HTMLDetailsElement) || !entry.closest("#panel-faq")) {
+    return;
+  }
+  entry.hidden = false;
+  entry.open = true;
+  requestAnimationFrame(() => entry.scrollIntoView({block: "start"}));
+}
+
 async function loadNotifications({force = false} = {}) {
   const status = document.querySelector("#notifications-status");
   const refreshButton = document.querySelector("#refresh-notifications");
@@ -1004,6 +1018,7 @@ window.addEventListener("popstate", () => {
 
 applyConfiguredLinks();
 setActiveTab(window.location.hash, {skipHash: true});
+openLinkedFaq();
 const shouldValidatePrefilledLicense = applyPricingUrlParams();
 updateAddDevicePrice();
 updatePricingMode();

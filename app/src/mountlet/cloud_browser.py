@@ -24,6 +24,16 @@ OFFLINE_CACHE_DIR = "offline"
 OFFLINE_MANIFEST_FILE = "offline_manifest.json"
 REMOTE_CURRENT_DIR = ".mountlet-remote-current"
 RCLONE_FILE_OPERATION_TIMEOUT_SECONDS = 120
+GOOGLE_PHOTOS_COMMAND_FLAGS = (
+    "--low-level-retries=1",
+    "--retries=1",
+    "--contimeout=10s",
+    "--timeout=30s",
+)
+GOOGLE_PHOTOS_OPTIONAL_FLAGS = (
+    ("--gphotos-read-size", "--gphotos-read-size=false"),
+    ("--gphotos-batch-mode", "--gphotos-batch-mode=off"),
+)
 RCLONE_CACHE_SYNC_TIMEOUT_SECONDS = 45
 RCLONE_METADATA_TIMEOUT_SECONDS = 15
 DRIVE_EDITABLE_DOCUMENT_FORMATS = ("docx", "xlsx", "pptx", "svg")
@@ -40,6 +50,10 @@ class BrowserEntry:
     is_dir: bool
     size: int = 0
     modified: str = ""
+
+
+class ListingCancelled(RuntimeError):
+    """Raised when a folder listing is no longer relevant to the UI."""
 
 
 @dataclass(frozen=True)
@@ -129,6 +143,30 @@ def _is_google_photos_upload_listing(remote: core.RemoteInfo, path: str, stderr:
     )
 
 
+def _listing_timeout(remote: core.RemoteInfo, path: str) -> int:
+    if remote.backend_type.casefold() != "gphotos":
+        return 60
+    parts = PurePosixPath(normalize_browser_path(path)).parts
+    # Google has no efficient directory primitive for these virtual views.
+    # Bound leaf traversal more tightly so it cannot look like a hung browser.
+    if len(parts) >= 2 and parts[0].casefold() in {"album", "feature"}:
+        return 30
+    return 60
+
+
+def _rclone_error(remote: core.RemoteInfo, detail: str, fallback: str) -> str:
+    message = detail.strip()
+    if remote.backend_type.casefold() == "gphotos" and (
+        "resource_exhausted" in message.casefold()
+        or "quota exceeded" in message.casefold()
+    ):
+        return (
+            "Google Photos API request quota is exhausted. Google resets the quota daily; "
+            "try again after the reset or raise the Photos Library API quota for this OAuth client."
+        )
+    return message or fallback
+
+
 def format_file_size(size: int) -> str:
     if size < 1024:
         return f"{size} B"
@@ -159,6 +197,8 @@ class CloudBrowserBackend:
         self._offline_records = self._load_offline_manifest()
         self.index = MetadataIndex(self.state_path.with_name("metadata-index.sqlite3"))
         self.operation_output_callback: Callable[[str], None] | None = None
+        self._rclone_flag_lock = threading.Lock()
+        self._rclone_flags_by_binary: dict[str, frozenset[str]] = {}
 
     def current_path(self, remote_name: str) -> str:
         return normalize_browser_path(self._paths.get(remote_name, ""))
@@ -195,7 +235,18 @@ class CloudBrowserBackend:
         temporary.write_text(json.dumps({"paths": self._paths}, indent=2, sort_keys=True), encoding="utf-8")
         temporary.replace(self.state_path)
 
-    def list_entries(self, remote: core.RemoteInfo, path: str) -> list[BrowserEntry]:
+    def list_entries(
+        self,
+        remote: core.RemoteInfo,
+        path: str,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> list[BrowserEntry]:
+        projected = self._google_photos_date_entries(remote, path)
+        if projected is not None:
+            return projected
+        date_prefix = self._google_photos_date_prefix(remote, path)
+        listing_path = "media/all" if date_prefix else path
         try:
             binary = self._rclone()
         except RuntimeError:
@@ -203,21 +254,47 @@ class CloudBrowserBackend:
             if offline is not None:
                 return offline
             raise
-        result = subprocess.run(
-            self._command(binary, "lsjson", remote_target(remote, path), "--max-depth", "1"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=60,
-            **core.PLATFORM.command_process_options(),
+        timeout = _listing_timeout(remote, listing_path)
+        command = self._command_for_remote(
+            binary,
+            remote,
+            "lsjson",
+            remote_target(remote, listing_path),
+            "--max-depth",
+            "1",
         )
+        try:
+            if cancel_event is None:
+                result = subprocess.run(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout,
+                    **core.PLATFORM.command_process_options(),
+                )
+            else:
+                result = self._run_cancellable_listing(command, timeout, cancel_event)
+        except subprocess.TimeoutExpired as exc:
+            if remote.backend_type.casefold() == "gphotos":
+                raise RuntimeError(
+                    f"Google Photos did not return this virtual folder within {timeout} seconds. "
+                    "Try Google Photos in your browser instead."
+                ) from exc
+            raise
         if result.returncode != 0:
-            if _is_google_photos_upload_listing(remote, path, result.stderr):
+            if _is_google_photos_upload_listing(remote, listing_path, result.stderr):
                 return []
             offline = self._list_offline_entries(remote.name, path)
             if offline is not None:
                 return offline
-            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+            raise RuntimeError(
+                _rclone_error(
+                    remote,
+                    result.stderr,
+                    f"rclone exited with code {result.returncode}",
+                )
+            )
         try:
             values = json.loads(result.stdout or "[]")
         except json.JSONDecodeError as exc:
@@ -231,22 +308,106 @@ class CloudBrowserBackend:
             entries.append(
                 BrowserEntry(
                     name=name,
-                    path=join_browser_path(path, name),
+                    path=join_browser_path(listing_path, name),
                     is_dir=bool(value.get("IsDir")),
                     size=max(int(value.get("Size") or 0), 0),
                     modified=modified,
                 )
             )
         entries = sorted(entries, key=lambda entry: (not entry.is_dir, entry.name.casefold()))
-        self.index.upsert_folder(remote, path, entries)
-        return entries
+        self.index.upsert_folder(remote, listing_path, entries)
+        return self._project_google_photos_date_entries(entries, date_prefix) if date_prefix else entries
+
+    def _run_cancellable_listing(
+        self,
+        command: list[str],
+        timeout: int,
+        cancel_event: threading.Event,
+    ) -> subprocess.CompletedProcess[str]:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            **core.PLATFORM.command_process_options(),
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            if cancel_event.is_set():
+                self._stop_listing_process(process)
+                raise ListingCancelled("Folder listing was superseded")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._stop_listing_process(process)
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                continue
+
+    @staticmethod
+    def _stop_listing_process(process: subprocess.Popen[str]) -> None:
+        with suppress(Exception):
+            process.terminate()
+            process.communicate(timeout=0.5)
+            return
+        with suppress(Exception):
+            process.kill()
+            process.communicate(timeout=0.5)
+
+    def _google_photos_date_entries(
+        self,
+        remote: core.RemoteInfo,
+        path: str,
+    ) -> list[BrowserEntry] | None:
+        date_prefix = self._google_photos_date_prefix(remote, path)
+        if not date_prefix:
+            return None
+        source = self.cached_entries(remote, "media/all")
+        if not source:
+            return None
+        return self._project_google_photos_date_entries(source, date_prefix)
+
+    def _google_photos_date_prefix(self, remote: core.RemoteInfo, path: str) -> str:
+        if remote.backend_type.casefold() != "gphotos":
+            return ""
+        parts = PurePosixPath(normalize_browser_path(path)).parts
+        if len(parts) == 3 and parts[:2] == ("media", "by-year"):
+            return parts[2]
+        if len(parts) == 4 and parts[:2] in {("media", "by-month"), ("media", "by-day")}:
+            return parts[3]
+        return ""
+
+    def _project_google_photos_date_entries(
+        self,
+        source: list[BrowserEntry],
+        date_prefix: str,
+    ) -> list[BrowserEntry]:
+        return [
+            BrowserEntry(
+                name=entry.name,
+                path=join_browser_path("media/all", entry.name),
+                is_dir=False,
+                size=entry.size,
+                modified=entry.modified,
+            )
+            for entry in source
+            if not entry.is_dir and entry.modified.startswith(date_prefix)
+        ]
 
     def list_entries_recursive(self, remote: core.RemoteInfo, entry: BrowserEntry) -> list[BrowserEntry]:
         if not entry.is_dir:
             return [entry]
         binary = self._rclone()
         result = subprocess.run(
-            self._command(binary, "lsjson", remote_target(remote, entry.path), "--recursive"),
+            self._command_for_remote(
+                binary,
+                remote,
+                "lsjson",
+                remote_target(remote, entry.path),
+                "--recursive",
+            ),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -254,7 +415,13 @@ class CloudBrowserBackend:
             **core.PLATFORM.command_process_options(),
         )
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+            raise RuntimeError(
+                _rclone_error(
+                    remote,
+                    result.stderr,
+                    f"rclone exited with code {result.returncode}",
+                )
+            )
         try:
             values = json.loads(result.stdout or "[]")
         except json.JSONDecodeError as exc:
@@ -310,7 +477,13 @@ class CloudBrowserBackend:
     def index_remote_tree(self, remote: core.RemoteInfo) -> int:
         binary = self._rclone()
         result = subprocess.run(
-            self._command(binary, "lsjson", remote_target(remote, ""), "--recursive"),
+            self._command_for_remote(
+                binary,
+                remote,
+                "lsjson",
+                remote_target(remote, ""),
+                "--recursive",
+            ),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -318,7 +491,13 @@ class CloudBrowserBackend:
             **core.PLATFORM.command_process_options(),
         )
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+            raise RuntimeError(
+                _rclone_error(
+                    remote,
+                    result.stderr,
+                    f"rclone exited with code {result.returncode}",
+                )
+            )
         try:
             values = json.loads(result.stdout or "[]")
         except json.JSONDecodeError as exc:
@@ -404,7 +583,16 @@ class CloudBrowserBackend:
                     arguments.append("--delete-empty-src-dirs")
             else:
                 arguments = ["moveto" if move else "copyto", source, target]
-            self._run_operation(binary, *arguments)
+            # Transfers can legitimately exceed two minutes. Streaming mode
+            # preserves progress and completion state without treating size or
+            # a slow provider as a hung command.
+            command_remote = (
+                source_remote
+                if source_remote.backend_type.casefold() == "gphotos"
+                and destination.backend_type.casefold() != "gphotos"
+                else destination
+            )
+            self._run_operation(binary, *arguments, timeout=None, remote=command_remote)
 
     def copy_local_paths(
         self,
@@ -420,22 +608,47 @@ class CloudBrowserBackend:
             target_path = join_browser_path(destination_path, source.name)
             target = remote_target(destination, target_path)
             if source.is_dir():
-                self._run_operation(binary, "copy", str(source), target, "--create-empty-src-dirs", timeout=None)
+                self._run_operation(
+                    binary,
+                    "copy",
+                    str(source),
+                    target,
+                    "--create-empty-src-dirs",
+                    timeout=None,
+                    remote=destination,
+                )
             else:
-                self._run_operation(binary, "copyto", str(source), target, timeout=None)
+                self._run_operation(
+                    binary,
+                    "copyto",
+                    str(source),
+                    target,
+                    timeout=None,
+                    remote=destination,
+                )
 
     def delete_entries(self, remote: core.RemoteInfo, entries: Iterable[BrowserEntry]) -> None:
         binary = self._rclone()
         for entry in entries:
             operation = "purge" if entry.is_dir else "deletefile"
-            self._run_operation(binary, operation, remote_target(remote, entry.path))
+            self._run_operation(
+                binary,
+                operation,
+                remote_target(remote, entry.path),
+                remote=remote,
+            )
             self.remove_offline(remote.name, entry.path)
 
     def create_folder(self, remote: core.RemoteInfo, parent: str, name: str) -> None:
         normalized_name = normalize_browser_path(name)
         if not normalized_name or "/" in normalized_name or normalized_name != name.strip():
             raise RuntimeError("Enter a single folder name without slashes")
-        self._run_operation(self._rclone(), "mkdir", remote_target(remote, join_browser_path(parent, normalized_name)))
+        self._run_operation(
+            self._rclone(),
+            "mkdir",
+            remote_target(remote, join_browser_path(parent, normalized_name)),
+            remote=remote,
+        )
 
     def rename_entry(self, remote: core.RemoteInfo, entry: BrowserEntry, new_name: str) -> str:
         normalized_name = normalize_browser_path(new_name)
@@ -458,6 +671,7 @@ class CloudBrowserBackend:
             "moveto",
             remote_target(remote, old_path),
             remote_target(remote, new_path),
+            remote=remote,
         )
         self._rename_offline_path(remote.name, old_path, new_path)
         self.index.rename_path(remote.name, old_path, new_path)
@@ -498,6 +712,7 @@ class CloudBrowserBackend:
                 str(destination),
                 "--create-empty-src-dirs",
                 timeout=None,
+                remote=remote,
             )
             self._offline_marker(destination).touch()
             self._record_offline_tree(remote.name, entry, destination, protected=True)
@@ -545,6 +760,7 @@ class CloudBrowserBackend:
             str(destination),
             "--create-empty-src-dirs",
             timeout=None,
+            remote=remote,
         )
         self._record_offline_tree(remote.name, entry, destination, protected=False)
         ready = self.cached_export_path(remote.name, entry)
@@ -1453,10 +1669,85 @@ class CloudBrowserBackend:
     def _command(self, binary: str, *arguments: str) -> list[str]:
         return [binary, "--config", core.CONFIG_PATH, *arguments]
 
-    def _run_operation(self, binary: str, *arguments: str, timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS) -> None:
-        command = self._command(binary, *arguments)
+    def _command_for_remote(
+        self,
+        binary: str,
+        remote: core.RemoteInfo,
+        *arguments: str,
+    ) -> list[str]:
+        flags = (
+            self._google_photos_command_flags(binary)
+            if remote.backend_type.casefold() == "gphotos"
+            else ()
+        )
+        return self._command(binary, *arguments, *flags)
+
+    def _google_photos_command_flags(self, binary: str) -> tuple[str, ...]:
+        supported = self._supported_rclone_flags(binary)
+        optional = tuple(
+            value
+            for name, value in GOOGLE_PHOTOS_OPTIONAL_FLAGS
+            if name in supported
+        )
+        return (*optional, *GOOGLE_PHOTOS_COMMAND_FLAGS)
+
+    def _supported_rclone_flags(self, binary: str) -> frozenset[str]:
+        candidate = Path(binary).expanduser()
+        if not candidate.is_file():
+            # Test doubles and command names resolved by a wrapper cannot be
+            # probed reliably. Real platform discovery returns an existing
+            # path, so retain the intended flags for those synthetic callers.
+            return frozenset(name for name, _value in GOOGLE_PHOTOS_OPTIONAL_FLAGS)
+        cache_key = str(candidate.resolve())
+        with self._rclone_flag_lock:
+            cached = self._rclone_flags_by_binary.get(cache_key)
+            if cached is not None:
+                return cached
+            try:
+                result = subprocess.run(
+                    [binary, "help", "flags"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                    **core.PLATFORM.command_process_options(),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                result = None
+            output = (
+                f"{result.stdout}\n{result.stderr}"
+                if result is not None and result.returncode == 0
+                else ""
+            )
+            supported = frozenset(re.findall(r"--[a-z0-9][a-z0-9-]*", output.casefold()))
+            self._rclone_flags_by_binary[cache_key] = supported
+            return supported
+
+    def _run_operation(
+        self,
+        binary: str,
+        *arguments: str,
+        timeout: int | None = RCLONE_FILE_OPERATION_TIMEOUT_SECONDS,
+        remote: core.RemoteInfo | None = None,
+    ) -> None:
+        command = (
+            self._command_for_remote(binary, remote, *arguments)
+            if remote is not None
+            else self._command(binary, *arguments)
+        )
         if self.operation_output_callback is not None and timeout is None:
-            self._run_operation_streaming(command)
+            try:
+                self._run_operation_streaming(command)
+            except RuntimeError as exc:
+                if remote is not None:
+                    raise RuntimeError(
+                        _rclone_error(
+                            remote,
+                            str(exc),
+                            f"rclone exited while running {arguments[0] if arguments else 'operation'}",
+                        )
+                    ) from exc
+                raise
             return
         try:
             result = subprocess.run(
@@ -1471,6 +1762,14 @@ class CloudBrowserBackend:
             operation = arguments[0] if arguments else "operation"
             raise RuntimeError(f"rclone {operation} timed out after {timeout} seconds") from exc
         if result.returncode != 0:
+            if remote is not None:
+                raise RuntimeError(
+                    _rclone_error(
+                        remote,
+                        result.stderr,
+                        f"rclone exited with code {result.returncode}",
+                    )
+                )
             raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
 
     def _run_operation_streaming(self, command: list[str]) -> None:
@@ -1541,7 +1840,13 @@ class CloudBrowserBackend:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"rclone metadata check timed out after {timeout} seconds") from exc
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"rclone exited with code {result.returncode}")
+            raise RuntimeError(
+                _rclone_error(
+                    remote,
+                    result.stderr,
+                    f"rclone exited with code {result.returncode}",
+                )
+            )
         try:
             metadata = json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
@@ -1561,9 +1866,22 @@ class CloudBrowserBackend:
     ) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
-            self._run_operation(binary, "copyto", remote_target(remote, path), str(destination))
+            self._run_operation(
+                binary,
+                "copyto",
+                remote_target(remote, path),
+                str(destination),
+                remote=remote,
+            )
         else:
-            self._run_operation(binary, "copyto", remote_target(remote, path), str(destination), timeout=timeout)
+            self._run_operation(
+                binary,
+                "copyto",
+                remote_target(remote, path),
+                str(destination),
+                timeout=timeout,
+                remote=remote,
+            )
         self._make_file_writable(destination)
 
     def _upload_remote_file(
@@ -1579,24 +1897,54 @@ class CloudBrowserBackend:
         import_flags = self._drive_document_import_flags(remote, source, remote_metadata)
         try:
             if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
-                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
+                self._run_operation(
+                    binary,
+                    "copyto",
+                    str(source),
+                    remote_target(remote, path),
+                    *import_flags,
+                    remote=remote,
+                )
             else:
-                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
+                self._run_operation(
+                    binary,
+                    "copyto",
+                    str(source),
+                    remote_target(remote, path),
+                    *import_flags,
+                    timeout=timeout,
+                    remote=remote,
+                )
         except RuntimeError as exc:
             if import_flags or not self._drive_document_upload_needs_import_flags(remote, source, exc):
                 raise
             import_flags = self._drive_document_import_flags(remote, source, {"MimeType": GOOGLE_APPS_MIME_PREFIX})
             if timeout == RCLONE_FILE_OPERATION_TIMEOUT_SECONDS:
-                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags)
+                self._run_operation(
+                    binary,
+                    "copyto",
+                    str(source),
+                    remote_target(remote, path),
+                    *import_flags,
+                    remote=remote,
+                )
             else:
-                self._run_operation(binary, "copyto", str(source), remote_target(remote, path), *import_flags, timeout=timeout)
+                self._run_operation(
+                    binary,
+                    "copyto",
+                    str(source),
+                    remote_target(remote, path),
+                    *import_flags,
+                    timeout=timeout,
+                    remote=remote,
+                )
         return bool(import_flags)
 
     def _remote_metadata_command(self, binary: str, remote: core.RemoteInfo, path: str) -> list[str]:
         arguments = ["lsjson", remote_target(remote, path), "--stat", "--hash"]
         if remote.backend_type.casefold() != "drive":
             arguments.append("--no-mimetype")
-        return self._command(binary, *arguments)
+        return self._command_for_remote(binary, remote, *arguments)
 
     def _drive_document_import_flags(
         self,

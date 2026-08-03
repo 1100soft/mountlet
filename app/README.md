@@ -85,6 +85,11 @@ may change for future renewals with advance notice.
 ## Daily Use
 
 - Select a remote to show its file browser.
+- For Google Drive and Google Photos, the optional **Google account** setting
+  helps **Open in web** choose the matching account. The account must already
+  be signed in within the default browser; the hint does not start a new Google
+  sign-in session. Leave the setting blank to use the browser's current
+  account.
 - Type in the main search box to search all indexed remotes.
 - Type in the file-browser search box to search the current remote.
 - Open files directly. Mountlet opens a managed local cache copy whether or
@@ -130,10 +135,14 @@ Locally tested:
 - MEGA. Sign in through MEGA's website once before setup so the account
   encryption keys exist.
 - Google Photos, with a major limitation: current rclone releases can only
-  download media that rclone uploaded. Mountlet sends dropped files to its
-  `upload` folder. See the
-  [rclone Google Photos guide](https://rclone.org/googlephotos/) for its
-  specialized layout and API limitations.
+  download media that rclone uploaded. Mountlet sends drops outside a specific
+  album to its `upload` folder. Media views are read-only; Google permits
+  rclone to remove media only from albums it created. See the
+  [rclone Google Photos limitations](https://rclone.org/googlephotos/#limitations) for its
+  specialized layout and API limitations. To conserve Google's restricted API
+  quota, Mountlet does not recursively index Photos or poll its cached files
+  for cloud changes; folders refresh when visited and manual **Sync now**
+  remains available.
 
 Available but less tested:
 

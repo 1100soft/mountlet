@@ -178,6 +178,50 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
 
+    def test_remote_browser_url_selects_configured_google_account(self):
+        remote = core.RemoteInfo(
+            "Docs__Drive",
+            "Docs",
+            "Drive",
+            "drive",
+            "/tmp/docs",
+            extra_info={"email": "person+drive@example.com"},
+        )
+
+        self.assertEqual(
+            tray._remote_browser_url(remote),
+            "https://drive.google.com/drive/my-drive?authuser=person%2Bdrive%40example.com",
+        )
+
+    def test_remote_browser_url_opens_configured_google_drive_root(self):
+        remote = core.RemoteInfo(
+            "Team__Drive",
+            "Team",
+            "Drive",
+            "drive",
+            "/tmp/team",
+            extra_info={"team_drive": "drive/id"},
+        )
+
+        self.assertEqual(
+            tray._remote_browser_url(remote),
+            "https://drive.google.com/drive/folders/drive%2Fid",
+        )
+
+    def test_remote_browser_url_uses_email_alias_as_google_account_hint(self):
+        remote = core.RemoteInfo(
+            "person@example.com__Photos",
+            "person@example.com",
+            "Google Photos",
+            "gphotos",
+            "/tmp/photos",
+        )
+
+        self.assertEqual(
+            tray._remote_browser_url(remote),
+            "https://photos.google.com/?authuser=person%40example.com",
+        )
+
     def test_drive_usage_note_is_limited_to_google_drive_backend(self):
         drive = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
         s3 = core.RemoteInfo("Docs__S3", "Docs", "Google Drive", "s3", "/tmp/docs")
@@ -730,6 +774,16 @@ class TrayTests(unittest.TestCase):
         dialog._original_rclone_values = {"env_auth": ""}
 
         self.assertEqual(dialog._changed_auth_fields({"env_auth": "false"}), [])
+
+    def test_mount_config_google_account_change_does_not_require_reauthentication(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/mnt/docs")
+        dialog._original_rclone_values = {"mountlet_google_account": "old@example.com"}
+
+        self.assertEqual(
+            dialog._changed_auth_fields({"mountlet_google_account": "new@example.com"}),
+            [],
+        )
 
     def test_mount_config_masks_protected_credentials(self):
         dialog = object.__new__(tray.MountConfigDialog)
@@ -1408,6 +1462,7 @@ class TrayTests(unittest.TestCase):
         wizard._drive_local_auth = True
         wizard._drive_client_id = "client-id"
         wizard._drive_client_secret = "client-secret"
+        wizard._google_account = "photos@example.com"
         wizard.fields = {"gphotos_read_only": mock.Mock(isChecked=mock.Mock(return_value=True))}
 
         self.assertEqual(
@@ -1425,6 +1480,10 @@ class TrayTests(unittest.TestCase):
                 "true",
                 "read_size",
                 "true",
+                "mountlet_google_account",
+                "photos@example.com",
+                "auth_url",
+                "https://accounts.google.com/o/oauth2/auth?login_hint=photos%40example.com",
             ],
         )
 
@@ -1977,6 +2036,37 @@ class TrayTests(unittest.TestCase):
         timer.setInterval.assert_called_once_with(30_000)
         timer.timeout.connect.assert_called_once_with(mountlet_window._scan_remote_cache_changes)
         timer.start.assert_called_once_with()
+
+    def test_mountlet_window_skips_automatic_google_photos_cache_polling(self):
+        photos = core.RemoteInfo(
+            "Photos",
+            "Photos",
+            "Google Photos",
+            "gphotos",
+            "/mnt/Photos",
+        )
+        docs = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/Docs")
+        backend = mock.Mock()
+        backend.managed_record_paths.return_value = ["cached.jpg"]
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window.file_browser = SimpleNamespace(backend=backend)
+        mountlet_window._action_pending = set()
+        mountlet_window._offline_reconcile_scheduled = set()
+        mountlet_window._offline_reconcile_running = set()
+        mountlet_window._remote_change_poll_index = 0
+        mountlet_window._remote_change_poll_offsets = {}
+        mountlet_window._start_remote_cache_check = mock.Mock(return_value=True)
+
+        with mock.patch.object(mountlet_window, "_license_locked", return_value=False):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[photos, docs]):
+                mountlet_window._scan_remote_cache_changes()
+
+        backend.managed_record_paths.assert_called_once_with("Docs")
+        mountlet_window._start_remote_cache_check.assert_called_once_with(
+            docs,
+            ["cached.jpg"],
+        )
 
     def test_mountlet_window_disables_background_storage_checks_for_frozen_linux_x11_by_default(self):
         remote = SimpleNamespace(name="Docs")
@@ -4777,6 +4867,37 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(changes, [(old_remote, new_remote)])
 
+    def test_remount_changes_ignore_google_account_web_metadata(self):
+        old_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            extra_info={"type": "drive", "token": "token"},
+        )
+        new_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            extra_info={
+                "type": "drive",
+                "token": "token",
+                "mountlet_google_account": "person@example.com",
+                "auth_url": (
+                    "https://accounts.google.com/o/oauth2/auth?login_hint=person%40example.com"
+                ),
+            },
+        )
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], {"Docs"})
+
+        self.assertEqual(changes, [])
+
     def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
         remotes = [
             core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True),
@@ -4846,26 +4967,49 @@ class TrayTests(unittest.TestCase):
         window.file_browser.close.assert_not_called()
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
 
-    def test_remote_card_accepts_local_file_drop_at_remote_root(self):
+    def test_remote_card_accepts_local_file_drop_at_persisted_folder(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
-        local = Path("/tmp/a.txt")
-        mime = SimpleNamespace(hasFormat=lambda _value: False)
-        event = SimpleNamespace(mimeData=lambda: mime, ignore=mock.Mock())
+        event = SimpleNamespace(ignore=mock.Mock())
         browser = mock.Mock()
-        browser._mime_drop_supported.return_value = True
-        browser._local_paths_from_mime.return_value = [local]
+        browser.backend.current_path.return_value = "Inbox/Reports"
         window = object.__new__(tray.MountletWindow)
         window.file_browser = browser
         window._license_locked = mock.Mock(return_value=False)
 
         window._remote_drop(event, remote)
 
-        browser.accept_local_paths.assert_called_once_with(
-            [local],
+        browser.perform_drop.assert_called_once_with(
+            event,
             destination_remote=remote,
-            destination_path="",
+            destination_path="Inbox/Reports",
         )
-        browser._accept_drag_event.assert_called_once_with(event)
+
+    def test_remote_card_drag_hover_previews_destination_even_when_hover_was_suppressed(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        row = mock.Mock()
+        mime = SimpleNamespace()
+        event = SimpleNamespace(mimeData=lambda: mime, ignore=mock.Mock())
+        browser = mock.Mock()
+        browser.preview_drop.return_value = True
+        browser.backend.current_path.return_value = "Inbox"
+        browser.remote = None
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = browser
+        window._license_locked = mock.Mock(return_value=False)
+        window._release_remote_hover_suppression = mock.Mock()
+        window._remote_row_style = mock.Mock(return_value="style")
+        window._cancel_remote_preview = mock.Mock()
+        window._show_file_browser_for_remote = mock.Mock()
+
+        window._remote_drag_enter(event, row, remote)
+
+        window._release_remote_hover_suppression.assert_called_once_with()
+        row.setProperty.assert_called_once_with("hovered", True)
+        window._show_file_browser_for_remote.assert_called_once_with(
+            remote,
+            row,
+            focus_browser=False,
+        )
 
     def test_remote_card_internal_drop_targets_google_photos_upload(self):
         remote = core.RemoteInfo(
@@ -4885,7 +5029,7 @@ class TrayTests(unittest.TestCase):
             ignore=mock.Mock(),
         )
         browser = mock.Mock()
-        browser._mime_drop_supported.return_value = True
+        browser.backend.current_path.return_value = "media/by-year/2026"
         window = object.__new__(tray.MountletWindow)
         window.file_browser = browser
         window._license_locked = mock.Mock(return_value=False)
@@ -4897,13 +5041,11 @@ class TrayTests(unittest.TestCase):
 
         window._remote_drop(event, remote)
 
-        browser.accept_drop.assert_called_once_with(
-            b"[]",
-            move=False,
+        browser.perform_drop.assert_called_once_with(
+            event,
             destination_remote=remote,
-            destination_path="",
+            destination_path="media/by-year/2026",
         )
-        browser._accept_drag_event.assert_called_once_with(event)
 
     def test_google_photos_usage_field_links_to_rclone_guide(self):
         remote = core.RemoteInfo(
@@ -4923,7 +5065,7 @@ class TrayTests(unittest.TestCase):
             remote=remote,
         )
 
-        self.assertIn(tray.GOOGLE_PHOTOS_GUIDE_URL, label.setText.call_args.args[0])
+        self.assertIn("?faq=google-photos#faq", label.setText.call_args.args[0])
         label.setToolTip.assert_called_once()
 
     def test_remote_action_finish_does_not_force_reopen_browser(self):

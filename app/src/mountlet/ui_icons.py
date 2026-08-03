@@ -158,6 +158,7 @@ def _ensure_dynamic_icon_refresh(qt: Any, widget: Any) -> None:
             getattr(event_type.Type, "ApplicationPaletteChange", None),
             getattr(event_type.Type, "PaletteChange", None),
             getattr(event_type.Type, "StyleChange", None),
+            getattr(event_type.Type, "Show", None),
         )
         if value is not None
     }

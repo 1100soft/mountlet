@@ -26,12 +26,12 @@ from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from . import __version__, build_info, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
-from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
+from .cloud_browser_ui import CompactCloudBrowser
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, app_state_dir, ensure_app_directories
@@ -165,6 +165,7 @@ MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
 )
 RCLONE_FIELD_TOOLTIPS = {
+    "mountlet_google_account": "Optional Google account email. Mountlet uses it to suggest the account during sign-in and when opening this remote on the web.",
     "client_id": "Google OAuth client ID used by this Drive remote. Changing it may require reconnecting the account.",
     "client_secret": "Google OAuth client secret used by this Drive remote. Changing it may require reconnecting the account.",
     "description": "Optional note stored in rclone.conf. Mountlet does not use this value.",
@@ -239,7 +240,7 @@ RCLONE_SELECT_FIELDS = {
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 DRIVE_USAGE_NOTE = "Google Drive usage excludes Photos and other Google account data."
-GOOGLE_PHOTOS_GUIDE_URL = "https://rclone.org/googlephotos/"
+GOOGLE_PHOTOS_LIMITATIONS_URL = "https://rclone.org/googlephotos/#limitations"
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -518,6 +519,7 @@ REMOTE_BROWSER_URLS = {
     "protondrive": "https://drive.proton.me/",
     "mega": "https://mega.nz/fm",
 }
+REMOUNT_IGNORED_RCLONE_FIELDS = {"mountlet_google_account", "auth_url"}
 _wizard_pending_remote_names: set[str] = set()
 
 
@@ -746,6 +748,20 @@ def _remote_title(remote: core.RemoteInfo, mounted: bool) -> str:
 
 def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
     backend_type = remote.backend_type.casefold()
+    if backend_type in {"drive", "gphotos"}:
+        url = REMOTE_BROWSER_URLS[backend_type]
+        if backend_type == "drive":
+            folder_id = (
+                remote.extra_info.get("root_folder_id", "").strip()
+                or remote.extra_info.get("team_drive", "").strip()
+            )
+            if folder_id:
+                url = f"https://drive.google.com/drive/folders/{quote(folder_id, safe='')}"
+        account = _remote_account_hint(remote)
+        if account:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{urlencode({'authuser': account})}"
+        return url
     if backend_type in REMOTE_BROWSER_URLS:
         return REMOTE_BROWSER_URLS[backend_type]
     if backend_type == "s3":
@@ -766,6 +782,18 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
             remote.extra_info.get("vendor", remote.provider),
         )
     return None
+
+
+def _remote_account_hint(remote: core.RemoteInfo) -> str:
+    """Return an explicitly configured login name suitable for a web URL hint."""
+    for key in ("mountlet_google_account", "account", "email", "user", "username"):
+        value = remote.extra_info.get(key, "").strip()
+        if "@" in value and not any(character.isspace() for character in value):
+            return value
+    alias = remote.alias.strip()
+    if "@" in alias and not any(character.isspace() for character in alias):
+        return alias
+    return ""
 
 
 def _provider_color(remote: core.RemoteInfo) -> str:
@@ -2330,6 +2358,8 @@ def _muted_text_style(widget: Any) -> str:
 
 
 def _field_label(key: str) -> str:
+    if key == "mountlet_google_account":
+        return "Google account"
     return key.replace("_", " ").title()
 
 
@@ -3607,7 +3637,8 @@ class MountConfigDialog(_ConfigDialogBase):
         return [
             key
             for key in updates
-            if key in auth_fields
+            if key != "mountlet_google_account"
+            and key in auth_fields
             and not self._rclone_values_equal(key, updates[key], original.get(key, ""))
         ]
 
@@ -3647,6 +3678,7 @@ class NewRemoteWizard:
         self._state = ""
         self._drive_client_id = ""
         self._drive_client_secret = ""
+        self._google_account = ""
         self._drive_local_auth = True
         self._drive_shared_drive = False
         self._drive_team_drive = ""
@@ -3785,6 +3817,12 @@ class NewRemoteWizard:
         client_secret.setPlaceholderText("Optional")
         client_secret.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
         client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
+        google_account = self.qt.QLineEdit()
+        google_account.setPlaceholderText("Optional, for example name@gmail.com")
+        google_account.setToolTip(
+            "Used to suggest the right Google account during sign-in and when opening Drive or Photos on the web. "
+            "Enter the full address because Google Workspace accounts may not end in @gmail.com."
+        )
 
         credential_source = self.qt.QComboBox()
         existing_credentials = core.drive_oauth_credentials()
@@ -3834,7 +3872,7 @@ class NewRemoteWizard:
         connect_after_create.setToolTip("Mount the new remote as an operating-system folder after setup succeeds.")
         gphotos_help = self.qt.QLabel(
             "Google Photos is limited by Google's API. Recent rclone versions can only download media uploaded "
-            f'through rclone. <a href="{GOOGLE_PHOTOS_GUIDE_URL}#limitations">'
+            f'through rclone. <a href="{GOOGLE_PHOTOS_LIMITATIONS_URL}">'
             "rclone Google Photos limits</a>"
         )
         gphotos_help.setWordWrap(True)
@@ -4018,6 +4056,7 @@ class NewRemoteWizard:
             "gphotos_help": gphotos_help,
             "client_id": client_id,
             "client_secret": client_secret,
+            "google_account": google_account,
             "gphotos_read_only": gphotos_read_only,
             "auth_group": auth_group,
             "local_auth": local_auth,
@@ -4063,6 +4102,7 @@ class NewRemoteWizard:
         form.addRow(gphotos_help)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
+        form.addRow("Google account", google_account)
         form.addRow("Google Photos access", gphotos_read_only)
         form.addRow("Authorization", auth_group)
         form.addRow("Drive", drive_group)
@@ -4226,11 +4266,19 @@ class NewRemoteWizard:
         self._cancelled = False
         self._drive_client_id = self.fields["client_id"].text()
         self._drive_client_secret = self.fields["client_secret"].text()
+        self._google_account = self.fields["google_account"].text().strip()
         self._drive_local_auth = self.fields["local_auth"].isChecked()
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
         self._initial_remote_path = self._initial_mount_remote_path()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
+        if self._remote_type in {"drive", "gphotos"} and self._google_account and (
+            "@" not in self._google_account or any(character.isspace() for character in self._google_account)
+        ):
+            self._warning("Add remote", "Enter the full Google account email address, or leave it blank.")
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
             self._warning("Add remote", "Enter the shared drive ID before setup, or choose My Drive.")
             return
@@ -4501,6 +4549,7 @@ class NewRemoteWizard:
             self.question_frame.hide()
 
     def _initial_config_args(self) -> list[str]:
+        account_args = rclone_wizard.google_account_config_args(getattr(self, "_google_account", ""))
         if self._remote_type == "drive":
             return rclone_wizard._drive_config_args(
                 client_id=self._drive_client_id,
@@ -4508,7 +4557,7 @@ class NewRemoteWizard:
                 local_auth=self._drive_local_auth,
                 shared_drive=self._drive_shared_drive,
                 team_drive=self._drive_team_drive,
-            )
+            ) + account_args
         if self._remote_type == "gphotos":
             return [
                 "client_id",
@@ -4523,6 +4572,7 @@ class NewRemoteWizard:
                 "true" if self._drive_local_auth else "false",
                 "read_size",
                 "true",
+                *account_args,
             ]
         if self._remote_type in OAUTH_REMOTE_TYPES:
             return ["config_is_local", "true" if self._drive_local_auth else "false"]
@@ -4830,6 +4880,7 @@ class NewRemoteWizard:
             "s3_secret_access_key",
             "s3_remote_path",
             "gphotos_read_only",
+            "google_account",
             "koofr_user",
             "koofr_pass",
             "proton_user",
@@ -4890,6 +4941,7 @@ class NewRemoteWizard:
         self._set_form_row_visible(self.fields["credential_source"], is_drive)
         self._set_form_row_visible(self.fields["client_id"], is_drive or is_gphotos)
         self._set_form_row_visible(self.fields["client_secret"], is_drive or is_gphotos)
+        self._set_form_row_visible(self.fields["google_account"], is_drive or is_gphotos)
         self._set_form_row_visible(self.fields["gphotos_read_only"], is_gphotos)
         for field_name in (
             "drive_group",
@@ -5875,7 +5927,10 @@ class MountletWindow:
         remotes = [
             remote
             for remote in _load_visible_remotes()
-            if remote.name not in pending and remote.name not in scheduled and remote.name not in running
+            if remote.backend_type.casefold() != "gphotos"
+            and remote.name not in pending
+            and remote.name not in scheduled
+            and remote.name not in running
         ]
         if not remotes:
             return
@@ -7929,7 +7984,8 @@ class MountletWindow:
             event, selected, row
         )
         frame.dragEnterEvent = lambda event, row=frame, selected=remote: self._remote_drag_enter(event, row, selected)
-        frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+        frame.dragMoveEvent = lambda event, row=frame, selected=remote: self._remote_drag_move(event, row, selected)
+        frame.dragLeaveEvent = lambda event, row=frame: self._remote_drag_leave(row)
         frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
         frame.setStyleSheet(self._remote_row_style(frame, highlighted=False))
         layout = self.qt.QGridLayout(frame)
@@ -8075,7 +8131,10 @@ class MountletWindow:
             row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
                 event, frame, selected
             )
-            row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+            row.frame.dragMoveEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_move(
+                event, frame, selected
+            )
+            row.frame.dragLeaveEvent = lambda event, frame=row.frame: self._remote_drag_leave(frame)
             row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
             row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
                 event, frame, selected, focused=True
@@ -8481,10 +8540,11 @@ class MountletWindow:
             label.setStyleSheet(_muted_text_style(label))
             return
         if remote is not None and _is_google_photos_remote(remote):
+            faq_url = f"{license_control.license_site_url()}/?faq=google-photos#faq"
             label.setStyleSheet("")
-            label.setToolTip("Open the rclone Google Photos usage and limitations guide")
+            label.setToolTip("Open Mountlet's Google Photos notes")
             label.setText(
-                f'<a href="{GOOGLE_PHOTOS_GUIDE_URL}" '
+                f'<a href="{faq_url}" '
                 f'style="color:{_provider_color(remote)};">Photos guide ↗</a>'
             )
             return
@@ -8941,52 +9001,47 @@ class MountletWindow:
         self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
-        del row, remote
-        if self._license_locked():
-            event.ignore()
-            return
-        if not self.file_browser._mime_drop_supported(event.mimeData()):
-            event.ignore()
-            return
-        self.file_browser._accept_drag_event(event)
+        self._preview_remote_drop(event, row, remote)
 
-    def _remote_drag_move(self, event: Any) -> None:
+    def _remote_drag_move(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        self._preview_remote_drop(event, row, remote)
+
+    def _preview_remote_drop(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             event.ignore()
             return
-        if self.file_browser._mime_drop_supported(event.mimeData()):
-            self.file_browser._accept_drag_event(event)
+        destination_path = self.file_browser.backend.current_path(remote.name)
+        if not self.file_browser.preview_drop(
+            event,
+            row,
+            destination_remote=remote,
+            destination_path=destination_path,
+        ):
             return
-        event.ignore()
+        self._release_remote_hover_suppression()
+        row.setProperty("hovered", True)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+        # Drag hover must switch immediately. The normal 45 ms pointer-hover
+        # debounce can be starved by a platform drag loop.
+        if self.file_browser.remote is None or self.file_browser.remote.name != remote.name:
+            self._cancel_remote_preview()
+            self._show_file_browser_for_remote(remote, row, focus_browser=False)
+
+    def _remote_drag_leave(self, row: Any) -> None:
+        row.setProperty("hovered", False)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+        self.file_browser.leave_drop()
 
     def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             event.ignore()
             return
-        mime = event.mimeData()
-        if not self.file_browser._mime_drop_supported(mime):
-            event.ignore()
-            return
-        if mime.hasFormat(MIME_TYPE):
-            modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
-            move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
-            self.file_browser.accept_drop(
-                bytes(mime.data(MIME_TYPE)),
-                move=move,
-                destination_remote=remote,
-                destination_path="",
-            )
-        else:
-            paths = self.file_browser._local_paths_from_mime(mime)
-            if not paths:
-                event.ignore()
-                return
-            self.file_browser.accept_local_paths(
-                paths,
-                destination_remote=remote,
-                destination_path="",
-            )
-        self.file_browser._accept_drag_event(event)
+        destination_path = self.file_browser.backend.current_path(remote.name)
+        self.file_browser.perform_drop(
+            event,
+            destination_remote=remote,
+            destination_path=destination_path,
+        )
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
         return html.escape(self._truncated_remote_alias(remote))
@@ -10296,7 +10351,17 @@ class MountletWindow:
                 continue
             path_changed = _absolute_path(old_remote.mount_path) != _absolute_path(new_remote.mount_path)
             flags_changed = old_remote.flags != new_remote.flags
-            rclone_changed = old_remote.extra_info != new_remote.extra_info
+            old_mount_config = {
+                key: value
+                for key, value in old_remote.extra_info.items()
+                if key not in REMOUNT_IGNORED_RCLONE_FIELDS
+            }
+            new_mount_config = {
+                key: value
+                for key, value in new_remote.extra_info.items()
+                if key not in REMOUNT_IGNORED_RCLONE_FIELDS
+            }
+            rclone_changed = old_mount_config != new_mount_config
             if path_changed or flags_changed or rclone_changed:
                 changes.append((old_remote, new_remote))
         return changes

@@ -482,8 +482,16 @@ token = REDACTED
             fields = core.editable_rclone_fields(remote)
 
             self.assertEqual(
-                list(fields)[:6],
-                ["client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"],
+                list(fields)[:7],
+                [
+                    "mountlet_google_account",
+                    "client_id",
+                    "client_secret",
+                    "shared_with_me",
+                    "root_folder_id",
+                    "team_drive",
+                    "scope",
+                ],
             )
             self.assertEqual(fields["root_folder_id"], "abc")
             self.assertIn("team_drive", fields)
@@ -495,6 +503,7 @@ token = REDACTED
                     "client_id": "client.apps.googleusercontent.com",
                     "client_secret": "new-secret",
                     "root_folder_id": "def",
+                    "mountlet_google_account": "person+drive@example.com",
                     "token": "REDACTED",
                 },
             )
@@ -503,6 +512,8 @@ token = REDACTED
             self.assertEqual(remote.extra_info["client_id"], "client.apps.googleusercontent.com")
             self.assertEqual(remote.extra_info["client_secret"], "new-secret")
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
+            self.assertEqual(remote.extra_info["mountlet_google_account"], "person+drive@example.com")
+            self.assertIn("login_hint=person%2Bdrive%40example.com", remote.extra_info["auth_url"])
             self.assertEqual(remote.extra_info["token"], "REDACTED")
 
     def test_s3_credentials_are_editable_and_new_secrets_are_obscured(self):

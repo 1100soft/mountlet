@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -196,6 +197,217 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(entries, [])
 
+    def test_google_photos_listing_uses_low_cost_fail_fast_flags(self):
+        response = subprocess.CompletedProcess(["rclone"], 0, stderr="", stdout="[]")
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response) as run:
+                    backend.list_entries(remote, "album")
+
+        command = run.call_args.args[0]
+        self.assertIn("--gphotos-read-size=false", command)
+        self.assertIn("--gphotos-batch-mode=off", command)
+        self.assertIn("--low-level-retries=1", command)
+        self.assertIn("--retries=1", command)
+        self.assertIn("--timeout=30s", command)
+
+    def test_google_photos_omits_flags_not_supported_by_selected_rclone(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(
+                backend,
+                "_supported_rclone_flags",
+                return_value=frozenset({"--gphotos-read-size"}),
+            ):
+                command = backend._command_for_remote("rclone", remote, "lsjson", "Photos:")
+
+        self.assertIn("--gphotos-read-size=false", command)
+        self.assertNotIn("--gphotos-batch-mode=off", command)
+        self.assertIn("--low-level-retries=1", command)
+
+    def test_rclone_flag_probe_is_cached_per_binary(self):
+        response = subprocess.CompletedProcess(
+            ["rclone", "help", "flags"],
+            0,
+            stdout="  --gphotos-read-size\n",
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            binary = root / "rclone"
+            binary.write_text("", encoding="utf-8")
+            backend = CloudBrowserBackend(
+                state_path=root / "state.json",
+                cache_root=root / "cache",
+            )
+            with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response) as run:
+                first = backend._supported_rclone_flags(str(binary))
+                second = backend._supported_rclone_flags(str(binary))
+
+        self.assertEqual(first, frozenset({"--gphotos-read-size"}))
+        self.assertEqual(second, first)
+        run.assert_called_once()
+
+    def test_regular_listing_does_not_receive_google_photos_flags(self):
+        response = subprocess.CompletedProcess(["rclone"], 0, stderr="", stdout="[]")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response) as run:
+                    backend.list_entries(_remote(), "")
+
+        self.assertNotIn("--gphotos-read-size=false", run.call_args.args[0])
+
+    def test_google_photos_quota_error_is_reported_without_retry_noise(self):
+        response = subprocess.CompletedProcess(
+            ["rclone"],
+            1,
+            stderr="Quota exceeded for quota metric 'All requests' (429 RESOURCE_EXHAUSTED)",
+            stdout="",
+        )
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response):
+                    with self.assertRaisesRegex(RuntimeError, "API request quota is exhausted"):
+                        backend.list_entries(remote, "album")
+
+    def test_google_photos_listing_has_bounded_timeout_and_clear_error(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch(
+                    "mountlet.cloud_browser.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(["rclone"], 60),
+                ) as run:
+                    with self.assertRaisesRegex(RuntimeError, "did not return this virtual folder within 60 seconds"):
+                        backend.list_entries(remote, "media/by-day")
+
+        self.assertEqual(run.call_args.kwargs["timeout"], 60)
+
+    def test_google_photos_timeout_does_not_masquerade_stale_index_as_fresh(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend.index.upsert_folder(
+                remote,
+                "album/Trips",
+                [BrowserEntry("deleted.jpg", "album/Trips/deleted.jpg", False)],
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch(
+                    "mountlet.cloud_browser.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(["rclone"], 30),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "within 30 seconds"):
+                        backend.list_entries(remote, "album/Trips")
+
+    def test_google_photos_album_leaf_has_shorter_bounded_timeout(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch(
+                    "mountlet.cloud_browser.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(["rclone"], 30),
+                ) as run:
+                    with self.assertRaisesRegex(RuntimeError, "within 30 seconds"):
+                        backend.list_entries(remote, "album/Trips")
+
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_google_photos_date_leaf_uses_cached_media_all_entries(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend.index.upsert_folder(
+                remote,
+                "media/all",
+                [
+                    BrowserEntry("new.jpg", "media/all/new.jpg", False, modified="2026-07-30 12:00"),
+                    BrowserEntry("old.jpg", "media/all/old.jpg", False, modified="2025-04-10 09:00"),
+                ],
+            )
+
+            entries = backend.list_entries(remote, "media/by-day/2026/2026-07-30")
+
+        self.assertEqual(entries, [BrowserEntry("new.jpg", "media/all/new.jpg", False, modified="2026-07-30 12:00")])
+
+    def test_google_photos_month_leaf_uses_media_all_operation_paths(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            backend.index.upsert_folder(
+                remote,
+                "media/all",
+                [BrowserEntry("photo.jpg", "media/all/photo.jpg", False, modified="2026-07-30 12:00")],
+            )
+
+            entries = backend.list_entries(remote, "media/by-month/2026/2026-07")
+
+        self.assertEqual(entries[0].path, "media/all/photo.jpg")
+
+    def test_uncached_google_photos_date_leaf_loads_canonical_media_all(self):
+        remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        response = subprocess.CompletedProcess(
+            ["rclone"],
+            0,
+            stderr="",
+            stdout=json.dumps(
+                [
+                    {
+                        "Name": "photo.jpg",
+                        "Size": -1,
+                        "ModTime": "2026-07-30T12:00:00Z",
+                        "IsDir": False,
+                    }
+                ]
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tempdir:
+            backend = CloudBrowserBackend(
+                state_path=Path(tempdir) / "state.json",
+                cache_root=Path(tempdir) / "cache",
+            )
+            with mock.patch.object(backend, "_rclone", return_value="rclone"):
+                with mock.patch("mountlet.cloud_browser.subprocess.run", return_value=response) as run:
+                    entries = backend.list_entries(remote, "media/by-year/2026")
+
+        self.assertIn("Photos:/media/all", run.call_args.args[0])
+        self.assertEqual(entries[0].path, "media/all/photo.jpg")
+
     def test_list_files_recursive_uses_full_rclone_listing(self):
         response = subprocess.CompletedProcess(
             ["rclone"],
@@ -259,7 +471,14 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation") as run:
                     backend.transfer([item], {"Source": source}, destination, "Inbox", move=False)
 
-        run.assert_called_once_with("rclone", "copyto", "Source:/Reports/a.txt", "Target:/Inbox/a.txt")
+        run.assert_called_once_with(
+            "rclone",
+            "copyto",
+            "Source:/Reports/a.txt",
+            "Target:/Inbox/a.txt",
+            timeout=None,
+            remote=destination,
+        )
 
     def test_copy_local_paths_uploads_file_without_mounting(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -274,7 +493,14 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation") as run:
                     backend.copy_local_paths([source], _remote("Target"), "Inbox")
 
-        run.assert_called_once_with("rclone", "copyto", str(source), "Target:/Inbox/a.txt", timeout=None)
+        run.assert_called_once_with(
+            "rclone",
+            "copyto",
+            str(source),
+            "Target:/Inbox/a.txt",
+            timeout=None,
+            remote=mock.ANY,
+        )
 
     def test_copy_local_paths_uploads_folder_without_mounting(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -296,6 +522,7 @@ class CloudBrowserTests(unittest.TestCase):
             "Target:/Inbox/Folder",
             "--create-empty-src-dirs",
             timeout=None,
+            remote=mock.ANY,
         )
 
     def test_delete_uses_deletefile_and_purge(self):
@@ -315,8 +542,8 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(
             run.call_args_list,
             [
-                mock.call("rclone", "deletefile", "Docs:/Reports/a.txt"),
-                mock.call("rclone", "purge", "Docs:/Reports/Old"),
+                mock.call("rclone", "deletefile", "Docs:/Reports/a.txt", remote=mock.ANY),
+                mock.call("rclone", "purge", "Docs:/Reports/Old", remote=mock.ANY),
             ],
         )
 
@@ -330,7 +557,7 @@ class CloudBrowserTests(unittest.TestCase):
                 with mock.patch.object(backend, "_run_operation") as run:
                     backend.create_folder(_remote(), "Reports", "New")
 
-        run.assert_called_once_with("rclone", "mkdir", "Docs:/Reports/New")
+        run.assert_called_once_with("rclone", "mkdir", "Docs:/Reports/New", remote=mock.ANY)
 
     def test_create_folder_rejects_nested_path(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -374,7 +601,13 @@ class CloudBrowserTests(unittest.TestCase):
             offline_paths = set(backend._offline_records[remote.name])
 
         self.assertEqual(renamed, "Reports/New")
-        run.assert_called_once_with("rclone", "moveto", "Docs:/Reports/Old", "Docs:/Reports/New")
+        run.assert_called_once_with(
+            "rclone",
+            "moveto",
+            "Docs:/Reports/Old",
+            "Docs:/Reports/New",
+            remote=remote,
+        )
         self.assertFalse(old_cached_exists)
         self.assertTrue(child_cached_exists)
         self.assertNotIn("Reports/Old", offline_paths)
@@ -1762,10 +1995,26 @@ class CloudBrowserTests(unittest.TestCase):
         browser.remote = None
         entries = [BrowserEntry("a.txt", "Reports/a.txt", False)]
 
-        browser._listing_ready("Docs", "Reports", entries, "")
+        browser._listing_ready("Docs", "Reports", 1, entries, "")
 
         self.assertEqual(browser._folder_cache[("Docs", "Reports")], entries)
         self.assertNotIn(("Docs", "Reports"), browser._loads_pending)
+
+    def test_superseded_listing_completion_cannot_clear_new_request_state(self):
+        browser = object.__new__(CompactCloudBrowser)
+        key = ("Photos", "album/Trips")
+        browser._folder_cache = {}
+        browser._loads_pending = {key}
+        browser._listing_request_ids = {key: 2}
+        browser._listing_cancel_events = {key: threading.Event()}
+        browser._active_listing_by_remote = {"Photos": key}
+        browser.remote = None
+
+        browser._listing_ready("Photos", "album/Trips", 1, [], "")
+
+        self.assertEqual(browser._listing_request_ids[key], 2)
+        self.assertIn(key, browser._loads_pending)
+        self.assertNotIn(key, browser._folder_cache)
 
     def test_cached_folder_refresh_displays_cache_and_refreshes_in_background(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -1797,7 +2046,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.status = mock.Mock()
         browser._update_actions = mock.Mock()
 
-        browser._listing_ready("Docs", "Reports", None, "token expired")
+        browser._listing_ready("Docs", "Reports", 1, None, "token expired")
 
         self.assertEqual(browser.entries, [])
         browser.tree.clear.assert_called_once_with()
@@ -1814,10 +2063,12 @@ class CloudBrowserTests(unittest.TestCase):
         browser.status = mock.Mock()
         browser._display_entries = mock.Mock()
 
-        browser._listing_ready("Docs", "Reports", None, "token expired")
+        browser._listing_ready("Docs", "Reports", 1, None, "token expired")
 
         browser._display_entries.assert_called_once_with(entries)
-        browser.status.setText.assert_called_once_with("Showing cached folder contents")
+        browser.status.setText.assert_called_once_with(
+            "Showing cached folder contents — token expired"
+        )
 
     def test_invalidate_clears_selected_remote_cache_and_refreshes(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -1835,6 +2086,35 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._loads_pending, {("Photos", "")})
         browser.refresh.assert_called_once_with(force=True)
 
+    def test_cancel_folder_load_clears_pending_state_and_signals_worker(self):
+        browser = object.__new__(CompactCloudBrowser)
+        key = ("Photos", "album/Trips")
+        cancel_event = threading.Event()
+        browser._listing_cancel_events = {key: cancel_event}
+        browser._active_listing_by_remote = {"Photos": key}
+        browser._loads_pending = {key}
+
+        browser._cancel_folder_load(key)
+
+        self.assertTrue(cancel_event.is_set())
+        self.assertNotIn(key, browser._loads_pending)
+        self.assertNotIn("Photos", browser._active_listing_by_remote)
+
+    def test_preload_skips_google_photos_virtual_tree(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._folder_cache = {}
+        browser._loads_pending = set()
+        browser.backend = mock.Mock()
+        browser._load_folder = mock.Mock()
+        browser._start_missing_index = mock.Mock()
+        docs = _remote()
+        photos = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        browser.backend.current_path.return_value = ""
+
+        browser.preload([photos, docs])
+
+        browser._load_folder.assert_called_once_with(docs, "")
+
     def test_pending_folder_refresh_shows_loading_message(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
@@ -1846,14 +2126,45 @@ class CloudBrowserTests(unittest.TestCase):
         browser.up_button = mock.Mock()
         browser.root_button = mock.Mock()
         browser.status = mock.Mock()
+        browser.entries = [BrowserEntry("old.txt", "old.txt", False)]
+        browser.tree = mock.Mock()
+        browser._rendered_key = ("Other", "")
+        browser._update_actions = mock.Mock()
+        browser._resize_to_rendered_items = mock.Mock()
         browser._display_entries = mock.Mock()
         browser._load_folder = mock.Mock()
 
         browser.refresh(force=False)
 
         browser.status.setText.assert_called_once_with("Loading…")
+        self.assertEqual(browser.entries, [])
+        browser.tree.clear.assert_called_once_with()
         browser._display_entries.assert_not_called()
         browser._load_folder.assert_not_called()
+
+    def test_refresh_clears_previous_remote_while_new_listing_loads(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote("Photos")
+        browser.path = ""
+        browser._rendered_key = ("Docs", "")
+        browser._folder_cache = {}
+        browser._loads_pending = set()
+        browser.entries = [BrowserEntry("old.txt", "old.txt", False)]
+        browser.title = mock.Mock()
+        browser.path_field = mock.Mock()
+        browser.up_button = mock.Mock()
+        browser.root_button = mock.Mock()
+        browser.status = mock.Mock()
+        browser.tree = mock.Mock()
+        browser._update_actions = mock.Mock()
+        browser._resize_to_rendered_items = mock.Mock()
+        browser._load_folder = mock.Mock()
+
+        browser.refresh()
+
+        self.assertEqual(browser.entries, [])
+        browser.tree.clear.assert_called_once_with()
+        browser._load_folder.assert_called_once_with(browser.remote, "")
 
     def test_prefetch_related_folders_fetches_parent_and_children(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -1870,6 +2181,22 @@ class CloudBrowserTests(unittest.TestCase):
                 mock.call(browser.remote, "Reports"),
                 mock.call(browser.remote, "Reports/Deep/Child"),
             ]
+        )
+
+    def test_automatic_index_skips_google_photos_recursive_tree(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._auto_index_requested = False
+        browser.backend = mock.Mock()
+        browser.backend.remote_fully_indexed.return_value = False
+        browser._index_remotes = mock.Mock()
+        photos = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        docs = _remote()
+
+        browser._start_missing_index([photos, docs])
+
+        browser._index_remotes.assert_called_once_with(
+            [docs],
+            "Indexing metadata for search…",
         )
 
     def test_display_entries_preserves_current_item_by_path(self):
@@ -2192,6 +2519,24 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser._working_phase, 1)
         browser._refresh_entry_icons.assert_called_once_with()
         browser._display_entries.assert_not_called()
+
+    def test_theme_refresh_repaints_existing_file_icons(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace()
+        browser.root = object()
+        browser.search_field = None
+        browser._base_entry_icon_cache = {("type", ".txt"): object()}
+        browser._is_disposed = mock.Mock(return_value=False)
+        browser._refresh_search_icon = mock.Mock()
+        browser._offline_icon = mock.Mock(return_value=None)
+        browser._refresh_entry_icons = mock.Mock()
+
+        with mock.patch("mountlet.cloud_browser_ui.refresh_widget_icons") as refresh_widgets:
+            browser.refresh_theme_icons()
+
+        self.assertEqual(browser._base_entry_icon_cache, {})
+        refresh_widgets.assert_called_once_with(browser.qt, browser.root)
+        browser._refresh_entry_icons.assert_called_once_with()
 
     def test_animation_checks_download_completion_in_worker(self):
         started_threads = []
@@ -2886,7 +3231,7 @@ class CloudBrowserTests(unittest.TestCase):
                 "Inbox/Reports",
             )
 
-    def test_google_photos_drop_always_targets_upload_folder(self):
+    def test_google_photos_drop_preserves_specific_album_folder(self):
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "photo.jpg"
             path.write_bytes(b"photo")
@@ -2903,14 +3248,62 @@ class CloudBrowserTests(unittest.TestCase):
             _message, action = browser._run_operation.call_args.args[:2]
             self.assertEqual(
                 browser._run_operation.call_args.kwargs["invalidate_keys"],
-                {("Photos", "upload")},
+                {("Photos", "album/Trips")},
             )
             action()
             browser.backend.copy_local_paths.assert_called_once_with(
                 [path],
                 browser.remote,
-                "upload",
+                "album/Trips",
             )
+
+    def test_google_photos_drop_redirects_album_root_to_upload(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        browser.path = "album"
+
+        remote, path = browser._resolved_drop_destination(None, "album")
+
+        self.assertIs(remote, browser.remote)
+        self.assertEqual(path, "upload")
+
+    def test_drop_tooltip_describes_google_photos_redirection(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        browser.path = "media/by-year/2026"
+        mime = SimpleNamespace(
+            hasFormat=lambda _value: False,
+            hasUrls=lambda: True,
+            urls=lambda: [
+                SimpleNamespace(
+                    isLocalFile=lambda: True,
+                    toLocalFile=lambda: "/tmp/photo.jpg",
+                )
+            ],
+        )
+
+        text = browser.drop_tooltip_text(mime)
+
+        self.assertEqual(text, "Upload photo.jpg to Google Photos")
+
+    def test_drop_tooltip_names_regular_destination_folder(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Inbox/Reports"
+        mime = SimpleNamespace(
+            hasFormat=lambda _value: False,
+            hasUrls=lambda: True,
+            urls=lambda: [
+                SimpleNamespace(
+                    isLocalFile=lambda: True,
+                    toLocalFile=lambda: "/tmp/report.pdf",
+                )
+            ],
+        )
+
+        text = browser.drop_tooltip_text(mime)
+
+        self.assertEqual(text, "Upload report.pdf to Reports")
 
     def test_internal_drop_can_target_displayed_folder(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -3059,6 +3452,39 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertTrue(browser.tree.drag_enabled)
 
+    def test_drag_out_is_enabled_before_the_first_item_is_selected(self):
+        class Tree:
+            drag_enabled = None
+
+            def setDragEnabled(self, enabled: bool) -> None:
+                self.drag_enabled = enabled
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = Tree()
+        browser.offline_button = mock.Mock()
+        browser._selected_entries = mock.Mock(return_value=[])
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser.remote = _remote()
+        browser._operation_pending = False
+
+        browser._update_actions()
+
+        self.assertTrue(browser.tree.drag_enabled)
+
+    def test_google_photos_destructive_operations_are_limited_to_album_files(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+
+        self.assertFalse(
+            browser._can_delete_entries([BrowserEntry("photo.jpg", "media/all/photo.jpg", False)])
+        )
+        self.assertFalse(
+            browser._can_delete_entries([BrowserEntry("Trips", "album/Trips", True)])
+        )
+        self.assertTrue(
+            browser._can_delete_entries([BrowserEntry("photo.jpg", "album/Trips/photo.jpg", False)])
+        )
+
     def test_ready_items_drag_as_copy_only_local_urls(self):
         created: dict[str, object] = {}
 
@@ -3120,7 +3546,23 @@ class CloudBrowserTests(unittest.TestCase):
         browser._prepare_drag_export.assert_not_called()
 
     def test_uncached_drag_starts_background_preparation_instead_of_empty_drag(self):
+        ignore_action = object()
+        copy_action = object()
+        mime = mock.Mock()
+        drag = mock.Mock()
+        drag.exec.return_value = ignore_action
         browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(
+            QMimeData=mock.Mock(return_value=mime),
+            QDrag=mock.Mock(return_value=drag),
+            QUrl=SimpleNamespace(fromLocalFile=lambda path: path),
+            Qt=SimpleNamespace(
+                DropAction=SimpleNamespace(
+                    CopyAction=copy_action,
+                    IgnoreAction=ignore_action,
+                )
+            ),
+        )
         browser.remote = _remote()
         browser._operation_pending = False
         browser._drag_export_pending = set()
@@ -3130,6 +3572,9 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._start_file_drag(object(), [entry])
 
+        drag.setMimeData.assert_called_once_with(mime)
+        drag.exec.assert_called_once_with(copy_action, copy_action)
+        mime.setUrls.assert_not_called()
         browser._prepare_drag_export.assert_called_once_with(browser.remote, [entry])
 
     def test_zero_byte_drive_document_mount_path_falls_back_to_cache(self):
@@ -3193,16 +3638,27 @@ class CloudBrowserTests(unittest.TestCase):
         event = SimpleNamespace(
             mimeData=lambda: mime,
             modifiers=lambda: shift,
+            setDropAction=mock.Mock(),
+            accept=mock.Mock(),
         )
         browser = object.__new__(CompactCloudBrowser)
         browser.qt = SimpleNamespace(
-            Qt=SimpleNamespace(KeyboardModifier=SimpleNamespace(ShiftModifier=shift))
+            Qt=SimpleNamespace(
+                KeyboardModifier=SimpleNamespace(ShiftModifier=shift),
+                DropAction=SimpleNamespace(MoveAction=object()),
+            )
         )
         browser._drop_event_supported = mock.Mock(return_value=True)
         browser.accept_drop = mock.Mock()
+        browser._drop_hover_item = None
 
         self.assertTrue(browser._handle_drop_event(event))
-        browser.accept_drop.assert_called_once_with(b"[]", move=True, destination_path="")
+        browser.accept_drop.assert_called_once_with(
+            b"[]",
+            move=True,
+            destination_remote=None,
+            destination_path="",
+        )
 
     def test_update_actions_ignores_deleted_qt_tree_during_shutdown(self):
         class DeletedTree:
@@ -3321,6 +3777,45 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser.offline_button.setEnabled.assert_called_with(False)
         self.assertIn("Wait", browser.offline_button.setToolTip.call_args.args[0])
+
+    def test_pending_operation_blocks_only_the_remote_that_owns_it(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote("Docs")
+        browser._pending_operations = {
+            1: {
+                "remote_names": {"Photos"},
+            }
+        }
+
+        self.assertFalse(browser._current_remote_operation_pending())
+        self.assertFalse(browser._remote_operation_pending("Docs"))
+        self.assertTrue(browser._remote_operation_pending("Photos"))
+
+    def test_unrelated_operation_completion_does_not_refresh_current_remote(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote("Docs")
+        browser.path = "Reports"
+        browser._pending_operations = {
+            7: {
+                "remote_names": {"Photos"},
+                "cache_keys": {("Photos", "album/Trips")},
+                "clear_clipboard": False,
+                "working_remote": "Photos",
+                "working_paths": [],
+                "working_kind": "",
+            }
+        }
+        browser._folder_cache = {("Photos", "album/Trips"): []}
+        browser._notify = mock.Mock()
+        browser._local_files_changed = mock.Mock()
+        browser.refresh = mock.Mock()
+        browser._update_actions = mock.Mock()
+
+        browser._operation_finished(7, True, "")
+
+        browser.refresh.assert_not_called()
+        browser._update_actions.assert_called_once_with()
+        self.assertNotIn(("Photos", "album/Trips"), browser._folder_cache)
 
     def test_refresh_mount_state_repaints_visible_remote_entries(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -3665,6 +4160,43 @@ class CloudBrowserTests(unittest.TestCase):
         browser._prefetch_child_folders(entries)
 
         self.assertEqual(browser._load_folder.call_count, CHILD_FOLDER_PREFETCH_LIMIT)
+
+    def test_google_photos_does_not_prefetch_virtual_child_folders(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        browser._folder_cache = {}
+        browser._loads_pending = set()
+        browser._load_folder = mock.Mock()
+
+        browser._prefetch_child_folders([BrowserEntry("by-day", "media/by-day", True)])
+
+        browser._load_folder.assert_not_called()
+
+    def test_google_photos_does_not_prefetch_parent_folder(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        browser.path = "album/Trips"
+        browser._folder_cache = {}
+        browser._loads_pending = set()
+        browser._load_folder = mock.Mock()
+
+        browser._prefetch_parent_folder()
+
+        browser._load_folder.assert_not_called()
+
+    def test_google_photos_search_verification_uses_index_without_api_requests(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
+        browser._search_results = [SimpleNamespace(parent_path="album/Trips")]
+        browser._search_verify_pending = True
+        browser.search_field = mock.Mock()
+        browser.backend = mock.Mock()
+        browser._finish_search_verification = mock.Mock()
+
+        browser._verify_visible_search_results()
+
+        browser._finish_search_verification.assert_called_once_with()
+        browser.backend.list_entries.assert_not_called()
 
 
 if __name__ == "__main__":

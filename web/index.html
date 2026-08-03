@@ -540,6 +540,19 @@
           <summary>Can Mountlet replace provider desktop apps?</summary>
           <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
         </details>
+        <details id="google-photos">
+          <summary>What should I know about Google Photos?</summary>
+          <p>Google limits third-party access. Mountlet can download only media previously uploaded through rclone, and uploads accept images and videos only. Uploads use original quality and count against your Google storage. Drops outside a specific album are sent through Google Photos' upload area rather than the displayed virtual folder.</p>
+          <p>Some virtual views, especially date-based folders, can be slow. Downloaded media may differ from the original: location metadata is removed, images may use a different resolution, and videos may be compressed.</p>
+          <p>Google Photos is not a normal filesystem. Media views are read-only; rclone can remove media only from albums it created and cannot permanently delete it from Google Photos.</p>
+          <p>To conserve Google's restricted API quota, Mountlet does not recursively index Photos or poll cached Photos files for cloud changes. Folders refresh when visited; use Sync now for a manual cached-file check. Custom OAuth clients also need sufficient Photos Library API quota.</p>
+          <p>Uploads require the Google Photos Library API. Mountlet's built-in credentials are prepared for it; if you use your own Google OAuth client, enable the API before uploading. See the <a class="external-link" href="https://rclone.org/googlephotos/#limitations" target="_blank" rel="noopener">rclone Google Photos limitations</a>.</p>
+        </details>
+        <details>
+          <summary>How does Open in web choose a Google account?</summary>
+          <p>Drive and Google Photos remotes can include an optional Google account email. Mountlet passes it to Google when opening the provider website so Google can select the matching browser session.</p>
+          <p>The account must already be signed in within your default browser. This hint does not start a new Google sign-in or redirect an unsigned-in account through authentication. If no matching session exists, Google may keep the current account or show its normal account chooser.</p>
+        </details>
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
           <p>A platform filesystem driver provides mounted folder access. Mountlet file management runs independently through the integrated browser, and both workflows can be used together.</p>
