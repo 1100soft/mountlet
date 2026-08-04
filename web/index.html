@@ -553,6 +553,12 @@
           <p>Drive and Google Photos remotes can include an optional Google account email. Mountlet passes it to Google when opening the provider website so Google can select the matching browser session.</p>
           <p>The account must already be signed in within your default browser. This hint does not start a new Google sign-in or redirect an unsigned-in account through authentication. If no matching session exists, Google may keep the current account or show its normal account chooser.</p>
         </details>
+        <details id="icloud-authentication">
+          <summary>Why does iCloud ask me to sign in again?</summary>
+          <p>Apple can expire an iCloud session even when the remote worked previously. If mounting detects an invalid session or missing authentication cookies, open Mountlet's main window. Mountlet shows one reauthentication prompt there and retries the mount after saving the refreshed session.</p>
+          <p>Approve the sign-in on a trusted Apple device and enter its verification code in Mountlet. To receive a text message instead, enter <code>sms</code>, select a trusted phone number when asked, then enter the SMS code.</p>
+          <p>Use your regular Apple Account password, not an app-specific password. With Advanced Data Protection, enable <strong>Access iCloud Data on the Web</strong> and approve the access request on an Apple device. Account recovery and security-key challenges must still be completed through Apple.</p>
+        </details>
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
           <p>A platform filesystem driver provides mounted folder access. Mountlet file management runs independently through the integrated browser, and both workflows can be used together.</p>

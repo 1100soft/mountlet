@@ -48,6 +48,17 @@ user-facing document used for package publication.
   hint selects only an account that already has a session in the default
   browser; it does not redirect an unsigned-in account through Google login.
   Changing this metadata does not require reauthentication or remounting.
+- Default mount folders retain provider disambiguation in their leaf name (for
+  example, `Google Drive/Work__Drive`) while the app continues to show the
+  shorter `Work` alias. Empty legacy alias-only mount folders are removed after
+  migration; mounted or nonempty folders are preserved.
+- iCloud session failures are queued during startup until the main window is
+  first shown. Only one prompt can be active per remote. Reauthentication uses
+  rclone's noninteractive configuration state machine and renders its required
+  follow-up questions, including trusted-device verification and the `sms`
+  path with trusted-phone selection. On success Mountlet saves the session and
+  retries the mount. Keep these dynamic question handlers intact: a simple
+  reconnect command cannot supply iCloud's interactive verification answers.
 
 ### Website and service boundaries
 

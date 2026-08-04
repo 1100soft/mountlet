@@ -93,6 +93,10 @@ def start_remote(remote_name: str, remote_type: str, args: list[str] | None = No
     return _run_config_create(remote_name, remote_type, list(args or []))
 
 
+def start_update_remote(remote_name: str, args: list[str] | None = None) -> RcloneConfigStep:
+    return _run_config_update(remote_name, list(args or []))
+
+
 def open_config_in_external_terminal() -> str:
     binary = find_rclone()
     if not binary:
@@ -171,6 +175,13 @@ def continue_remote(
             "--result",
             result,
         ],
+    )
+
+
+def continue_update_remote(remote_name: str, state: str, result: str) -> RcloneConfigStep:
+    return _run_config_update(
+        remote_name,
+        ["--continue", "--state", state, "--result", result],
     )
 
 
@@ -290,6 +301,56 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
     )
 
 
+def _run_config_update(remote_name: str, args: list[str]) -> RcloneConfigStep:
+    binary = find_rclone()
+    if not binary:
+        raise RcloneWizardError("rclone is not installed or RCLONE_PATH is not set.")
+    config_path = default_config_path()
+    _ensure_config_parent(config_path)
+    command = [
+        binary,
+        "--config",
+        str(config_path),
+        "config",
+        "update",
+        remote_name,
+        "--non-interactive",
+        *args,
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            **process_group_options(PLATFORM),
+        )
+        with _ACTIVE_CONFIG_LOCK:
+            _ACTIVE_CONFIG_PROCESSES[remote_name] = process
+        stdout, stderr = process.communicate(timeout=RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process(process)
+        raise RcloneWizardError("iCloud authentication timed out. Request a new verification code and try again.") from exc
+    except OSError as exc:
+        raise RcloneWizardError(f"Could not run rclone: {exc}") from exc
+    finally:
+        with _ACTIVE_CONFIG_LOCK:
+            if _ACTIVE_CONFIG_PROCESSES.get(remote_name) is locals().get("process"):
+                _ACTIVE_CONFIG_PROCESSES.pop(remote_name, None)
+    output = "\n".join(part for part in (stdout, stderr) if part.strip())
+    if process.returncode != 0:
+        raise RcloneWizardError(output.strip() or f"rclone exited with code {process.returncode}.")
+    if not output.strip():
+        return RcloneConfigStep(state="", option={})
+    data = _extract_json_object(output)
+    return RcloneConfigStep(
+        state=str(data.get("State", "")),
+        option=data.get("Option") or {},
+        error=str(data.get("Error", "")),
+        result=str(data.get("Result", "")),
+    )
+
+
 def _terminate_process(process: subprocess.Popen[str]) -> None:
     terminate_process(process, PLATFORM)
 
@@ -382,6 +443,8 @@ __all__ = [
     "cancel_remote_config",
     "continue_drive_remote",
     "continue_remote",
+    "continue_update_remote",
     "start_drive_remote",
     "start_remote",
+    "start_update_remote",
 ]

@@ -205,6 +205,20 @@ class RcloneWizardTests(unittest.TestCase):
             self.assertTrue(step.complete)
             self.assertIn("type = dropbox", config_path.read_text(encoding="utf-8"))
 
+    def test_continue_update_remote_submits_noninteractive_answer(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            config_path = Path(tempdir) / "rclone.conf"
+            process = FakeProcess(stdout='{"State":"","Option":{},"Error":"","Result":""}')
+            with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(rclone_wizard, "default_config_path", return_value=config_path):
+                    with mock.patch.object(subprocess, "Popen", return_value=process) as popen:
+                        step = rclone_wizard.continue_update_remote("Personal__iCloud", "*state", "123456")
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[4:7], ["update", "Personal__iCloud", "--non-interactive"])
+        self.assertEqual(command[-5:], ["--continue", "--state", "*state", "--result", "123456"])
+        self.assertTrue(step.complete)
+
     def test_run_config_create_reports_rclone_failure(self):
         process = FakeProcess(returncode=1, stdout="", stderr="failed")
         with mock.patch.object(rclone_wizard, "find_rclone", return_value="/usr/bin/rclone"):

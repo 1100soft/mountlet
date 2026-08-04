@@ -65,7 +65,7 @@ mount_flags = --read-only --dir-cache-time 10m
             self.assertEqual(remote.name, "Work__Drive")
             self.assertEqual(remote.alias, "Work")
             self.assertEqual(remote.provider, "Drive")
-            self.assertEqual(Path(remote.mount_path).parts[-2:], ("drive", "Work"))
+            self.assertEqual(Path(remote.mount_path).parts[-2:], ("drive", "Work__Drive"))
             self.assertIn("--links", remote.flags)
             self.assertIn("--read-only", remote.flags)
             self.assertIn("10m", remote.flags)
@@ -76,6 +76,58 @@ mount_flags = --read-only --dir-cache-time 10m
             self.load_core(tempdir, "[Docs]\ntype = drive\n")
 
             self.assertFalse(mount_base.exists())
+
+    def test_default_mount_folders_distinguish_same_alias_across_providers(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Personal__Drive]
+type = drive
+
+[Personal__Dropbox]
+type = dropbox
+""".strip(),
+            )
+
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.alias for remote in remotes], ["Personal", "Personal"])
+        self.assertEqual(
+            [Path(remote.mount_path).name for remote in remotes],
+            ["Personal__Drive", "Personal__Dropbox"],
+        )
+
+    def test_mount_removes_empty_legacy_default_folder_before_mounting(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            legacy_path = Path(remote.mount_path).with_name("Work")
+            legacy_path.mkdir(parents=True)
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.PLATFORM, "mount_driver_available", return_value=True):
+                    with mock.patch.object(core, "check_remote_connection", return_value=(True, "connected")):
+                        with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")):
+                            success, _message = core.mount_remote(remote)
+
+            self.assertTrue(success)
+            self.assertFalse(legacy_path.exists())
+
+    def test_mount_preserves_nonempty_legacy_default_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            legacy_path = Path(remote.mount_path).with_name("Work")
+            legacy_path.mkdir(parents=True)
+            (legacy_path / "local.txt").write_text("keep", encoding="utf-8")
+
+            core._cleanup_legacy_default_mount(remote)
+
+            self.assertTrue(legacy_path.exists())
+            self.assertEqual((legacy_path / "local.txt").read_text(encoding="utf-8"), "keep")
 
     def test_mount_remote_builds_rclone_mount_command(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -189,6 +241,62 @@ type = dropbox
                     "1",
                 ],
             )
+
+    def test_check_remote_connection_explains_missing_backend_binary(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Personal__MEGA]\ntype = mega\n")
+            remote = core.load_remotes()[0]
+            result = mock.Mock(
+                returncode=1,
+                stderr='Failed to create file system: didn\'t find backend called "mega"',
+            )
+
+            with mock.patch.object(core.subprocess, "run", return_value=result):
+                success, message = core.check_remote_connection(remote, "/usr/bin/rclone")
+
+            self.assertFalse(success)
+            self.assertIn("/usr/bin/rclone", message)
+            self.assertIn("does not include the mega backend", message)
+            self.assertIn("standard bundled-rclone build", message)
+
+    def test_check_remote_connection_explains_invalid_icloud_session(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Personal__iCloud]\ntype = iclouddrive\n")
+            remote = core.load_remotes()[0]
+            result = mock.Mock(
+                returncode=1,
+                stderr=(
+                    'HTTP error 421 (421 Misdirected Request) returned body: '
+                    '''{"reason":"Invalid global session","error":2}'''
+                ),
+            )
+
+            with mock.patch.object(core.subprocess, "run", return_value=result):
+                success, message = core.check_remote_connection(remote, "/official/rclone")
+
+            self.assertFalse(success)
+            self.assertIn("saved iCloud session", message)
+            self.assertIn("Reauthenticate", message)
+            self.assertIn("iCloud.com", message)
+
+    def test_check_remote_connection_explains_missing_icloud_adp_cookie(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Personal__iCloud]\ntype = iclouddrive\n")
+            remote = core.load_remotes()[0]
+            result = mock.Mock(
+                returncode=1,
+                stderr=(
+                    "requestPCS(iclouddrive): HTTP error 500 returned body: "
+                    '''{"success":false,"error":"Missing X-APPLE-WEBAUTH-TOKEN cookie"}'''
+                ),
+            )
+
+            with mock.patch.object(core.subprocess, "run", return_value=result):
+                success, message = core.check_remote_connection(remote, "/official/rclone")
+
+            self.assertFalse(success)
+            self.assertIn("Reauthenticate", message)
+            self.assertIn("Advanced Data Protection", message)
 
     def test_reconnect_remote_uses_active_rclone_config(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -342,7 +450,7 @@ endpoint = https://account.r2.cloudflarestorage.com
             remote = core.load_remotes()[0]
 
         self.assertEqual(remote.provider, "Cloudflare R2")
-        self.assertEqual(Path(remote.mount_path).parts[-2:], ("s3", "Archive"))
+        self.assertEqual(Path(remote.mount_path).parts[-2:], ("s3", "Archive__S3"))
 
     def test_load_remotes_uses_mountlet_order_when_configured(self):
         with tempfile.TemporaryDirectory() as tempdir:

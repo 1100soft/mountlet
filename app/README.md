@@ -103,7 +103,10 @@ may change for future renewals with advance notice.
   uncached items in the background first; drag them again when the status says
   they are ready.
 - Mount a remote from the file browser to expose it as a native folder in
-  Finder, Explorer, Dolphin, or another file manager.
+  Finder, Explorer, Dolphin, or another file manager. Mountlet keeps the short
+  alias in its own interface but uses the full remote name for the default
+  mounted folder, so similarly named accounts remain distinguishable. A custom
+  **Local folder name** overrides that default.
 
 Files opened through a system file manager use the live mounted folder. Close
 them before unmounting. Mountlet refuses a busy unmount rather than detaching a
@@ -155,6 +158,26 @@ Available but less tested:
 Some providers may require reconnecting on each device even when config files
 are synced. iCloud and Google Photos may not expose reliable quota information,
 so usage can show as `?`.
+
+### iCloud authentication
+
+Apple can expire an iCloud session even though the remote was working
+previously. If mounting reports an invalid global session or missing PCS/web
+authentication cookies, open Mountlet's main window. Mountlet presents one
+reauthentication prompt there and retries the mount after the refreshed session
+is saved.
+
+The prompt supports both verification paths exposed by rclone:
+
+- Approve the sign-in on a trusted Apple device, then enter its verification
+  code in Mountlet.
+- Enter `sms` instead of a code, select a trusted phone number when asked, then
+  enter the code received by text message.
+
+Use the regular Apple Account password; app-specific passwords do not work for
+this connection. Accounts with Advanced Data Protection must also enable
+**Access iCloud Data on the Web** and approve the access request on an Apple
+device. Mountlet cannot replace Apple's account-recovery or security-key flows.
 
 ## Config Sync
 

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import re
+from pathlib import Path
 from urllib.parse import urlencode
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
@@ -275,10 +276,10 @@ def remote_name_with_alias(remote_name: str, alias: str) -> str:
     return new_alias
 
 
-def _build_mount_path(provider: str, alias: str) -> str:
+def _build_mount_path(provider: str, remote_name: str) -> str:
     provider_component = _slugify(provider.lower())
-    alias_component = _slugify(alias)
-    return os.path.join(BASE_MOUNT_DIR, provider_component, alias_component)
+    remote_component = _slugify(remote_name)
+    return os.path.join(BASE_MOUNT_DIR, provider_component, remote_component)
 
 
 def _resolve_configured_mount_path(path: str) -> str:
@@ -302,6 +303,22 @@ def _cleanup_mount_dir(path: str) -> None:
         except OSError:
             break
         parent = os.path.abspath(os.path.dirname(parent))
+
+
+def _legacy_default_mount_path(remote: RemoteInfo) -> str | None:
+    """Return the old alias-only path when this remote uses the new default path."""
+    current = Path(remote.mount_path)
+    if current.name != _slugify(remote.name):
+        return None
+    legacy = current.with_name(_slugify(remote.alias))
+    return str(legacy) if legacy != current else None
+
+
+def _cleanup_legacy_default_mount(remote: RemoteInfo) -> None:
+    legacy_path = _legacy_default_mount_path(remote)
+    if not legacy_path or PLATFORM.is_mounted(legacy_path):
+        return
+    _cleanup_mount_dir(legacy_path)
 
 
 def _load_config() -> configparser.ConfigParser:
@@ -496,7 +513,7 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
         mount_path = (
             _resolve_configured_mount_path(remote_settings.mount_path)
             if remote_settings and remote_settings.mount_path
-            else _build_mount_path(mount_provider, alias)
+            else _build_mount_path(mount_provider, name)
         )
         auto_mount = (
             remote_settings.auto_mount
@@ -514,6 +531,7 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
             extra_info=dict(section.items()),
             auto_mount=auto_mount,
         )
+        _cleanup_legacy_default_mount(info)
         order = remote_settings.order if remote_settings else None
         remotes.append((order, config_index, info))
     if any(order is not None for order, _config_index, _info in remotes):
@@ -670,6 +688,7 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not connected:
         return False, connection_message
 
+    _cleanup_legacy_default_mount(remote)
     ok, err = _ensure_mount_dir(mount_path(remote))
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
@@ -727,6 +746,28 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
     if result.returncode == 0:
         return True, f"[*] connected {remote.display_name}."
     detail = result.stderr.strip()
+    if "didn't find backend called" in detail.casefold():
+        return (
+            False,
+            f"[!] The selected rclone ({binary}) does not include the {remote.backend_type} backend needed by "
+            f"{remote.display_name}. Install Mountlet's standard bundled-rclone build or set RCLONE_PATH to a "
+            "compatible official rclone binary.",
+        )
+    icloud_auth_errors = (
+        "invalid global session",
+        "missing x-apple-webauth-token cookie",
+        "missing pcs cookies",
+    )
+    if remote.backend_type.casefold() == "iclouddrive" and any(
+        indicator in detail.casefold() for indicator in icloud_auth_errors
+    ):
+        return (
+            False,
+            f"[!] The saved iCloud session for {remote.display_name} is no longer valid. Reauthenticate the "
+            "remote with your Apple ID and two-factor authentication, then try again. If Apple still rejects "
+            "the session, sign in at iCloud.com first, confirm that Access iCloud Data on the Web is enabled, "
+            "and accept any pending account or Advanced Data Protection prompts.",
+        )
     summary = detail or f"rclone exited with code {result.returncode}."
     return False, f"[!] {remote.display_name} is not connected to {source}:\n{summary}"
 

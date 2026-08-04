@@ -785,6 +785,16 @@ class TrayTests(unittest.TestCase):
             [],
         )
 
+    def test_invalid_icloud_session_is_recognized_as_authentication_failure(self):
+        self.assertTrue(tray._message_might_be_auth_failure("HTTP 421: Invalid global session"))
+
+    def test_missing_icloud_adp_cookie_is_recognized_as_authentication_failure(self):
+        self.assertTrue(
+            tray._message_might_be_auth_failure(
+                "requestPCS(iclouddrive): Missing X-APPLE-WEBAUTH-TOKEN cookie"
+            )
+        )
+
     def test_mount_config_masks_protected_credentials(self):
         dialog = object.__new__(tray.MountConfigDialog)
         field = mock.Mock()
@@ -5133,6 +5143,119 @@ class TrayTests(unittest.TestCase):
 
         window._run_remote_reauthentication.assert_called_once_with(remote, remount=True)
 
+    def test_reauthentication_failure_does_not_open_another_prompt(self):
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window._action_pending = {"Personal__iCloud"}
+        window._reauth_in_progress = {"Personal__iCloud"}
+        window._usage_cache = {}
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+        window._offer_reauthentication_if_relevant = mock.Mock()
+        window._reconcile_offline_changes_after_mount = mock.Mock()
+
+        window._handle_action_finished(
+            "Personal__iCloud",
+            False,
+            "The saved iCloud session is no longer valid. Reauthenticate.",
+        )
+
+        window._offer_reauthentication_if_relevant.assert_not_called()
+        window._reconcile_offline_changes_after_mount.assert_not_called()
+        self.assertNotIn("Personal__iCloud", window._reauth_in_progress)
+
+    def test_reauthentication_prompt_is_suppressed_while_attempt_is_active(self):
+        window = object.__new__(tray.MountletWindow)
+        window._reauth_prompt_pending = set()
+        window._reauth_in_progress = {"Personal__iCloud"}
+        window._foreground_question = mock.Mock()
+
+        window._offer_reauthentication_if_relevant(
+            "Personal__iCloud",
+            "The saved iCloud session is no longer valid. Reauthenticate.",
+        )
+
+        window._foreground_question.assert_not_called()
+
+    def test_startup_reauthentication_is_deferred_until_window_is_visible(self):
+        window = object.__new__(tray.MountletWindow)
+        window.window = mock.Mock()
+        window.window.isVisible.return_value = False
+        window._reauth_prompt_pending = set()
+        window._reauth_in_progress = set()
+        window._deferred_reauth_requests = {}
+        window._foreground_question = mock.Mock()
+
+        window._offer_reauthentication_if_relevant(
+            "Personal__iCloud",
+            "The saved iCloud session is no longer valid. Reauthenticate.",
+        )
+
+        self.assertEqual(
+            window._deferred_reauth_requests,
+            {"Personal__iCloud": "The saved iCloud session is no longer valid. Reauthenticate."},
+        )
+        window._foreground_question.assert_not_called()
+
+    def test_deferred_reauthentication_opens_after_main_window_is_visible(self):
+        message = "The saved iCloud session is no longer valid. Reauthenticate."
+        window = object.__new__(tray.MountletWindow)
+        window.is_visible = mock.Mock(return_value=True)
+        window._deferred_reauth_requests = {"Personal__iCloud": message}
+        window._offer_reauthentication_if_relevant = mock.Mock()
+
+        window._show_deferred_reauthentication()
+
+        window._offer_reauthentication_if_relevant.assert_called_once_with("Personal__iCloud", message)
+        self.assertEqual(window._deferred_reauth_requests, {})
+
+    def test_reauthentication_question_is_raised_and_application_modal(self):
+        class Box:
+            Icon = SimpleNamespace(Question="question")
+            StandardButton = SimpleNamespace(Yes=1, No=2)
+
+            def __init__(self, parent):
+                self.parent = parent
+                self.setIcon = mock.Mock()
+                self.setWindowTitle = mock.Mock()
+                self.setText = mock.Mock()
+                self.setStandardButtons = mock.Mock()
+                self.setDefaultButton = mock.Mock()
+                self.setWindowModality = mock.Mock()
+                self.show = mock.Mock()
+                self.raise_ = mock.Mock()
+                self.activateWindow = mock.Mock()
+
+            def exec(self):
+                return self.StandardButton.Yes
+
+        boxes = []
+
+        def make_box(parent):
+            box = Box(parent)
+            boxes.append(box)
+            return box
+
+        make_box.Icon = Box.Icon
+        make_box.StandardButton = Box.StandardButton
+        timer = mock.Mock(side_effect=lambda _delay, callback: callback())
+        window = object.__new__(tray.MountletWindow)
+        window.window = object()
+        window.qt = SimpleNamespace(
+            QMessageBox=make_box,
+            Qt=SimpleNamespace(WindowModality=SimpleNamespace(ApplicationModal="application")),
+            QTimer=SimpleNamespace(singleShot=timer),
+        )
+
+        reply = window._foreground_question("Reauthenticate remote?", "Sign in again")
+
+        self.assertEqual(reply, Box.StandardButton.Yes)
+        boxes[0].setWindowModality.assert_called_once_with("application")
+        boxes[0].show.assert_called_once_with()
+        self.assertGreaterEqual(boxes[0].raise_.call_count, 2)
+        self.assertGreaterEqual(boxes[0].activateWindow.call_count, 2)
+
     def test_remote_reauthentication_retries_mount_after_reconnect(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
@@ -5149,6 +5272,73 @@ class TrayTests(unittest.TestCase):
                         window._run_remote_reauthentication(remote, remount=True)
 
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "reauthenticated\nmounted")
+
+    def test_icloud_reauthentication_requests_code_and_continues(self):
+        remote = core.RemoteInfo(
+            "Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud"
+        )
+        step = tray.rclone_wizard.RcloneConfigStep(
+            "*icloud-state",
+            {"Name": "config_2fa", "Help": "Enter verification code"},
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._icloud_reauth_answer = mock.Mock(return_value=("123456", True))
+        window._run_icloud_reauth_step = mock.Mock()
+
+        window._handle_icloud_reauth_step(remote, True, (step, None))
+
+        window._icloud_reauth_answer.assert_called_once_with(step)
+        window._run_icloud_reauth_step.assert_called_once_with(
+            remote,
+            remount=True,
+            state="*icloud-state",
+            answer="123456",
+        )
+
+    def test_icloud_reauthentication_completion_retries_mount(self):
+        remote = core.RemoteInfo(
+            "Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud"
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._finish_icloud_reauthentication = mock.Mock()
+
+        window._handle_icloud_reauth_step(
+            remote,
+            True,
+            (tray.rclone_wizard.RcloneConfigStep("", {}), None),
+        )
+
+        window._finish_icloud_reauthentication.assert_called_once_with(remote, remount=True)
+
+    def test_icloud_reauthentication_handles_sms_phone_choice(self):
+        remote = core.RemoteInfo(
+            "Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud"
+        )
+        step = tray.rclone_wizard.RcloneConfigStep(
+            "*sms-state",
+            {
+                "Name": "config_sms_phone",
+                "Help": "Choose a trusted phone number",
+                "Exclusive": True,
+                "Examples": [{"Value": "1", "Help": "••• ••42"}],
+            },
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._icloud_reauth_answer = mock.Mock(return_value=("1", True))
+        window._run_icloud_reauth_step = mock.Mock()
+
+        window._handle_icloud_reauth_step(remote, True, (step, None))
+
+        window._icloud_reauth_answer.assert_called_once_with(step)
+        window._run_icloud_reauth_step.assert_called_once_with(
+            remote,
+            remount=True,
+            state="*sms-state",
+            answer="1",
+        )
 
     def test_remote_reauthentication_unmounts_before_reconnecting(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
@@ -5202,6 +5392,22 @@ class TrayTests(unittest.TestCase):
         window.file_browser.invalidate.assert_has_calls([mock.call("Docs"), mock.call("Photos")], any_order=True)
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
+
+    def test_auto_mount_failure_offers_icloud_reauthentication(self):
+        remote = core.RemoteInfo("Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud")
+        window = object.__new__(tray.MountletWindow)
+        window._offer_reauthentication_if_relevant = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            window._offer_bulk_reauthentication_if_relevant(
+                {remote.name},
+                ["The saved iCloud session for Personal (iCloud) is no longer valid. Reauthenticate the remote."],
+            )
+
+        window._offer_reauthentication_if_relevant.assert_called_once_with(
+            remote.name,
+            "The saved iCloud session for Personal (iCloud) is no longer valid. Reauthenticate the remote.",
+        )
 
 
 if __name__ == "__main__":

@@ -157,7 +157,7 @@ DEFAULT_MOUNTS_CONFIG = """# Per-remote Mountlet settings.
 # [remotes."Work__Drive"]
 # auto_mount = true
 # order = 10
-# mount_path = "drive/Work"
+# mount_path = "drive/Work__Drive"
 # remote_path = ""
 # mount_flags = "--read-only --dir-cache-time 10m"
 """

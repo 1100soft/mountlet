@@ -988,6 +988,10 @@ def _message_might_be_auth_failure(message: str) -> bool:
         "authorization",
         "oauth",
         "login required",
+        "invalid global session",
+        "missing x-apple-webauth-token cookie",
+        "missing pcs cookies",
+        "requestpcs(",
         "reauth",
     )
     return any(indicator in text for indicator in indicators)
@@ -5441,6 +5445,9 @@ class MountletWindow:
         self._connection_cache: dict[str, bool] = {}
         self._usage_pending: set[str] = set()
         self._action_pending: set[str] = set()
+        self._reauth_prompt_pending: set[str] = set()
+        self._reauth_in_progress: set[str] = set()
+        self._deferred_reauth_requests: dict[str, str] = {}
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
         self._remote_rows_layout: Any | None = None
@@ -5522,6 +5529,7 @@ class MountletWindow:
         self._bridge.notices_ready.connect(self.tray_app._handle_notices_ready)
         self._bridge.local_cache_scan_ready.connect(self._handle_local_cache_scan_ready)
         self._bridge.mount_states_ready.connect(self._handle_mount_states_ready)
+        self._bridge.icloud_reauth_step_ready.connect(self._handle_icloud_reauth_step)
         self.window = self._make_main_window()
         build_label = build_info.visible_label()
         self.window.setWindowTitle(f"Mountlet - {build_label}" if build_label else "Mountlet")
@@ -5598,6 +5606,7 @@ class MountletWindow:
             notices_ready = qt.Signal(object, object)
             local_cache_scan_ready = qt.Signal(object, str)
             mount_states_ready = qt.Signal(object)
+            icloud_reauth_step_ready = qt.Signal(object, object, object)
 
         return Bridge()
 
@@ -6132,6 +6141,8 @@ class MountletWindow:
             self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
+        if not was_visible:
+            self._show_deferred_reauthentication()
         if not was_visible and browser_restore is not None:
             remote_name, focus_browser = browser_restore
             self._show_file_browser_for_remote_name(remote_name, focus_browser=focus_browser)
@@ -9345,6 +9356,8 @@ class MountletWindow:
     def _handle_action_finished(self, remote_name: str, success: bool, message: str) -> None:
         if self._tray_is_quitting():
             return
+        was_reauthentication = remote_name in getattr(self, "_reauth_in_progress", set())
+        getattr(self, "_reauth_in_progress", set()).discard(remote_name)
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
         getattr(self, "_connection_cache", {}).pop(remote_name, None)
@@ -9352,7 +9365,8 @@ class MountletWindow:
         self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
-            self._offer_reauthentication_if_relevant(remote_name, message)
+            if not was_reauthentication:
+                self._offer_reauthentication_if_relevant(remote_name, message)
         else:
             self._reconcile_offline_changes_after_mount(remote_name)
         self.tray_app.rebuild_menus()
@@ -9361,20 +9375,72 @@ class MountletWindow:
     def _offer_reauthentication_if_relevant(self, remote_name: str, message: str) -> None:
         if not _message_might_be_auth_failure(message):
             return
+        prompt_pending = getattr(self, "_reauth_prompt_pending", set())
+        reauth_in_progress = getattr(self, "_reauth_in_progress", set())
+        if remote_name in prompt_pending or remote_name in reauth_in_progress:
+            return
+        if not self.is_visible():
+            deferred = getattr(self, "_deferred_reauth_requests", {})
+            deferred.setdefault(remote_name, message)
+            self._deferred_reauth_requests = deferred
+            return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
             return
-        reply = self.qt.QMessageBox.question(
-            self.window,
-            "Reauthenticate remote?",
-            f"{remote.display_name} may need to sign in again.\n\n"
-            "Reauthenticate it now and retry mounting?",
-            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
-            self.qt.QMessageBox.StandardButton.Yes,
-        )
-        if reply != self.qt.QMessageBox.StandardButton.Yes:
+        prompt_pending.add(remote_name)
+        self._reauth_prompt_pending = prompt_pending
+        try:
+            reply = self._foreground_question(
+                "Reauthenticate remote?",
+                f"{remote.display_name} may need to sign in again.\n\n"
+                "Reauthenticate it now and retry mounting?",
+            )
+            if reply != self.qt.QMessageBox.StandardButton.Yes:
+                return
+            self._run_remote_reauthentication(remote, remount=True)
+        finally:
+            prompt_pending.discard(remote_name)
+
+    def _show_deferred_reauthentication(self) -> None:
+        if not self.is_visible():
             return
-        self._run_remote_reauthentication(remote, remount=True)
+        deferred = getattr(self, "_deferred_reauth_requests", {})
+        if not deferred:
+            return
+        remote_name = next(iter(deferred))
+        message = deferred.pop(remote_name)
+        self._deferred_reauth_requests = deferred
+        self._offer_reauthentication_if_relevant(remote_name, message)
+
+    def _foreground_question(self, title: str, message: str) -> Any:
+        box_class = self.qt.QMessageBox
+        if not callable(box_class):
+            return box_class.question(
+                self.window,
+                title,
+                message,
+                box_class.StandardButton.Yes | box_class.StandardButton.No,
+                box_class.StandardButton.Yes,
+            )
+        box = box_class(self.window)
+        box.setIcon(box_class.Icon.Question)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setStandardButtons(box_class.StandardButton.Yes | box_class.StandardButton.No)
+        box.setDefaultButton(box_class.StandardButton.Yes)
+        try:
+            box.setWindowModality(self.qt.Qt.WindowModality.ApplicationModal)
+        except Exception:
+            pass
+        box.show()
+        box.raise_()
+        box.activateWindow()
+        try:
+            self.qt.QTimer.singleShot(0, box.raise_)
+            self.qt.QTimer.singleShot(0, box.activateWindow)
+        except Exception:
+            pass
+        return box.exec()
 
     def _run_remote_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
         if self._license_locked():
@@ -9382,8 +9448,16 @@ class MountletWindow:
             return
         if remote.name in self._action_pending:
             return
+        reauth_in_progress = getattr(self, "_reauth_in_progress", set())
+        if remote.name in reauth_in_progress:
+            return
+        reauth_in_progress.add(remote.name)
+        self._reauth_in_progress = reauth_in_progress
         self._action_pending.add(remote.name)
         self._request_refresh()
+        if remote.backend_type.casefold() == "iclouddrive":
+            self._run_icloud_reauth_step(remote, remount=remount)
+            return
 
         def worker() -> None:
             messages: list[str] = []
@@ -9401,6 +9475,109 @@ class MountletWindow:
                 self._bridge.action_finished.emit(remote.name, mount_success, "\n".join(messages))
                 return
             self._bridge.action_finished.emit(remote.name, success, "\n".join(messages))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_icloud_reauth_step(
+        self,
+        remote: core.RemoteInfo,
+        *,
+        remount: bool,
+        state: str = "",
+        answer: str = "",
+    ) -> None:
+        def worker() -> None:
+            try:
+                if state:
+                    step = rclone_wizard.continue_update_remote(remote.name, state, answer)
+                else:
+                    step = rclone_wizard.start_update_remote(
+                        remote.name,
+                        ["cookies", "", "trust_token", ""],
+                    )
+                error: object = None
+            except Exception as exc:
+                step = None
+                error = exc
+            self._bridge.icloud_reauth_step_ready.emit(remote, remount, (step, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_icloud_reauth_step(self, remote: object, remount: object, payload: object) -> None:
+        if self._tray_is_quitting() or not isinstance(remote, core.RemoteInfo):
+            return
+        step, error = payload if isinstance(payload, tuple) and len(payload) == 2 else (None, "Invalid response")
+        if error is not None:
+            self._bridge.action_finished.emit(remote.name, False, f"iCloud reauthentication failed: {error}")
+            return
+        if not isinstance(step, rclone_wizard.RcloneConfigStep):
+            self._bridge.action_finished.emit(remote.name, False, "iCloud reauthentication returned no result.")
+            return
+        if step.complete:
+            self._finish_icloud_reauthentication(remote, remount=bool(remount))
+            return
+        option_name = str(step.option.get("Name", ""))
+        needs_input = (
+            option_name == "config_2fa"
+            or bool(step.option.get("Required"))
+            or bool(step.option.get("Exclusive"))
+            or bool(step.option.get("Examples"))
+        )
+        if needs_input:
+            answer, accepted = self._icloud_reauth_answer(step)
+            if not accepted:
+                rclone_wizard.cancel_remote_config(remote.name)
+                self._bridge.action_finished.emit(remote.name, False, "iCloud reauthentication was cancelled.")
+                return
+        else:
+            default = step.option.get("Default", "")
+            answer = str(default).lower() if isinstance(default, bool) else str(default)
+        self._run_icloud_reauth_step(remote, remount=bool(remount), state=step.state, answer=answer)
+
+    def _icloud_reauth_answer(self, step: rclone_wizard.RcloneConfigStep) -> tuple[str, bool]:
+        dialog = self.qt.QInputDialog(self.window)
+        dialog.setWindowTitle("iCloud verification")
+        help_text = str(step.option.get("Help", "")).strip()
+        if str(step.option.get("Name", "")) == "config_2fa":
+            help_text = (
+                "Enter the verification code shown on your trusted Apple device, "
+                "or enter sms to request a text message."
+            )
+        dialog.setLabelText(help_text or "Complete the requested iCloud authentication step.")
+        dialog.setInputMode(self.qt.QInputDialog.InputMode.TextInput)
+        examples = step.option.get("Examples") or []
+        choices: dict[str, str] = {}
+        for example in examples:
+            if not isinstance(example, dict):
+                continue
+            value = str(example.get("Value", ""))
+            label = str(example.get("Help", "")).strip()
+            display = f"{label} ({value})" if label and label != value else value
+            choices[display] = value
+        if choices:
+            dialog.setComboBoxItems(list(choices))
+            dialog.setComboBoxEditable(not bool(step.option.get("Exclusive")))
+        else:
+            default = step.option.get("Default", "")
+            dialog.setTextValue(str(default) if default is not None else "")
+        try:
+            dialog.setWindowModality(self.qt.Qt.WindowModality.ApplicationModal)
+        except Exception:
+            pass
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        accepted = bool(dialog.exec())
+        entered = dialog.textValue().strip()
+        return choices.get(entered, entered), accepted
+
+    def _finish_icloud_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
+        def worker() -> None:
+            if remount:
+                success, message = core.mount_remote(remote)
+            else:
+                success, message = True, f"[*] reauthenticated {remote.display_name}."
+            self._bridge.action_finished.emit(remote.name, success, message)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -9450,6 +9627,7 @@ class MountletWindow:
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
+                self._offer_bulk_reauthentication_if_relevant(pending_names, failures)
             elif completed:
                 verb = "Unmounted" if title == "Unmount all" else "Mounted"
                 self.tray_app._notify(title, f"{verb}: " + ", ".join(completed), success=True)
@@ -9457,6 +9635,28 @@ class MountletWindow:
                 self.tray_app._notify(title, "Nothing to do.", success=True)
         self.tray_app.rebuild_menus()
         self._request_refresh()
+
+    def _offer_bulk_reauthentication_if_relevant(
+        self,
+        pending_names: set[str],
+        failures: list[object],
+    ) -> None:
+        remotes = [remote for remote in _load_visible_remotes() if remote.name in pending_names]
+        for failure in failures:
+            message = str(failure)
+            if not _message_might_be_auth_failure(message):
+                continue
+            remote = next(
+                (
+                    candidate
+                    for candidate in remotes
+                    if candidate.display_name in message or candidate.name in message
+                ),
+                None,
+            )
+            if remote is not None:
+                self._offer_reauthentication_if_relevant(remote.name, message)
+                return
 
     def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
         self._schedule_offline_reconcile(remote_name)
@@ -10974,6 +11174,7 @@ class MountletWindow:
         self._usage_pending.clear()
         getattr(self, "_connection_cache", {}).clear()
         self._action_pending.clear()
+        getattr(self, "_deferred_reauth_requests", {}).clear()
         self._hide_window_stack()
         with suppress(Exception):
             self.file_browser.dispose()
