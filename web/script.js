@@ -1,9 +1,21 @@
 let releaseFilesPromise = null;
+let releaseCatalogPromise = null;
 let notificationsPromise = null;
 let loadedNotifications = [];
 
 async function openConfiguredLink(group, key) {
   if (group === "downloads") {
+    const catalog = await loadReleaseCatalog();
+    const version = document.querySelector("#release-version")?.value || catalog?.latest || "";
+    const release = catalog?.releases?.find((item) => item.version === version);
+    if (catalog?.releases?.length) {
+      if (!release?.files?.[key]) {
+        window.alert(`That build is not available for Mountlet v${version}.`);
+        return;
+      }
+      window.location.href = `/api/download/${encodeURIComponent(key)}?version=${encodeURIComponent(version)}`;
+      return;
+    }
     const fileName = await getReleaseDownloadFile(key);
     if (!fileName) {
       window.alert(`No release file is configured for "${key}".`);
@@ -22,9 +34,18 @@ async function openConfiguredLink(group, key) {
   window.location.href = url;
 }
 
+async function loadReleaseCatalog() {
+  if (!releaseCatalogPromise) {
+    releaseCatalogPromise = fetch("/api/releases", {headers: {accept: "application/json"}})
+      .then(async (response) => response.ok ? response.json() : null)
+      .catch(() => null);
+  }
+  return releaseCatalogPromise;
+}
+
 async function getReleaseDownloadFile(key) {
   const releases = await loadReleaseFiles();
-  return releases.downloads && releases.downloads[key];
+  return releases.legacyDownloads && releases.legacyDownloads[key];
 }
 
 async function loadReleaseFiles() {
@@ -824,15 +845,35 @@ function updateDownloadSelection() {
   const button = document.querySelector("#selected-download-button");
   const note = document.querySelector("#download-selection-note");
   const label = downloadTargetLabels[input?.value] || "selected platform";
+  const version = document.querySelector("#release-version")?.value || "";
   if (button) {
     button.disabled = !input;
-    button.textContent = `Download ${lean ? "lean " : ""}Mountlet for ${label}`;
+    button.textContent = `Download ${lean ? "lean " : ""}Mountlet${version ? ` v${version}` : ""} for ${label}`;
   }
   if (note) {
     note.textContent = lean
       ? "The lean build requires a compatible rclone installed on the computer."
       : "The standard build includes an app-local rclone.";
   }
+}
+
+async function initializeReleaseSelection() {
+  const select = document.querySelector("#release-version");
+  if (!select) return;
+  const catalog = await loadReleaseCatalog();
+  if (!catalog?.releases?.length) {
+    select.disabled = true;
+    select.title = "Only the current legacy release is available.";
+    return;
+  }
+  select.replaceChildren(...catalog.releases.map((release, index) => {
+    const option = document.createElement("option");
+    option.value = release.version;
+    option.textContent = `v${release.version}${index === 0 ? " (latest)" : ""}`;
+    return option;
+  }));
+  select.value = catalog.latest || catalog.releases[0].version;
+  updateDownloadSelection();
 }
 
 function normalizedDownloadPlatform(value) {
@@ -1055,7 +1096,7 @@ document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="license-plan"]')) {
     updateCart();
   }
-  if (event.target.matches('input[name="download-target"], #lean-build')) {
+  if (event.target.matches('input[name="download-target"], #lean-build, #release-version')) {
     updateDownloadSelection();
   }
 });
@@ -1104,3 +1145,4 @@ if (shouldValidatePrefilledLicense) {
 }
 loadCheckoutLicense();
 initializeDownloadSelection();
+initializeReleaseSelection();

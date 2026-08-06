@@ -10,6 +10,7 @@ on:
       - "package-lock.json"
       - "web/release-files.json"
       - "web/tools/upload-release-r2.mjs"
+      - "web/tools/release-layout.mjs"
   push:
     branches: [main, wip]
     tags:
@@ -21,6 +22,7 @@ on:
       - "package-lock.json"
       - "web/release-files.json"
       - "web/tools/upload-release-r2.mjs"
+      - "web/tools/release-layout.mjs"
 
 permissions:
   contents: read
@@ -234,4 +236,4 @@ jobs:
         run: npm run web:release:check
 
       - name: Upload installers
-        run: npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --remote
+        run: npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --retain 5 --remote

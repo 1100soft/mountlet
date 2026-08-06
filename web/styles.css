@@ -464,7 +464,32 @@ h3 {
 }
 
 .lean-build-choice {
+  margin: 0;
+}
+
+.download-options {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
   margin: 4px 0 14px;
+}
+
+.release-version-choice {
+  align-items: center;
+  display: flex;
+  font-weight: 650;
+  gap: 8px;
+}
+
+.release-version-choice select {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  min-width: 130px;
+  padding: 7px 30px 7px 9px;
 }
 
 .download-selection-status,

@@ -76,9 +76,10 @@ user-facing document used for package publication.
   reports to the configured private GitHub issue repository and optionally by
   email; reports are not mirrored into D1. Do not reintroduce the removed D1
   report-management workaround.
-- Release filenames come from `web/release-files.json`. The native package
-  workflow builds every platform/variant, verifies all package jobs, then
-  uploads matching installers to the preview or production R2 bucket.
+- Release artifact definitions come from `web/release-files.json`. The native
+  package workflow builds every platform/variant, verifies all package jobs,
+  then publishes versioned installers and a five-version release index to the
+  preview or production R2 bucket.
 
 ### Latest Google Photos diagnosis
 

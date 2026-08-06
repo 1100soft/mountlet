@@ -104,9 +104,10 @@ If you initialized D1 before subscription support, add the subscription fields:
 wrangler d1 execute mountlet-license --local --file web/migrations/0005_subscription_fields.sql
 ```
 
-`web:r2:seed` uploads local test release files to local R2. The download
-buttons read `web/release-files.json` and route through `/api/download/...`, so
-you can test the same release path before publishing real installer artifacts.
+`web:r2:seed` publishes local test release files and a release index to local
+R2. The website reads `/api/releases`, then routes a logical build key and
+version through `/api/download/...`, so local testing follows the production
+release path.
 
 To upload real installer artifacts from a GitHub Actions artifact directory to
 Cloudflare R2, run with `--remote`:
@@ -122,9 +123,21 @@ preview installers to the bucket bound as preview `DOWNLOADS`:
 npm run web:r2:upload -- mountlet-preview /tmp/mountlet-artifacts --remote
 ```
 
-The upload tool reads the expected public file names from
-`web/release-files.json` and finds those files recursively in the artifact
-directory. It still accepts an explicit manifest file for one-off overrides.
+The upload tool reads artifact definitions from `web/release-files.json`, finds
+the installers recursively, and publishes them under versioned keys such as:
+
+```text
+releases/v0.6.3/windows/x64/standard/mountlet-v0.6.3-windows-x64-standard-setup.exe
+releases/v0.6.3/macos/arm64/lean/mountlet-v0.6.3-macos-arm64-lean.dmg
+releases/v0.6.3/linux/x64/standard/mountlet-v0.6.3-linux-x64-standard.deb
+```
+
+It publishes `releases/index.json` only after every installer succeeds. The
+index keeps the latest five app versions. Objects belonging only to retired
+versions are deleted after the new index becomes active. Re-publishing the same
+app version replaces that version instead of consuming another history slot.
+The first versioned publication also removes the former flat installer objects
+after the new index is live.
 Omit `--remote` only when intentionally seeding Wrangler's local R2 simulator.
 Use `--dry-run` to verify artifact discovery without uploading:
 
@@ -168,7 +181,8 @@ curl -H "Authorization: Bearer <LICENSE_ADMIN_TOKEN>" \
 You can also verify that local R2 is bound:
 
 ```bash
-curl "http://127.0.0.1:8788/api/download/$(node -p 'require("./web/release-files.json").downloads.linux')"
+curl http://127.0.0.1:8788/api/releases
+curl -OJ "http://127.0.0.1:8788/api/download/linux?version=0.0.0-dev"
 ```
 
 To activate a local paid build against the local API:
@@ -211,9 +225,11 @@ secrets or local `.dev.vars` values.
 
 ## Downloads
 
-The default download buttons point to `/api/download/...`, which reads objects
-from the `DOWNLOADS` R2 binding. The public object keys live in
-`web/release-files.json`.
+The download UI obtains the five retained versions from `/api/releases`. It
+sends a logical build key, such as `windows` or `macosLeanX64`, plus the chosen
+version to `/api/download/...`. The Function resolves that request through
+`releases/index.json` and streams the corresponding object from the `DOWNLOADS`
+R2 binding. R2 folder paths are not exposed as user-controlled download paths.
 
 The native package workflow uploads installers automatically after successful
 builds when these GitHub settings are present:
@@ -237,9 +253,9 @@ Preview app builds also embed the preview license and report API defaults:
 `https://wip.mountlet.pages.dev/api/report`. Production builds keep the
 relocatable production defaults under `https://mountlet.app`.
 
-These keys are the public download API names. Keep them in
-`web/release-files.json` so the website, deployment check, and R2 upload tool
-use the same list.
+Artifact source names, platform/architecture metadata, build variants, and the
+five-version retention setting live in `web/release-files.json`. Keep the
+logical keys stable so old links and website controls continue to resolve.
 
 Before uploading, verify that the site release list matches the package
 workflow outputs:

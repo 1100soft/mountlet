@@ -115,7 +115,10 @@
               </tbody>
             </table>
           </div>
-          <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build (requires a compatible system rclone)</label>
+          <div class="download-options">
+            <label class="release-version-choice" for="release-version">Version <select id="release-version" aria-label="Mountlet version"><option value="">Latest</option></select></label>
+            <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build (requires a compatible system rclone)</label>
+          </div>
           <p class="download-selection-status" id="download-selection-status" role="status"></p>
           <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
           <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
