@@ -384,7 +384,16 @@ h3 {
 .download-matrix {
   border-collapse: collapse;
   margin: 14px 0 18px;
+  table-layout: fixed;
   width: 100%;
+}
+
+.download-matrix .platform-column {
+  width: 44%;
+}
+
+.download-matrix .architecture-column {
+  width: 28%;
 }
 
 .download-matrix th,
@@ -396,6 +405,27 @@ h3 {
 
 .download-matrix thead th {
   background: var(--panel-soft);
+}
+
+.download-matrix thead th:not(:first-child),
+.download-matrix td {
+  text-align: center;
+}
+
+.download-matrix tbody th {
+  vertical-align: middle;
+}
+
+.download-matrix tbody th img {
+  background: #fff;
+  border-radius: 4px;
+  box-sizing: border-box;
+  height: 24px;
+  margin-right: 8px;
+  object-fit: contain;
+  padding: 3px;
+  vertical-align: middle;
+  width: 24px;
 }
 
 .download-matrix tbody th small {

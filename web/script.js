@@ -869,7 +869,7 @@ async function initializeDownloadSelection() {
     architectureDetected = Boolean(architecture);
   }
   if (platform === "macos" && !architecture) {
-    architecture = "arm64";
+    architecture = "x64";
   }
   if ((platform === "windows" || platform === "linux") && architecture !== "arm64") {
     architecture = "x64";
@@ -883,7 +883,7 @@ async function initializeDownloadSelection() {
     if (status) {
       status.textContent = architectureDetected
         ? `Detected ${downloadTargetLabels[target.value]}.`
-        : `Detected macOS; selected ${downloadTargetLabels[target.value]} by default.`;
+        : `Detected macOS, but not its architecture; selected ${downloadTargetLabels[target.value]} as the safer default.`;
     }
   }
   updateDownloadSelection();
