@@ -412,6 +412,11 @@ h3 {
   gap: 8px;
 }
 
+.download-matrix label {
+  justify-content: center;
+  min-height: 24px;
+}
+
 .download-matrix td:has(input:checked) {
   background: color-mix(in srgb, var(--accent) 16%, var(--panel));
   outline: 2px solid var(--accent);
