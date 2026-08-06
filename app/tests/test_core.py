@@ -70,6 +70,16 @@ mount_flags = --read-only --dir-cache-time 10m
             self.assertIn("--read-only", remote.flags)
             self.assertIn("10m", remote.flags)
 
+    def test_load_remotes_does_not_probe_or_migrate_mount_folders(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+
+            with mock.patch.object(core.PLATFORM, "is_mounted") as is_mounted:
+                remotes = core.load_remotes()
+
+            self.assertEqual([remote.name for remote in remotes], ["Work__Drive"])
+            is_mounted.assert_not_called()
+
     def test_import_does_not_create_mount_directory(self):
         with tempfile.TemporaryDirectory() as tempdir:
             mount_base = Path(tempdir) / "mounts"
@@ -128,6 +138,102 @@ type = dropbox
 
             self.assertTrue(legacy_path.exists())
             self.assertEqual((legacy_path / "local.txt").read_text(encoding="utf-8"), "keep")
+
+    def test_cleanup_orphaned_mounts_releases_only_unconfigured_managed_mounts(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            orphan = Path(core.BASE_MOUNT_DIR) / "Drive" / "Old"
+            orphan.mkdir(parents=True)
+            unrelated = Path(tempdir) / "elsewhere" / "Other"
+            unrelated.mkdir(parents=True)
+
+            mounted = {remote.mount_path, str(orphan), str(unrelated)}
+            with mock.patch.object(core.PLATFORM, "is_mounted", side_effect=lambda path: str(path) in mounted):
+                def unmount(path):
+                    mounted.discard(str(path))
+                    return mock.Mock(success=True, detail="")
+
+                with mock.patch.object(core, "_orphan_mount_pid", return_value=42):
+                    with mock.patch.object(
+                        core.PLATFORM,
+                        "unmount",
+                        side_effect=lambda path, _pid: unmount(path),
+                    ) as release:
+                        released, failures = core.cleanup_orphaned_mounts([remote])
+
+            self.assertEqual(released, [str(orphan)])
+            self.assertEqual(failures, [])
+            release.assert_called_once_with(str(orphan), 42)
+            self.assertIn(str(unrelated), mounted)
+
+    def test_cleanup_orphaned_mounts_reports_busy_mount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "")
+            orphan = Path(core.BASE_MOUNT_DIR) / "Drive" / "Old"
+            orphan.mkdir(parents=True)
+
+            with mock.patch.object(core.PLATFORM, "is_mounted", return_value=True):
+                with mock.patch.object(core, "_orphan_mount_pid", return_value=None):
+                    with mock.patch.object(core, "_mount_endpoint_disconnected", return_value=False):
+                        with mock.patch.object(
+                            core.PLATFORM,
+                            "unmount",
+                            return_value=mock.Mock(success=False, detail="busy"),
+                        ):
+                            released, failures = core.cleanup_orphaned_mounts([])
+
+            self.assertEqual(released, [])
+            self.assertEqual(failures, [f"[!] Failed to release stale mount {orphan}. busy"])
+
+    def test_cleanup_orphaned_mounts_detaches_disconnected_fuse_endpoint(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "")
+            orphan = Path(core.BASE_MOUNT_DIR) / "drive" / "Old"
+            orphan.mkdir(parents=True)
+            mounted = [True, False]
+
+            with mock.patch.object(core.PLATFORM, "is_mounted", side_effect=lambda _path: mounted.pop(0)):
+                with mock.patch.object(core, "_orphan_mount_pid", return_value=None):
+                    with mock.patch.object(core, "_mount_endpoint_disconnected", return_value=True):
+                        with mock.patch.object(
+                            core.PLATFORM,
+                            "unmount",
+                            return_value=mock.Mock(success=False, detail="busy"),
+                        ):
+                            with mock.patch.object(
+                                core.PLATFORM,
+                                "detach_disconnected_mount",
+                                return_value=mock.Mock(success=True, detail=""),
+                            ) as detach:
+                                released, failures = core.cleanup_orphaned_mounts([])
+
+            self.assertEqual(released, [str(orphan)])
+            self.assertEqual(failures, [])
+            detach.assert_called_once_with(str(orphan))
+
+    def test_orphan_mount_pid_requires_exact_rclone_mount_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "")
+            proc = Path(tempdir) / "proc"
+            (proc / "123").mkdir(parents=True)
+            (proc / "123" / "cmdline").write_bytes(
+                b"/usr/bin/rclone\0mount\0Old:\0/home/user/Mountlet/mounted/drive/Old\0"
+            )
+            (proc / "124").mkdir()
+            (proc / "124" / "cmdline").write_bytes(
+                b"/usr/bin/other\0mount\0/home/user/Mountlet/mounted/drive/Old\0"
+            )
+
+            real_path = Path
+            with mock.patch.object(core, "Path", side_effect=lambda value: proc if value == "/proc" else real_path(value)):
+                pid = core._orphan_mount_pid("/home/user/Mountlet/mounted/drive/Old")
+
+            self.assertEqual(pid, 123)
 
     def test_mount_remote_builds_rclone_mount_command(self):
         with tempfile.TemporaryDirectory() as tempdir:

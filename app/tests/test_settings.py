@@ -228,6 +228,7 @@ remote_next = "S, PageDown"
                     focus_file_manager=False,
                     window_mode=settings.WINDOW_MODE_SINGLE,
                     theme=settings.THEME_DARK,
+                    file_list_max_items=25,
                     remote_sync_interval_seconds=120.0,
                     config_sync_remote="Docs__Drive",
                     config_sync_path="Mountlet/shared.mountlet",
@@ -248,6 +249,7 @@ remote_next = "S, PageDown"
         self.assertFalse(loaded.focus_file_manager)
         self.assertEqual(loaded.window_mode, settings.WINDOW_MODE_SINGLE)
         self.assertEqual(loaded.theme, settings.THEME_DARK)
+        self.assertEqual(loaded.file_list_max_items, 25)
         self.assertEqual(loaded.remote_sync_interval_seconds, 120.0)
         self.assertEqual(loaded.config_sync_remote, "Docs__Drive")
         self.assertEqual(loaded.config_sync_path, "Mountlet/shared.mountlet")

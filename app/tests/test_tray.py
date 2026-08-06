@@ -299,18 +299,47 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
         self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
 
-    def test_system_theme_uses_fusion_standard_palette_consistently(self):
+    def test_system_theme_releases_color_scheme_without_replacing_live_style(self):
         palette = object()
         style = mock.Mock()
         style.standardPalette.return_value = palette
         app = mock.Mock()
         app.style.return_value = style
-        qt = SimpleNamespace()
+        hints = mock.Mock()
+        app.styleHints.return_value = hints
+        schemes = SimpleNamespace(Unknown="unknown", Light="light", Dark="dark")
+        qt = SimpleNamespace(Qt=SimpleNamespace(ColorScheme=schemes))
 
         tray._apply_theme(qt, app, settings.THEME_SYSTEM)
 
-        app.setStyle.assert_called_once_with("Fusion")
+        hints.setColorScheme.assert_called_once_with("unknown")
+        app.setStyle.assert_not_called()
         app.setPalette.assert_called_once_with(palette)
+
+    def test_dark_theme_uses_native_dark_palette_when_available(self):
+        color = SimpleNamespace(red=lambda: 49, green=lambda: 54, blue=lambda: 59)
+        palette = mock.Mock()
+        palette.color.return_value = color
+        style = mock.Mock(standardPalette=mock.Mock(return_value=palette))
+        schemes = SimpleNamespace(Unknown="unknown", Light="light", Dark="dark")
+        hints = mock.Mock()
+        hints.colorScheme.return_value = "dark"
+        app = mock.Mock(style=mock.Mock(return_value=style), styleHints=mock.Mock(return_value=hints))
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(ColorScheme=schemes),
+            QPalette=SimpleNamespace(ColorRole=SimpleNamespace(Window="window")),
+        )
+
+        tray._apply_theme(qt, app, settings.THEME_DARK)
+
+        hints.setColorScheme.assert_called_once_with("dark")
+        app.setPalette.assert_called_once_with(palette)
+
+    def test_muted_text_style_remains_palette_dynamic(self):
+        widget = mock.Mock()
+
+        self.assertEqual(tray._muted_text_style(widget), "color: palette(mid);")
+        widget.palette.assert_not_called()
 
     def test_platform_without_driver_config_hides_config_action(self):
         platform = mock.Mock()
@@ -4356,7 +4385,7 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray, "load_app_settings", side_effect=[old_settings, new_settings]):
             with mock.patch.object(tray, "_load_visible_remotes", return_value=[]):
                 with mock.patch.object(tray.core, "ensure_base_mount_dir", return_value=(tray.core.BASE_MOUNT_DIR, "")):
-                    with mock.patch.object(tray, "_apply_theme"):
+                    with mock.patch.object(tray, "_apply_theme") as apply_theme:
                         with mock.patch.object(tray, "AppConfigDialog", return_value=dialog):
                             window._show_app_config_editor()
 
@@ -4364,9 +4393,68 @@ class TrayTests(unittest.TestCase):
         tray_app.rebuild_menus.assert_called_once_with()
         single_shot.assert_called_once_with(0, window.show)
         window.show.assert_called_once_with()
-        window.refresh.assert_not_called()
+        window.refresh.assert_called_once_with()
+        apply_theme.assert_not_called()
         window._tray_anchor.assert_not_called()
         self.assertTrue(window._prefer_remembered_tray_anchor_once)
+
+    def test_app_settings_save_starts_disabled_and_tracks_changes(self):
+        dialog = object.__new__(tray.AppConfigDialog)
+        save_button = mock.Mock()
+        dialog.qt = SimpleNamespace(
+            QDialogButtonBox=SimpleNamespace(StandardButton=SimpleNamespace(Save="save")),
+        )
+        dialog._button_box = mock.Mock()
+        dialog._button_box.button.return_value = save_button
+        dialog._initial_values = ("multiple",)
+        dialog._current_values = mock.Mock(return_value=("multiple",))
+
+        dialog._update_dirty_state()
+        dialog._current_values.return_value = ("single",)
+        dialog._update_dirty_state()
+
+        self.assertEqual(save_button.setEnabled.call_args_list, [mock.call(False), mock.call(True)])
+
+    def test_single_window_frame_flags_are_applied_in_one_native_update(self):
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = SimpleNamespace(_is_wayland=False)
+        window._file_browser_embedded = mock.Mock(return_value=True)
+        window.is_visible = mock.Mock(return_value=True)
+        window._window_position = mock.Mock(return_value=(10, 20))
+        window.window = mock.Mock()
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowType=SimpleNamespace(
+                    Window=1,
+                    FramelessWindowHint=2,
+                    WindowTitleHint=4,
+                    WindowSystemMenuHint=8,
+                    WindowMinMaxButtonsHint=16,
+                    WindowCloseButtonHint=32,
+                )
+            )
+        )
+
+        window._apply_main_window_frame_for_current_mode()
+
+        window.window.setWindowFlags.assert_called_once_with(61)
+        window.window.setWindowFlag.assert_not_called()
+        window.window.move.assert_called_once_with(10, 20)
+        window.window.show.assert_called_once_with()
+
+    def test_unchanged_app_settings_save_does_nothing(self):
+        dialog = object.__new__(tray.AppConfigDialog)
+        dialog._initial_values = ("unchanged",)
+        dialog._current_values = mock.Mock(return_value=("unchanged",))
+        dialog.dialog = mock.Mock()
+
+        with mock.patch.object(tray, "load_app_settings") as load_settings:
+            with mock.patch.object(tray, "save_app_settings") as save_settings:
+                dialog._save()
+
+        load_settings.assert_not_called()
+        save_settings.assert_not_called()
+        dialog.dialog.accept.assert_not_called()
 
     def test_layout_reposition_prefers_remembered_tray_anchor_over_cursor(self):
         class Point:
@@ -4925,6 +5013,38 @@ class TrayTests(unittest.TestCase):
 
         qt.QTimer.singleShot.assert_called_once()
         self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 1500)
+
+    def test_schedule_auto_mounts_accepts_startup_remote_snapshot(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
+        qt = mock.Mock()
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app.qt = qt
+
+        with mock.patch.object(tray, "_load_visible_remotes") as load_remotes:
+            with mock.patch.object(tray, "load_app_settings") as load_settings:
+                load_settings.return_value.auto_mount_delay = 0
+                tray_app._schedule_auto_mounts([remote])
+
+        load_remotes.assert_not_called()
+        self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 0)
+
+    def test_startup_cleanup_result_reports_failures_then_schedules_auto_mount(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app._notify = mock.Mock()
+        tray_app._schedule_auto_mounts = mock.Mock()
+
+        with mock.patch("builtins.print"):
+            tray_app._handle_startup_cleanup_ready(
+                [remote],
+                ["/tmp/old"],
+                ["busy"],
+                True,
+            )
+
+        tray_app._notify.assert_called_once_with("Mount folder cleanup", "busy", success=False)
+        tray_app._schedule_auto_mounts.assert_called_once_with([remote])
 
     def test_auto_mount_delegates_to_threaded_main_window_runner(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)

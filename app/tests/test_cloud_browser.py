@@ -25,7 +25,6 @@ from mountlet.cloud_browser import (
 )
 from mountlet.cloud_browser_ui import (
     CHILD_FOLDER_PREFETCH_LIMIT,
-    EMBEDDED_BROWSER_MAX_HEIGHT,
     EMBEDDED_BROWSER_MIN_HEIGHT,
     OFFLINE_JOB_CONCURRENCY,
     CompactCloudBrowser,
@@ -1883,13 +1882,19 @@ class CloudBrowserTests(unittest.TestCase):
         browser.entries = [BrowserEntry(str(index), str(index), False) for index in range(3)]
         browser._zoom_steps = 0
         browser._embedded = True
+        browser._file_list_max_items = 0
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 98)
-        self.assertEqual(browser.tree.maximum_height, 98)
+        self.assertEqual(browser.tree.minimum_height, 38)
+        self.assertEqual(browser.tree.maximum_height, 16_777_215)
         self.assertEqual(browser.root.minimum_height, EMBEDDED_BROWSER_MIN_HEIGHT)
-        self.assertGreaterEqual(browser.root.maximum_height, EMBEDDED_BROWSER_MAX_HEIGHT)
+        self.assertEqual(browser.root.maximum_height, 16_777_215)
+
+        browser._file_list_max_items = 2
+        browser._resize_to_rendered_items()
+
+        self.assertEqual(browser.tree.maximum_height, 58)
 
     def test_file_browser_resize_can_shrink_window(self):
         class Tree:
@@ -1947,7 +1952,7 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 58)
+        self.assertEqual(browser.tree.minimum_height, 38)
         self.assertEqual(browser.window.size, (620, 260))
 
     def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
@@ -2848,7 +2853,7 @@ class CloudBrowserTests(unittest.TestCase):
             ["Reports/a.txt"],
         )
 
-    def test_close_button_suppresses_hover_reopen_until_explicit_selection(self):
+    def test_embedded_browser_cannot_be_hidden_until_selected(self):
         browser = object.__new__(CompactCloudBrowser)
         browser._embedded = True
         browser.root = mock.Mock()
@@ -2868,13 +2873,32 @@ class CloudBrowserTests(unittest.TestCase):
         browser.hide_until_selected()
         browser.show_remote(_remote(), mock.Mock(), show_browser=True, focus_browser=False)
 
-        browser.root.hide.assert_called_once_with()
-        browser.root.show.assert_not_called()
-        self.assertTrue(browser._closed_until_selected)
+        browser.root.hide.assert_not_called()
+        self.assertEqual(browser.root.show.call_count, 2)
+        self.assertFalse(browser._closed_until_selected)
 
         browser.show_remote(_remote(), mock.Mock(), show_browser=True, focus_browser=True)
 
-        self.assertEqual(browser.root.show.call_count, 2)
+        self.assertEqual(browser.root.show.call_count, 4)
+        self.assertFalse(browser._closed_until_selected)
+
+    def test_embedding_browser_always_shows_panel(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._embedded = True
+        browser._closed_until_selected = True
+        browser.root = mock.Mock()
+        browser.window = mock.Mock()
+        browser.window.centralWidget.return_value = browser.root
+        layout = mock.Mock()
+        parent = object()
+        layout.parentWidget.return_value = parent
+
+        browser.embed_into(layout)
+
+        browser.window.takeCentralWidget.assert_called_once_with()
+        browser.root.setParent.assert_called_once_with(parent)
+        layout.addWidget.assert_called_once_with(browser.root, 1)
+        browser.root.show.assert_called_once_with()
         self.assertFalse(browser._closed_until_selected)
 
     def test_showing_same_rendered_remote_does_not_refresh_or_reposition(self):

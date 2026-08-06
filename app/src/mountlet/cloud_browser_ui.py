@@ -21,16 +21,12 @@ from .cloud_browser import (
 from .metadata_index import IndexedEntry
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
-from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
-EMBEDDED_BROWSER_MAX_HEIGHT = 460
-EMBEDDED_BROWSER_MAX_VISIBLE_ROWS = 8
 FILE_BROWSER_MIN_HEIGHT = 240
-FILE_BROWSER_MAX_VISIBLE_ROWS = 14
-FILE_BROWSER_CONTEXT_ROWS = 1
 FILE_BROWSER_STATUS_MAX_CHARS = 140
 RCLONE_OUTPUT_TAIL_LINES = 10
 RCLONE_OUTPUT_MIN_LINES = 8
@@ -41,8 +37,8 @@ ENTRY_ICON_SIZE = 30
 OFFLINE_JOB_CONCURRENCY = 3
 FILE_BROWSER_SELECTION_STYLE = """
 QTreeWidget {
-    selection-background-color: #dbeafe;
-    selection-color: #111827;
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
 }
 QTreeWidget::item:hover:!selected {
     background: transparent;
@@ -53,8 +49,8 @@ QTreeWidget::item:focus {
 QTreeWidget::item:selected,
 QTreeWidget::item:selected:active,
 QTreeWidget::item:selected:!active {
-    background-color: #dbeafe;
-    color: #111827;
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
 }
 """
 
@@ -130,7 +126,9 @@ class CompactCloudBrowser:
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
         self._local_files_changed = local_files_changed or (lambda: None)
-        self._integrated_file_edits = bool(load_app_settings().integrated_file_edits)
+        app_settings = load_app_settings()
+        self._integrated_file_edits = bool(app_settings.integrated_file_edits)
+        self._file_list_max_items = max(int(getattr(app_settings, "file_list_max_items", 0)), 0)
         self.backend = CloudBrowserBackend()
         self.remote: core.RemoteInfo | None = None
         self.path = ""
@@ -335,15 +333,16 @@ class CompactCloudBrowser:
             icon_name="ui-rclone-output",
         )
         header.addWidget(self.rclone_output_button)
-        header.addWidget(
-            self._button(
-                "×",
-                self.hide_until_selected,
-                "Close file browser",
-                square=True,
-                icon_name="ui-window-close",
+        if not self._embedded:
+            header.addWidget(
+                self._button(
+                    "×",
+                    self.hide_until_selected,
+                    "Close file browser",
+                    square=True,
+                    icon_name="ui-window-close",
+                )
             )
-        )
         layout.addLayout(header)
 
         navigation = qt.QHBoxLayout()
@@ -1266,22 +1265,28 @@ class CompactCloudBrowser:
 
     def hide(self) -> None:
         if self._embedded:
-            self.root.hide()
-            self._layout_changed()
+            # The embedded browser is a permanent part of single-window mode.
+            # Hiding the containing main window is sufficient; keep this panel
+            # visible so it returns with its parent.
+            self.root.show()
         else:
             self.window.hide()
 
     def hide_until_selected(self) -> None:
+        if self._embedded:
+            self._closed_until_selected = False
+            self.root.show()
+            return
         self._closed_until_selected = True
         self.hide()
 
     def close(self) -> None:
-        self._closed_until_selected = True
         if self._embedded:
-            self.root.hide()
-            self._layout_changed()
-        else:
-            self.window.close()
+            self._closed_until_selected = False
+            self.root.show()
+            return
+        self._closed_until_selected = True
+        self.window.close()
 
     def dispose(self) -> None:
         self._disposed = True
@@ -1297,7 +1302,10 @@ class CompactCloudBrowser:
                 unsubscribe()
             self._unsubscribe_rclone_log = None
         with suppress(Exception):
-            self.close()
+            if self._embedded:
+                self.root.hide()
+            else:
+                self.close()
 
     def embed_into(self, layout: Any) -> None:
         if not self._embedded:
@@ -1306,7 +1314,8 @@ class CompactCloudBrowser:
             self.window.takeCentralWidget()
         self.root.setParent(layout.parentWidget())
         layout.addWidget(self.root, 1)
-        self.root.hide()
+        self._closed_until_selected = False
+        self.root.show()
 
     def owns_focus_widget(self, widget: Any | None = None) -> bool:
         if widget is None:
@@ -2252,8 +2261,8 @@ class CompactCloudBrowser:
         entries = getattr(self, "entries", [])
         count = len(entries) if entries else tree.topLevelItemCount()
         count = max(1, int(count))
-        max_visible_rows = EMBEDDED_BROWSER_MAX_VISIBLE_ROWS if self._embedded else FILE_BROWSER_MAX_VISIBLE_ROWS
-        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, max_visible_rows + FILE_BROWSER_CONTEXT_ROWS)
+        item_limit = max(int(getattr(self, "_file_list_max_items", 0)), 0)
+        visible_rows = min(count, item_limit) if item_limit else count
         try:
             row_height = tree.sizeHintForRow(0)
         except Exception:
@@ -2267,26 +2276,51 @@ class CompactCloudBrowser:
             header_height = tree.header().sizeHint().height()
         except Exception:
             header_height = 28
-        tree_height = int(header_height + row_height * visible_rows + 8)
+        minimum_tree_height = int(header_height + row_height + 8)
+        desired_tree_height = int(header_height + row_height * visible_rows + 8)
+        if self._embedded:
+            with suppress(Exception):
+                tree.setMinimumHeight(minimum_tree_height)
+                tree.setMaximumHeight(desired_tree_height if item_limit else 16_777_215)
+            with suppress(Exception):
+                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
+                root.setMaximumHeight(16_777_215)
+            return
+
+        available_height = 720
+        frame_overhead = 0
+        try:
+            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is not None:
+                available_height = screen.availableGeometry().height()
+            frame_overhead = max(self.window.frameGeometry().height() - self.window.height(), 0)
+        except Exception:
+            pass
+        try:
+            current_tree_height = max(tree.height(), minimum_tree_height)
+        except Exception:
+            current_tree_height = minimum_tree_height
+        try:
+            non_tree_height = max(root.sizeHint().height() - current_tree_height, 0)
+        except Exception:
+            non_tree_height = 120
+        maximum_tree_height = max(
+            minimum_tree_height,
+            available_height - frame_overhead - non_tree_height,
+        )
+        tree_height = min(desired_tree_height, maximum_tree_height)
         with suppress(Exception):
             tree.setMinimumHeight(tree_height)
             tree.setMaximumHeight(tree_height)
         try:
-            if self._embedded:
-                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
-                root.setMaximumHeight(16_777_215)
-            else:
-                root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
-                with suppress(Exception):
-                    self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            with suppress(Exception):
+                self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
             hint = root.sizeHint()
-            desired_height = max(FILE_BROWSER_MIN_HEIGHT, hint.height())
-            if self._embedded:
-                desired_height = min(max(EMBEDDED_BROWSER_MIN_HEIGHT, desired_height), EMBEDDED_BROWSER_MAX_HEIGHT)
+            desired_height = min(max(FILE_BROWSER_MIN_HEIGHT, hint.height()), available_height - frame_overhead)
             root.setMinimumHeight(desired_height)
-            if not self._embedded:
-                self.window.resize(max(self.window.width(), hint.width()), desired_height)
-                self._position_rclone_output()
+            self.window.resize(max(self.window.width(), hint.width()), desired_height)
+            self._position_rclone_output()
         except Exception:
             pass
 
@@ -3845,7 +3879,10 @@ class CompactCloudBrowser:
         self._painted_selected_items = selected
         if not changed:
             return
-        selected_brush = self._item_brush("#dbeafe")
+        try:
+            selected_brush = tree.palette().brush(self.qt.QPalette.ColorRole.Highlight)
+        except Exception:
+            selected_brush = self._item_brush("#3daee9")
         clear_brush = self._item_brush("")
         with suppress(Exception):
             for item in changed:
@@ -4172,6 +4209,18 @@ class CompactCloudBrowser:
             self._update_snapshot_button_icon(getattr(self.offline_button, "isEnabled", lambda: True)())
         self._refresh_entry_icons()
 
+    def refresh_theme_ui(self, *, refresh_palette: bool = True) -> None:
+        if self._is_disposed():
+            return
+        if refresh_palette:
+            target = getattr(self, "root", None) if self._embedded else getattr(self, "window", None)
+            refresh_widget_palette(self.qt, target)
+        with suppress(Exception):
+            self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
+        self._painted_selected_items = set()
+        self._refresh_selection_backgrounds()
+        self.refresh_theme_icons()
+
     def _schedule_theme_icon_refresh(self) -> None:
         if self._is_disposed() or getattr(self, "_theme_icon_refresh_pending", False):
             return
@@ -4307,6 +4356,9 @@ class CompactCloudBrowser:
 
     def apply_app_settings(self, app_settings: Any) -> None:
         self._integrated_file_edits = bool(getattr(app_settings, "integrated_file_edits", False))
+        self._file_list_max_items = max(int(getattr(app_settings, "file_list_max_items", 0)), 0)
+        self._resize_to_rendered_items()
+        self._layout_changed()
         self._update_actions()
 
     def _edit_disabled(self) -> bool:

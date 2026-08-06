@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 from contextlib import suppress
+import errno
 import json
 import os
 import shlex
@@ -321,6 +322,90 @@ def _cleanup_legacy_default_mount(remote: RemoteInfo) -> None:
     _cleanup_mount_dir(legacy_path)
 
 
+def _orphan_mount_pid(path: str) -> int | None:
+    """Find an rclone mount process with this exact mount-point argument."""
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    normalized = os.path.normcase(os.path.abspath(path))
+    try:
+        processes = tuple(proc.iterdir())
+    except OSError:
+        return None
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        try:
+            raw = (process / "cmdline").read_bytes()
+            arguments = [item.decode(errors="replace") for item in raw.split(b"\0") if item]
+        except OSError:
+            continue
+        if len(arguments) < 3 or Path(arguments[0]).name.casefold() not in {"rclone", "rclone.exe"}:
+            continue
+        if "mount" not in arguments[1:]:
+            continue
+        if any(
+            os.path.normcase(os.path.abspath(argument)) == normalized
+            for argument in arguments[1:]
+        ):
+            return int(process.name)
+    return None
+
+
+def _mount_endpoint_disconnected(path: str) -> bool:
+    try:
+        os.stat(path)
+    except OSError as exc:
+        return exc.errno == errno.ENOTCONN
+    return False
+
+
+def cleanup_orphaned_mounts(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
+    """Release mounted folders in Mountlet's managed tree with no current remote.
+
+    Default Mountlet mount points are always two levels below BASE_MOUNT_DIR.
+    Limiting discovery to that shape prevents this recovery pass from touching
+    custom paths or mounts managed by other applications.
+    """
+    remotes = list(remotes)
+    for remote in remotes:
+        _cleanup_legacy_default_mount(remote)
+    configured_paths = {
+        os.path.normcase(os.path.abspath(mount_path(remote)))
+        for remote in remotes
+    }
+    released: List[str] = []
+    failures: List[str] = []
+    base = Path(BASE_MOUNT_DIR)
+    try:
+        provider_dirs = tuple(base.iterdir())
+    except OSError:
+        return released, failures
+
+    for provider_dir in provider_dirs:
+        try:
+            if provider_dir.is_symlink() or not provider_dir.is_dir():
+                continue
+            candidates = tuple(provider_dir.iterdir())
+        except OSError:
+            continue
+        for candidate in candidates:
+            path = str(candidate)
+            normalized = os.path.normcase(os.path.abspath(path))
+            if normalized in configured_paths or not PLATFORM.is_mounted(path):
+                continue
+            result = PLATFORM.unmount(path, _orphan_mount_pid(path))
+            if not result.success and _mount_endpoint_disconnected(path):
+                result = PLATFORM.detach_disconnected_mount(path)
+            if not result.success or PLATFORM.is_mounted(path):
+                detail = f" {result.detail}" if result.detail else ""
+                failures.append(f"[!] Failed to release stale mount {path}.{detail}")
+                continue
+            released.append(path)
+            _cleanup_mount_dir(path)
+    return released, failures
+
+
 def _load_config() -> configparser.ConfigParser:
     config = configparser.ConfigParser(interpolation=None)
     config.read(CONFIG_PATH, encoding="utf-8")
@@ -531,7 +616,6 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
             extra_info=dict(section.items()),
             auto_mount=auto_mount,
         )
-        _cleanup_legacy_default_mount(info)
         order = remote_settings.order if remote_settings else None
         remotes.append((order, config_index, info))
     if any(order is not None for order, _config_index, _info in remotes):
@@ -628,6 +712,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
             return False, f"[!] Failed to mount {remote.name}: {exc}"
 
         PIDS[remote.name] = proc.pid
+        PLATFORM.invalidate_mount_cache()
 
         if wait_for(remote, True, timeout=wait_timeout):
             rclone_log.append_raw(f"mounted {remote.name} at {remote.mount_path} (pid {proc.pid})\n")
@@ -898,6 +983,7 @@ __all__ = [
     "get_storage_usage",
     "get_storage_usage_details",
     "is_mounted",
+    "cleanup_orphaned_mounts",
     "load_remotes",
     "mount_all",
     "mount_remote",

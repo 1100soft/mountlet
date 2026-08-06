@@ -7,6 +7,43 @@ from mountlet import ui_icons
 
 
 class UiIconTests(unittest.TestCase):
+    def test_refresh_widget_palette_reapplies_stylesheet_and_repolishes(self):
+        style = mock.Mock()
+        widget = mock.Mock()
+        widget.styleSheet.return_value = "color: palette(text);"
+        widget.style.return_value = style
+        widget.findChildren.return_value = []
+        qt = mock.Mock(QWidget=object)
+
+        ui_icons.refresh_widget_palette(qt, widget)
+
+        self.assertEqual(
+            widget.setStyleSheet.call_args_list,
+            [mock.call(""), mock.call("color: palette(text);")],
+        )
+        style.unpolish.assert_called_once_with(widget)
+        style.polish.assert_called_once_with(widget)
+        widget.update.assert_called_once_with()
+
+    def test_refresh_widget_palette_does_not_repolish_every_child(self):
+        root_style = mock.Mock()
+        child_style = mock.Mock()
+        child = mock.Mock()
+        child.styleSheet.return_value = ""
+        child.style.return_value = child_style
+        root = mock.Mock()
+        root.styleSheet.return_value = ""
+        root.style.return_value = root_style
+        root.findChildren.return_value = [child]
+        qt = mock.Mock(QWidget=object)
+
+        ui_icons.refresh_widget_palette(qt, root)
+
+        root_style.unpolish.assert_called_once_with(root)
+        root_style.polish.assert_called_once_with(root)
+        child_style.unpolish.assert_not_called()
+        child_style.polish.assert_not_called()
+
     def test_neutral_icon_recolors_only_334155_case_insensitively(self):
         svg = '<path stroke="#334155"/><path fill="#334155"/><path fill="#000000"/><path stroke="#334155AA"/>'
 

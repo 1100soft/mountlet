@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -111,6 +112,9 @@ class PlatformServices:
     def is_mounted(self, path: str) -> bool:
         return os.path.ismount(path)
 
+    def invalidate_mount_cache(self) -> None:
+        return
+
     def prepare_mount_path(self, path: str) -> OperationResult:
         mountpoint = Path(path)
         try:
@@ -170,8 +174,32 @@ class PlatformServices:
             if result.returncode == 0:
                 if pid:
                     self.terminate_pid(pid)
+                self.invalidate_mount_cache()
                 return OperationResult(True)
+        if pid:
+            # A stale rclone FUSE owner can keep an otherwise unused mount busy.
+            # Stop only the explicitly identified owner, then retry the normal
+            # unmount commands. Do not use a lazy detach: it can hide live work.
+            self.terminate_pid(pid)
+            time.sleep(0.2)
+            for command in commands:
+                try:
+                    result = subprocess.run(
+                        command,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if result.returncode == 0:
+                    self.invalidate_mount_cache()
+                    return OperationResult(True)
         return OperationResult(False, "The mount is busy or could not be released.")
+
+    def detach_disconnected_mount(self, path: str) -> OperationResult:
+        """Detach a proven-dead filesystem endpoint when supported."""
+        return OperationResult(False, "Disconnected mount cleanup is not supported on this platform.")
 
     def autostart_path(self, app_name: str) -> Path:
         raise NotImplementedError

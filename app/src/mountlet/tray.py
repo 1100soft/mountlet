@@ -67,7 +67,7 @@ from .settings import (
     set_start_at_login,
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
-from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -2355,10 +2355,9 @@ def _path_relative_to_base(path: str | None, base_path: str) -> str:
 
 
 def _muted_text_style(widget: Any) -> str:
-    background = widget.palette().color(widget.backgroundRole())
-    luminance = _color_luminance(background)
-    color = "#cbd5e1" if luminance < 128 else "#4b5563"
-    return f"color: {color};"
+    # Palette roles are resolved whenever Qt repaints the widget, unlike a
+    # color sampled here and frozen into the stylesheet at construction time.
+    return "color: palette(mid);"
 
 
 def _field_label(key: str) -> str:
@@ -2387,8 +2386,18 @@ def _effective_window_mode(settings: AppSettings | None = None, *, is_wayland: b
 
 def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
     selected = theme if theme in {THEME_SYSTEM, THEME_LIGHT, THEME_DARK} else THEME_SYSTEM
+    requested_scheme = {
+        THEME_SYSTEM: "Unknown",
+        THEME_LIGHT: "Light",
+        THEME_DARK: "Dark",
+    }[selected]
+    scheme_applied = False
     try:
-        app.setStyle("Fusion")
+        scheme_type = qt.Qt.ColorScheme
+        scheme = getattr(scheme_type, requested_scheme)
+        hints = app.styleHints()
+        hints.setColorScheme(scheme)
+        scheme_applied = selected == THEME_SYSTEM or hints.colorScheme() == scheme
     except Exception:
         pass
     if selected == THEME_SYSTEM:
@@ -2397,6 +2406,15 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
         except Exception:
             pass
         return
+    try:
+        native_palette = app.style().standardPalette()
+        window_role = qt.QPalette.ColorRole.Window
+        native_is_dark = _color_luminance(native_palette.color(window_role)) < 128
+        if scheme_applied and native_is_dark == (selected == THEME_DARK):
+            app.setPalette(native_palette)
+            return
+    except Exception:
+        pass
     palette = qt.QPalette()
     colors = _theme_colors(selected)
     for role_name, color in colors.items():
@@ -2412,34 +2430,34 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
 def _theme_colors(theme: str) -> dict[str, str]:
     if theme == THEME_DARK:
         return {
-            "Window": "#111827",
-            "WindowText": "#f9fafb",
-            "Base": "#0b1220",
-            "AlternateBase": "#1f2937",
-            "ToolTipBase": "#111827",
-            "ToolTipText": "#f9fafb",
-            "Text": "#f9fafb",
-            "Button": "#1f2937",
-            "ButtonText": "#f9fafb",
+            "Window": "#31363b",
+            "WindowText": "#eff0f1",
+            "Base": "#232629",
+            "AlternateBase": "#31363b",
+            "ToolTipBase": "#31363b",
+            "ToolTipText": "#eff0f1",
+            "Text": "#eff0f1",
+            "Button": "#31363b",
+            "ButtonText": "#eff0f1",
             "BrightText": "#ffffff",
-            "Highlight": "#2563eb",
+            "Highlight": "#3daee9",
             "HighlightedText": "#ffffff",
-            "PlaceholderText": "#9ca3af",
+            "PlaceholderText": "#a1a9b1",
         }
     return {
-        "Window": "#f8fafc",
-        "WindowText": "#111827",
+        "Window": "#eff0f1",
+        "WindowText": "#232629",
         "Base": "#ffffff",
-        "AlternateBase": "#eef2f7",
+        "AlternateBase": "#f7f7f7",
         "ToolTipBase": "#ffffff",
-        "ToolTipText": "#111827",
-        "Text": "#111827",
-        "Button": "#f3f4f6",
-        "ButtonText": "#111827",
+        "ToolTipText": "#232629",
+        "Text": "#232629",
+        "Button": "#eff0f1",
+        "ButtonText": "#232629",
         "BrightText": "#ffffff",
-        "Highlight": "#bfdbfe",
-        "HighlightedText": "#111827",
-        "PlaceholderText": "#6b7280",
+        "Highlight": "#3daee9",
+        "HighlightedText": "#ffffff",
+        "PlaceholderText": "#707880",
     }
 
 
@@ -2575,6 +2593,8 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields: dict[str, Any] = {}
         self._layout_buttons: dict[str, Any] = {}
         self._layout_group: Any | None = None
+        self._button_box: Any | None = None
+        self._initial_values: tuple[Any, ...] = ()
         self._build()
 
     def _build(self) -> None:
@@ -2607,7 +2627,7 @@ class AppConfigDialog(_ConfigDialogBase):
             "file_manager": self._combo(
                 tuple(
                     (manager.identifier, manager.label)
-                    for manager in discover_file_managers(get_platform(), refresh=True)
+                    for manager in discover_file_managers(get_platform())
                 ),
                 app_settings.file_manager,
             ),
@@ -2622,6 +2642,9 @@ class AppConfigDialog(_ConfigDialogBase):
                 app_settings.theme,
             ),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
+            "file_list_max_items": self._line(
+                "" if app_settings.file_list_max_items <= 0 else str(app_settings.file_list_max_items)
+            ),
             "remote_sync_interval": self._line(f"{app_settings.remote_sync_interval_seconds:g}"),
             "notice_info_display": self._combo(
                 (
@@ -2656,6 +2679,10 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["integrated_file_edits"].setToolTip(
             "Allow direct copy, move, delete, drag-and-drop, and folder creation in Mountlet Files."
         )
+        self.fields["file_list_max_items"].setPlaceholderText("No limit")
+        self.fields["file_list_max_items"].setToolTip(
+            "Maximum file items visible at once. Leave blank or use 0 to fill the available height."
+        )
         self.fields["remote_sync_interval"].setToolTip(
             "Seconds between background checks for cloud-side changes in cached and offline files. Use 0 for manual sync only."
         )
@@ -2674,6 +2701,7 @@ class AppConfigDialog(_ConfigDialogBase):
         mounting_form.addRow(self.fields["focus_file_manager"])
 
         files_form.addRow(self.fields["integrated_file_edits"])
+        files_form.addRow("Maximum visible items", self.fields["file_list_max_items"])
         files_form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
         warning.setWordWrap(True)
@@ -2691,10 +2719,16 @@ class AppConfigDialog(_ConfigDialogBase):
         notices_form.addRow("", critical_note)
 
         root.addWidget(tabs)
-        root.addWidget(self._buttons())
+        self._button_box = self._buttons()
+        root.addWidget(self._button_box)
+        self._initial_values = self._current_values()
+        self._connect_dirty_tracking()
+        self._update_dirty_state()
         self.dialog.adjustSize()
 
     def _save(self) -> None:
+        if self._current_values() == self._initial_values:
+            return
         current = load_app_settings()
         try:
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
@@ -2708,6 +2742,10 @@ class AppConfigDialog(_ConfigDialogBase):
             notice_check_interval = float(self.fields["notice_check_interval"].text().strip() or "0")
         except ValueError:
             notice_check_interval = 14_400.0
+        try:
+            file_list_max_items = int(self.fields["file_list_max_items"].text().strip() or "0")
+        except ValueError:
+            file_list_max_items = 0
         if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
             self.qt.QMessageBox.warning(
                 self.dialog,
@@ -2728,6 +2766,7 @@ class AppConfigDialog(_ConfigDialogBase):
                 window_mode=self._selected_window_mode(),
                 theme=self.fields["theme"].currentData() or THEME_SYSTEM,
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
+                file_list_max_items=max(file_list_max_items, 0),
                 remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
                 notice_info_display=self.fields["notice_info_display"].currentData() or NOTICE_DISPLAY_TRAY,
                 notice_important_display=self.fields["notice_important_display"].currentData() or NOTICE_DISPLAY_DIALOG,
@@ -2741,6 +2780,45 @@ class AppConfigDialog(_ConfigDialogBase):
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
+
+    def _current_values(self) -> tuple[Any, ...]:
+        return (
+            self.fields["mount_base"].text().strip(),
+            self.fields["auto_mount"].isChecked(),
+            self.fields["auto_mount_delay"].text().strip(),
+            self.fields["start_at_login"].isChecked(),
+            self.fields["file_manager"].currentData() or "",
+            self.fields["open_folder_behavior"].currentData() or "",
+            self.fields["focus_file_manager"].isChecked(),
+            self._selected_window_mode(),
+            self.fields["theme"].currentData() or THEME_SYSTEM,
+            self.fields["integrated_file_edits"].isChecked(),
+            self.fields["file_list_max_items"].text().strip(),
+            self.fields["remote_sync_interval"].text().strip(),
+            self.fields["notice_info_display"].currentData() or "",
+            self.fields["notice_important_display"].currentData() or "",
+            self.fields["notice_check_interval"].text().strip(),
+            self.fields["config_sync_remote"].currentData() or "",
+            self.fields["config_sync_path"].text().strip(),
+        )
+
+    def _connect_dirty_tracking(self) -> None:
+        for field in self.fields.values():
+            for signal_name in ("textChanged", "toggled", "currentIndexChanged"):
+                signal = getattr(field, signal_name, None)
+                if signal is not None:
+                    with suppress(Exception):
+                        signal.connect(lambda *_args: self._update_dirty_state())
+        for button in self._layout_buttons.values():
+            with suppress(Exception):
+                button.toggled.connect(lambda *_args: self._update_dirty_state())
+
+    def _update_dirty_state(self) -> None:
+        if self._button_box is None:
+            return
+        with suppress(Exception):
+            save_button = self._button_box.button(self.qt.QDialogButtonBox.StandardButton.Save)
+            save_button.setEnabled(self._current_values() != self._initial_values)
 
     def _layout_mode_selector(self, current_mode: str) -> Any:
         container = self.qt.QWidget()
@@ -2939,6 +3017,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 window_mode=current.window_mode,
                 theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
+                file_list_max_items=current.file_list_max_items,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 notice_info_display=current.notice_info_display,
                 notice_important_display=current.notice_important_display,
@@ -3070,6 +3149,7 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 window_mode=current.window_mode,
                 theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
+                file_list_max_items=current.file_list_max_items,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 notice_info_display=current.notice_info_display,
                 notice_important_display=current.notice_important_display,
@@ -5530,6 +5610,7 @@ class MountletWindow:
         self._bridge.local_cache_scan_ready.connect(self._handle_local_cache_scan_ready)
         self._bridge.mount_states_ready.connect(self._handle_mount_states_ready)
         self._bridge.icloud_reauth_step_ready.connect(self._handle_icloud_reauth_step)
+        self._bridge.startup_cleanup_ready.connect(self.tray_app._handle_startup_cleanup_ready)
         self.window = self._make_main_window()
         build_label = build_info.visible_label()
         self.window.setWindowTitle(f"Mountlet - {build_label}" if build_label else "Mountlet")
@@ -5607,6 +5688,7 @@ class MountletWindow:
             local_cache_scan_ready = qt.Signal(object, str)
             mount_states_ready = qt.Signal(object)
             icloud_reauth_step_ready = qt.Signal(object, object, object)
+            startup_cleanup_ready = qt.Signal(object, object, object, bool)
 
         return Bridge()
 
@@ -9117,10 +9199,7 @@ class MountletWindow:
         ):
             browser_size = file_browser.root.sizeHint()
             browser_width = max(browser_size.width(), EMBEDDED_BROWSER_MIN_WIDTH)
-            browser_height = min(
-                max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT),
-                EMBEDDED_BROWSER_MAX_HEIGHT,
-            )
+            browser_height = max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT)
             width += browser_width + 6
             height = max(height, menu_height + browser_height + 16)
 
@@ -10316,7 +10395,8 @@ class MountletWindow:
                     dialog.dialog.close()
                 with suppress(Exception):
                     self.window.hide()
-            _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
+            if theme_changed:
+                _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
             self._rebuild_file_browser_if_layout_changed(old_embedded)
             file_browser = getattr(self, "file_browser", None)
             if file_browser is not None:
@@ -10350,13 +10430,14 @@ class MountletWindow:
                 self._skip_background_refresh_once = True
             if layout_changed:
                 self._prefer_remembered_tray_anchor_once = True
+            self.refresh()
+            if layout_changed:
                 self.qt.QTimer.singleShot(0, self.show)
-            else:
-                self.refresh()
             if theme_changed:
-                # Application palette changes reach existing widgets
-                # asynchronously. Rebuild every derived icon after adoption.
-                self.qt.QTimer.singleShot(1, self._refresh_theme_icons)
+                # Palette changes reach existing widgets asynchronously. Once
+                # adopted, repolish all existing controls and rebuild visuals
+                # whose colors were derived at construction time.
+                self.qt.QTimer.singleShot(1, self._refresh_theme_ui)
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
@@ -10369,6 +10450,22 @@ class MountletWindow:
         file_browser = getattr(self, "file_browser", None)
         if file_browser is not None:
             file_browser.refresh_theme_icons()
+        self._update_config_sync_buttons()
+        self._update_keep_above_button()
+
+    def _refresh_theme_ui(self) -> None:
+        refresh_widget_palette(self.qt, self.window)
+        for widgets in getattr(self, "_row_widgets", {}).values():
+            with suppress(Exception):
+                widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser.refresh_theme_ui(
+                refresh_palette=not bool(getattr(file_browser, "_embedded", False)),
+            )
+        else:
+            self._refresh_theme_icons()
+        self._refresh_search_icon(getattr(self, "_global_search_field", None))
         self._update_config_sync_buttons()
         self._update_keep_above_button()
 
@@ -10427,11 +10524,13 @@ class MountletWindow:
         position = self._window_position(self.window)
         try:
             if native:
-                self.window.setWindowFlag(self.qt.Qt.WindowType.FramelessWindowHint, False)
+                window_type = self.qt.Qt.WindowType
+                flags = window_type.Window
                 for name in ("WindowTitleHint", "WindowSystemMenuHint", "WindowMinMaxButtonsHint", "WindowCloseButtonHint"):
-                    flag = getattr(self.qt.Qt.WindowType, name, None)
+                    flag = getattr(window_type, name, None)
                     if flag is not None:
-                        self.window.setWindowFlag(flag, True)
+                        flags |= flag
+                self.window.setWindowFlags(flags)
             else:
                 _apply_frameless_window_flags(self.qt, self.window, base_name="Tool")
         except Exception:
@@ -11266,6 +11365,7 @@ class MountletTray:
             return 1
 
         locked = _license_locked()
+        remotes = _load_visible_remotes()
         if locked:
             self.main_window.show()
         else:
@@ -11276,9 +11376,47 @@ class MountletTray:
         self.qt.QTimer.singleShot(1200, self.main_window._maybe_prompt_crash_report)
         self.qt.QTimer.singleShot(2500, self._check_notices)
         self._reschedule_notice_timer()
-        if not locked:
-            self._schedule_auto_mounts()
+        self._start_startup_mount_cleanup(remotes, allow_auto_mount=not locked)
         return int(self.app.exec() or 0)
+
+    def _start_startup_mount_cleanup(
+        self,
+        remotes: list[core.RemoteInfo],
+        *,
+        allow_auto_mount: bool,
+    ) -> None:
+        def worker() -> None:
+            released, failures = core.cleanup_orphaned_mounts(remotes)
+            self.main_window._bridge.startup_cleanup_ready.emit(
+                remotes,
+                released,
+                failures,
+                allow_auto_mount,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_startup_cleanup_ready(
+        self,
+        remotes: object,
+        released: object,
+        failures: object,
+        allow_auto_mount: bool,
+    ) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        released_paths = list(released) if isinstance(released, list) else []
+        cleanup_failures = list(failures) if isinstance(failures, list) else []
+        if released_paths:
+            print("Startup cleanup: released stale mounts: " + ", ".join(released_paths))
+        if cleanup_failures:
+            self._notify(
+                "Mount folder cleanup",
+                "\n".join(str(item) for item in cleanup_failures),
+                success=False,
+            )
+        if allow_auto_mount and isinstance(remotes, list):
+            self._schedule_auto_mounts(remotes)
 
     def _reschedule_notice_timer(self) -> None:
         with suppress(Exception):
@@ -11601,10 +11739,11 @@ class MountletTray:
             return
         self.main_window._mount_all()
 
-    def _schedule_auto_mounts(self) -> None:
+    def _schedule_auto_mounts(self, remotes: list[core.RemoteInfo] | None = None) -> None:
         if getattr(self, "_quitting", False) or _license_locked():
             return
-        remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount]
+        candidates = remotes if remotes is not None else _load_visible_remotes()
+        remotes = [remote for remote in candidates if remote.auto_mount]
         if not remotes:
             return
         delay_ms = int(load_app_settings().auto_mount_delay * 1000)

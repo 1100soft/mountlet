@@ -112,6 +112,38 @@ def refresh_widget_icons(qt: Any, widget: Any | None) -> None:
         refresh_widget_icons(qt, child)
 
 
+def refresh_widget_palette(qt: Any, root: Any | None) -> None:
+    """Force existing widgets and stylesheets to resolve a new app palette."""
+    if root is None:
+        return
+    widgets = [root]
+    find_children = getattr(root, "findChildren", None)
+    widget_type = getattr(qt, "QWidget", None)
+    if callable(find_children) and widget_type is not None:
+        with suppress(Exception):
+            widgets.extend(find_children(widget_type))
+    seen: set[int] = set()
+    for widget in widgets:
+        if id(widget) in seen:
+            continue
+        seen.add(id(widget))
+        try:
+            stylesheet = widget.styleSheet()
+            if stylesheet:
+                widget.setStyleSheet("")
+                widget.setStyleSheet(stylesheet)
+        except Exception:
+            pass
+        with suppress(Exception):
+            widget.update()
+    try:
+        style = root.style()
+        style.unpolish(root)
+        style.polish(root)
+    except Exception:
+        pass
+
+
 def _refresh_one_widget_icon(qt: Any, widget: Any) -> None:
     property_getter = getattr(widget, "property", None)
     if not callable(property_getter):
@@ -193,4 +225,10 @@ def _ensure_dynamic_icon_refresh(qt: Any, widget: Any) -> None:
         return
 
 
-__all__ = ["apply_button_icon", "icon_path", "mountlet_icon", "refresh_widget_icons"]
+__all__ = [
+    "apply_button_icon",
+    "icon_path",
+    "mountlet_icon",
+    "refresh_widget_icons",
+    "refresh_widget_palette",
+]
