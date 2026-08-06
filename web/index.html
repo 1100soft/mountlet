@@ -90,50 +90,35 @@
           <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
         </section>
 
-        <div class="platform-picker" role="tablist" aria-label="Choose platform">
-          <button class="platform-choice active" type="button" data-platform="windows" aria-selected="true">Windows</button>
-          <button class="platform-choice" type="button" data-platform="macos" aria-selected="false">macOS</button>
-          <button class="platform-choice" type="button" data-platform="linux" aria-selected="false">Linux</button>
-        </div>
-
-        <div class="download-panels">
-          <article class="download-card emphasized platform-panel active" data-platform-panel="windows">
-            <h3>Windows</h3>
-            <p>For Windows 10 and 11 on Intel or AMD 64-bit systems.</p>
-            <button class="button full primary download-button" data-download="windows">Download for Windows</button>
-            <details>
-              <summary>Lean build</summary>
-              <button class="button full secondary download-button" data-download="windowsLean">Download lean Windows build</button>
-            </details>
-          </article>
-          <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
-            <h3>macOS</h3>
-            <p>Choose the build matching the Mac processor.</p>
-            <button class="button full primary download-button" data-download="macos">Download for Apple silicon Mac</button>
-            <button class="button full secondary download-button" data-download="macosX64">Download for Intel Mac</button>
-            <details>
-              <summary>Lean builds</summary>
-              <p>Mounted folders require the official rclone binary; Homebrew rclone does not support mounting on macOS.</p>
-              <button class="button full secondary download-button" data-download="macosLean">Download lean Apple silicon build</button>
-              <button class="button full secondary download-button" data-download="macosLeanX64">Download lean Intel build</button>
-            </details>
-          </article>
-          <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
-            <h3>Linux: Debian-based</h3>
-            <p>The current <code>.deb</code> package supports Debian, Ubuntu, Linux Mint, and compatible distributions on x86-64.</p>
-            <button class="button full primary download-button" data-download="linux">Download Debian/Ubuntu package</button>
-            <details>
-              <summary>Lean Debian-based build</summary>
-              <button class="button full secondary download-button" data-download="linuxLean">Download lean Debian/Ubuntu package</button>
-            </details>
-            <div class="future-linux" aria-label="Linux packages under development">
-              <strong>Under development</strong>
-              <span>Fedora and RHEL-compatible <code>.rpm</code></span>
-              <span>Arch Linux package</span>
-              <span>openSUSE package</span>
-            </div>
-          </article>
-        </div>
+        <section class="download-card emphasized download-selector" aria-labelledby="download-selector-title">
+          <h3 id="download-selector-title">Choose platform and architecture</h3>
+          <div class="download-matrix-wrap">
+            <table class="download-matrix">
+              <thead><tr><th scope="col">Platform</th><th scope="col">x64</th><th scope="col">ARM64</th></tr></thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Windows</th>
+                  <td><label><input type="radio" name="download-target" value="windows-x64" data-download-standard="windows" data-download-lean="windowsLean" checked /> Windows x64</label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+                <tr>
+                  <th scope="row">macOS</th>
+                  <td><label><input type="radio" name="download-target" value="macos-x64" data-download-standard="macosX64" data-download-lean="macosLeanX64" /> Intel x64</label></td>
+                  <td><label><input type="radio" name="download-target" value="macos-arm64" data-download-standard="macos" data-download-lean="macosLean" /> Apple silicon</label></td>
+                </tr>
+                <tr>
+                  <th scope="row">Linux <small>Debian/Ubuntu</small></th>
+                  <td><label><input type="radio" name="download-target" value="linux-x64" data-download-standard="linux" data-download-lean="linuxLean" /> Linux x64</label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build (requires a compatible system rclone)</label>
+          <p class="download-selection-status" id="download-selection-status" role="status"></p>
+          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
+          <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
+        </section>
 
         <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
           <div class="mount-dependencies-heading">

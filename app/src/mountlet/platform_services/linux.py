@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -40,7 +41,7 @@ class LinuxPlatformServices(PlatformServices):
 
     def is_mounted(self, path: str) -> bool:
         """Consult mountinfo so disconnected FUSE endpoints still count."""
-        target = os.path.normpath(os.path.abspath(path))
+        target = posixpath.normpath(str(path).replace("\\", "/"))
         return target in self._mounted_paths()
 
     def _mounted_paths(self) -> frozenset[str]:
@@ -64,7 +65,7 @@ class LinuxPlatformServices(PlatformServices):
                     lambda match: chr(int(match.group(1), 8)),
                     fields[4],
                 )
-                paths.add(os.path.normpath(mountpoint))
+                paths.add(posixpath.normpath(mountpoint))
             self._mount_cache_time = now
             self._mount_cache = frozenset(paths)
             return self._mount_cache
