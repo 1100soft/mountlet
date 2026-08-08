@@ -133,10 +133,12 @@ class WindowsPlatformServices(PlatformServices):
         try:
             mountpoint.parent.mkdir(parents=True, exist_ok=True)
             if mountpoint.exists() and not self.is_mounted(path):
+                self.remove_empty_mount_descendants(mountpoint)
                 if not mountpoint.is_dir() or any(mountpoint.iterdir()):
                     return OperationResult(
                         False,
-                        f"Mount folder {path} is not empty. Choose an empty folder or move its files first.",
+                        f"Mount folder {path} contains local files, possibly saved after it was unmounted. "
+                        "Move those files elsewhere before mounting so they are not hidden.",
                     )
                 mountpoint.rmdir()
         except OSError as exc:

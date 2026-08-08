@@ -1,5 +1,10 @@
 import {handleError, HttpError, jsonResponse, nowIso, readJson, requireEnv} from "../../_lib/license.js";
-import {adminNotice, ensureNoticeSchema, normalizeNoticeInput} from "../../_lib/notices.js";
+import {
+  adminNotice,
+  ensureNoticeSchema,
+  normalizeNoticeInput,
+  noticeAudience,
+} from "../../_lib/notices.js";
 
 export async function onRequestGet({request, env}) {
   try {
@@ -17,14 +22,16 @@ export async function onRequestPost({request, env}) {
     authorize(request, env);
     await ensureNoticeSchema(env);
     const notice = normalizeNoticeInput(await readJson(request));
+    notice.audience = notice.audience || noticeAudience(request);
     const now = nowIso();
     await env.DB.prepare(`
       INSERT INTO notices (
-        id, version, title, message, level, type, url, starts_at, ends_at, status, created_at, updated_at
-      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, version, title, message, level, type, url, starts_at, ends_at, audience,
+        status, created_at, updated_at
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       notice.id, notice.title, notice.message, notice.level, notice.type, notice.url,
-      notice.startsAt, notice.endsAt, notice.status, now, now
+      notice.startsAt, notice.endsAt, notice.audience, notice.status, now, now
     ).run();
     const row = await env.DB.prepare("SELECT * FROM notices WHERE id = ?").bind(notice.id).first();
     return jsonResponse({ok: true, notice: adminNotice(row)}, 201);
@@ -56,14 +63,15 @@ export async function onRequestPatch({request, env}) {
       url: body.url ?? current.url,
       startsAt: body.startsAt ?? current.starts_at,
       endsAt: body.endsAt ?? current.ends_at,
+      audience: body.audience ?? current.audience ?? "preview",
       status: body.status ?? current.status,
     };
     await env.DB.prepare(`
       UPDATE notices SET version = version + 1, title = ?, message = ?, level = ?, type = ?, url = ?,
-        starts_at = ?, ends_at = ?, status = ?, updated_at = ? WHERE id = ?
+        starts_at = ?, ends_at = ?, audience = ?, status = ?, updated_at = ? WHERE id = ?
     `).bind(
       next.title, next.message, next.level, next.type, next.url,
-      next.startsAt, next.endsAt, next.status, nowIso(), body.id
+      next.startsAt, next.endsAt, next.audience, next.status, nowIso(), body.id
     ).run();
     const row = await env.DB.prepare("SELECT * FROM notices WHERE id = ?").bind(body.id).first();
     return jsonResponse({ok: true, notice: adminNotice(row)});

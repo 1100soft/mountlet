@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` inside `app/` first:
 
 ```bash
-VERSION=0.6.3
+VERSION=0.6.4
 python packaging/run_tests.py
 python -m unittest tests.test_tray
 python -m compileall -q src tests packaging
@@ -34,8 +34,9 @@ Confirm:
 - Built distributions do not include `secrets/`, `rclone.conf`, or `client_secret*.json`.
 - The native package workflow passes for Linux, Windows, macOS arm64, and macOS x64.
 - Bundled-rclone workflow jobs pass the packaged-rclone smoke test before artifacts are uploaded.
-- The `Upload installers to R2` job uploads every installer listed in
-  `web/release-files.json`. The upload uses R2's S3-compatible API, so GitHub
+- The `Upload installers to R2` job publishes every installer defined in
+  `web/release-files.json`, updates `releases/index.json`, and retains the five
+  newest app versions. The upload uses R2's S3-compatible API, so GitHub
   needs `CLOUDFLARE_R2_ACCESS_KEY_ID` and
   `CLOUDFLARE_R2_SECRET_ACCESS_KEY` secrets with bucket-item read/write access.
 
@@ -84,10 +85,11 @@ git tag -a "v$VERSION" -m "Release v$VERSION"
 git push origin main --tags
 ```
 
-Pushing a version tag starts the native package workflow. The workflow builds
-the installers, verifies them, and uploads the files listed in
-`web/release-files.json` to the production R2 bucket. Confirm the release
-download routes after the workflow completes.
+Pushing a version tag starts the production native package workflow. The workflow builds
+the installers, verifies them, and uploads versioned objects defined by
+`web/release-files.json` to the production R2 bucket. It replaces an existing
+entry for the same app version or adds a new entry and removes versions beyond
+the newest five. Confirm the release list and download routes after completion.
 
 ## Python Package Publishing
 

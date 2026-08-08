@@ -345,7 +345,129 @@ Categories=Utility;FileManager;
             result = WindowsPlatformServices().prepare_mount_path(str(mountpoint))
 
             self.assertFalse(result.success)
-        self.assertIn("not empty", result.detail)
+        self.assertIn("contains local files", result.detail)
+
+    def test_windows_mountpoint_removes_nested_empty_stale_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            mountpoint = Path(tempdir) / "Mountlet" / "Work"
+            (mountpoint / "stale" / "nested").mkdir(parents=True)
+
+            result = WindowsPlatformServices().prepare_mount_path(str(mountpoint))
+
+            self.assertTrue(result.success)
+            self.assertFalse(mountpoint.exists())
+
+    def test_linux_mountpoint_removes_nested_empty_stale_directories(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            mountpoint = Path(tempdir) / "Mountlet" / "Work"
+            (mountpoint / "stale" / "nested").mkdir(parents=True)
+            platform = LinuxPlatformServices()
+            platform.is_mounted = lambda _path: False
+
+            result = platform.prepare_mount_path(str(mountpoint))
+
+            self.assertTrue(result.success)
+            self.assertTrue(mountpoint.is_dir())
+            self.assertEqual(list(mountpoint.iterdir()), [])
+
+    def test_linux_mount_detection_uses_mountinfo_for_disconnected_endpoint(self):
+        platform = LinuxPlatformServices()
+        mountinfo = (
+            "13034 2174 0:126 / /home/user/Mountlet/mounted/drive/Old rw,nosuid "
+            "- fuse.rclone Old: rw,user_id=1000\n"
+        )
+
+        with mock.patch("mountlet.platform_services.linux.Path.read_text", return_value=mountinfo):
+            with mock.patch("mountlet.platform_services.base.os.path.ismount", return_value=False):
+                mounted = platform.is_mounted("/home/user/Mountlet/mounted/drive/Old")
+
+        self.assertTrue(mounted)
+
+    def test_linux_mount_detection_decodes_mountinfo_spaces(self):
+        platform = LinuxPlatformServices()
+        mountinfo = (
+            r"13034 2174 0:126 / /home/user/Mountlet/mounted/drive/R\040Package rw "
+            "- fuse.rclone Remote: rw\n"
+        )
+
+        with mock.patch("mountlet.platform_services.linux.Path.read_text", return_value=mountinfo):
+            mounted = platform.is_mounted("/home/user/Mountlet/mounted/drive/R Package")
+
+        self.assertTrue(mounted)
+
+    def test_linux_mount_detection_reuses_batch_snapshot_and_invalidates(self):
+        platform = LinuxPlatformServices()
+        mountinfo = (
+            "13034 2174 0:126 / /mnt/one rw - fuse.rclone One: rw\n"
+            "13035 2174 0:127 / /mnt/two rw - fuse.rclone Two: rw\n"
+        )
+
+        with mock.patch(
+            "mountlet.platform_services.linux.Path.read_text",
+            return_value=mountinfo,
+        ) as read_mountinfo:
+            self.assertTrue(platform.is_mounted("/mnt/one"))
+            self.assertTrue(platform.is_mounted("/mnt/two"))
+            self.assertFalse(platform.is_mounted("/mnt/three"))
+            self.assertEqual(read_mountinfo.call_count, 1)
+            platform.invalidate_mount_cache()
+            self.assertTrue(platform.is_mounted("/mnt/one"))
+
+        self.assertEqual(read_mountinfo.call_count, 2)
+
+    def test_linux_unmount_does_not_fall_back_to_lazy_detach(self):
+        platform = LinuxPlatformServices()
+
+        with mock.patch("mountlet.platform_services.linux.shutil.which", return_value="/usr/bin/fusermount3"):
+            commands = platform.unmount_commands("/mnt/docs")
+
+        self.assertEqual(commands, (["/usr/bin/fusermount3", "-u", "/mnt/docs"],))
+
+    def test_linux_detaches_proven_disconnected_fuse_mount_lazily(self):
+        platform = LinuxPlatformServices()
+
+        with mock.patch("mountlet.platform_services.linux.shutil.which", return_value="/usr/bin/fusermount3"):
+            with mock.patch(
+                "mountlet.platform_services.linux.subprocess.run",
+                return_value=mock.Mock(returncode=0),
+            ) as run:
+                result = platform.detach_disconnected_mount("/mnt/old")
+
+        self.assertTrue(result.success)
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/fusermount3", "-u", "-z", "/mnt/old"])
+
+    def test_unmount_terminates_known_owner_and_retries_when_busy(self):
+        platform = LinuxPlatformServices()
+        first = mock.Mock(returncode=1)
+        second = mock.Mock(returncode=0)
+
+        with mock.patch.object(
+            platform,
+            "unmount_commands",
+            return_value=(["fusermount3", "-u", "/mnt/old"],),
+        ):
+            with mock.patch(
+                "mountlet.platform_services.base.subprocess.run",
+                side_effect=[first, second],
+            ) as run:
+                with mock.patch("mountlet.platform_services.base.time.sleep"):
+                    with mock.patch.object(platform, "terminate_pid") as terminate:
+                        result = platform.unmount("/mnt/old", 123)
+
+        self.assertTrue(result.success)
+        terminate.assert_called_once_with(123)
+        self.assertEqual(run.call_count, 2)
+
+    def test_macos_unmount_does_not_fall_back_to_force(self):
+        platform = MacOSPlatformServices()
+
+        with mock.patch(
+            "mountlet.platform_services.macos.shutil.which",
+            side_effect=lambda name: f"/usr/sbin/{name}",
+        ):
+            commands = platform.unmount_commands("/Users/test/Mountlet/Docs")
+
+        self.assertNotIn("force", [argument for command in commands for argument in command])
 
     def test_windows_mount_detection_uses_nonblocking_volume_api(self):
         platform = WindowsPlatformServices()

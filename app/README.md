@@ -1,9 +1,9 @@
 # Mountlet
 
-Mountlet manages many cloud storage accounts from one desktop app. It can browse
-files without mounting, open cloud files in local apps, keep selected files
-available offline, sync safe local edits back to the cloud, search across
-remotes, and optionally mount remotes as native folders.
+Mountlet manages many cloud storage accounts from one desktop app. It provides
+two complete file-management workflows: an integrated browser with managed
+cache, offline files, and conflict checks; and mounted folders for Finder,
+Explorer, Dolphin, command-line tools, and other desktop apps.
 
 <!-- mountlet-vars:start -->
 - Paid downloads and license purchases: https://mountlet.app
@@ -20,14 +20,30 @@ yourself. The bundled build includes an app-local rclone and is the normal
 choice for most users. The lean build uses an rclone already installed on the
 computer.
 
-Native folder mounting is optional:
+Mounted folder access uses a platform filesystem driver:
 
-- Linux: install FUSE 3 if you want native mounted folders.
-- Windows: install WinFsp if you want native mounted folders.
-- macOS: install macFUSE if you want native mounted folders.
+- Linux: install FUSE 3 from the distribution package manager
+  ([libfuse](https://github.com/libfuse/libfuse)):
 
-Without those filesystem drivers, Mountlet still browses, opens, caches, and
-syncs files through the integrated file browser.
+  ```bash
+  # Debian or Ubuntu
+  sudo apt install fuse3
+
+  # Fedora
+  sudo dnf install fuse3
+
+  # Arch Linux
+  sudo pacman -S fuse3
+  ```
+- Windows: download and run the
+  [WinFsp installer](https://winfsp.dev/rel/).
+- macOS: follow the official
+  [macFUSE installation guide](https://github.com/macfuse/macfuse/wiki/Getting-Started),
+  approve its system software in **System Settings > Privacy & Security** when
+  prompted, and restart when macOS requests it.
+
+Mountlet file management runs through the integrated browser. The two workflows
+operate independently and can be used together, per remote.
 
 ### Unsigned Builds
 
@@ -69,19 +85,38 @@ may change for future renewals with advance notice.
 ## Daily Use
 
 - Select a remote to show its file browser.
+- For Google Drive and Google Photos, the optional **Google account** setting
+  helps **Open in web** choose the matching account. The account must already
+  be signed in within the default browser; the hint does not start a new Google
+  sign-in session. Leave the setting blank to use the browser's current
+  account.
 - Type in the main search box to search all indexed remotes.
 - Type in the file-browser search box to search the current remote.
-- Open files directly. If the remote is not mounted, Mountlet downloads a
-  managed local cache copy and opens that file.
+- Open files directly. Mountlet opens a managed local cache copy whether or
+  not the remote is mounted. This also lets rclone export native Google
+  documents for local editing.
 - Use **Make available offline** to protect selected files or folders from cache
   cleanup.
 - Use **Sync now** to check cached/offline files immediately.
-- Enable optional native mounting from the file browser when you want Finder,
-  Explorer, Dolphin, or another file manager to see the remote as a folder.
+- Drag local files and folders into the browser to upload them. Drag browser
+  items into a system file manager to copy them out. Mountlet prepares
+  uncached items in the background first; drag them again when the status says
+  they are ready.
+- Mount a remote from the file browser to expose it as a native folder in
+  Finder, Explorer, Dolphin, or another file manager. Mountlet keeps the short
+  alias in its own interface but uses the full remote name for the default
+  mounted folder, so similarly named accounts remain distinguishable. A custom
+  **Local folder name** overrides that default.
+
+Files opened through a system file manager use the live mounted folder. Close
+them before unmounting. Mountlet refuses a busy unmount rather than detaching a
+path that an editor could later recreate; empty stale directories are cleaned
+before the next mount, while actual local files are never deleted automatically.
 
 Integrated file edits are disabled by default. If enabled, copy, move, upload,
 delete, and drag-and-drop operations are direct cloud operations and are not
-undoable by Mountlet.
+undoable by Mountlet. Dragging out is always copy-only, so an external file
+manager cannot move or delete Mountlet's managed cache.
 
 ## Supported Providers
 
@@ -103,7 +138,14 @@ Locally tested:
 - MEGA. Sign in through MEGA's website once before setup so the account
   encryption keys exist.
 - Google Photos, with a major limitation: current rclone releases can only
-  download media that rclone uploaded.
+  download media that rclone uploaded. Mountlet sends drops outside a specific
+  album to its `upload` folder. Media views are read-only; Google permits
+  rclone to remove media only from albums it created. See the
+  [rclone Google Photos limitations](https://rclone.org/googlephotos/#limitations) for its
+  specialized layout and API limitations. To conserve Google's restricted API
+  quota, Mountlet does not recursively index Photos or poll its cached files
+  for cloud changes; folders refresh when visited and manual **Sync now**
+  remains available.
 
 Available but less tested:
 
@@ -116,6 +158,26 @@ Available but less tested:
 Some providers may require reconnecting on each device even when config files
 are synced. iCloud and Google Photos may not expose reliable quota information,
 so usage can show as `?`.
+
+### iCloud authentication
+
+Apple can expire an iCloud session even though the remote was working
+previously. If mounting reports an invalid global session or missing PCS/web
+authentication cookies, open Mountlet's main window. Mountlet presents one
+reauthentication prompt there and retries the mount after the refreshed session
+is saved.
+
+The prompt supports both verification paths exposed by rclone:
+
+- Approve the sign-in on a trusted Apple device, then enter its verification
+  code in Mountlet.
+- Enter `sms` instead of a code, select a trusted phone number when asked, then
+  enter the code received by text message.
+
+Use the regular Apple Account password; app-specific passwords do not work for
+this connection. Accounts with Advanced Data Protection must also enable
+**Access iCloud Data on the Web** and approve the access request on an Apple
+device. Mountlet cannot replace Apple's account-recovery or security-key flows.
 
 ## Config Sync
 

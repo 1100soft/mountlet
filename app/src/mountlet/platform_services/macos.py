@@ -49,7 +49,7 @@ class MacOSPlatformServices(PlatformServices):
         if umount:
             commands.append([umount, path])
         if diskutil:
-            commands.extend(([diskutil, "unmount", path], [diskutil, "unmount", "force", path]))
+            commands.append([diskutil, "unmount", path])
         return tuple(commands)
 
     def is_mounted(self, path: str) -> bool:

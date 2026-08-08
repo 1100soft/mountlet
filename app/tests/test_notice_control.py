@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -51,6 +52,25 @@ class NoticeControlTests(unittest.TestCase):
 
         changed = notice_control.Notice(id="n1", title="Title", message="Body", version="2")
         self.assertEqual(notice_control.unseen_notices([changed]), [changed])
+
+    def test_fetch_sends_build_identity_to_packaged_notice_endpoint(self):
+        with (
+            mock.patch.object(notice_control.build_info, "channel", return_value="preview"),
+            mock.patch.object(notice_control.build_info, "identifier", return_value="r314.2-12345678"),
+            mock.patch.object(
+                notice_control.build_info,
+                "notice_api_url",
+                return_value="https://wip.mountlet.pages.dev/api/notices",
+            ),
+            mock.patch.object(notice_control, "_get_json", return_value={"notices": []}) as get_json,
+        ):
+            notice_control.fetch_notices()
+
+        requested = urlsplit(get_json.call_args.args[0])
+        self.assertEqual(f"{requested.scheme}://{requested.netloc}{requested.path}", "https://wip.mountlet.pages.dev/api/notices")
+        query = parse_qs(requested.query)
+        self.assertEqual(query["buildChannel"], ["preview"])
+        self.assertEqual(query["buildId"], ["r314.2-12345678"])
 
     def test_history_retains_content_and_deletes_only_noncritical_notices(self):
         ordinary = notice_control.Notice(id="ordinary", title="Update", message="Done")

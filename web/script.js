@@ -1,9 +1,21 @@
 let releaseFilesPromise = null;
+let releaseCatalogPromise = null;
 let notificationsPromise = null;
 let loadedNotifications = [];
 
 async function openConfiguredLink(group, key) {
   if (group === "downloads") {
+    const catalog = await loadReleaseCatalog();
+    const version = document.querySelector("#release-version")?.value || catalog?.latest || "";
+    const release = catalog?.releases?.find((item) => item.version === version);
+    if (catalog?.releases?.length) {
+      if (!release?.files?.[key]) {
+        window.alert(`That build is not available for Mountlet v${version}.`);
+        return;
+      }
+      window.location.href = `/api/download/${encodeURIComponent(key)}?version=${encodeURIComponent(version)}`;
+      return;
+    }
     const fileName = await getReleaseDownloadFile(key);
     if (!fileName) {
       window.alert(`No release file is configured for "${key}".`);
@@ -22,9 +34,18 @@ async function openConfiguredLink(group, key) {
   window.location.href = url;
 }
 
+async function loadReleaseCatalog() {
+  if (!releaseCatalogPromise) {
+    releaseCatalogPromise = fetch("/api/releases", {headers: {accept: "application/json"}})
+      .then(async (response) => response.ok ? response.json() : null)
+      .catch(() => null);
+  }
+  return releaseCatalogPromise;
+}
+
 async function getReleaseDownloadFile(key) {
   const releases = await loadReleaseFiles();
-  return releases.downloads && releases.downloads[key];
+  return releases.legacyDownloads && releases.legacyDownloads[key];
 }
 
 async function loadReleaseFiles() {
@@ -551,6 +572,20 @@ function setActiveTab(nextTab, options = {}) {
   }
 }
 
+function openLinkedFaq() {
+  const faqId = new URLSearchParams(window.location.search).get("faq");
+  if (!faqId) {
+    return;
+  }
+  const entry = document.getElementById(faqId);
+  if (!(entry instanceof HTMLDetailsElement) || !entry.closest("#panel-faq")) {
+    return;
+  }
+  entry.hidden = false;
+  entry.open = true;
+  requestAnimationFrame(() => entry.scrollIntoView({block: "start"}));
+}
+
 async function loadNotifications({force = false} = {}) {
   const status = document.querySelector("#notifications-status");
   const refreshButton = document.querySelector("#refresh-notifications");
@@ -785,25 +820,114 @@ async function submitSupportRequest(form) {
   }
 }
 
-function setDownloadPlatform(nextPlatform) {
-  const platformName = String(nextPlatform || "windows");
-  const panel = document.querySelector(`[data-platform-panel="${platformName}"]`);
-  if (!panel) {
-    setDownloadPlatform("windows");
+const downloadTargetLabels = {
+  "windows-x64": "Windows x64",
+  "macos-x64": "macOS Intel x64",
+  "macos-arm64": "macOS Apple silicon",
+  "linux-x64": "Linux x64",
+};
+
+function selectedDownloadInput() {
+  return document.querySelector('input[name="download-target"]:checked');
+}
+
+function selectedDownloadKey() {
+  const input = selectedDownloadInput();
+  if (!input) return "";
+  return document.querySelector("#lean-build")?.checked
+    ? input.dataset.downloadLean || ""
+    : input.dataset.downloadStandard || "";
+}
+
+function updateDownloadSelection() {
+  const input = selectedDownloadInput();
+  const lean = Boolean(document.querySelector("#lean-build")?.checked);
+  const button = document.querySelector("#selected-download-button");
+  const note = document.querySelector("#download-selection-note");
+  const label = downloadTargetLabels[input?.value] || "selected platform";
+  const version = document.querySelector("#release-version")?.value || "";
+  if (button) {
+    button.disabled = !input;
+    button.textContent = `Download ${lean ? "lean " : ""}Mountlet${version ? ` v${version}` : ""} for ${label}`;
+  }
+  if (note) {
+    note.textContent = lean
+      ? "The lean build requires a compatible rclone installed on the computer."
+      : "The standard build includes an app-local rclone.";
+  }
+}
+
+async function initializeReleaseSelection() {
+  const select = document.querySelector("#release-version");
+  if (!select) return;
+  const catalog = await loadReleaseCatalog();
+  if (!catalog?.releases?.length) {
+    select.disabled = true;
+    select.title = "Only the current legacy release is available.";
     return;
   }
+  select.replaceChildren(...catalog.releases.map((release, index) => {
+    const option = document.createElement("option");
+    option.value = release.version;
+    option.textContent = `v${release.version}${index === 0 ? " (latest)" : ""}`;
+    return option;
+  }));
+  select.value = catalog.latest || catalog.releases[0].version;
+  updateDownloadSelection();
+}
 
-  document.querySelectorAll("[data-platform-panel]").forEach((candidate) => {
-    const isActive = candidate === panel;
-    candidate.classList.toggle("active", isActive);
-    candidate.hidden = !isActive;
-  });
+function normalizedDownloadPlatform(value) {
+  const platform = String(value || "").toLowerCase();
+  if (platform.includes("win")) return "windows";
+  if (platform.includes("mac")) return "macos";
+  if (platform.includes("linux")) return "linux";
+  return "";
+}
 
-  document.querySelectorAll(".platform-choice").forEach((button) => {
-    const isActive = button.dataset.platform === platformName;
-    button.classList.toggle("active", isActive);
-    button.setAttribute("aria-selected", String(isActive));
-  });
+function normalizedDownloadArchitecture(value, bitness = "") {
+  const architecture = `${value || ""} ${bitness || ""}`.toLowerCase();
+  if (architecture.includes("arm") || architecture.includes("aarch64")) return "arm64";
+  if (architecture.includes("x86") || architecture.includes("x64") || architecture.includes("64")) return "x64";
+  return "";
+}
+
+async function initializeDownloadSelection() {
+  let platform = normalizedDownloadPlatform(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+  let architecture = "";
+  let architectureDetected = false;
+  if (navigator.userAgentData?.getHighEntropyValues) {
+    try {
+      const details = await navigator.userAgentData.getHighEntropyValues(["architecture", "bitness", "platform"]);
+      platform = normalizedDownloadPlatform(details.platform) || platform;
+      architecture = normalizedDownloadArchitecture(details.architecture, details.bitness);
+      architectureDetected = Boolean(architecture);
+    } catch (_error) {
+      // Browser privacy settings may withhold architecture details.
+    }
+  }
+  if (!architecture && platform !== "macos") {
+    architecture = normalizedDownloadArchitecture(navigator.userAgent);
+    architectureDetected = Boolean(architecture);
+  }
+  if (platform === "macos" && !architecture) {
+    architecture = "x64";
+  }
+  if ((platform === "windows" || platform === "linux") && architecture !== "arm64") {
+    architecture = "x64";
+  }
+  const target = platform && architecture
+    ? document.querySelector(`input[name="download-target"][value="${platform}-${architecture}"]`)
+    : null;
+  if (target) {
+    target.checked = true;
+    const status = document.querySelector("#download-selection-status");
+    if (status) {
+      status.textContent = architectureDetected
+        ? `Detected ${downloadTargetLabels[target.value]}.`
+        : `Detected macOS, but not its architecture; selected ${downloadTargetLabels[target.value]} as the safer default.`;
+    }
+  }
+  updateDownloadSelection();
 }
 
 document.addEventListener("click", (event) => {
@@ -821,12 +945,6 @@ document.addEventListener("click", (event) => {
         }
       });
     }
-    return;
-  }
-
-  const platformButton = event.target.closest(".platform-choice");
-  if (platformButton) {
-    setDownloadPlatform(platformButton.dataset.platform);
     return;
   }
 
@@ -857,6 +975,17 @@ document.addEventListener("click", (event) => {
   const downloadButton = event.target.closest(".download-button");
   if (downloadButton) {
     openConfiguredLink("downloads", downloadButton.dataset.download)
+      .catch((error) => window.alert(error.message || "Could not load the release file list."));
+  }
+
+  const selectedDownloadButton = event.target.closest("#selected-download-button");
+  if (selectedDownloadButton) {
+    const key = selectedDownloadKey();
+    if (!key) {
+      window.alert("Choose a supported platform and architecture.");
+      return;
+    }
+    openConfiguredLink("downloads", key)
       .catch((error) => window.alert(error.message || "Could not load the release file list."));
   }
 
@@ -967,6 +1096,9 @@ document.addEventListener("change", (event) => {
   if (event.target.matches('input[name="license-plan"]')) {
     updateCart();
   }
+  if (event.target.matches('input[name="download-target"], #lean-build, #release-version')) {
+    updateDownloadSelection();
+  }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -1004,6 +1136,7 @@ window.addEventListener("popstate", () => {
 
 applyConfiguredLinks();
 setActiveTab(window.location.hash, {skipHash: true});
+openLinkedFaq();
 const shouldValidatePrefilledLicense = applyPricingUrlParams();
 updateAddDevicePrice();
 updatePricingMode();
@@ -1011,3 +1144,5 @@ if (shouldValidatePrefilledLicense) {
   validateLicenseKey();
 }
 loadCheckoutLicense();
+initializeDownloadSelection();
+initializeReleaseSelection();

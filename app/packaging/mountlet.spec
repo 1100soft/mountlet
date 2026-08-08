@@ -13,6 +13,9 @@ except ModuleNotFoundError:
 
 
 root = Path.cwd()
+sys.path.insert(0, str(root / "packaging"))
+from build_metadata import build_info_data
+
 project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 version = project["project"]["version"]
 assets_dir = root / "src" / "mountlet" / "assets"
@@ -24,37 +27,6 @@ rclone_name = "rclone.exe" if sys.platform == "win32" else "rclone"
 rclone_path = os.environ.get("MOUNTLET_BUNDLED_RCLONE_PATH")
 bundled_rclone = Path(rclone_path) if rclone_path else root / "vendor" / "rclone" / rclone_name
 binaries = [(str(bundled_rclone), "vendor/rclone")] if bundled_rclone.is_file() else []
-
-
-def build_channel():
-    configured = os.environ.get("MOUNTLET_BUILD_CHANNEL", "").strip().lower()
-    if configured:
-        return configured
-    ref_name = os.environ.get("GITHUB_REF_NAME", "").strip()
-    if ref_name == "wip":
-        return "preview"
-    if ref_name == "main" or ref_name.startswith("v"):
-        return "production"
-    return "local"
-
-
-def build_info_data():
-    channel = build_channel()
-    report_api_url = os.environ.get("MOUNTLET_DEFAULT_REPORT_API_URL", "").strip()
-    license_api_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_API_URL", "").strip()
-    license_site_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_SITE_URL", "").strip()
-    if not report_api_url and channel == "preview":
-        report_api_url = "https://wip.mountlet.pages.dev/api/report"
-    if not license_api_url and channel == "preview":
-        license_api_url = "https://wip.mountlet.pages.dev/api/license"
-    if not license_site_url and channel == "preview":
-        license_site_url = "https://wip.mountlet.pages.dev"
-    return {
-        "channel": channel,
-        "licenseApiUrl": license_api_url,
-        "licenseSiteUrl": license_site_url,
-        "reportApiUrl": report_api_url,
-    }
 
 
 build_info_path = build_dir / "mountlet-build-info.json"

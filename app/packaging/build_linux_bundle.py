@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -9,41 +10,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+
+def _load_build_info_data():
+    path = Path(__file__).resolve().with_name("build_metadata.py")
+    spec = importlib.util.spec_from_file_location("mountlet_build_metadata", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load build metadata helper: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_info_data
+
+
+build_info_data = _load_build_info_data()
+
 try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib
-
-
-def build_channel() -> str:
-    configured = os.environ.get("MOUNTLET_BUILD_CHANNEL", "").strip().lower()
-    if configured:
-        return configured
-    ref_name = os.environ.get("GITHUB_REF_NAME", "").strip()
-    if ref_name == "wip":
-        return "preview"
-    if ref_name == "main" or ref_name.startswith("v"):
-        return "production"
-    return "local"
-
-
-def build_info_data() -> dict[str, str]:
-    channel = build_channel()
-    report_api_url = os.environ.get("MOUNTLET_DEFAULT_REPORT_API_URL", "").strip()
-    license_api_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_API_URL", "").strip()
-    license_site_url = os.environ.get("MOUNTLET_DEFAULT_LICENSE_SITE_URL", "").strip()
-    if not report_api_url and channel == "preview":
-        report_api_url = "https://wip.mountlet.pages.dev/api/report"
-    if not license_api_url and channel == "preview":
-        license_api_url = "https://wip.mountlet.pages.dev/api/license"
-    if not license_site_url and channel == "preview":
-        license_site_url = "https://wip.mountlet.pages.dev"
-    return {
-        "channel": channel,
-        "licenseApiUrl": license_api_url,
-        "licenseSiteUrl": license_site_url,
-        "reportApiUrl": report_api_url,
-    }
 
 
 def rclone_binary_name() -> str:

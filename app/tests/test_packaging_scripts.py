@@ -144,12 +144,61 @@ class BuildLinuxBundleTests(unittest.TestCase):
 
     def test_preview_build_info_defaults_to_preview_report_api(self):
         build_linux_bundle = _load_build_linux_bundle()
-        with mock.patch.dict(build_linux_bundle.os.environ, {"GITHUB_REF_NAME": "wip"}, clear=True):
+        with mock.patch.dict(
+            build_linux_bundle.os.environ,
+            {
+                "GITHUB_REF_NAME": "wip",
+                "GITHUB_RUN_NUMBER": "314",
+                "GITHUB_RUN_ATTEMPT": "2",
+                "GITHUB_SHA": "1234567890abcdef",
+            },
+            clear=True,
+        ):
             data = build_linux_bundle.build_info_data()
 
+        self.assertEqual(data["channel"], "preview")
+        self.assertEqual(data["buildId"], "r314.2-12345678")
         self.assertEqual(data["licenseApiUrl"], "https://wip.mountlet.pages.dev/api/license")
         self.assertEqual(data["licenseSiteUrl"], "https://wip.mountlet.pages.dev")
+        self.assertEqual(data["noticeApiUrl"], "https://wip.mountlet.pages.dev/api/notices")
         self.assertEqual(data["reportApiUrl"], "https://wip.mountlet.pages.dev/api/report")
+
+    def test_production_build_info_keeps_production_services_separate(self):
+        build_linux_bundle = _load_build_linux_bundle()
+        with mock.patch.dict(
+            build_linux_bundle.os.environ,
+            {
+                "GITHUB_REF_NAME": "v0.6.3",
+                "GITHUB_RUN_NUMBER": "315",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_SHA": "abcdef1234567890",
+            },
+            clear=True,
+        ):
+            data = build_linux_bundle.build_info_data()
+
+        self.assertEqual(data["channel"], "production")
+        self.assertEqual(data["buildId"], "r315.1-abcdef12")
+        self.assertEqual(data["licenseApiUrl"], "https://mountlet.app/api/license")
+        self.assertEqual(data["licenseSiteUrl"], "https://mountlet.app")
+        self.assertEqual(data["noticeApiUrl"], "https://mountlet.app/api/notices")
+        self.assertEqual(data["reportApiUrl"], "https://mountlet.app/api/report")
+
+    def test_pull_request_artifacts_are_preview_builds(self):
+        build_linux_bundle = _load_build_linux_bundle()
+        with mock.patch.dict(
+            build_linux_bundle.os.environ,
+            {
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_REF_NAME": "42/merge",
+                "GITHUB_HEAD_REF": "feature",
+            },
+            clear=True,
+        ):
+            data = build_linux_bundle.build_info_data()
+
+        self.assertEqual(data["channel"], "preview")
+        self.assertEqual(data["licenseSiteUrl"], "https://wip.mountlet.pages.dev")
 
     def test_install_build_info_writes_to_installed_package(self):
         build_linux_bundle = _load_build_linux_bundle()

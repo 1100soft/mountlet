@@ -65,10 +65,20 @@ mount_flags = --read-only --dir-cache-time 10m
             self.assertEqual(remote.name, "Work__Drive")
             self.assertEqual(remote.alias, "Work")
             self.assertEqual(remote.provider, "Drive")
-            self.assertEqual(Path(remote.mount_path).parts[-2:], ("drive", "Work"))
+            self.assertEqual(Path(remote.mount_path).parts[-2:], ("drive", "Work__Drive"))
             self.assertIn("--links", remote.flags)
             self.assertIn("--read-only", remote.flags)
             self.assertIn("10m", remote.flags)
+
+    def test_load_remotes_does_not_probe_or_migrate_mount_folders(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+
+            with mock.patch.object(core.PLATFORM, "is_mounted") as is_mounted:
+                remotes = core.load_remotes()
+
+            self.assertEqual([remote.name for remote in remotes], ["Work__Drive"])
+            is_mounted.assert_not_called()
 
     def test_import_does_not_create_mount_directory(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -76,6 +86,154 @@ mount_flags = --read-only --dir-cache-time 10m
             self.load_core(tempdir, "[Docs]\ntype = drive\n")
 
             self.assertFalse(mount_base.exists())
+
+    def test_default_mount_folders_distinguish_same_alias_across_providers(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(
+                tempdir,
+                """
+[Personal__Drive]
+type = drive
+
+[Personal__Dropbox]
+type = dropbox
+""".strip(),
+            )
+
+            remotes = core.load_remotes()
+
+        self.assertEqual([remote.alias for remote in remotes], ["Personal", "Personal"])
+        self.assertEqual(
+            [Path(remote.mount_path).name for remote in remotes],
+            ["Personal__Drive", "Personal__Dropbox"],
+        )
+
+    def test_mount_removes_empty_legacy_default_folder_before_mounting(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            legacy_path = Path(remote.mount_path).with_name("Work")
+            legacy_path.mkdir(parents=True)
+
+            with mock.patch.object(core, "find_rclone", return_value="/usr/bin/rclone"):
+                with mock.patch.object(core.PLATFORM, "mount_driver_available", return_value=True):
+                    with mock.patch.object(core, "check_remote_connection", return_value=(True, "connected")):
+                        with mock.patch.object(core, "_launch_mount_process", return_value=(True, "mounted")):
+                            success, _message = core.mount_remote(remote)
+
+            self.assertTrue(success)
+            self.assertFalse(legacy_path.exists())
+
+    def test_mount_preserves_nonempty_legacy_default_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            legacy_path = Path(remote.mount_path).with_name("Work")
+            legacy_path.mkdir(parents=True)
+            (legacy_path / "local.txt").write_text("keep", encoding="utf-8")
+
+            core._cleanup_legacy_default_mount(remote)
+
+            self.assertTrue(legacy_path.exists())
+            self.assertEqual((legacy_path / "local.txt").read_text(encoding="utf-8"), "keep")
+
+    def test_cleanup_orphaned_mounts_releases_only_unconfigured_managed_mounts(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "[Work__Drive]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            orphan = Path(core.BASE_MOUNT_DIR) / "Drive" / "Old"
+            orphan.mkdir(parents=True)
+            unrelated = Path(tempdir) / "elsewhere" / "Other"
+            unrelated.mkdir(parents=True)
+
+            mounted = {remote.mount_path, str(orphan), str(unrelated)}
+            with mock.patch.object(core.PLATFORM, "is_mounted", side_effect=lambda path: str(path) in mounted):
+                def unmount(path):
+                    mounted.discard(str(path))
+                    return mock.Mock(success=True, detail="")
+
+                with mock.patch.object(core, "_orphan_mount_pid", return_value=42):
+                    with mock.patch.object(
+                        core.PLATFORM,
+                        "unmount",
+                        side_effect=lambda path, _pid: unmount(path),
+                    ) as release:
+                        released, failures = core.cleanup_orphaned_mounts([remote])
+
+            self.assertEqual(released, [str(orphan)])
+            self.assertEqual(failures, [])
+            release.assert_called_once_with(str(orphan), 42)
+            self.assertIn(str(unrelated), mounted)
+
+    def test_cleanup_orphaned_mounts_reports_busy_mount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "")
+            orphan = Path(core.BASE_MOUNT_DIR) / "Drive" / "Old"
+            orphan.mkdir(parents=True)
+
+            with mock.patch.object(core.PLATFORM, "is_mounted", return_value=True):
+                with mock.patch.object(core, "_orphan_mount_pid", return_value=None):
+                    with mock.patch.object(core, "_mount_endpoint_disconnected", return_value=False):
+                        with mock.patch.object(
+                            core.PLATFORM,
+                            "unmount",
+                            return_value=mock.Mock(success=False, detail="busy"),
+                        ):
+                            released, failures = core.cleanup_orphaned_mounts([])
+
+            self.assertEqual(released, [])
+            self.assertEqual(failures, [f"[!] Failed to release stale mount {orphan}. busy"])
+
+    def test_cleanup_orphaned_mounts_detaches_disconnected_fuse_endpoint(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "")
+            orphan = Path(core.BASE_MOUNT_DIR) / "drive" / "Old"
+            orphan.mkdir(parents=True)
+            mounted = [True, False]
+
+            with mock.patch.object(core.PLATFORM, "is_mounted", side_effect=lambda _path: mounted.pop(0)):
+                with mock.patch.object(core, "_orphan_mount_pid", return_value=None):
+                    with mock.patch.object(core, "_mount_endpoint_disconnected", return_value=True):
+                        with mock.patch.object(
+                            core.PLATFORM,
+                            "unmount",
+                            return_value=mock.Mock(success=False, detail="busy"),
+                        ):
+                            with mock.patch.object(
+                                core.PLATFORM,
+                                "detach_disconnected_mount",
+                                return_value=mock.Mock(success=True, detail=""),
+                            ) as detach:
+                                released, failures = core.cleanup_orphaned_mounts([])
+
+            self.assertEqual(released, [str(orphan)])
+            self.assertEqual(failures, [])
+            detach.assert_called_once_with(str(orphan))
+
+    def test_orphan_mount_pid_requires_exact_rclone_mount_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            (Path(tempdir) / "mounts").mkdir()
+            core = self.load_core(tempdir, "")
+            proc = Path(tempdir) / "proc"
+            (proc / "123").mkdir(parents=True)
+            (proc / "123" / "cmdline").write_bytes(
+                b"/usr/bin/rclone\0mount\0Old:\0/home/user/Mountlet/mounted/drive/Old\0"
+            )
+            (proc / "124").mkdir()
+            (proc / "124" / "cmdline").write_bytes(
+                b"/usr/bin/other\0mount\0/home/user/Mountlet/mounted/drive/Old\0"
+            )
+
+            real_path = Path
+            with mock.patch.object(core, "Path", side_effect=lambda value: proc if value == "/proc" else real_path(value)):
+                pid = core._orphan_mount_pid("/home/user/Mountlet/mounted/drive/Old")
+
+            self.assertEqual(pid, 123)
 
     def test_mount_remote_builds_rclone_mount_command(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -190,6 +348,62 @@ type = dropbox
                 ],
             )
 
+    def test_check_remote_connection_explains_missing_backend_binary(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Personal__MEGA]\ntype = mega\n")
+            remote = core.load_remotes()[0]
+            result = mock.Mock(
+                returncode=1,
+                stderr='Failed to create file system: didn\'t find backend called "mega"',
+            )
+
+            with mock.patch.object(core.subprocess, "run", return_value=result):
+                success, message = core.check_remote_connection(remote, "/usr/bin/rclone")
+
+            self.assertFalse(success)
+            self.assertIn("/usr/bin/rclone", message)
+            self.assertIn("does not include the mega backend", message)
+            self.assertIn("standard bundled-rclone build", message)
+
+    def test_check_remote_connection_explains_invalid_icloud_session(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Personal__iCloud]\ntype = iclouddrive\n")
+            remote = core.load_remotes()[0]
+            result = mock.Mock(
+                returncode=1,
+                stderr=(
+                    'HTTP error 421 (421 Misdirected Request) returned body: '
+                    '''{"reason":"Invalid global session","error":2}'''
+                ),
+            )
+
+            with mock.patch.object(core.subprocess, "run", return_value=result):
+                success, message = core.check_remote_connection(remote, "/official/rclone")
+
+            self.assertFalse(success)
+            self.assertIn("saved iCloud session", message)
+            self.assertIn("Reauthenticate", message)
+            self.assertIn("iCloud.com", message)
+
+    def test_check_remote_connection_explains_missing_icloud_adp_cookie(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Personal__iCloud]\ntype = iclouddrive\n")
+            remote = core.load_remotes()[0]
+            result = mock.Mock(
+                returncode=1,
+                stderr=(
+                    "requestPCS(iclouddrive): HTTP error 500 returned body: "
+                    '''{"success":false,"error":"Missing X-APPLE-WEBAUTH-TOKEN cookie"}'''
+                ),
+            )
+
+            with mock.patch.object(core.subprocess, "run", return_value=result):
+                success, message = core.check_remote_connection(remote, "/official/rclone")
+
+            self.assertFalse(success)
+            self.assertIn("Reauthenticate", message)
+            self.assertIn("Advanced Data Protection", message)
+
     def test_reconnect_remote_uses_active_rclone_config(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\ntoken = REDACTED\n")
@@ -230,7 +444,7 @@ type = dropbox
                         success, message = core.mount_remote(remote)
 
             self.assertFalse(success)
-            self.assertIn("is not empty", message)
+            self.assertIn("contains local files", message)
             launch.assert_not_called()
 
     def test_launch_mount_process_preserves_complete_rclone_error(self):
@@ -259,6 +473,29 @@ type = dropbox
             self.assertIn("first diagnostic line", message)
             self.assertIn("final diagnostic line", message)
             self.assertGreaterEqual(append_raw.call_count, 2)
+
+    def test_launch_mount_process_rolls_back_a_late_partial_mount(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+            process = mock.Mock(pid=42)
+            process.poll.return_value = 1
+            unmount_result = mock.Mock(success=True)
+
+            with mock.patch.object(core.subprocess, "Popen", return_value=process):
+                with mock.patch.object(core, "wait_for", return_value=False):
+                    with mock.patch.object(core, "is_mounted", side_effect=(True, False)):
+                        with mock.patch.object(core.PLATFORM, "unmount", return_value=unmount_result) as unmount:
+                            with mock.patch.object(core, "_cleanup_mount_dir") as cleanup:
+                                success, _message = core._launch_mount_process(
+                                    remote,
+                                    ["rclone", "mount"],
+                                    wait_timeout=0,
+                                )
+
+            self.assertFalse(success)
+            unmount.assert_called_once_with(remote.mount_path)
+            cleanup.assert_called_once_with(remote.mount_path)
 
     def test_load_remotes_applies_app_and_mount_settings(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -319,7 +556,7 @@ endpoint = https://account.r2.cloudflarestorage.com
             remote = core.load_remotes()[0]
 
         self.assertEqual(remote.provider, "Cloudflare R2")
-        self.assertEqual(Path(remote.mount_path).parts[-2:], ("s3", "Archive"))
+        self.assertEqual(Path(remote.mount_path).parts[-2:], ("s3", "Archive__S3"))
 
     def test_load_remotes_uses_mountlet_order_when_configured(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -459,8 +696,16 @@ token = REDACTED
             fields = core.editable_rclone_fields(remote)
 
             self.assertEqual(
-                list(fields)[:6],
-                ["client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"],
+                list(fields)[:7],
+                [
+                    "mountlet_google_account",
+                    "client_id",
+                    "client_secret",
+                    "shared_with_me",
+                    "root_folder_id",
+                    "team_drive",
+                    "scope",
+                ],
             )
             self.assertEqual(fields["root_folder_id"], "abc")
             self.assertIn("team_drive", fields)
@@ -472,6 +717,7 @@ token = REDACTED
                     "client_id": "client.apps.googleusercontent.com",
                     "client_secret": "new-secret",
                     "root_folder_id": "def",
+                    "mountlet_google_account": "person+drive@example.com",
                     "token": "REDACTED",
                 },
             )
@@ -480,6 +726,8 @@ token = REDACTED
             self.assertEqual(remote.extra_info["client_id"], "client.apps.googleusercontent.com")
             self.assertEqual(remote.extra_info["client_secret"], "new-secret")
             self.assertEqual(remote.extra_info["root_folder_id"], "def")
+            self.assertEqual(remote.extra_info["mountlet_google_account"], "person+drive@example.com")
+            self.assertIn("login_hint=person%2Bdrive%40example.com", remote.extra_info["auth_url"])
             self.assertEqual(remote.extra_info["token"], "REDACTED")
 
     def test_s3_credentials_are_editable_and_new_secrets_are_obscured(self):
@@ -719,7 +967,7 @@ client_secret = work-secret
             self.assertTrue(success)
             self.assertEqual(run.call_args.args[0][:2], ["/usr/bin/fusermount3", "-u"])
 
-    def test_unmount_remote_falls_back_to_lazy_unmount(self):
+    def test_unmount_remote_does_not_fall_back_to_lazy_unmount(self):
         with tempfile.TemporaryDirectory() as tempdir:
             core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
             remote = core.load_remotes()[0]
@@ -731,13 +979,27 @@ client_secret = work-secret
                 with mock.patch.object(core.subprocess, "run") as run:
                     run.side_effect = [
                         mock.Mock(returncode=1),
-                        mock.Mock(returncode=0),
                     ]
-                    success, _ = core.unmount_remote(remote)
+                    success, message = core.unmount_remote(remote)
 
-            self.assertTrue(success)
+            self.assertFalse(success)
+            self.assertIn("Close files or folders", message)
             self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/fusermount3", "-u", remote.mount_path])
-            self.assertEqual(run.call_args_list[1].args[0], ["/usr/bin/fusermount3", "-uz", remote.mount_path])
+            self.assertEqual(run.call_count, 1)
+
+    def test_refresh_remote_does_not_mount_after_unmount_failure(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            core = self.load_core(tempdir, "[Docs]\ntype = drive\n")
+            remote = core.load_remotes()[0]
+
+            with mock.patch.object(core, "is_mounted", return_value=True):
+                with mock.patch.object(core, "unmount_remote", return_value=(False, "mount is busy")):
+                    with mock.patch.object(core, "mount_remote") as mount:
+                        success, message = core.refresh_remote(remote)
+
+            self.assertFalse(success)
+            self.assertEqual(message, "mount is busy")
+            mount.assert_not_called()
 
 
 if __name__ == "__main__":

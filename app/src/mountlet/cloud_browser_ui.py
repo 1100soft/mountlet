@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import suppress
 import json
 import threading
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import core, rclone_log
@@ -11,6 +11,8 @@ from .badged_button import create_badged_button, set_badge
 from .cloud_browser import (
     BrowserEntry,
     CloudBrowserBackend,
+    DRIVE_EDITABLE_DOCUMENT_FORMATS,
+    ListingCancelled,
     TransferItem,
     format_file_size,
     normalize_browser_path,
@@ -19,16 +21,12 @@ from .cloud_browser import (
 from .metadata_index import IndexedEntry
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
-from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
 
 MIME_TYPE = "application/x-mountlet-remote-files"
 EMBEDDED_BROWSER_MIN_WIDTH = 540
 EMBEDDED_BROWSER_MIN_HEIGHT = 340
-EMBEDDED_BROWSER_MAX_HEIGHT = 460
-EMBEDDED_BROWSER_MAX_VISIBLE_ROWS = 8
 FILE_BROWSER_MIN_HEIGHT = 240
-FILE_BROWSER_MAX_VISIBLE_ROWS = 14
-FILE_BROWSER_CONTEXT_ROWS = 1
 FILE_BROWSER_STATUS_MAX_CHARS = 140
 RCLONE_OUTPUT_TAIL_LINES = 10
 RCLONE_OUTPUT_MIN_LINES = 8
@@ -39,8 +37,8 @@ ENTRY_ICON_SIZE = 30
 OFFLINE_JOB_CONCURRENCY = 3
 FILE_BROWSER_SELECTION_STYLE = """
 QTreeWidget {
-    selection-background-color: #dbeafe;
-    selection-color: #111827;
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
 }
 QTreeWidget::item:hover:!selected {
     background: transparent;
@@ -51,8 +49,8 @@ QTreeWidget::item:focus {
 QTreeWidget::item:selected,
 QTreeWidget::item:selected:active,
 QTreeWidget::item:selected:!active {
-    background-color: #dbeafe;
-    color: #111827;
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
 }
 """
 
@@ -128,7 +126,9 @@ class CompactCloudBrowser:
         self._embedded = embedded
         self._layout_changed = layout_changed or (lambda: None)
         self._local_files_changed = local_files_changed or (lambda: None)
-        self._integrated_file_edits = bool(load_app_settings().integrated_file_edits)
+        app_settings = load_app_settings()
+        self._integrated_file_edits = bool(app_settings.integrated_file_edits)
+        self._file_list_max_items = max(int(getattr(app_settings, "file_list_max_items", 0)), 0)
         self.backend = CloudBrowserBackend()
         self.remote: core.RemoteInfo | None = None
         self.path = ""
@@ -136,11 +136,15 @@ class CompactCloudBrowser:
         self.entries: list[BrowserEntry] = []
         self._rendered_key: tuple[str, str] | None = None
         self.clipboard: tuple[list[TransferItem], bool] | None = None
-        self._operation_pending = False
+        self._pending_operations: dict[int, dict[str, object]] = {}
+        self._next_operation_id = 1
         self._zoom_steps = 0
-        self._operation_cache_keys: set[tuple[str, str]] = set()
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._loads_pending: set[tuple[str, str]] = set()
+        self._listing_cancel_events: dict[tuple[str, str], threading.Event] = {}
+        self._active_listing_by_remote: dict[str, tuple[str, str]] = {}
+        self._listing_request_ids: dict[tuple[str, str], int] = {}
+        self._next_listing_request_id = 1
         self._entry_state_cache: dict[tuple[str, str, bool], tuple[bool, bool, bool, bool, bool]] = {}
         self._remote_managed_cache: dict[str, bool] = {}
         self._entry_state_scans_pending: set[tuple[str, str]] = set()
@@ -170,16 +174,22 @@ class CompactCloudBrowser:
         self._offline_job_queue: list[
             tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
         ] = []
+        self._drag_export_pending: set[tuple[str, str]] = set()
+        self._drag_export_slots = threading.BoundedSemaphore(2)
+        self._drop_hover_item: Any | None = None
+        self._theme_icon_refresh_pending = False
         self._indexing_remote_names: set[str] = set()
         self._auto_index_requested = False
         self._pending_select_path = ""
         self._closed_until_selected = False
         self._disposed = False
         self._load_slots = threading.BoundedSemaphore(4)
+        self._photo_load_slots = threading.BoundedSemaphore(1)
         self._bridge = self._make_bridge()
         self._bridge.listing_ready.connect(self._listing_ready)
         self._bridge.operation_finished.connect(self._operation_finished)
         self._bridge.cached_file_ready.connect(self._cached_file_ready)
+        self._bridge.drag_export_ready.connect(self._drag_export_ready)
         self._bridge.offline_job_paths_ready.connect(self._offline_job_paths_ready)
         self._bridge.offline_job_finished.connect(self._offline_job_finished)
         self._bridge.rclone_output_ready.connect(self._append_rclone_output)
@@ -203,9 +213,10 @@ class CompactCloudBrowser:
         qt = self.qt
 
         class Bridge(qt.QObject):
-            listing_ready = qt.Signal(str, str, object, str)
-            operation_finished = qt.Signal(bool, str)
+            listing_ready = qt.Signal(str, str, int, object, str)
+            operation_finished = qt.Signal(int, bool, str)
             cached_file_ready = qt.Signal(str, str, object, str)
+            drag_export_ready = qt.Signal(str, object, str)
             offline_job_paths_ready = qt.Signal(str, object, str)
             offline_job_finished = qt.Signal(str, object, str, bool, str)
             rclone_output_ready = qt.Signal(str)
@@ -322,15 +333,16 @@ class CompactCloudBrowser:
             icon_name="ui-rclone-output",
         )
         header.addWidget(self.rclone_output_button)
-        header.addWidget(
-            self._button(
-                "×",
-                self.hide_until_selected,
-                "Close file browser",
-                square=True,
-                icon_name="ui-window-close",
+        if not self._embedded:
+            header.addWidget(
+                self._button(
+                    "×",
+                    self.hide_until_selected,
+                    "Close file browser",
+                    square=True,
+                    icon_name="ui-window-close",
+                )
             )
-        )
         layout.addLayout(header)
 
         navigation = qt.QHBoxLayout()
@@ -452,32 +464,24 @@ class CompactCloudBrowser:
                 super().mousePressEvent(event)
 
             def startDrag(self, _supported_actions: Any) -> None:
-                if not outer._edits_enabled():
-                    return
-                items = outer.selected_transfer_items()
-                if not items:
-                    return
-                mime = qt.QMimeData()
-                mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in items]).encode())
-                drag = qt.QDrag(self)
-                drag.setMimeData(mime)
-                drag.exec(qt.Qt.DropAction.CopyAction | qt.Qt.DropAction.MoveAction, qt.Qt.DropAction.CopyAction)
+                outer._start_file_drag(self, outer._selected_entries())
 
             def dragEnterEvent(self, event: Any) -> None:
-                if outer._drop_event_supported(event):
-                    event.acceptProposedAction()
+                if outer.preview_drop(event, self):
                     return
                 super().dragEnterEvent(event)
 
             def dragMoveEvent(self, event: Any) -> None:
-                if outer._drop_event_supported(event):
-                    event.acceptProposedAction()
+                if outer.preview_drop(event, self):
                     return
                 super().dragMoveEvent(event)
 
+            def dragLeaveEvent(self, event: Any) -> None:
+                outer.leave_drop()
+                super().dragLeaveEvent(event)
+
             def dropEvent(self, event: Any) -> None:
-                if outer._handle_drop_event(event):
-                    event.acceptProposedAction()
+                if outer.perform_drop(event):
                     return
                 super().dropEvent(event)
 
@@ -508,6 +512,7 @@ class CompactCloudBrowser:
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tree.setDragDropMode(qt.QAbstractItemView.DragDropMode.DragDrop)
         self.tree.setDragEnabled(False)
         self.tree.setAcceptDrops(True)
         self.tree.setDropIndicatorShown(True)
@@ -540,6 +545,7 @@ class CompactCloudBrowser:
         self.window.setCentralWidget(root)
         self._update_actions()
         self._update_focus_style()
+        self._schedule_theme_icon_refresh()
 
     def _show_rclone_output(self) -> None:
         dialog = self._rclone_output_dialog
@@ -1259,25 +1265,32 @@ class CompactCloudBrowser:
 
     def hide(self) -> None:
         if self._embedded:
-            self.root.hide()
-            self._layout_changed()
+            # The embedded browser is a permanent part of single-window mode.
+            # Hiding the containing main window is sufficient; keep this panel
+            # visible so it returns with its parent.
+            self.root.show()
         else:
             self.window.hide()
 
     def hide_until_selected(self) -> None:
+        if self._embedded:
+            self._closed_until_selected = False
+            self.root.show()
+            return
         self._closed_until_selected = True
         self.hide()
 
     def close(self) -> None:
-        self._closed_until_selected = True
         if self._embedded:
-            self.root.hide()
-            self._layout_changed()
-        else:
-            self.window.close()
+            self._closed_until_selected = False
+            self.root.show()
+            return
+        self._closed_until_selected = True
+        self.window.close()
 
     def dispose(self) -> None:
         self._disposed = True
+        self._cancel_folder_loads()
         for timer_name in ("_working_timer", "_search_timer"):
             timer = getattr(self, timer_name, None)
             if timer is not None:
@@ -1289,7 +1302,10 @@ class CompactCloudBrowser:
                 unsubscribe()
             self._unsubscribe_rclone_log = None
         with suppress(Exception):
-            self.close()
+            if self._embedded:
+                self.root.hide()
+            else:
+                self.close()
 
     def embed_into(self, layout: Any) -> None:
         if not self._embedded:
@@ -1298,7 +1314,8 @@ class CompactCloudBrowser:
             self.window.takeCentralWidget()
         self.root.setParent(layout.parentWidget())
         layout.addWidget(self.root, 1)
-        self.root.hide()
+        self._closed_until_selected = False
+        self.root.show()
 
     def owns_focus_widget(self, widget: Any | None = None) -> bool:
         if widget is None:
@@ -1345,6 +1362,10 @@ class CompactCloudBrowser:
 
     def preload(self, remotes: list[core.RemoteInfo]) -> None:
         for remote in remotes:
+            # Google Photos exposes expensive virtual folders rather than a
+            # normal directory tree. Load it only when the user selects it.
+            if remote.backend_type.casefold() == "gphotos":
+                continue
             path = self.backend.current_path(remote.name)
             key = (remote.name, path)
             if key not in self._folder_cache and key not in self._loads_pending:
@@ -1357,6 +1378,8 @@ class CompactCloudBrowser:
         self._auto_index_requested = True
         missing: list[core.RemoteInfo] = []
         for remote in remotes:
+            if remote.backend_type.casefold() == "gphotos":
+                continue
             try:
                 if not self.backend.remote_fully_indexed(remote.name):
                     missing.append(remote)
@@ -1367,11 +1390,13 @@ class CompactCloudBrowser:
 
     def invalidate(self, remote_name: str | None = None) -> None:
         if remote_name is None:
+            self._cancel_folder_loads()
             self._folder_cache.clear()
             self._loads_pending.clear()
             if self.remote is not None:
                 self.refresh(force=True)
             return
+        self._cancel_folder_loads(remote_name)
         self._folder_cache = {
             key: entries for key, entries in self._folder_cache.items() if key[0] != remote_name
         }
@@ -1387,7 +1412,10 @@ class CompactCloudBrowser:
         show_browser: bool,
         focus_browser: bool = False,
     ) -> None:
-        previous_key = (self.remote.name, self.path) if self.remote is not None else None
+        previous_remote_name = self.remote.name if self.remote is not None else ""
+        previous_key = (previous_remote_name, self.path) if previous_remote_name else None
+        if previous_remote_name and previous_remote_name != remote.name:
+            self._cancel_folder_loads(previous_remote_name)
         self.remote = remote
         self.path = self.backend.current_path(remote.name)
         changed = previous_key != (remote.name, self.path)
@@ -1412,6 +1440,7 @@ class CompactCloudBrowser:
                 self.focus()
         if changed or getattr(self, "_rendered_key", None) != (remote.name, self.path):
             self.refresh(force=False)
+        self._schedule_theme_icon_refresh()
 
     def reposition(self, row: Any) -> None:
         if not self._embedded:
@@ -1630,6 +1659,11 @@ class CompactCloudBrowser:
             if indexed:
                 cached = indexed
                 self._folder_cache[key] = indexed
+        if cached is None and getattr(self, "_rendered_key", None) != key:
+            self.entries = []
+            self.tree.clear()
+            self._update_actions()
+            self._resize_to_rendered_items()
         if cached is not None and not force:
             self._display_entries(cached)
             if key not in self._loads_pending:
@@ -1648,28 +1682,89 @@ class CompactCloudBrowser:
         key = (remote.name, path)
         if key in self._loads_pending:
             return
+        previous = self._active_listing_by_remote.get(remote.name)
+        if previous is not None and previous != key:
+            self._cancel_folder_load(previous)
+        cancel_event = threading.Event()
+        request_id = self._next_listing_request_id
+        self._next_listing_request_id += 1
+        self._listing_cancel_events[key] = cancel_event
+        self._listing_request_ids[key] = request_id
+        self._active_listing_by_remote[remote.name] = key
         self._loads_pending.add(key)
 
+        def load_entries() -> None:
+            try:
+                entries = self.backend.list_entries(remote, path, cancel_event=cancel_event)
+            except ListingCancelled:
+                self._bridge.listing_ready.emit(remote.name, path, request_id, None, "__cancelled__")
+                return
+            except Exception as exc:
+                self._bridge.listing_ready.emit(remote.name, path, request_id, None, str(exc))
+                return
+            if cancel_event.is_set():
+                self._bridge.listing_ready.emit(remote.name, path, request_id, None, "__cancelled__")
+                return
+            self._bridge.listing_ready.emit(remote.name, path, request_id, entries, "")
+
         def worker() -> None:
+            if remote.backend_type.casefold() == "gphotos":
+                with self._photo_load_slots:
+                    if not cancel_event.is_set():
+                        load_entries()
+                return
             with self._load_slots:
-                try:
-                    entries = self.backend.list_entries(remote, path)
-                except Exception as exc:
-                    self._bridge.listing_ready.emit(remote.name, path, None, str(exc))
-                    return
-            self._bridge.listing_ready.emit(remote.name, path, entries, "")
+                if not cancel_event.is_set():
+                    load_entries()
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _listing_ready(self, remote_name: str, path: str, entries: object, error: str) -> None:
-        key = (remote_name, path)
+    def _cancel_folder_load(self, key: tuple[str, str]) -> None:
+        event = getattr(self, "_listing_cancel_events", {}).pop(key, None)
+        if event is not None:
+            event.set()
+        getattr(self, "_listing_request_ids", {}).pop(key, None)
         self._loads_pending.discard(key)
+        active = getattr(self, "_active_listing_by_remote", {})
+        if active.get(key[0]) == key:
+            active.pop(key[0], None)
+
+    def _cancel_folder_loads(self, remote_name: str | None = None) -> None:
+        keys = [
+            key
+            for key in getattr(self, "_listing_cancel_events", {})
+            if remote_name is None or key[0] == remote_name
+        ]
+        for key in keys:
+            self._cancel_folder_load(key)
+
+    def _listing_ready(
+        self,
+        remote_name: str,
+        path: str,
+        request_id: int,
+        entries: object,
+        error: str,
+    ) -> None:
+        key = (remote_name, path)
+        request_ids = getattr(self, "_listing_request_ids", {})
+        if request_ids and request_ids.get(key) != request_id:
+            return
+        request_ids.pop(key, None)
+        getattr(self, "_listing_cancel_events", {}).pop(key, None)
+        active = getattr(self, "_active_listing_by_remote", {})
+        if active.get(remote_name) == key:
+            active.pop(remote_name, None)
+        self._loads_pending.discard(key)
+        if error == "__cancelled__":
+            return
         if not isinstance(entries, list):
             cached = getattr(self, "_folder_cache", {}).get(key)
             if self.remote and (self.remote.name, self.path) == key:
                 if cached is not None:
                     self._display_entries(cached)
-                    self.status.setText("Showing cached folder contents")
+                    detail = (error or "refresh failed").splitlines()[0]
+                    self.status.setText(f"Showing cached folder contents — {detail}")
                 else:
                     self.entries = []
                     self.tree.clear()
@@ -1976,6 +2071,12 @@ class CompactCloudBrowser:
             return
         query = self.search_field.text().strip()
         remote = self.remote
+        if remote.backend_type.casefold() == "gphotos":
+            # Photos exposes virtual folders through a tightly quota-limited
+            # API. Navigation refreshes visited folders; search verification
+            # must not multiply those requests in the background.
+            self._finish_search_verification()
+            return
         parents: list[str] = []
         seen: set[str] = set()
         for result in self._search_results:
@@ -2025,9 +2126,18 @@ class CompactCloudBrowser:
         self._index_remotes(remotes, "Indexing all remote metadata…")
 
     def _index_remotes(self, remotes: list[core.RemoteInfo], message: str) -> None:
-        runnable = [remote for remote in remotes if remote.name not in self._indexing_remote_names]
+        eligible = [remote for remote in remotes if remote.backend_type.casefold() != "gphotos"]
+        runnable = [
+            remote
+            for remote in eligible
+            if remote.name not in self._indexing_remote_names
+        ]
         if not runnable:
-            self.status.setText("Indexing is already running")
+            self.status.setText(
+                "Google Photos is indexed as folders are visited"
+                if not eligible
+                else "Indexing is already running"
+            )
             return
         for remote in runnable:
             self._indexing_remote_names.add(remote.name)
@@ -2151,8 +2261,8 @@ class CompactCloudBrowser:
         entries = getattr(self, "entries", [])
         count = len(entries) if entries else tree.topLevelItemCount()
         count = max(1, int(count))
-        max_visible_rows = EMBEDDED_BROWSER_MAX_VISIBLE_ROWS if self._embedded else FILE_BROWSER_MAX_VISIBLE_ROWS
-        visible_rows = min(count + FILE_BROWSER_CONTEXT_ROWS, max_visible_rows + FILE_BROWSER_CONTEXT_ROWS)
+        item_limit = max(int(getattr(self, "_file_list_max_items", 0)), 0)
+        visible_rows = min(count, item_limit) if item_limit else count
         try:
             row_height = tree.sizeHintForRow(0)
         except Exception:
@@ -2166,26 +2276,51 @@ class CompactCloudBrowser:
             header_height = tree.header().sizeHint().height()
         except Exception:
             header_height = 28
-        tree_height = int(header_height + row_height * visible_rows + 8)
+        minimum_tree_height = int(header_height + row_height + 8)
+        desired_tree_height = int(header_height + row_height * visible_rows + 8)
+        if self._embedded:
+            with suppress(Exception):
+                tree.setMinimumHeight(minimum_tree_height)
+                tree.setMaximumHeight(desired_tree_height if item_limit else 16_777_215)
+            with suppress(Exception):
+                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
+                root.setMaximumHeight(16_777_215)
+            return
+
+        available_height = 720
+        frame_overhead = 0
+        try:
+            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is not None:
+                available_height = screen.availableGeometry().height()
+            frame_overhead = max(self.window.frameGeometry().height() - self.window.height(), 0)
+        except Exception:
+            pass
+        try:
+            current_tree_height = max(tree.height(), minimum_tree_height)
+        except Exception:
+            current_tree_height = minimum_tree_height
+        try:
+            non_tree_height = max(root.sizeHint().height() - current_tree_height, 0)
+        except Exception:
+            non_tree_height = 120
+        maximum_tree_height = max(
+            minimum_tree_height,
+            available_height - frame_overhead - non_tree_height,
+        )
+        tree_height = min(desired_tree_height, maximum_tree_height)
         with suppress(Exception):
             tree.setMinimumHeight(tree_height)
             tree.setMaximumHeight(tree_height)
         try:
-            if self._embedded:
-                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
-                root.setMaximumHeight(16_777_215)
-            else:
-                root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
-                with suppress(Exception):
-                    self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            with suppress(Exception):
+                self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
             hint = root.sizeHint()
-            desired_height = max(FILE_BROWSER_MIN_HEIGHT, hint.height())
-            if self._embedded:
-                desired_height = min(max(EMBEDDED_BROWSER_MIN_HEIGHT, desired_height), EMBEDDED_BROWSER_MAX_HEIGHT)
+            desired_height = min(max(FILE_BROWSER_MIN_HEIGHT, hint.height()), available_height - frame_overhead)
             root.setMinimumHeight(desired_height)
-            if not self._embedded:
-                self.window.resize(max(self.window.width(), hint.width()), desired_height)
-                self._position_rclone_output()
+            self.window.resize(max(self.window.width(), hint.width()), desired_height)
+            self._position_rclone_output()
         except Exception:
             pass
 
@@ -2393,7 +2528,11 @@ class CompactCloudBrowser:
 
     def _prefetch_parent_folder(self) -> None:
         remote = self.remote
-        if remote is None or not self.path:
+        if (
+            remote is None
+            or not self.path
+            or remote.backend_type.casefold() == "gphotos"
+        ):
             return
         parent = parent_browser_path(self.path)
         key = (remote.name, parent)
@@ -2403,7 +2542,7 @@ class CompactCloudBrowser:
 
     def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
         remote = self.remote
-        if remote is None:
+        if remote is None or remote.backend_type.casefold() == "gphotos":
             return
         scheduled = 0
         for entry in entries:
@@ -2440,6 +2579,126 @@ class CompactCloudBrowser:
             for entry in self._selected_entries()
         ]
 
+    def _start_file_drag(self, source: Any, entries: list[BrowserEntry]) -> None:
+        remote = self.remote
+        if remote is None or not entries or self._remote_operation_pending(remote.name):
+            return
+
+        local_paths: list[Path] = []
+        missing: list[BrowserEntry] = []
+        for entry in entries:
+            local = self._drag_export_path(remote, entry)
+            if local is None:
+                missing.append(entry)
+            else:
+                local_paths.append(local)
+
+        items = [
+            TransferItem(remote.name, entry.path, entry.name, entry.is_dir)
+            for entry in entries
+        ]
+        mime = self.qt.QMimeData()
+        mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in items]).encode())
+        # A partial URL list would silently omit uncached selected items when
+        # dropping into an external file manager. Attach URLs only when the
+        # complete selection is ready; Mountlet's own MIME remains immediately
+        # usable for internal transfers.
+        if not missing:
+            mime.setUrls([self.qt.QUrl.fromLocalFile(str(path)) for path in local_paths])
+        drag = self.qt.QDrag(source)
+        drag.setMimeData(mime)
+        # External file managers receive only a copy operation. Moving a
+        # managed cache path would break Mountlet's local-state tracking.
+        result = drag.exec(self.qt.Qt.DropAction.CopyAction, self.qt.Qt.DropAction.CopyAction)
+        ignore_action = getattr(self.qt.Qt.DropAction, "IgnoreAction", None)
+        if missing and (result is None or ignore_action is None or result == ignore_action):
+            self._prepare_drag_export(remote, missing)
+
+    def _drag_export_path(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path | None:
+        cached = self.backend.cached_export_path(remote.name, entry)
+        if cached is not None:
+            return cached
+        if entry.is_dir and self.backend.has_cached_content(remote.name, entry.path, is_dir=True):
+            return None
+        # A Drive mount can omit Google-native documents from an otherwise
+        # valid directory. Export Drive folders through rclone instead.
+        if entry.is_dir and remote.backend_type.casefold() == "drive":
+            return None
+        if not self._remote_is_mounted(remote):
+            return None
+        relative = normalize_browser_path(entry.path)
+        mounted = (
+            Path(remote.mount_path).joinpath(*relative.split("/"))
+            if relative
+            else Path(remote.mount_path)
+        )
+        if entry.is_dir:
+            return mounted if mounted.is_dir() else None
+        if not mounted.is_file():
+            return None
+        if remote.backend_type.casefold() == "drive":
+            suffix = mounted.suffix.casefold().lstrip(".")
+            if suffix in DRIVE_EDITABLE_DOCUMENT_FORMATS:
+                with suppress(OSError):
+                    if mounted.stat().st_size == 0:
+                        return None
+        return mounted
+
+    def _prepare_drag_export(self, remote: core.RemoteInfo, entries: list[BrowserEntry]) -> None:
+        keys = {(remote.name, normalize_browser_path(entry.path)) for entry in entries}
+        pending = getattr(self, "_drag_export_pending", None)
+        if pending is None:
+            pending = set()
+            self._drag_export_pending = pending
+        if pending.intersection(keys):
+            return
+        pending.update(keys)
+        paths = [entry.path for entry in entries]
+        self._start_working_paths(remote.name, paths, "download")
+        self.status.setText(
+            f"Preparing {len(entries)} item{'s' if len(entries) != 1 else ''} for drag and drop…"
+        )
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                with self._drag_export_slots:
+                    for entry in entries:
+                        self.backend.cache_for_export(remote, entry)
+            except Exception as exc:
+                self._bridge.drag_export_ready.emit(remote.name, entries, str(exc))
+                return
+            self._bridge.drag_export_ready.emit(remote.name, entries, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drag_export_ready(self, remote_name: str, entries: object, error: str) -> None:
+        if not isinstance(entries, list) or not all(isinstance(entry, BrowserEntry) for entry in entries):
+            return
+        paths = [entry.path for entry in entries]
+        pending = getattr(self, "_drag_export_pending", set())
+        pending.difference_update((remote_name, normalize_browser_path(path)) for path in paths)
+        if self._is_disposed():
+            return
+        self._finish_working_paths(remote_name, paths, "download")
+        for key in list(getattr(self, "_entry_state_cache", {})):
+            if key[0] == remote_name and _paths_overlap([key[1]], paths):
+                self._entry_state_cache.pop(key, None)
+        getattr(self, "_remote_managed_cache", {}).pop(remote_name, None)
+        self._local_files_changed()
+        self._refresh_entry_icons()
+        self._update_actions()
+        if error:
+            self._notify("Drag and drop", error, False)
+            if self.remote is not None and self.remote.name == remote_name:
+                self.status.setText(error)
+            return
+        if self.remote is not None and self.remote.name == remote_name:
+            count = len(entries)
+            self.status.setText(
+                f"{count} item{'s are' if count != 1 else ' is'} ready. Drag again to copy."
+            )
+
     def copy_selected(self) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
@@ -2453,6 +2712,15 @@ class CompactCloudBrowser:
     def cut_selected(self) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
+            return
+        entries = self._selected_entries()
+        if not self._can_delete_entries(entries):
+            if self.remote is not None and self.remote.backend_type.casefold() == "gphotos":
+                self._notify(
+                    "Google Photos",
+                    "Google Photos media can be moved only from albums created through rclone.",
+                    False,
+                )
             return
         items = self.selected_transfer_items()
         if items:
@@ -2473,15 +2741,29 @@ class CompactCloudBrowser:
             self._edit_disabled()
             return
         entries = self._selected_entries()
-        if not entries or self.remote is None or self._operation_pending:
+        if not entries or self.remote is None or self._remote_operation_pending(self.remote.name):
+            return
+        if not self._can_delete_entries(entries):
+            self._notify(
+                "Google Photos",
+                "Google Photos can remove media only from albums created through rclone.",
+                False,
+            )
             return
         names = ", ".join(entry.name for entry in entries[:3])
         if len(entries) > 3:
             names += f", and {len(entries) - 3} more"
+        is_google_photos = self.remote.backend_type.casefold() == "gphotos"
+        title = "Remove from album?" if is_google_photos else "Delete from cloud storage?"
+        message = (
+            f"Remove {names} from this album?\n\nThe media remains in your Google Photos library."
+            if is_google_photos
+            else f"Permanently delete {names}?\n\nThis cannot be undone by Mountlet."
+        )
         reply = self.qt.QMessageBox.question(
             self.window,
-            "Delete from cloud storage?",
-            f"Permanently delete {names}?\n\nThis cannot be undone by Mountlet.",
+            title,
+            message,
             self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
             self.qt.QMessageBox.StandardButton.No,
         )
@@ -2494,7 +2776,10 @@ class CompactCloudBrowser:
         if not self._edits_enabled():
             self._edit_disabled()
             return
-        if self.remote is None or self._operation_pending:
+        if self.remote is None or self._remote_operation_pending(self.remote.name):
+            return
+        if not self._can_create_folder():
+            self._notify("Google Photos", "Albums can be created only inside the album folder.", False)
             return
         name, accepted = self.qt.QInputDialog.getText(self.window, "New folder", "Folder name")
         if not accepted or not name.strip():
@@ -2507,7 +2792,10 @@ class CompactCloudBrowser:
             self._edit_disabled()
             return
         entries = self._selected_entries()
-        if len(entries) != 1 or self.remote is None or self._operation_pending:
+        if len(entries) != 1 or self.remote is None or self._remote_operation_pending(self.remote.name):
+            return
+        if self.remote.backend_type.casefold() == "gphotos":
+            self._notify("Google Photos", "Google Photos does not support renaming media through rclone.", False)
             return
         entry = entries[0]
         name, accepted = self.qt.QInputDialog.getText(
@@ -2566,12 +2854,19 @@ class CompactCloudBrowser:
         menu.addSeparator()
         edits_enabled = self._edits_enabled()
         self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
-        self._menu_action(menu, "Cut", self.cut_selected, enabled=edits_enabled)
+        destructive_enabled = edits_enabled and self._can_delete_entries(self._selected_entries())
+        self._menu_action(menu, "Cut", self.cut_selected, enabled=destructive_enabled)
         self._menu_action(
             menu,
             "Rename",
             self.rename_selected,
-            enabled=edits_enabled and len(self._selected_entries()) == 1 and not self._operation_pending,
+            enabled=bool(
+                edits_enabled
+                and len(self._selected_entries()) == 1
+                and not self._current_remote_operation_pending()
+                and self.remote is not None
+                and self.remote.backend_type.casefold() != "gphotos"
+            ),
         )
         self._add_offline_menu_actions(menu, entry)
         self._menu_action(
@@ -2586,7 +2881,7 @@ class CompactCloudBrowser:
             lambda selected=entry: self._free_cache(selected.path),
             enabled=self._can_free_cache(entry),
         )
-        self._menu_action(menu, "Delete", self.delete_selected, enabled=edits_enabled)
+        self._menu_action(menu, "Delete", self.delete_selected, enabled=destructive_enabled)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
     def _show_folder_menu(self, point: Any, *, source: Any | None = None) -> None:
@@ -2602,9 +2897,14 @@ class CompactCloudBrowser:
             menu,
             "Paste",
             self.paste,
-            enabled=edits_enabled and self.clipboard is not None and not self._operation_pending,
+            enabled=edits_enabled and self.clipboard is not None and not self._current_remote_operation_pending(),
         )
-        self._menu_action(menu, "New folder", self.create_folder, enabled=edits_enabled and not self._operation_pending)
+        self._menu_action(
+            menu,
+            "New folder",
+            self.create_folder,
+            enabled=edits_enabled and not self._current_remote_operation_pending() and self._can_create_folder(),
+        )
         menu.addSeparator()
         self._menu_action(menu, "Sync now", lambda: self._sync_cached_path(self.path, True), enabled=self._can_sync_folder())
         self._menu_action(
@@ -2614,7 +2914,7 @@ class CompactCloudBrowser:
             enabled=bool(
                 self.remote
                 and self.backend.has_offline_content(self.remote.name, self.path, is_dir=True)
-                and not self._operation_pending
+                and not self._current_remote_operation_pending()
             ),
         )
         self._menu_action(
@@ -2624,7 +2924,7 @@ class CompactCloudBrowser:
             enabled=bool(
                 self.remote
                 and self.backend.has_temporary_cache_content(self.remote.name, self.path, is_dir=True)
-                and not self._operation_pending
+                and not self._current_remote_operation_pending()
             ),
         )
         origin = source or self.path_field
@@ -2649,7 +2949,7 @@ class CompactCloudBrowser:
         return bool(
             remote
             and self._cached_entry_state(remote, entry)[2]
-            and not self._operation_pending
+            and not self._current_remote_operation_pending()
         )
 
     def _can_sync_cache(self, entry: BrowserEntry) -> bool:
@@ -2657,7 +2957,7 @@ class CompactCloudBrowser:
         return bool(
             remote
             and self._sync_paths is not None
-            and not self._operation_pending
+            and not self._current_remote_operation_pending()
             and not self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="sync")
             and self._entry_has_cached_content(entry)
         )
@@ -2667,7 +2967,7 @@ class CompactCloudBrowser:
         return bool(
             remote
             and self._sync_paths is not None
-            and not self._operation_pending
+            and not self._current_remote_operation_pending()
             and not self._entry_has_operation(remote.name, self.path, is_dir=True, kind="sync")
             and self.backend.managed_file_paths_under(remote.name, self.path)
         )
@@ -2687,7 +2987,7 @@ class CompactCloudBrowser:
     def sync_selected(self) -> None:
         remote = getattr(self, "remote", None)
         entries = self._selected_entries()
-        if remote is None or self._sync_paths is None or not entries or self._operation_pending:
+        if remote is None or self._sync_paths is None or not entries or self._remote_operation_pending(remote.name):
             return
         paths = [(entry.path, entry.is_dir) for entry in entries]
         affected = self._managed_record_paths_for_items(remote.name, paths)
@@ -2698,7 +2998,7 @@ class CompactCloudBrowser:
 
     def sync_remote(self) -> None:
         remote = getattr(self, "remote", None)
-        if remote is None or self._sync_paths is None or self._operation_pending:
+        if remote is None or self._sync_paths is None or self._remote_operation_pending(remote.name):
             return
         affected = self.backend.managed_record_paths(remote.name)
         if not affected:
@@ -2709,7 +3009,7 @@ class CompactCloudBrowser:
     def remove_selected_offline(self) -> None:
         remote = getattr(self, "remote", None)
         entries = self._selected_entries()
-        if remote is None or not entries or self._operation_pending:
+        if remote is None or not entries or self._remote_operation_pending(remote.name):
             return
         for entry in entries:
             if self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir):
@@ -2718,7 +3018,7 @@ class CompactCloudBrowser:
     def clear_selected_cache(self) -> None:
         remote = getattr(self, "remote", None)
         entries = self._selected_entries()
-        if remote is None or not entries or self._operation_pending:
+        if remote is None or not entries or self._remote_operation_pending(remote.name):
             return
         paths = [entry.path for entry in entries]
         self._run_operation(
@@ -2729,50 +3029,54 @@ class CompactCloudBrowser:
 
     def remove_remote_offline(self) -> None:
         remote = getattr(self, "remote", None)
-        if remote is None or self._operation_pending:
+        if remote is None or self._remote_operation_pending(remote.name):
             return
         self.remove_remote_offline_for(remote.name)
 
     def clear_remote_cache(self) -> None:
         remote = getattr(self, "remote", None)
-        if remote is None or self._operation_pending:
+        if remote is None or self._remote_operation_pending(remote.name):
             return
         self.clear_remote_cache_for(remote.name)
 
     def remove_remote_offline_for(self, remote_name: str) -> None:
-        if self._operation_pending:
+        if self._remote_operation_pending(remote_name):
             return
         self._run_operation(
             "Removing offline files…",
             lambda: self.backend.remove_remote_offline(remote_name),
             invalidate_keys={key for key in self._folder_cache if key[0] == remote_name},
+            remote_names={remote_name},
         )
 
     def clear_remote_cache_for(self, remote_name: str) -> None:
-        if self._operation_pending:
+        if self._remote_operation_pending(remote_name):
             return
         self._run_operation(
             "Clearing remote cache…",
             lambda: self.backend.free_remote_cache(remote_name),
             invalidate_keys={key for key in self._folder_cache if key[0] == remote_name},
+            remote_names={remote_name},
         )
 
     def remove_all_offline(self) -> None:
-        if self._operation_pending:
+        if self._any_operation_pending():
             return
         self._run_operation(
             "Removing all offline files…",
             self.backend.remove_all_offline,
             invalidate_keys=set(self._folder_cache),
+            remote_names={remote.name for remote in self._remotes()},
         )
 
     def clear_all_cache(self) -> None:
-        if self._operation_pending:
+        if self._any_operation_pending():
             return
         self._run_operation(
             "Clearing all resolved cache…",
             self.backend.free_all_resolved_cache,
             invalidate_keys=set(self._folder_cache),
+            remote_names={remote.name for remote in self._remotes()},
         )
 
     def _managed_record_paths_for_items(self, remote_name: str, items: list[tuple[str, bool]]) -> list[str]:
@@ -2798,7 +3102,7 @@ class CompactCloudBrowser:
             kind="download",
         )
         remove_pending = self._offline_remove_pending(remote.name, [entry.path])
-        available = not self._operation_pending and not downloading
+        available = not self._current_remote_operation_pending() and not downloading
         has_local_content = self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
         self._menu_action(
             menu,
@@ -2810,7 +3114,7 @@ class CompactCloudBrowser:
             menu,
             "Remove offline copies",
             lambda selected=entry: self._remove_offline_copy(selected.path),
-            enabled=has_local_content and not self._operation_pending and not remove_pending,
+            enabled=has_local_content and not self._current_remote_operation_pending() and not remove_pending,
         )
 
     def _remove_offline_copy(self, path: str) -> None:
@@ -2860,7 +3164,7 @@ class CompactCloudBrowser:
         self._run_operation("Freeing resolved cache…", self.backend.free_all_resolved_cache)
 
     def _replace_original_with_copy(self, entry: BrowserEntry) -> None:
-        if self.remote is None or self._operation_pending:
+        if self.remote is None or self._current_remote_operation_pending():
             return
         remote = self.remote
         parent = parent_browser_path(entry.path)
@@ -2876,7 +3180,14 @@ class CompactCloudBrowser:
         except Exception:
             return "file manager"
 
-    def accept_drop(self, payload: bytes, *, move: bool = False) -> None:
+    def accept_drop(
+        self,
+        payload: bytes,
+        *,
+        move: bool = False,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
             return
@@ -2886,41 +3197,280 @@ class CompactCloudBrowser:
         except (TypeError, ValueError, json.JSONDecodeError):
             self._notify("File transfer", "The dragged files could not be read.", False)
             return
-        self._transfer(items, move=move)
+        self._transfer(
+            items,
+            move=move,
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+        )
 
-    def accept_local_paths(self, paths: list[Path]) -> None:
+    def accept_local_paths(
+        self,
+        paths: list[Path],
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
             return
-        if not paths or self.remote is None or self._operation_pending:
+        remote, resolved_path = self._resolved_drop_destination(
+            destination_remote,
+            destination_path,
+        )
+        if not paths or remote is None or self._remote_operation_pending(remote.name):
             return
-        remote, destination_path = self.remote, self.path
-        invalidate = {(remote.name, destination_path)}
+        invalidate = {(remote.name, resolved_path)}
         self._run_operation(
             f"Uploading {len(paths)} item{'s' if len(paths) != 1 else ''}…",
-            lambda: self.backend.copy_local_paths(paths, remote, destination_path),
+            lambda: self.backend.copy_local_paths(paths, remote, resolved_path),
             invalidate_keys=invalidate,
         )
 
-    def _drop_event_supported(self, event: Any) -> bool:
-        if not self._edits_enabled() or self.remote is None or self._operation_pending:
-            return False
-        mime = event.mimeData()
-        return bool(mime.hasFormat(MIME_TYPE) or self._local_paths_from_mime(mime))
+    def _resolved_drop_destination(
+        self,
+        remote: core.RemoteInfo | None,
+        path: str | None,
+    ) -> tuple[core.RemoteInfo | None, str]:
+        destination = remote or self.remote
+        if destination is None:
+            return None, ""
+        current_path = self.path if path is None else path
+        current_path = normalize_browser_path(current_path)
+        if destination.backend_type.casefold() != "gphotos":
+            return destination, current_path
+        parts = PurePosixPath(current_path).parts
+        if len(parts) >= 2 and parts[0].casefold() == "album":
+            return destination, current_path
+        return destination, "upload"
 
-    def _handle_drop_event(self, event: Any) -> bool:
-        if not self._drop_event_supported(event):
+    def _drop_destination_path(self, event: Any) -> str:
+        try:
+            position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            item = self.tree.itemAt(position)
+            if item is not None:
+                entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+                if isinstance(entry, BrowserEntry) and entry.is_dir:
+                    return entry.path
+        except (AttributeError, RuntimeError, TypeError):
+            pass
+        return getattr(self, "path", "")
+
+    def _mime_drop_supported(self, mime: Any) -> bool:
+        if not self._edits_enabled():
             return False
+        if mime.hasFormat(MIME_TYPE):
+            return True
+        if not mime.hasUrls():
+            return False
+        for url in mime.urls():
+            with suppress(Exception):
+                if url.isLocalFile() and bool(url.toLocalFile()):
+                    return True
+        return False
+
+    def _drop_event_supported(
+        self,
+        event: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+    ) -> bool:
+        destination = destination_remote or self.remote
+        if destination is None or self._remote_operation_pending(destination.name):
+            return False
+        return self._mime_drop_supported(event.mimeData())
+
+    def _drop_action(self, event: Any) -> Any:
         mime = event.mimeData()
         if mime.hasFormat(MIME_TYPE):
-            move = event.proposedAction() == self.qt.Qt.DropAction.MoveAction
-            self.accept_drop(bytes(mime.data(MIME_TYPE)), move=move)
-            return True
-        local_paths = self._local_paths_from_mime(mime)
-        if not local_paths:
+            modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+            if modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier:
+                return self.qt.Qt.DropAction.MoveAction
+        return self.qt.Qt.DropAction.CopyAction
+
+    def _accept_drag_event(self, event: Any) -> None:
+        event.setDropAction(self._drop_action(event))
+        event.accept()
+
+    def preview_drop(
+        self,
+        event: Any,
+        widget: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> bool:
+        """Update all visual drop feedback through one shared path."""
+        if not self._drop_event_supported(event, destination_remote=destination_remote):
+            if widget is getattr(self, "tree", None):
+                self._clear_tree_drop_hover()
+            with suppress(Exception):
+                event.ignore()
             return False
-        self.accept_local_paths(local_paths)
+        if destination_path is None and widget is getattr(self, "tree", None):
+            destination_path = self._drop_destination_path(event)
+            self._set_tree_drop_hover(event)
+        self._accept_drag_event(event)
+        self._show_drop_tooltip(
+            event,
+            widget,
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+        )
         return True
+
+    def leave_drop(self) -> None:
+        self._clear_tree_drop_hover()
+        self._hide_drop_tooltip()
+
+    def perform_drop(
+        self,
+        event: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> bool:
+        """Execute an internal or external drop through one shared path."""
+        if not self._drop_event_supported(event, destination_remote=destination_remote):
+            self.leave_drop()
+            with suppress(Exception):
+                event.ignore()
+            return False
+        if destination_path is None:
+            destination_path = self._drop_destination_path(event)
+        mime = event.mimeData()
+        if mime.hasFormat(MIME_TYPE):
+            self.accept_drop(
+                bytes(mime.data(MIME_TYPE)),
+                move=self._drop_action(event) == self.qt.Qt.DropAction.MoveAction,
+                destination_remote=destination_remote,
+                destination_path=destination_path,
+            )
+        else:
+            local_paths = self._local_paths_from_mime(mime)
+            if not local_paths:
+                self.leave_drop()
+                with suppress(Exception):
+                    event.ignore()
+                return False
+            self.accept_local_paths(
+                local_paths,
+                destination_remote=destination_remote,
+                destination_path=destination_path,
+            )
+        self._accept_drag_event(event)
+        self.leave_drop()
+        return True
+
+    def _set_tree_drop_hover(self, event: Any) -> None:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return
+        item = None
+        with suppress(AttributeError, RuntimeError, TypeError):
+            position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            item = tree.itemAt(position)
+        previous = getattr(self, "_drop_hover_item", None)
+        if previous is item:
+            return
+        self._clear_tree_drop_hover()
+        if item is None:
+            return
+        self._drop_hover_item = item
+        brush = self._item_brush("#dcfce7")
+        with suppress(RuntimeError):
+            for column in range(tree.columnCount()):
+                item.setBackground(column, brush)
+            tree.viewport().update()
+
+    def _clear_tree_drop_hover(self) -> None:
+        tree = getattr(self, "tree", None)
+        item = getattr(self, "_drop_hover_item", None)
+        self._drop_hover_item = None
+        if tree is None or item is None:
+            return
+        clear_brush = self._item_brush("")
+        with suppress(RuntimeError):
+            for column in range(tree.columnCount()):
+                item.setBackground(column, clear_brush)
+        # Restore the normal selected-row brush if this was also selected.
+        self._painted_selected_items = set()
+        self._refresh_selection_backgrounds()
+        with suppress(RuntimeError):
+            tree.viewport().update()
+
+    def _drop_item_label(self, mime: Any) -> str:
+        names: list[str] = []
+        if mime.hasFormat(MIME_TYPE):
+            with suppress(Exception):
+                values = json.loads(bytes(mime.data(MIME_TYPE)).decode("utf-8"))
+                names = [str(value.get("name") or "").strip() for value in values]
+        elif mime.hasUrls():
+            for url in mime.urls():
+                with suppress(Exception):
+                    if url.isLocalFile() and url.toLocalFile():
+                        names.append(Path(url.toLocalFile()).name)
+        names = [name for name in names if name]
+        if len(names) == 1:
+            return names[0]
+        if names:
+            return f"{len(names)} items"
+        return "items"
+
+    def drop_tooltip_text(
+        self,
+        mime: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+        move: bool = False,
+    ) -> str:
+        remote, resolved_path = self._resolved_drop_destination(destination_remote, destination_path)
+        if remote is None:
+            return ""
+        item_label = self._drop_item_label(mime)
+        if remote.backend_type.casefold() == "gphotos" and resolved_path == "upload":
+            return f"Upload {item_label} to Google Photos"
+        if resolved_path:
+            folder_name = PurePosixPath(resolved_path).name
+        else:
+            folder_name = f"{remote.alias} root"
+        verb = "Move" if move else ("Copy" if mime.hasFormat(MIME_TYPE) else "Upload")
+        return f"{verb} {item_label} to {folder_name}"
+
+    def _show_drop_tooltip(
+        self,
+        event: Any,
+        widget: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
+        if destination_path is None and widget is self.tree:
+            destination_path = self._drop_destination_path(event)
+        move = self._drop_action(event) == self.qt.Qt.DropAction.MoveAction
+        text = self.drop_tooltip_text(
+            event.mimeData(),
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+            move=move,
+        )
+        if not text:
+            self._hide_drop_tooltip()
+            return
+        key = (text, id(widget))
+        if getattr(self, "_drop_tooltip_key", None) == key:
+            return
+        self._drop_tooltip_key = key
+        self.qt.QToolTip.showText(self.qt.QCursor.pos(), text, widget)
+
+    def _hide_drop_tooltip(self) -> None:
+        self._drop_tooltip_key = None
+        with suppress(Exception):
+            self.qt.QToolTip.hideText()
+
+    def _handle_drop_event(self, event: Any) -> bool:
+        return self.perform_drop(event)
 
     def _local_paths_from_mime(self, mime: Any) -> list[Path]:
         if not mime.hasUrls():
@@ -2935,28 +3485,61 @@ class CompactCloudBrowser:
                     paths.append(path)
         return paths
 
-    def _transfer(self, items: list[TransferItem], *, move: bool) -> None:
+    def _transfer(
+        self,
+        items: list[TransferItem],
+        *,
+        move: bool,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
         if not self._edits_enabled():
             self._edit_disabled()
             return
-        if not items or self.remote is None or self._operation_pending:
+        destination, resolved_path = self._resolved_drop_destination(
+            destination_remote,
+            destination_path,
+        )
+        if not items or destination is None or self._remote_operation_pending(destination.name):
             return
-        destination, destination_path = self.remote, self.path
+        if move and any(self._remote_operation_pending(item.remote_name) for item in items):
+            return
         remotes = {remote.name: remote for remote in self._remotes()}
+        if move and any(
+            source is not None
+            and source.backend_type.casefold() == "gphotos"
+            and (
+                item.is_dir
+                or len(PurePosixPath(normalize_browser_path(item.path)).parts) < 3
+                or PurePosixPath(normalize_browser_path(item.path)).parts[0].casefold() != "album"
+            )
+            for item in items
+            if (source := remotes.get(item.remote_name)) is not None
+        ):
+            self._notify(
+                "Google Photos",
+                "Media outside rclone-created albums can be copied, but not moved.",
+                False,
+            )
+            return
         verb = "Moving" if move else "Copying"
-        invalidate = {(destination.name, destination_path)}
+        invalidate = {(destination.name, resolved_path)}
         if move:
             invalidate.update((item.remote_name, parent_browser_path(item.path)) for item in items)
         self._run_operation(
             f"{verb} {len(items)} item{'s' if len(items) != 1 else ''}…",
-            lambda: self.backend.transfer(items, remotes, destination, destination_path, move=move),
+            lambda: self.backend.transfer(items, remotes, destination, resolved_path, move=move),
             clear_clipboard=move,
             invalidate_keys=invalidate,
+            remote_names={
+                destination.name,
+                *(item.remote_name for item in items if move),
+            },
         )
 
     def toggle_offline(self) -> None:
         entries = self._selected_entries()
-        if not entries or self.remote is None or self._operation_pending:
+        if not entries or self.remote is None or self._current_remote_operation_pending():
             return
         remote = self.remote
         entries = [
@@ -3005,29 +3588,66 @@ class CompactCloudBrowser:
         invalidate_keys: set[tuple[str, str]] | None = None,
         working_paths: list[str] | None = None,
         working_kind: str = "",
+        remote_names: set[str] | None = None,
     ) -> None:
-        self._operation_pending = True
-        current_key = (self.remote.name, self.path) if self.remote is not None else None
-        self._operation_cache_keys = set(invalidate_keys or ())
-        if current_key is not None:
-            self._operation_cache_keys.add(current_key)
-        working_remote = self.remote.name if self.remote is not None else ""
-        if working_remote and working_paths and working_kind:
-            self._start_working_paths(working_remote, working_paths, working_kind)
-        self.status.setText(message)
-        self._update_actions()
+        origin_remote = self.remote.name if self.remote is not None else ""
+        operation_keys = set(invalidate_keys or ())
+        owned_remotes = set(remote_names or ())
+        if not owned_remotes:
+            owned_remotes.update(key[0] for key in operation_keys)
+        if not owned_remotes and origin_remote:
+            owned_remotes.add(origin_remote)
+        if origin_remote and origin_remote in owned_remotes:
+            operation_keys.add((origin_remote, self.path))
+        operation_id = getattr(self, "_next_operation_id", 1)
+        self._next_operation_id = operation_id + 1
+        pending = getattr(self, "_pending_operations", None)
+        if pending is None:
+            pending = {}
+            self._pending_operations = pending
+        normalized_working_paths = [normalize_browser_path(path) for path in (working_paths or [])]
+        pending[operation_id] = {
+            "remote_names": owned_remotes,
+            "cache_keys": operation_keys,
+            "clear_clipboard": clear_clipboard,
+            "working_remote": origin_remote,
+            "working_paths": normalized_working_paths,
+            "working_kind": working_kind,
+        }
+        if origin_remote and normalized_working_paths and working_kind:
+            self._start_working_paths(origin_remote, normalized_working_paths, working_kind)
+        if origin_remote in owned_remotes:
+            self.status.setText(message)
+            self._update_actions()
 
         def worker() -> None:
             try:
                 action()
             except Exception as exc:
-                self._bridge.operation_finished.emit(False, str(exc))
+                self._bridge.operation_finished.emit(operation_id, False, str(exc))
                 return
-            if clear_clipboard:
-                self.clipboard = None
-            self._bridge.operation_finished.emit(True, "")
+            self._bridge.operation_finished.emit(operation_id, True, "")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _any_operation_pending(self) -> bool:
+        pending = getattr(self, "_pending_operations", None)
+        if pending is not None:
+            return bool(pending)
+        return bool(getattr(self, "_operation_pending", False))
+
+    def _remote_operation_pending(self, remote_name: str) -> bool:
+        pending = getattr(self, "_pending_operations", None)
+        if pending is None:
+            return bool(getattr(self, "_operation_pending", False))
+        return any(
+            remote_name in set(context.get("remote_names", set()))
+            for context in pending.values()
+        )
+
+    def _current_remote_operation_pending(self) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(remote and self._remote_operation_pending(remote.name))
 
     def _queue_offline_job(
         self,
@@ -3201,20 +3821,45 @@ class CompactCloudBrowser:
         self.refresh(force=True)
         self._start_offline_jobs()
 
-    def _operation_finished(self, success: bool, message: str) -> None:
-        self._operation_pending = False
-        remote_name = self.remote.name if self.remote is not None else ""
-        if remote_name:
-            self._finish_working_remote(remote_name, "download")
-        changed_keys = self._operation_cache_keys
-        self._operation_cache_keys = set()
+    def _operation_finished(self, operation_id: int, success: bool, message: str) -> None:
+        context = getattr(self, "_pending_operations", {}).pop(operation_id, None)
+        if context is None:
+            return
+        working_remote = str(context.get("working_remote") or "")
+        working_paths = [str(path) for path in context.get("working_paths", [])]
+        working_kind = str(context.get("working_kind") or "")
+        if working_remote and working_paths and working_kind:
+            self._finish_working_paths(working_remote, working_paths, working_kind)
+        if success and bool(context.get("clear_clipboard")):
+            self.clipboard = None
+        changed_keys = set(context.get("cache_keys", set()))
+        if success:
+            remotes_callback = getattr(self, "_remotes", None)
+            available_remotes = remotes_callback() if callable(remotes_callback) else []
+            photo_remote_names = {
+                remote.name
+                for remote in available_remotes
+                if remote.backend_type.casefold() == "gphotos"
+            }
+            touched_photo_remotes = photo_remote_names.intersection(
+                set(context.get("remote_names", set()))
+            )
+            if touched_photo_remotes:
+                self._folder_cache = {
+                    key: entries
+                    for key, entries in self._folder_cache.items()
+                    if key[0] not in touched_photo_remotes
+                }
         for changed_key in changed_keys:
             self._folder_cache.pop(changed_key, None)
         if not success:
             self._notify("File operation", message or "The operation failed.", False)
         self._local_files_changed()
         current_key = (self.remote.name, self.path) if self.remote is not None else None
-        self.refresh(force=current_key in changed_keys)
+        if current_key is not None and current_key in changed_keys:
+            self.refresh(force=True)
+        else:
+            self._update_actions()
 
     def _selection_changed(self) -> None:
         if getattr(self, "_rendering_entries", False):
@@ -3234,7 +3879,10 @@ class CompactCloudBrowser:
         self._painted_selected_items = selected
         if not changed:
             return
-        selected_brush = self._item_brush("#dbeafe")
+        try:
+            selected_brush = tree.palette().brush(self.qt.QPalette.ColorRole.Highlight)
+        except Exception:
+            selected_brush = self._item_brush("#3daee9")
         clear_brush = self._item_brush("")
         with suppress(Exception):
             for item in changed:
@@ -3263,8 +3911,8 @@ class CompactCloudBrowser:
             selected_entries = self._selected_entries() if hasattr(self, "tree") else []
             selected = bool(selected_entries)
             edits_enabled = self._edits_enabled()
-            operation_pending = bool(getattr(self, "_operation_pending", False))
-            drag_enabled = edits_enabled and selected
+            operation_pending = self._current_remote_operation_pending()
+            drag_enabled = bool(getattr(self, "remote", None)) and not operation_pending
             if getattr(self, "_tree_drag_enabled", None) != drag_enabled:
                 self._tree_drag_enabled = drag_enabled
                 self.tree.setDragEnabled(drag_enabled)
@@ -3276,10 +3924,23 @@ class CompactCloudBrowser:
             edits_enabled=edits_enabled,
             operation_pending=operation_pending,
         )
+        destructive_enabled = edit_action_enabled and self._can_delete_entries(selected_entries)
         for button, enabled, tooltip in (
             (getattr(self, "copy_button", None), edit_action_enabled, "Copy selected items"),
-            (getattr(self, "cut_button", None), edit_action_enabled, "Cut selected items"),
-            (getattr(self, "delete_button", None), edit_action_enabled, "Delete selected items"),
+            (
+                getattr(self, "cut_button", None),
+                destructive_enabled,
+                "Cut selected items"
+                if destructive_enabled
+                else "Google Photos media cannot be moved from this view",
+            ),
+            (
+                getattr(self, "delete_button", None),
+                destructive_enabled,
+                "Delete selected items"
+                if destructive_enabled
+                else "Google Photos can remove media only from albums created through rclone",
+            ),
         ):
             if button is None:
                 continue
@@ -3480,6 +4141,28 @@ class CompactCloudBrowser:
             return "Wait for the current file operation to finish"
         return None
 
+    def _can_delete_entries(self, entries: list[BrowserEntry]) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None or not entries:
+            return False
+        if remote.backend_type.casefold() != "gphotos":
+            return True
+        return all(
+            not entry.is_dir
+            and len(PurePosixPath(normalize_browser_path(entry.path)).parts) >= 3
+            and PurePosixPath(normalize_browser_path(entry.path)).parts[0].casefold() == "album"
+            for entry in entries
+        )
+
+    def _can_create_folder(self) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        if remote.backend_type.casefold() != "gphotos":
+            return True
+        parts = PurePosixPath(normalize_browser_path(getattr(self, "path", ""))).parts
+        return bool(parts and parts[0].casefold() == "album")
+
     def _paste_action_disabled_reason(
         self,
         *,
@@ -3524,6 +4207,33 @@ class CompactCloudBrowser:
             with suppress(Exception):
                 self.offline_button.setIcon(save_icon)
             self._update_snapshot_button_icon(getattr(self.offline_button, "isEnabled", lambda: True)())
+        self._refresh_entry_icons()
+
+    def refresh_theme_ui(self, *, refresh_palette: bool = True) -> None:
+        if self._is_disposed():
+            return
+        if refresh_palette:
+            target = getattr(self, "root", None) if self._embedded else getattr(self, "window", None)
+            refresh_widget_palette(self.qt, target)
+        with suppress(Exception):
+            self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
+        self._painted_selected_items = set()
+        self._refresh_selection_backgrounds()
+        self.refresh_theme_icons()
+
+    def _schedule_theme_icon_refresh(self) -> None:
+        if self._is_disposed() or getattr(self, "_theme_icon_refresh_pending", False):
+            return
+        timer_type = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer_type is None:
+            return
+        self._theme_icon_refresh_pending = True
+
+        def refresh() -> None:
+            self._theme_icon_refresh_pending = False
+            self.refresh_theme_icons()
+
+        timer_type.singleShot(0, refresh)
 
     def _refresh_search_icon(self, field: Any | None) -> None:
         if field is None:
@@ -3646,6 +4356,9 @@ class CompactCloudBrowser:
 
     def apply_app_settings(self, app_settings: Any) -> None:
         self._integrated_file_edits = bool(getattr(app_settings, "integrated_file_edits", False))
+        self._file_list_max_items = max(int(getattr(app_settings, "file_list_max_items", 0)), 0)
+        self._resize_to_rendered_items()
+        self._layout_changed()
         self._update_actions()
 
     def _edit_disabled(self) -> bool:
@@ -3671,10 +4384,10 @@ class CompactCloudBrowser:
             self.backend.remember_path(self.remote.name, self.path)
             self.refresh()
             return
-        if self._remote_is_mounted(self.remote):
-            local = Path(self.remote.mount_path).joinpath(*entry.path.split("/"))
-            self._open_local_file(local)
-            return
+        # Files opened from Mountlet always use the managed cache. A FUSE path
+        # can disappear while an external editor still has it open, and native
+        # Google documents are exported by rclone but are not represented
+        # reliably by every FUSE/filesystem combination.
         self._open_cached_file(entry)
 
     def _open_cached_file(self, entry: BrowserEntry) -> None:

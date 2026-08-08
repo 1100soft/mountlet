@@ -11,8 +11,10 @@
     "web:r2:upload": "node web/tools/upload-release-r2.mjs",
     "web:deploy:check": "node web/tools/check-deployment.mjs",
     "web:release:check": "node web/tools/check-release-files.mjs",
+    "web:release:test": "node web/tools/test-release-layout.mjs && node web/tools/test-release-api.mjs",
     "web:license:smoke": "node web/tools/test-license-flow.mjs",
     "web:notices": "node web/tools/manage-notices.mjs",
+    "web:notices:test": "node web/tools/test-notice-audiences.mjs",
     "docs:vars": "node web/tools/update-doc-vars.mjs"
   },
   "devDependencies": {

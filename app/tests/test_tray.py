@@ -178,6 +178,50 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._remote_browser_url(remote), "https://drive.google.com/drive/my-drive")
 
+    def test_remote_browser_url_selects_configured_google_account(self):
+        remote = core.RemoteInfo(
+            "Docs__Drive",
+            "Docs",
+            "Drive",
+            "drive",
+            "/tmp/docs",
+            extra_info={"email": "person+drive@example.com"},
+        )
+
+        self.assertEqual(
+            tray._remote_browser_url(remote),
+            "https://drive.google.com/drive/my-drive?authuser=person%2Bdrive%40example.com",
+        )
+
+    def test_remote_browser_url_opens_configured_google_drive_root(self):
+        remote = core.RemoteInfo(
+            "Team__Drive",
+            "Team",
+            "Drive",
+            "drive",
+            "/tmp/team",
+            extra_info={"team_drive": "drive/id"},
+        )
+
+        self.assertEqual(
+            tray._remote_browser_url(remote),
+            "https://drive.google.com/drive/folders/drive%2Fid",
+        )
+
+    def test_remote_browser_url_uses_email_alias_as_google_account_hint(self):
+        remote = core.RemoteInfo(
+            "person@example.com__Photos",
+            "person@example.com",
+            "Google Photos",
+            "gphotos",
+            "/tmp/photos",
+        )
+
+        self.assertEqual(
+            tray._remote_browser_url(remote),
+            "https://photos.google.com/?authuser=person%40example.com",
+        )
+
     def test_drive_usage_note_is_limited_to_google_drive_backend(self):
         drive = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/tmp/docs")
         s3 = core.RemoteInfo("Docs__S3", "Docs", "Google Drive", "s3", "/tmp/docs")
@@ -255,18 +299,47 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
         self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
 
-    def test_system_theme_uses_fusion_standard_palette_consistently(self):
+    def test_system_theme_releases_color_scheme_without_replacing_live_style(self):
         palette = object()
         style = mock.Mock()
         style.standardPalette.return_value = palette
         app = mock.Mock()
         app.style.return_value = style
-        qt = SimpleNamespace()
+        hints = mock.Mock()
+        app.styleHints.return_value = hints
+        schemes = SimpleNamespace(Unknown="unknown", Light="light", Dark="dark")
+        qt = SimpleNamespace(Qt=SimpleNamespace(ColorScheme=schemes))
 
         tray._apply_theme(qt, app, settings.THEME_SYSTEM)
 
-        app.setStyle.assert_called_once_with("Fusion")
+        hints.setColorScheme.assert_called_once_with("unknown")
+        app.setStyle.assert_not_called()
         app.setPalette.assert_called_once_with(palette)
+
+    def test_dark_theme_uses_native_dark_palette_when_available(self):
+        color = SimpleNamespace(red=lambda: 49, green=lambda: 54, blue=lambda: 59)
+        palette = mock.Mock()
+        palette.color.return_value = color
+        style = mock.Mock(standardPalette=mock.Mock(return_value=palette))
+        schemes = SimpleNamespace(Unknown="unknown", Light="light", Dark="dark")
+        hints = mock.Mock()
+        hints.colorScheme.return_value = "dark"
+        app = mock.Mock(style=mock.Mock(return_value=style), styleHints=mock.Mock(return_value=hints))
+        qt = SimpleNamespace(
+            Qt=SimpleNamespace(ColorScheme=schemes),
+            QPalette=SimpleNamespace(ColorRole=SimpleNamespace(Window="window")),
+        )
+
+        tray._apply_theme(qt, app, settings.THEME_DARK)
+
+        hints.setColorScheme.assert_called_once_with("dark")
+        app.setPalette.assert_called_once_with(palette)
+
+    def test_muted_text_style_remains_palette_dynamic(self):
+        widget = mock.Mock()
+
+        self.assertEqual(tray._muted_text_style(widget), "color: palette(mid);")
+        widget.palette.assert_not_called()
 
     def test_platform_without_driver_config_hides_config_action(self):
         platform = mock.Mock()
@@ -730,6 +803,26 @@ class TrayTests(unittest.TestCase):
         dialog._original_rclone_values = {"env_auth": ""}
 
         self.assertEqual(dialog._changed_auth_fields({"env_auth": "false"}), [])
+
+    def test_mount_config_google_account_change_does_not_require_reauthentication(self):
+        dialog = object.__new__(tray.MountConfigDialog)
+        dialog.remote = core.RemoteInfo("Docs__Drive", "Docs", "Drive", "drive", "/mnt/docs")
+        dialog._original_rclone_values = {"mountlet_google_account": "old@example.com"}
+
+        self.assertEqual(
+            dialog._changed_auth_fields({"mountlet_google_account": "new@example.com"}),
+            [],
+        )
+
+    def test_invalid_icloud_session_is_recognized_as_authentication_failure(self):
+        self.assertTrue(tray._message_might_be_auth_failure("HTTP 421: Invalid global session"))
+
+    def test_missing_icloud_adp_cookie_is_recognized_as_authentication_failure(self):
+        self.assertTrue(
+            tray._message_might_be_auth_failure(
+                "requestPCS(iclouddrive): Missing X-APPLE-WEBAUTH-TOKEN cookie"
+            )
+        )
 
     def test_mount_config_masks_protected_credentials(self):
         dialog = object.__new__(tray.MountConfigDialog)
@@ -1408,6 +1501,7 @@ class TrayTests(unittest.TestCase):
         wizard._drive_local_auth = True
         wizard._drive_client_id = "client-id"
         wizard._drive_client_secret = "client-secret"
+        wizard._google_account = "photos@example.com"
         wizard.fields = {"gphotos_read_only": mock.Mock(isChecked=mock.Mock(return_value=True))}
 
         self.assertEqual(
@@ -1425,6 +1519,10 @@ class TrayTests(unittest.TestCase):
                 "true",
                 "read_size",
                 "true",
+                "mountlet_google_account",
+                "photos@example.com",
+                "auth_url",
+                "https://accounts.google.com/o/oauth2/auth?login_hint=photos%40example.com",
             ],
         )
 
@@ -1977,6 +2075,37 @@ class TrayTests(unittest.TestCase):
         timer.setInterval.assert_called_once_with(30_000)
         timer.timeout.connect.assert_called_once_with(mountlet_window._scan_remote_cache_changes)
         timer.start.assert_called_once_with()
+
+    def test_mountlet_window_skips_automatic_google_photos_cache_polling(self):
+        photos = core.RemoteInfo(
+            "Photos",
+            "Photos",
+            "Google Photos",
+            "gphotos",
+            "/mnt/Photos",
+        )
+        docs = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/Docs")
+        backend = mock.Mock()
+        backend.managed_record_paths.return_value = ["cached.jpg"]
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.tray_app = SimpleNamespace(_quitting=False)
+        mountlet_window.file_browser = SimpleNamespace(backend=backend)
+        mountlet_window._action_pending = set()
+        mountlet_window._offline_reconcile_scheduled = set()
+        mountlet_window._offline_reconcile_running = set()
+        mountlet_window._remote_change_poll_index = 0
+        mountlet_window._remote_change_poll_offsets = {}
+        mountlet_window._start_remote_cache_check = mock.Mock(return_value=True)
+
+        with mock.patch.object(mountlet_window, "_license_locked", return_value=False):
+            with mock.patch.object(tray, "_load_visible_remotes", return_value=[photos, docs]):
+                mountlet_window._scan_remote_cache_changes()
+
+        backend.managed_record_paths.assert_called_once_with("Docs")
+        mountlet_window._start_remote_cache_check.assert_called_once_with(
+            docs,
+            ["cached.jpg"],
+        )
 
     def test_mountlet_window_disables_background_storage_checks_for_frozen_linux_x11_by_default(self):
         remote = SimpleNamespace(name="Docs")
@@ -4256,7 +4385,7 @@ class TrayTests(unittest.TestCase):
         with mock.patch.object(tray, "load_app_settings", side_effect=[old_settings, new_settings]):
             with mock.patch.object(tray, "_load_visible_remotes", return_value=[]):
                 with mock.patch.object(tray.core, "ensure_base_mount_dir", return_value=(tray.core.BASE_MOUNT_DIR, "")):
-                    with mock.patch.object(tray, "_apply_theme"):
+                    with mock.patch.object(tray, "_apply_theme") as apply_theme:
                         with mock.patch.object(tray, "AppConfigDialog", return_value=dialog):
                             window._show_app_config_editor()
 
@@ -4264,9 +4393,68 @@ class TrayTests(unittest.TestCase):
         tray_app.rebuild_menus.assert_called_once_with()
         single_shot.assert_called_once_with(0, window.show)
         window.show.assert_called_once_with()
-        window.refresh.assert_not_called()
+        window.refresh.assert_called_once_with()
+        apply_theme.assert_not_called()
         window._tray_anchor.assert_not_called()
         self.assertTrue(window._prefer_remembered_tray_anchor_once)
+
+    def test_app_settings_save_starts_disabled_and_tracks_changes(self):
+        dialog = object.__new__(tray.AppConfigDialog)
+        save_button = mock.Mock()
+        dialog.qt = SimpleNamespace(
+            QDialogButtonBox=SimpleNamespace(StandardButton=SimpleNamespace(Save="save")),
+        )
+        dialog._button_box = mock.Mock()
+        dialog._button_box.button.return_value = save_button
+        dialog._initial_values = ("multiple",)
+        dialog._current_values = mock.Mock(return_value=("multiple",))
+
+        dialog._update_dirty_state()
+        dialog._current_values.return_value = ("single",)
+        dialog._update_dirty_state()
+
+        self.assertEqual(save_button.setEnabled.call_args_list, [mock.call(False), mock.call(True)])
+
+    def test_single_window_frame_flags_are_applied_in_one_native_update(self):
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = SimpleNamespace(_is_wayland=False)
+        window._file_browser_embedded = mock.Mock(return_value=True)
+        window.is_visible = mock.Mock(return_value=True)
+        window._window_position = mock.Mock(return_value=(10, 20))
+        window.window = mock.Mock()
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                WindowType=SimpleNamespace(
+                    Window=1,
+                    FramelessWindowHint=2,
+                    WindowTitleHint=4,
+                    WindowSystemMenuHint=8,
+                    WindowMinMaxButtonsHint=16,
+                    WindowCloseButtonHint=32,
+                )
+            )
+        )
+
+        window._apply_main_window_frame_for_current_mode()
+
+        window.window.setWindowFlags.assert_called_once_with(61)
+        window.window.setWindowFlag.assert_not_called()
+        window.window.move.assert_called_once_with(10, 20)
+        window.window.show.assert_called_once_with()
+
+    def test_unchanged_app_settings_save_does_nothing(self):
+        dialog = object.__new__(tray.AppConfigDialog)
+        dialog._initial_values = ("unchanged",)
+        dialog._current_values = mock.Mock(return_value=("unchanged",))
+        dialog.dialog = mock.Mock()
+
+        with mock.patch.object(tray, "load_app_settings") as load_settings:
+            with mock.patch.object(tray, "save_app_settings") as save_settings:
+                dialog._save()
+
+        load_settings.assert_not_called()
+        save_settings.assert_not_called()
+        dialog.dialog.accept.assert_not_called()
 
     def test_layout_reposition_prefers_remembered_tray_anchor_over_cursor(self):
         class Point:
@@ -4777,6 +4965,37 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(changes, [(old_remote, new_remote)])
 
+    def test_remount_changes_ignore_google_account_web_metadata(self):
+        old_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            extra_info={"type": "drive", "token": "token"},
+        )
+        new_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            extra_info={
+                "type": "drive",
+                "token": "token",
+                "mountlet_google_account": "person@example.com",
+                "auth_url": (
+                    "https://accounts.google.com/o/oauth2/auth?login_hint=person%40example.com"
+                ),
+            },
+        )
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], {"Docs"})
+
+        self.assertEqual(changes, [])
+
     def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
         remotes = [
             core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True),
@@ -4794,6 +5013,38 @@ class TrayTests(unittest.TestCase):
 
         qt.QTimer.singleShot.assert_called_once()
         self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 1500)
+
+    def test_schedule_auto_mounts_accepts_startup_remote_snapshot(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
+        qt = mock.Mock()
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app.qt = qt
+
+        with mock.patch.object(tray, "_load_visible_remotes") as load_remotes:
+            with mock.patch.object(tray, "load_app_settings") as load_settings:
+                load_settings.return_value.auto_mount_delay = 0
+                tray_app._schedule_auto_mounts([remote])
+
+        load_remotes.assert_not_called()
+        self.assertEqual(qt.QTimer.singleShot.call_args.args[0], 0)
+
+    def test_startup_cleanup_result_reports_failures_then_schedules_auto_mount(self):
+        remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
+        tray_app = object.__new__(tray.MountletTray)
+        tray_app._quitting = False
+        tray_app._notify = mock.Mock()
+        tray_app._schedule_auto_mounts = mock.Mock()
+
+        with mock.patch("builtins.print"):
+            tray_app._handle_startup_cleanup_ready(
+                [remote],
+                ["/tmp/old"],
+                ["busy"],
+                True,
+            )
+
+        tray_app._notify.assert_called_once_with("Mount folder cleanup", "busy", success=False)
+        tray_app._schedule_auto_mounts.assert_called_once_with([remote])
 
     def test_auto_mount_delegates_to_threaded_main_window_runner(self):
         remote = core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True)
@@ -4845,6 +5096,107 @@ class TrayTests(unittest.TestCase):
 
         window.file_browser.close.assert_not_called()
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "done")
+
+    def test_remote_card_accepts_local_file_drop_at_persisted_folder(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        event = SimpleNamespace(ignore=mock.Mock())
+        browser = mock.Mock()
+        browser.backend.current_path.return_value = "Inbox/Reports"
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = browser
+        window._license_locked = mock.Mock(return_value=False)
+
+        window._remote_drop(event, remote)
+
+        browser.perform_drop.assert_called_once_with(
+            event,
+            destination_remote=remote,
+            destination_path="Inbox/Reports",
+        )
+
+    def test_remote_card_drag_hover_previews_destination_even_when_hover_was_suppressed(self):
+        remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
+        row = mock.Mock()
+        mime = SimpleNamespace()
+        event = SimpleNamespace(mimeData=lambda: mime, ignore=mock.Mock())
+        browser = mock.Mock()
+        browser.preview_drop.return_value = True
+        browser.backend.current_path.return_value = "Inbox"
+        browser.remote = None
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = browser
+        window._license_locked = mock.Mock(return_value=False)
+        window._release_remote_hover_suppression = mock.Mock()
+        window._remote_row_style = mock.Mock(return_value="style")
+        window._cancel_remote_preview = mock.Mock()
+        window._show_file_browser_for_remote = mock.Mock()
+
+        window._remote_drag_enter(event, row, remote)
+
+        window._release_remote_hover_suppression.assert_called_once_with()
+        row.setProperty.assert_called_once_with("hovered", True)
+        window._show_file_browser_for_remote.assert_called_once_with(
+            remote,
+            row,
+            focus_browser=False,
+        )
+
+    def test_remote_card_internal_drop_targets_google_photos_upload(self):
+        remote = core.RemoteInfo(
+            "Photos",
+            "Photos",
+            "Google Photos",
+            "gphotos",
+            "/mnt/photos",
+        )
+        mime = SimpleNamespace(
+            hasFormat=lambda _value: True,
+            data=lambda _value: b"[]",
+        )
+        event = SimpleNamespace(
+            mimeData=lambda: mime,
+            modifiers=lambda: 0,
+            ignore=mock.Mock(),
+        )
+        browser = mock.Mock()
+        browser.backend.current_path.return_value = "media/by-year/2026"
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = browser
+        window._license_locked = mock.Mock(return_value=False)
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                KeyboardModifier=SimpleNamespace(ShiftModifier=1),
+            )
+        )
+
+        window._remote_drop(event, remote)
+
+        browser.perform_drop.assert_called_once_with(
+            event,
+            destination_remote=remote,
+            destination_path="media/by-year/2026",
+        )
+
+    def test_google_photos_usage_field_links_to_rclone_guide(self):
+        remote = core.RemoteInfo(
+            "Photos",
+            "Photos",
+            "Google Photos",
+            "gphotos",
+            "/mnt/photos",
+        )
+        label = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+
+        window._set_status_text(
+            label,
+            core.StorageUsage("?"),
+            action_pending=False,
+            remote=remote,
+        )
+
+        self.assertIn("?faq=google-photos#faq", label.setText.call_args.args[0])
+        label.setToolTip.assert_called_once()
 
     def test_remote_action_finish_does_not_force_reopen_browser(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
@@ -4911,6 +5263,119 @@ class TrayTests(unittest.TestCase):
 
         window._run_remote_reauthentication.assert_called_once_with(remote, remount=True)
 
+    def test_reauthentication_failure_does_not_open_another_prompt(self):
+        window = object.__new__(tray.MountletWindow)
+        window.tray_app = mock.Mock()
+        window._action_pending = {"Personal__iCloud"}
+        window._reauth_in_progress = {"Personal__iCloud"}
+        window._usage_cache = {}
+        window.file_browser = mock.Mock()
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._request_refresh = mock.Mock()
+        window._offer_reauthentication_if_relevant = mock.Mock()
+        window._reconcile_offline_changes_after_mount = mock.Mock()
+
+        window._handle_action_finished(
+            "Personal__iCloud",
+            False,
+            "The saved iCloud session is no longer valid. Reauthenticate.",
+        )
+
+        window._offer_reauthentication_if_relevant.assert_not_called()
+        window._reconcile_offline_changes_after_mount.assert_not_called()
+        self.assertNotIn("Personal__iCloud", window._reauth_in_progress)
+
+    def test_reauthentication_prompt_is_suppressed_while_attempt_is_active(self):
+        window = object.__new__(tray.MountletWindow)
+        window._reauth_prompt_pending = set()
+        window._reauth_in_progress = {"Personal__iCloud"}
+        window._foreground_question = mock.Mock()
+
+        window._offer_reauthentication_if_relevant(
+            "Personal__iCloud",
+            "The saved iCloud session is no longer valid. Reauthenticate.",
+        )
+
+        window._foreground_question.assert_not_called()
+
+    def test_startup_reauthentication_is_deferred_until_window_is_visible(self):
+        window = object.__new__(tray.MountletWindow)
+        window.window = mock.Mock()
+        window.window.isVisible.return_value = False
+        window._reauth_prompt_pending = set()
+        window._reauth_in_progress = set()
+        window._deferred_reauth_requests = {}
+        window._foreground_question = mock.Mock()
+
+        window._offer_reauthentication_if_relevant(
+            "Personal__iCloud",
+            "The saved iCloud session is no longer valid. Reauthenticate.",
+        )
+
+        self.assertEqual(
+            window._deferred_reauth_requests,
+            {"Personal__iCloud": "The saved iCloud session is no longer valid. Reauthenticate."},
+        )
+        window._foreground_question.assert_not_called()
+
+    def test_deferred_reauthentication_opens_after_main_window_is_visible(self):
+        message = "The saved iCloud session is no longer valid. Reauthenticate."
+        window = object.__new__(tray.MountletWindow)
+        window.is_visible = mock.Mock(return_value=True)
+        window._deferred_reauth_requests = {"Personal__iCloud": message}
+        window._offer_reauthentication_if_relevant = mock.Mock()
+
+        window._show_deferred_reauthentication()
+
+        window._offer_reauthentication_if_relevant.assert_called_once_with("Personal__iCloud", message)
+        self.assertEqual(window._deferred_reauth_requests, {})
+
+    def test_reauthentication_question_is_raised_and_application_modal(self):
+        class Box:
+            Icon = SimpleNamespace(Question="question")
+            StandardButton = SimpleNamespace(Yes=1, No=2)
+
+            def __init__(self, parent):
+                self.parent = parent
+                self.setIcon = mock.Mock()
+                self.setWindowTitle = mock.Mock()
+                self.setText = mock.Mock()
+                self.setStandardButtons = mock.Mock()
+                self.setDefaultButton = mock.Mock()
+                self.setWindowModality = mock.Mock()
+                self.show = mock.Mock()
+                self.raise_ = mock.Mock()
+                self.activateWindow = mock.Mock()
+
+            def exec(self):
+                return self.StandardButton.Yes
+
+        boxes = []
+
+        def make_box(parent):
+            box = Box(parent)
+            boxes.append(box)
+            return box
+
+        make_box.Icon = Box.Icon
+        make_box.StandardButton = Box.StandardButton
+        timer = mock.Mock(side_effect=lambda _delay, callback: callback())
+        window = object.__new__(tray.MountletWindow)
+        window.window = object()
+        window.qt = SimpleNamespace(
+            QMessageBox=make_box,
+            Qt=SimpleNamespace(WindowModality=SimpleNamespace(ApplicationModal="application")),
+            QTimer=SimpleNamespace(singleShot=timer),
+        )
+
+        reply = window._foreground_question("Reauthenticate remote?", "Sign in again")
+
+        self.assertEqual(reply, Box.StandardButton.Yes)
+        boxes[0].setWindowModality.assert_called_once_with("application")
+        boxes[0].show.assert_called_once_with()
+        self.assertGreaterEqual(boxes[0].raise_.call_count, 2)
+        self.assertGreaterEqual(boxes[0].activateWindow.call_count, 2)
+
     def test_remote_reauthentication_retries_mount_after_reconnect(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
         window = object.__new__(tray.MountletWindow)
@@ -4927,6 +5392,73 @@ class TrayTests(unittest.TestCase):
                         window._run_remote_reauthentication(remote, remount=True)
 
         window._bridge.action_finished.emit.assert_called_once_with("Docs", True, "reauthenticated\nmounted")
+
+    def test_icloud_reauthentication_requests_code_and_continues(self):
+        remote = core.RemoteInfo(
+            "Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud"
+        )
+        step = tray.rclone_wizard.RcloneConfigStep(
+            "*icloud-state",
+            {"Name": "config_2fa", "Help": "Enter verification code"},
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._icloud_reauth_answer = mock.Mock(return_value=("123456", True))
+        window._run_icloud_reauth_step = mock.Mock()
+
+        window._handle_icloud_reauth_step(remote, True, (step, None))
+
+        window._icloud_reauth_answer.assert_called_once_with(step)
+        window._run_icloud_reauth_step.assert_called_once_with(
+            remote,
+            remount=True,
+            state="*icloud-state",
+            answer="123456",
+        )
+
+    def test_icloud_reauthentication_completion_retries_mount(self):
+        remote = core.RemoteInfo(
+            "Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud"
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._finish_icloud_reauthentication = mock.Mock()
+
+        window._handle_icloud_reauth_step(
+            remote,
+            True,
+            (tray.rclone_wizard.RcloneConfigStep("", {}), None),
+        )
+
+        window._finish_icloud_reauthentication.assert_called_once_with(remote, remount=True)
+
+    def test_icloud_reauthentication_handles_sms_phone_choice(self):
+        remote = core.RemoteInfo(
+            "Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud"
+        )
+        step = tray.rclone_wizard.RcloneConfigStep(
+            "*sms-state",
+            {
+                "Name": "config_sms_phone",
+                "Help": "Choose a trusted phone number",
+                "Exclusive": True,
+                "Examples": [{"Value": "1", "Help": "••• ••42"}],
+            },
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._icloud_reauth_answer = mock.Mock(return_value=("1", True))
+        window._run_icloud_reauth_step = mock.Mock()
+
+        window._handle_icloud_reauth_step(remote, True, (step, None))
+
+        window._icloud_reauth_answer.assert_called_once_with(step)
+        window._run_icloud_reauth_step.assert_called_once_with(
+            remote,
+            remount=True,
+            state="*sms-state",
+            answer="1",
+        )
 
     def test_remote_reauthentication_unmounts_before_reconnecting(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")
@@ -4980,6 +5512,22 @@ class TrayTests(unittest.TestCase):
         window.file_browser.invalidate.assert_has_calls([mock.call("Docs"), mock.call("Photos")], any_order=True)
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
+
+    def test_auto_mount_failure_offers_icloud_reauthentication(self):
+        remote = core.RemoteInfo("Personal__iCloud", "Personal", "iCloud", "iclouddrive", "/mnt/icloud")
+        window = object.__new__(tray.MountletWindow)
+        window._offer_reauthentication_if_relevant = mock.Mock()
+
+        with mock.patch.object(tray, "_load_visible_remotes", return_value=[remote]):
+            window._offer_bulk_reauthentication_if_relevant(
+                {remote.name},
+                ["The saved iCloud session for Personal (iCloud) is no longer valid. Reauthenticate the remote."],
+            )
+
+        window._offer_reauthentication_if_relevant.assert_called_once_with(
+            remote.name,
+            "The saved iCloud session for Personal (iCloud) is no longer valid. Reauthenticate the remote.",
+        )
 
 
 if __name__ == "__main__":

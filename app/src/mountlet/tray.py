@@ -26,12 +26,12 @@ from importlib.resources import files
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
-from . import __version__, core, license_control, notice_control, rclone_wizard, report_control
+from . import __version__, build_info, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
-from .cloud_browser_ui import CompactCloudBrowser, MIME_TYPE
+from .cloud_browser_ui import CompactCloudBrowser
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, app_state_dir, ensure_app_directories
@@ -67,7 +67,7 @@ from .settings import (
     set_start_at_login,
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
-from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -165,6 +165,7 @@ MOUNT_FLAG_OPTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Allow other users", "Let other local users access the mount when FUSE permits it.", ("--allow-other",)),
 )
 RCLONE_FIELD_TOOLTIPS = {
+    "mountlet_google_account": "Optional Google account email. Mountlet uses it to suggest the account during sign-in and when opening this remote on the web.",
     "client_id": "Google OAuth client ID used by this Drive remote. Changing it may require reconnecting the account.",
     "client_secret": "Google OAuth client secret used by this Drive remote. Changing it may require reconnecting the account.",
     "description": "Optional note stored in rclone.conf. Mountlet does not use this value.",
@@ -239,6 +240,7 @@ RCLONE_SELECT_FIELDS = {
 REMOVED_MOUNT_FLAGS = {"--allow-non-empty"}
 LOW_SPACE_BYTES = 100 * 1024 * 1024
 DRIVE_USAGE_NOTE = "Google Drive usage excludes Photos and other Google account data."
+GOOGLE_PHOTOS_LIMITATIONS_URL = "https://rclone.org/googlephotos/#limitations"
 DRIVE_CREDENTIAL_SOURCE_BUILTIN = "builtin"
 DRIVE_CREDENTIAL_SOURCE_CUSTOM = "custom"
 RCLONE_OAUTH_LOCAL_PORT = 53682
@@ -517,6 +519,7 @@ REMOTE_BROWSER_URLS = {
     "protondrive": "https://drive.proton.me/",
     "mega": "https://mega.nz/fm",
 }
+REMOUNT_IGNORED_RCLONE_FIELDS = {"mountlet_google_account", "auth_url"}
 _wizard_pending_remote_names: set[str] = set()
 
 
@@ -745,6 +748,20 @@ def _remote_title(remote: core.RemoteInfo, mounted: bool) -> str:
 
 def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
     backend_type = remote.backend_type.casefold()
+    if backend_type in {"drive", "gphotos"}:
+        url = REMOTE_BROWSER_URLS[backend_type]
+        if backend_type == "drive":
+            folder_id = (
+                remote.extra_info.get("root_folder_id", "").strip()
+                or remote.extra_info.get("team_drive", "").strip()
+            )
+            if folder_id:
+                url = f"https://drive.google.com/drive/folders/{quote(folder_id, safe='')}"
+        account = _remote_account_hint(remote)
+        if account:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{urlencode({'authuser': account})}"
+        return url
     if backend_type in REMOTE_BROWSER_URLS:
         return REMOTE_BROWSER_URLS[backend_type]
     if backend_type == "s3":
@@ -765,6 +782,18 @@ def _remote_browser_url(remote: core.RemoteInfo) -> str | None:
             remote.extra_info.get("vendor", remote.provider),
         )
     return None
+
+
+def _remote_account_hint(remote: core.RemoteInfo) -> str:
+    """Return an explicitly configured login name suitable for a web URL hint."""
+    for key in ("mountlet_google_account", "account", "email", "user", "username"):
+        value = remote.extra_info.get(key, "").strip()
+        if "@" in value and not any(character.isspace() for character in value):
+            return value
+    alias = remote.alias.strip()
+    if "@" in alias and not any(character.isspace() for character in alias):
+        return alias
+    return ""
 
 
 def _provider_color(remote: core.RemoteInfo) -> str:
@@ -794,6 +823,10 @@ def _remote_browser_tooltip(remote: core.RemoteInfo) -> str:
 
 def _is_google_drive_remote(remote: core.RemoteInfo) -> bool:
     return remote.backend_type.casefold() == "drive"
+
+
+def _is_google_photos_remote(remote: core.RemoteInfo) -> bool:
+    return remote.backend_type.casefold() == "gphotos"
 
 
 def _shortcut_hint(action: str) -> str:
@@ -955,6 +988,10 @@ def _message_might_be_auth_failure(message: str) -> bool:
         "authorization",
         "oauth",
         "login required",
+        "invalid global session",
+        "missing x-apple-webauth-token cookie",
+        "missing pcs cookies",
+        "requestpcs(",
         "reauth",
     )
     return any(indicator in text for indicator in indicators)
@@ -1128,9 +1165,14 @@ def _qt_about_line(qt: SimpleNamespace) -> str:
 
 
 def _about_text(qt: SimpleNamespace) -> str:
-    return "\n".join(
+    lines = [
+        f"Mountlet: {__version__}",
+    ]
+    build_label = build_info.visible_label()
+    if build_label:
+        lines.append(f"Build: {build_label}")
+    lines.extend(
         [
-            f"Mountlet: {__version__}",
             f"License: {license_control.status_summary()}",
             f"Python: {platform.python_version()}",
             _qt_about_line(qt),
@@ -1141,6 +1183,7 @@ def _about_text(qt: SimpleNamespace) -> str:
             f"Mount folder: {core.BASE_MOUNT_DIR}",
         ]
     )
+    return "\n".join(lines)
 
 
 def _popup_position(
@@ -2312,13 +2355,14 @@ def _path_relative_to_base(path: str | None, base_path: str) -> str:
 
 
 def _muted_text_style(widget: Any) -> str:
-    background = widget.palette().color(widget.backgroundRole())
-    luminance = _color_luminance(background)
-    color = "#cbd5e1" if luminance < 128 else "#4b5563"
-    return f"color: {color};"
+    # Palette roles are resolved whenever Qt repaints the widget, unlike a
+    # color sampled here and frozen into the stylesheet at construction time.
+    return "color: palette(mid);"
 
 
 def _field_label(key: str) -> str:
+    if key == "mountlet_google_account":
+        return "Google account"
     return key.replace("_", " ").title()
 
 
@@ -2342,8 +2386,18 @@ def _effective_window_mode(settings: AppSettings | None = None, *, is_wayland: b
 
 def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
     selected = theme if theme in {THEME_SYSTEM, THEME_LIGHT, THEME_DARK} else THEME_SYSTEM
+    requested_scheme = {
+        THEME_SYSTEM: "Unknown",
+        THEME_LIGHT: "Light",
+        THEME_DARK: "Dark",
+    }[selected]
+    scheme_applied = False
     try:
-        app.setStyle("Fusion")
+        scheme_type = qt.Qt.ColorScheme
+        scheme = getattr(scheme_type, requested_scheme)
+        hints = app.styleHints()
+        hints.setColorScheme(scheme)
+        scheme_applied = selected == THEME_SYSTEM or hints.colorScheme() == scheme
     except Exception:
         pass
     if selected == THEME_SYSTEM:
@@ -2352,6 +2406,15 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
         except Exception:
             pass
         return
+    try:
+        native_palette = app.style().standardPalette()
+        window_role = qt.QPalette.ColorRole.Window
+        native_is_dark = _color_luminance(native_palette.color(window_role)) < 128
+        if scheme_applied and native_is_dark == (selected == THEME_DARK):
+            app.setPalette(native_palette)
+            return
+    except Exception:
+        pass
     palette = qt.QPalette()
     colors = _theme_colors(selected)
     for role_name, color in colors.items():
@@ -2367,34 +2430,34 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
 def _theme_colors(theme: str) -> dict[str, str]:
     if theme == THEME_DARK:
         return {
-            "Window": "#111827",
-            "WindowText": "#f9fafb",
-            "Base": "#0b1220",
-            "AlternateBase": "#1f2937",
-            "ToolTipBase": "#111827",
-            "ToolTipText": "#f9fafb",
-            "Text": "#f9fafb",
-            "Button": "#1f2937",
-            "ButtonText": "#f9fafb",
+            "Window": "#31363b",
+            "WindowText": "#eff0f1",
+            "Base": "#232629",
+            "AlternateBase": "#31363b",
+            "ToolTipBase": "#31363b",
+            "ToolTipText": "#eff0f1",
+            "Text": "#eff0f1",
+            "Button": "#31363b",
+            "ButtonText": "#eff0f1",
             "BrightText": "#ffffff",
-            "Highlight": "#2563eb",
+            "Highlight": "#3daee9",
             "HighlightedText": "#ffffff",
-            "PlaceholderText": "#9ca3af",
+            "PlaceholderText": "#a1a9b1",
         }
     return {
-        "Window": "#f8fafc",
-        "WindowText": "#111827",
+        "Window": "#eff0f1",
+        "WindowText": "#232629",
         "Base": "#ffffff",
-        "AlternateBase": "#eef2f7",
+        "AlternateBase": "#f7f7f7",
         "ToolTipBase": "#ffffff",
-        "ToolTipText": "#111827",
-        "Text": "#111827",
-        "Button": "#f3f4f6",
-        "ButtonText": "#111827",
+        "ToolTipText": "#232629",
+        "Text": "#232629",
+        "Button": "#eff0f1",
+        "ButtonText": "#232629",
         "BrightText": "#ffffff",
-        "Highlight": "#bfdbfe",
-        "HighlightedText": "#111827",
-        "PlaceholderText": "#6b7280",
+        "Highlight": "#3daee9",
+        "HighlightedText": "#ffffff",
+        "PlaceholderText": "#707880",
     }
 
 
@@ -2530,6 +2593,8 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields: dict[str, Any] = {}
         self._layout_buttons: dict[str, Any] = {}
         self._layout_group: Any | None = None
+        self._button_box: Any | None = None
+        self._initial_values: tuple[Any, ...] = ()
         self._build()
 
     def _build(self) -> None:
@@ -2562,7 +2627,7 @@ class AppConfigDialog(_ConfigDialogBase):
             "file_manager": self._combo(
                 tuple(
                     (manager.identifier, manager.label)
-                    for manager in discover_file_managers(get_platform(), refresh=True)
+                    for manager in discover_file_managers(get_platform())
                 ),
                 app_settings.file_manager,
             ),
@@ -2577,6 +2642,9 @@ class AppConfigDialog(_ConfigDialogBase):
                 app_settings.theme,
             ),
             "integrated_file_edits": self._check(app_settings.integrated_file_edits),
+            "file_list_max_items": self._line(
+                "" if app_settings.file_list_max_items <= 0 else str(app_settings.file_list_max_items)
+            ),
             "remote_sync_interval": self._line(f"{app_settings.remote_sync_interval_seconds:g}"),
             "notice_info_display": self._combo(
                 (
@@ -2611,6 +2679,10 @@ class AppConfigDialog(_ConfigDialogBase):
         self.fields["integrated_file_edits"].setToolTip(
             "Allow direct copy, move, delete, drag-and-drop, and folder creation in Mountlet Files."
         )
+        self.fields["file_list_max_items"].setPlaceholderText("No limit")
+        self.fields["file_list_max_items"].setToolTip(
+            "Maximum file items visible at once. Leave blank or use 0 to fill the available height."
+        )
         self.fields["remote_sync_interval"].setToolTip(
             "Seconds between background checks for cloud-side changes in cached and offline files. Use 0 for manual sync only."
         )
@@ -2629,6 +2701,7 @@ class AppConfigDialog(_ConfigDialogBase):
         mounting_form.addRow(self.fields["focus_file_manager"])
 
         files_form.addRow(self.fields["integrated_file_edits"])
+        files_form.addRow("Maximum visible items", self.fields["file_list_max_items"])
         files_form.addRow("Cloud check interval", self.fields["remote_sync_interval"])
         warning = self.qt.QLabel("Mountlet file edits are direct, permanent, and not undoable.")
         warning.setWordWrap(True)
@@ -2646,10 +2719,16 @@ class AppConfigDialog(_ConfigDialogBase):
         notices_form.addRow("", critical_note)
 
         root.addWidget(tabs)
-        root.addWidget(self._buttons())
+        self._button_box = self._buttons()
+        root.addWidget(self._button_box)
+        self._initial_values = self._current_values()
+        self._connect_dirty_tracking()
+        self._update_dirty_state()
         self.dialog.adjustSize()
 
     def _save(self) -> None:
+        if self._current_values() == self._initial_values:
+            return
         current = load_app_settings()
         try:
             delay = float(self.fields["auto_mount_delay"].text().strip() or "0")
@@ -2663,6 +2742,10 @@ class AppConfigDialog(_ConfigDialogBase):
             notice_check_interval = float(self.fields["notice_check_interval"].text().strip() or "0")
         except ValueError:
             notice_check_interval = 14_400.0
+        try:
+            file_list_max_items = int(self.fields["file_list_max_items"].text().strip() or "0")
+        except ValueError:
+            file_list_max_items = 0
         if self.fields["integrated_file_edits"].isChecked() and not current.integrated_file_edits:
             self.qt.QMessageBox.warning(
                 self.dialog,
@@ -2683,6 +2766,7 @@ class AppConfigDialog(_ConfigDialogBase):
                 window_mode=self._selected_window_mode(),
                 theme=self.fields["theme"].currentData() or THEME_SYSTEM,
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
+                file_list_max_items=max(file_list_max_items, 0),
                 remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
                 notice_info_display=self.fields["notice_info_display"].currentData() or NOTICE_DISPLAY_TRAY,
                 notice_important_display=self.fields["notice_important_display"].currentData() or NOTICE_DISPLAY_DIALOG,
@@ -2696,6 +2780,45 @@ class AppConfigDialog(_ConfigDialogBase):
         _file_manager_label_cache = None
         set_start_at_login(self.fields["start_at_login"].isChecked())
         self.dialog.accept()
+
+    def _current_values(self) -> tuple[Any, ...]:
+        return (
+            self.fields["mount_base"].text().strip(),
+            self.fields["auto_mount"].isChecked(),
+            self.fields["auto_mount_delay"].text().strip(),
+            self.fields["start_at_login"].isChecked(),
+            self.fields["file_manager"].currentData() or "",
+            self.fields["open_folder_behavior"].currentData() or "",
+            self.fields["focus_file_manager"].isChecked(),
+            self._selected_window_mode(),
+            self.fields["theme"].currentData() or THEME_SYSTEM,
+            self.fields["integrated_file_edits"].isChecked(),
+            self.fields["file_list_max_items"].text().strip(),
+            self.fields["remote_sync_interval"].text().strip(),
+            self.fields["notice_info_display"].currentData() or "",
+            self.fields["notice_important_display"].currentData() or "",
+            self.fields["notice_check_interval"].text().strip(),
+            self.fields["config_sync_remote"].currentData() or "",
+            self.fields["config_sync_path"].text().strip(),
+        )
+
+    def _connect_dirty_tracking(self) -> None:
+        for field in self.fields.values():
+            for signal_name in ("textChanged", "toggled", "currentIndexChanged"):
+                signal = getattr(field, signal_name, None)
+                if signal is not None:
+                    with suppress(Exception):
+                        signal.connect(lambda *_args: self._update_dirty_state())
+        for button in self._layout_buttons.values():
+            with suppress(Exception):
+                button.toggled.connect(lambda *_args: self._update_dirty_state())
+
+    def _update_dirty_state(self) -> None:
+        if self._button_box is None:
+            return
+        with suppress(Exception):
+            save_button = self._button_box.button(self.qt.QDialogButtonBox.StandardButton.Save)
+            save_button.setEnabled(self._current_values() != self._initial_values)
 
     def _layout_mode_selector(self, current_mode: str) -> Any:
         container = self.qt.QWidget()
@@ -2894,6 +3017,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 window_mode=current.window_mode,
                 theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
+                file_list_max_items=current.file_list_max_items,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 notice_info_display=current.notice_info_display,
                 notice_important_display=current.notice_important_display,
@@ -3025,6 +3149,7 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 window_mode=current.window_mode,
                 theme=current.theme,
                 integrated_file_edits=current.integrated_file_edits,
+                file_list_max_items=current.file_list_max_items,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
                 notice_info_display=current.notice_info_display,
                 notice_important_display=current.notice_important_display,
@@ -3596,7 +3721,8 @@ class MountConfigDialog(_ConfigDialogBase):
         return [
             key
             for key in updates
-            if key in auth_fields
+            if key != "mountlet_google_account"
+            and key in auth_fields
             and not self._rclone_values_equal(key, updates[key], original.get(key, ""))
         ]
 
@@ -3636,6 +3762,7 @@ class NewRemoteWizard:
         self._state = ""
         self._drive_client_id = ""
         self._drive_client_secret = ""
+        self._google_account = ""
         self._drive_local_auth = True
         self._drive_shared_drive = False
         self._drive_team_drive = ""
@@ -3774,6 +3901,12 @@ class NewRemoteWizard:
         client_secret.setPlaceholderText("Optional")
         client_secret.setEchoMode(self.qt.QLineEdit.EchoMode.Password)
         client_secret.setToolTip("Google OAuth client secret. Use the secret that matches the client ID.")
+        google_account = self.qt.QLineEdit()
+        google_account.setPlaceholderText("Optional, for example name@gmail.com")
+        google_account.setToolTip(
+            "Used to suggest the right Google account during sign-in and when opening Drive or Photos on the web. "
+            "Enter the full address because Google Workspace accounts may not end in @gmail.com."
+        )
 
         credential_source = self.qt.QComboBox()
         existing_credentials = core.drive_oauth_credentials()
@@ -3823,7 +3956,8 @@ class NewRemoteWizard:
         connect_after_create.setToolTip("Mount the new remote as an operating-system folder after setup succeeds.")
         gphotos_help = self.qt.QLabel(
             "Google Photos is limited by Google's API. Recent rclone versions can only download media uploaded "
-            'through rclone. <a href="https://rclone.org/googlephotos/#limitations">rclone Google Photos limits</a>'
+            f'through rclone. <a href="{GOOGLE_PHOTOS_LIMITATIONS_URL}">'
+            "rclone Google Photos limits</a>"
         )
         gphotos_help.setWordWrap(True)
         gphotos_help.setOpenExternalLinks(True)
@@ -4006,6 +4140,7 @@ class NewRemoteWizard:
             "gphotos_help": gphotos_help,
             "client_id": client_id,
             "client_secret": client_secret,
+            "google_account": google_account,
             "gphotos_read_only": gphotos_read_only,
             "auth_group": auth_group,
             "local_auth": local_auth,
@@ -4051,6 +4186,7 @@ class NewRemoteWizard:
         form.addRow(gphotos_help)
         form.addRow("Google client ID", client_id)
         form.addRow("Google client secret", client_secret)
+        form.addRow("Google account", google_account)
         form.addRow("Google Photos access", gphotos_read_only)
         form.addRow("Authorization", auth_group)
         form.addRow("Drive", drive_group)
@@ -4214,11 +4350,19 @@ class NewRemoteWizard:
         self._cancelled = False
         self._drive_client_id = self.fields["client_id"].text()
         self._drive_client_secret = self.fields["client_secret"].text()
+        self._google_account = self.fields["google_account"].text().strip()
         self._drive_local_auth = self.fields["local_auth"].isChecked()
         self._drive_shared_drive = self.fields["shared_drive"].isChecked()
         self._drive_team_drive = self.fields["shared_drive_id"].text()
         self._initial_remote_path = self._initial_mount_remote_path()
         self._connect_after_create = self.fields["connect_after_create"].isChecked()
+        if self._remote_type in {"drive", "gphotos"} and self._google_account and (
+            "@" not in self._google_account or any(character.isspace() for character in self._google_account)
+        ):
+            self._warning("Add remote", "Enter the full Google account email address, or leave it blank.")
+            self._remote_name = ""
+            self._remote_alias = ""
+            return
         if self._remote_type == "drive" and self._drive_shared_drive and not self._drive_team_drive.strip():
             self._warning("Add remote", "Enter the shared drive ID before setup, or choose My Drive.")
             return
@@ -4489,6 +4633,7 @@ class NewRemoteWizard:
             self.question_frame.hide()
 
     def _initial_config_args(self) -> list[str]:
+        account_args = rclone_wizard.google_account_config_args(getattr(self, "_google_account", ""))
         if self._remote_type == "drive":
             return rclone_wizard._drive_config_args(
                 client_id=self._drive_client_id,
@@ -4496,7 +4641,7 @@ class NewRemoteWizard:
                 local_auth=self._drive_local_auth,
                 shared_drive=self._drive_shared_drive,
                 team_drive=self._drive_team_drive,
-            )
+            ) + account_args
         if self._remote_type == "gphotos":
             return [
                 "client_id",
@@ -4511,6 +4656,7 @@ class NewRemoteWizard:
                 "true" if self._drive_local_auth else "false",
                 "read_size",
                 "true",
+                *account_args,
             ]
         if self._remote_type in OAUTH_REMOTE_TYPES:
             return ["config_is_local", "true" if self._drive_local_auth else "false"]
@@ -4818,6 +4964,7 @@ class NewRemoteWizard:
             "s3_secret_access_key",
             "s3_remote_path",
             "gphotos_read_only",
+            "google_account",
             "koofr_user",
             "koofr_pass",
             "proton_user",
@@ -4878,6 +5025,7 @@ class NewRemoteWizard:
         self._set_form_row_visible(self.fields["credential_source"], is_drive)
         self._set_form_row_visible(self.fields["client_id"], is_drive or is_gphotos)
         self._set_form_row_visible(self.fields["client_secret"], is_drive or is_gphotos)
+        self._set_form_row_visible(self.fields["google_account"], is_drive or is_gphotos)
         self._set_form_row_visible(self.fields["gphotos_read_only"], is_gphotos)
         for field_name in (
             "drive_group",
@@ -5377,6 +5525,9 @@ class MountletWindow:
         self._connection_cache: dict[str, bool] = {}
         self._usage_pending: set[str] = set()
         self._action_pending: set[str] = set()
+        self._reauth_prompt_pending: set[str] = set()
+        self._reauth_in_progress: set[str] = set()
+        self._deferred_reauth_requests: dict[str, str] = {}
         self._row_widgets: dict[str, SimpleNamespace] = {}
         self._current_remote_names: list[str] = []
         self._remote_rows_layout: Any | None = None
@@ -5458,8 +5609,11 @@ class MountletWindow:
         self._bridge.notices_ready.connect(self.tray_app._handle_notices_ready)
         self._bridge.local_cache_scan_ready.connect(self._handle_local_cache_scan_ready)
         self._bridge.mount_states_ready.connect(self._handle_mount_states_ready)
+        self._bridge.icloud_reauth_step_ready.connect(self._handle_icloud_reauth_step)
+        self._bridge.startup_cleanup_ready.connect(self.tray_app._handle_startup_cleanup_ready)
         self.window = self._make_main_window()
-        self.window.setWindowTitle("Mountlet")
+        build_label = build_info.visible_label()
+        self.window.setWindowTitle(f"Mountlet - {build_label}" if build_label else "Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self.file_browser = self._create_file_browser()
         self._storage_load_slots = threading.BoundedSemaphore(2)
@@ -5533,6 +5687,8 @@ class MountletWindow:
             notices_ready = qt.Signal(object, object)
             local_cache_scan_ready = qt.Signal(object, str)
             mount_states_ready = qt.Signal(object)
+            icloud_reauth_step_ready = qt.Signal(object, object, object)
+            startup_cleanup_ready = qt.Signal(object, object, object, bool)
 
         return Bridge()
 
@@ -5862,7 +6018,10 @@ class MountletWindow:
         remotes = [
             remote
             for remote in _load_visible_remotes()
-            if remote.name not in pending and remote.name not in scheduled and remote.name not in running
+            if remote.backend_type.casefold() != "gphotos"
+            and remote.name not in pending
+            and remote.name not in scheduled
+            and remote.name not in running
         ]
         if not remotes:
             return
@@ -6064,6 +6223,8 @@ class MountletWindow:
             self._position_near_tray()
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
+        if not was_visible:
+            self._show_deferred_reauthentication()
         if not was_visible and browser_restore is not None:
             remote_name, focus_browser = browser_restore
             self._show_file_browser_for_remote_name(remote_name, focus_browser=focus_browser)
@@ -7758,6 +7919,26 @@ class MountletWindow:
         self._reverse_button = reverse_button
 
         layout.addWidget(drag_handle)
+        build_label = build_info.visible_label()
+        if build_label:
+            channel = build_info.channel()
+            status = self.qt.QLabel(build_label)
+            status.setObjectName("buildStatus")
+            status.setToolTip(
+                f"Build channel: {channel}\nBuild identifier: {build_info.identifier()}\n"
+                f"Public version: {__version__}"
+            )
+            if channel == "preview":
+                status.setStyleSheet(
+                    "QLabel#buildStatus { color: #111827; background: #fbbf24; "
+                    "border: 1px solid #d97706; padding: 3px 6px; border-radius: 3px; }"
+                )
+            else:
+                status.setStyleSheet(
+                    "QLabel#buildStatus { color: #ffffff; background: #2563eb; "
+                    "border: 1px solid #1d4ed8; padding: 3px 6px; border-radius: 3px; }"
+                )
+            layout.addWidget(status)
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
@@ -7896,7 +8077,8 @@ class MountletWindow:
             event, selected, row
         )
         frame.dragEnterEvent = lambda event, row=frame, selected=remote: self._remote_drag_enter(event, row, selected)
-        frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+        frame.dragMoveEvent = lambda event, row=frame, selected=remote: self._remote_drag_move(event, row, selected)
+        frame.dragLeaveEvent = lambda event, row=frame: self._remote_drag_leave(row)
         frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
         frame.setStyleSheet(self._remote_row_style(frame, highlighted=False))
         layout = self.qt.QGridLayout(frame)
@@ -7932,7 +8114,9 @@ class MountletWindow:
 
         status = self.qt.QLabel()
         status.setFixedWidth(120)
-        self._set_status_text(status, usage, action_pending=action_pending)
+        status.setOpenExternalLinks(True)
+        status.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
+        self._set_status_text(status, usage, action_pending=action_pending, remote=remote)
         usage_note = self._drive_usage_note_label(remote)
         status_group = self.qt.QWidget()
         status_layout = self.qt.QHBoxLayout(status_group)
@@ -8040,7 +8224,10 @@ class MountletWindow:
             row.frame.dragEnterEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_enter(
                 event, frame, selected
             )
-            row.frame.dragMoveEvent = lambda event: self._remote_drag_move(event)
+            row.frame.dragMoveEvent = lambda event, frame=row.frame, selected=remote: self._remote_drag_move(
+                event, frame, selected
+            )
+            row.frame.dragLeaveEvent = lambda event, frame=row.frame: self._remote_drag_leave(frame)
             row.frame.dropEvent = lambda event, selected=remote: self._remote_drop(event, selected)
             row.frame.focusInEvent = lambda event, frame=row.frame, selected=remote: self._remote_row_focus(
                 event, frame, selected, focused=True
@@ -8067,7 +8254,7 @@ class MountletWindow:
         row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
 
-        self._set_status_text(row.status, usage, action_pending=action_pending)
+        self._set_status_text(row.status, usage, action_pending=action_pending, remote=remote)
         row.config_button.setEnabled(not action_pending)
         if remote_changed:
             config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
@@ -8433,11 +8620,28 @@ class MountletWindow:
             return f'<span style="{_muted_text_style(self.window).removesuffix(";")}">{usage.text}</span>'
         return ""
 
-    def _set_status_text(self, label: Any, usage: core.StorageUsage, *, action_pending: bool) -> None:
+    def _set_status_text(
+        self,
+        label: Any,
+        usage: core.StorageUsage,
+        *,
+        action_pending: bool,
+        remote: core.RemoteInfo | None = None,
+    ) -> None:
         if action_pending:
             label.setText("Working...")
             label.setStyleSheet(_muted_text_style(label))
             return
+        if remote is not None and _is_google_photos_remote(remote):
+            faq_url = f"{license_control.license_site_url()}/?faq=google-photos#faq"
+            label.setStyleSheet("")
+            label.setToolTip("Open Mountlet's Google Photos notes")
+            label.setText(
+                f'<a href="{faq_url}" '
+                f'style="color:{_provider_color(remote)};">Photos guide ↗</a>'
+            )
+            return
+        label.setToolTip("")
         label.setStyleSheet("")
         label.setText(self._usage_status_html(usage, checking_usage=usage.percent is None))
 
@@ -8890,35 +9094,47 @@ class MountletWindow:
         self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
-        if self._license_locked():
-            event.ignore()
-            return
-        if not event.mimeData().hasFormat(MIME_TYPE):
-            event.ignore()
-            return
-        self._select_browser_remote(remote, row)
-        event.acceptProposedAction()
+        self._preview_remote_drop(event, row, remote)
 
-    def _remote_drag_move(self, event: Any) -> None:
+    def _remote_drag_move(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
+        self._preview_remote_drop(event, row, remote)
+
+    def _preview_remote_drop(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             event.ignore()
             return
-        if event.mimeData().hasFormat(MIME_TYPE):
-            event.acceptProposedAction()
+        destination_path = self.file_browser.backend.current_path(remote.name)
+        if not self.file_browser.preview_drop(
+            event,
+            row,
+            destination_remote=remote,
+            destination_path=destination_path,
+        ):
+            return
+        self._release_remote_hover_suppression()
+        row.setProperty("hovered", True)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+        # Drag hover must switch immediately. The normal 45 ms pointer-hover
+        # debounce can be starved by a platform drag loop.
+        if self.file_browser.remote is None or self.file_browser.remote.name != remote.name:
+            self._cancel_remote_preview()
+            self._show_file_browser_for_remote(remote, row, focus_browser=False)
+
+    def _remote_drag_leave(self, row: Any) -> None:
+        row.setProperty("hovered", False)
+        row.setStyleSheet(self._remote_row_style(row, highlighted=False))
+        self.file_browser.leave_drop()
 
     def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             event.ignore()
             return
-        if not event.mimeData().hasFormat(MIME_TYPE):
-            event.ignore()
-            return
-        modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
-        move = bool(modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier)
-        self.file_browser.remote = remote
-        self.file_browser.path = self.file_browser.backend.current_path(remote.name)
-        self.file_browser.accept_drop(bytes(event.mimeData().data(MIME_TYPE)), move=move)
-        event.acceptProposedAction()
+        destination_path = self.file_browser.backend.current_path(remote.name)
+        self.file_browser.perform_drop(
+            event,
+            destination_remote=remote,
+            destination_path=destination_path,
+        )
 
     def _display_remote_name(self, remote: core.RemoteInfo) -> str:
         return html.escape(self._truncated_remote_alias(remote))
@@ -8983,10 +9199,7 @@ class MountletWindow:
         ):
             browser_size = file_browser.root.sizeHint()
             browser_width = max(browser_size.width(), EMBEDDED_BROWSER_MIN_WIDTH)
-            browser_height = min(
-                max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT),
-                EMBEDDED_BROWSER_MAX_HEIGHT,
-            )
+            browser_height = max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT)
             width += browser_width + 6
             height = max(height, menu_height + browser_height + 16)
 
@@ -9222,6 +9435,8 @@ class MountletWindow:
     def _handle_action_finished(self, remote_name: str, success: bool, message: str) -> None:
         if self._tray_is_quitting():
             return
+        was_reauthentication = remote_name in getattr(self, "_reauth_in_progress", set())
+        getattr(self, "_reauth_in_progress", set()).discard(remote_name)
         self._action_pending.discard(remote_name)
         self._usage_cache.pop(remote_name, None)
         getattr(self, "_connection_cache", {}).pop(remote_name, None)
@@ -9229,7 +9444,8 @@ class MountletWindow:
         self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
-            self._offer_reauthentication_if_relevant(remote_name, message)
+            if not was_reauthentication:
+                self._offer_reauthentication_if_relevant(remote_name, message)
         else:
             self._reconcile_offline_changes_after_mount(remote_name)
         self.tray_app.rebuild_menus()
@@ -9238,20 +9454,72 @@ class MountletWindow:
     def _offer_reauthentication_if_relevant(self, remote_name: str, message: str) -> None:
         if not _message_might_be_auth_failure(message):
             return
+        prompt_pending = getattr(self, "_reauth_prompt_pending", set())
+        reauth_in_progress = getattr(self, "_reauth_in_progress", set())
+        if remote_name in prompt_pending or remote_name in reauth_in_progress:
+            return
+        if not self.is_visible():
+            deferred = getattr(self, "_deferred_reauth_requests", {})
+            deferred.setdefault(remote_name, message)
+            self._deferred_reauth_requests = deferred
+            return
         remote = next((candidate for candidate in _load_visible_remotes() if candidate.name == remote_name), None)
         if remote is None:
             return
-        reply = self.qt.QMessageBox.question(
-            self.window,
-            "Reauthenticate remote?",
-            f"{remote.display_name} may need to sign in again.\n\n"
-            "Reauthenticate it now and retry mounting?",
-            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
-            self.qt.QMessageBox.StandardButton.Yes,
-        )
-        if reply != self.qt.QMessageBox.StandardButton.Yes:
+        prompt_pending.add(remote_name)
+        self._reauth_prompt_pending = prompt_pending
+        try:
+            reply = self._foreground_question(
+                "Reauthenticate remote?",
+                f"{remote.display_name} may need to sign in again.\n\n"
+                "Reauthenticate it now and retry mounting?",
+            )
+            if reply != self.qt.QMessageBox.StandardButton.Yes:
+                return
+            self._run_remote_reauthentication(remote, remount=True)
+        finally:
+            prompt_pending.discard(remote_name)
+
+    def _show_deferred_reauthentication(self) -> None:
+        if not self.is_visible():
             return
-        self._run_remote_reauthentication(remote, remount=True)
+        deferred = getattr(self, "_deferred_reauth_requests", {})
+        if not deferred:
+            return
+        remote_name = next(iter(deferred))
+        message = deferred.pop(remote_name)
+        self._deferred_reauth_requests = deferred
+        self._offer_reauthentication_if_relevant(remote_name, message)
+
+    def _foreground_question(self, title: str, message: str) -> Any:
+        box_class = self.qt.QMessageBox
+        if not callable(box_class):
+            return box_class.question(
+                self.window,
+                title,
+                message,
+                box_class.StandardButton.Yes | box_class.StandardButton.No,
+                box_class.StandardButton.Yes,
+            )
+        box = box_class(self.window)
+        box.setIcon(box_class.Icon.Question)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setStandardButtons(box_class.StandardButton.Yes | box_class.StandardButton.No)
+        box.setDefaultButton(box_class.StandardButton.Yes)
+        try:
+            box.setWindowModality(self.qt.Qt.WindowModality.ApplicationModal)
+        except Exception:
+            pass
+        box.show()
+        box.raise_()
+        box.activateWindow()
+        try:
+            self.qt.QTimer.singleShot(0, box.raise_)
+            self.qt.QTimer.singleShot(0, box.activateWindow)
+        except Exception:
+            pass
+        return box.exec()
 
     def _run_remote_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
         if self._license_locked():
@@ -9259,8 +9527,16 @@ class MountletWindow:
             return
         if remote.name in self._action_pending:
             return
+        reauth_in_progress = getattr(self, "_reauth_in_progress", set())
+        if remote.name in reauth_in_progress:
+            return
+        reauth_in_progress.add(remote.name)
+        self._reauth_in_progress = reauth_in_progress
         self._action_pending.add(remote.name)
         self._request_refresh()
+        if remote.backend_type.casefold() == "iclouddrive":
+            self._run_icloud_reauth_step(remote, remount=remount)
+            return
 
         def worker() -> None:
             messages: list[str] = []
@@ -9278,6 +9554,109 @@ class MountletWindow:
                 self._bridge.action_finished.emit(remote.name, mount_success, "\n".join(messages))
                 return
             self._bridge.action_finished.emit(remote.name, success, "\n".join(messages))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_icloud_reauth_step(
+        self,
+        remote: core.RemoteInfo,
+        *,
+        remount: bool,
+        state: str = "",
+        answer: str = "",
+    ) -> None:
+        def worker() -> None:
+            try:
+                if state:
+                    step = rclone_wizard.continue_update_remote(remote.name, state, answer)
+                else:
+                    step = rclone_wizard.start_update_remote(
+                        remote.name,
+                        ["cookies", "", "trust_token", ""],
+                    )
+                error: object = None
+            except Exception as exc:
+                step = None
+                error = exc
+            self._bridge.icloud_reauth_step_ready.emit(remote, remount, (step, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_icloud_reauth_step(self, remote: object, remount: object, payload: object) -> None:
+        if self._tray_is_quitting() or not isinstance(remote, core.RemoteInfo):
+            return
+        step, error = payload if isinstance(payload, tuple) and len(payload) == 2 else (None, "Invalid response")
+        if error is not None:
+            self._bridge.action_finished.emit(remote.name, False, f"iCloud reauthentication failed: {error}")
+            return
+        if not isinstance(step, rclone_wizard.RcloneConfigStep):
+            self._bridge.action_finished.emit(remote.name, False, "iCloud reauthentication returned no result.")
+            return
+        if step.complete:
+            self._finish_icloud_reauthentication(remote, remount=bool(remount))
+            return
+        option_name = str(step.option.get("Name", ""))
+        needs_input = (
+            option_name == "config_2fa"
+            or bool(step.option.get("Required"))
+            or bool(step.option.get("Exclusive"))
+            or bool(step.option.get("Examples"))
+        )
+        if needs_input:
+            answer, accepted = self._icloud_reauth_answer(step)
+            if not accepted:
+                rclone_wizard.cancel_remote_config(remote.name)
+                self._bridge.action_finished.emit(remote.name, False, "iCloud reauthentication was cancelled.")
+                return
+        else:
+            default = step.option.get("Default", "")
+            answer = str(default).lower() if isinstance(default, bool) else str(default)
+        self._run_icloud_reauth_step(remote, remount=bool(remount), state=step.state, answer=answer)
+
+    def _icloud_reauth_answer(self, step: rclone_wizard.RcloneConfigStep) -> tuple[str, bool]:
+        dialog = self.qt.QInputDialog(self.window)
+        dialog.setWindowTitle("iCloud verification")
+        help_text = str(step.option.get("Help", "")).strip()
+        if str(step.option.get("Name", "")) == "config_2fa":
+            help_text = (
+                "Enter the verification code shown on your trusted Apple device, "
+                "or enter sms to request a text message."
+            )
+        dialog.setLabelText(help_text or "Complete the requested iCloud authentication step.")
+        dialog.setInputMode(self.qt.QInputDialog.InputMode.TextInput)
+        examples = step.option.get("Examples") or []
+        choices: dict[str, str] = {}
+        for example in examples:
+            if not isinstance(example, dict):
+                continue
+            value = str(example.get("Value", ""))
+            label = str(example.get("Help", "")).strip()
+            display = f"{label} ({value})" if label and label != value else value
+            choices[display] = value
+        if choices:
+            dialog.setComboBoxItems(list(choices))
+            dialog.setComboBoxEditable(not bool(step.option.get("Exclusive")))
+        else:
+            default = step.option.get("Default", "")
+            dialog.setTextValue(str(default) if default is not None else "")
+        try:
+            dialog.setWindowModality(self.qt.Qt.WindowModality.ApplicationModal)
+        except Exception:
+            pass
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        accepted = bool(dialog.exec())
+        entered = dialog.textValue().strip()
+        return choices.get(entered, entered), accepted
+
+    def _finish_icloud_reauthentication(self, remote: core.RemoteInfo, *, remount: bool) -> None:
+        def worker() -> None:
+            if remount:
+                success, message = core.mount_remote(remote)
+            else:
+                success, message = True, f"[*] reauthenticated {remote.display_name}."
+            self._bridge.action_finished.emit(remote.name, success, message)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -9327,6 +9706,7 @@ class MountletWindow:
         if isinstance(completed, list) and isinstance(failures, list):
             if failures:
                 self.tray_app._notify(title, "\n".join(_clean_message(item) for item in failures), success=False)
+                self._offer_bulk_reauthentication_if_relevant(pending_names, failures)
             elif completed:
                 verb = "Unmounted" if title == "Unmount all" else "Mounted"
                 self.tray_app._notify(title, f"{verb}: " + ", ".join(completed), success=True)
@@ -9334,6 +9714,28 @@ class MountletWindow:
                 self.tray_app._notify(title, "Nothing to do.", success=True)
         self.tray_app.rebuild_menus()
         self._request_refresh()
+
+    def _offer_bulk_reauthentication_if_relevant(
+        self,
+        pending_names: set[str],
+        failures: list[object],
+    ) -> None:
+        remotes = [remote for remote in _load_visible_remotes() if remote.name in pending_names]
+        for failure in failures:
+            message = str(failure)
+            if not _message_might_be_auth_failure(message):
+                continue
+            remote = next(
+                (
+                    candidate
+                    for candidate in remotes
+                    if candidate.display_name in message or candidate.name in message
+                ),
+                None,
+            )
+            if remote is not None:
+                self._offer_reauthentication_if_relevant(remote.name, message)
+                return
 
     def _reconcile_offline_changes_after_mount(self, remote_name: str) -> None:
         self._schedule_offline_reconcile(remote_name)
@@ -9993,7 +10395,8 @@ class MountletWindow:
                     dialog.dialog.close()
                 with suppress(Exception):
                     self.window.hide()
-            _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
+            if theme_changed:
+                _apply_theme(self.qt, self.tray_app.app, new_settings.theme)
             self._rebuild_file_browser_if_layout_changed(old_embedded)
             file_browser = getattr(self, "file_browser", None)
             if file_browser is not None:
@@ -10027,13 +10430,14 @@ class MountletWindow:
                 self._skip_background_refresh_once = True
             if layout_changed:
                 self._prefer_remembered_tray_anchor_once = True
+            self.refresh()
+            if layout_changed:
                 self.qt.QTimer.singleShot(0, self.show)
-            else:
-                self.refresh()
             if theme_changed:
-                # Application palette changes reach existing widgets
-                # asynchronously. Rebuild every derived icon after adoption.
-                self.qt.QTimer.singleShot(1, self._refresh_theme_icons)
+                # Palette changes reach existing widgets asynchronously. Once
+                # adopted, repolish all existing controls and rebuild visuals
+                # whose colors were derived at construction time.
+                self.qt.QTimer.singleShot(1, self._refresh_theme_ui)
             self._configuration_changed()
             self._ask_remount_for_config_changes(changes, old_base=old_base if base_changed else None)
 
@@ -10046,6 +10450,22 @@ class MountletWindow:
         file_browser = getattr(self, "file_browser", None)
         if file_browser is not None:
             file_browser.refresh_theme_icons()
+        self._update_config_sync_buttons()
+        self._update_keep_above_button()
+
+    def _refresh_theme_ui(self) -> None:
+        refresh_widget_palette(self.qt, self.window)
+        for widgets in getattr(self, "_row_widgets", {}).values():
+            with suppress(Exception):
+                widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
+        file_browser = getattr(self, "file_browser", None)
+        if file_browser is not None:
+            file_browser.refresh_theme_ui(
+                refresh_palette=not bool(getattr(file_browser, "_embedded", False)),
+            )
+        else:
+            self._refresh_theme_icons()
+        self._refresh_search_icon(getattr(self, "_global_search_field", None))
         self._update_config_sync_buttons()
         self._update_keep_above_button()
 
@@ -10104,11 +10524,13 @@ class MountletWindow:
         position = self._window_position(self.window)
         try:
             if native:
-                self.window.setWindowFlag(self.qt.Qt.WindowType.FramelessWindowHint, False)
+                window_type = self.qt.Qt.WindowType
+                flags = window_type.Window
                 for name in ("WindowTitleHint", "WindowSystemMenuHint", "WindowMinMaxButtonsHint", "WindowCloseButtonHint"):
-                    flag = getattr(self.qt.Qt.WindowType, name, None)
+                    flag = getattr(window_type, name, None)
                     if flag is not None:
-                        self.window.setWindowFlag(flag, True)
+                        flags |= flag
+                self.window.setWindowFlags(flags)
             else:
                 _apply_frameless_window_flags(self.qt, self.window, base_name="Tool")
         except Exception:
@@ -10228,7 +10650,17 @@ class MountletWindow:
                 continue
             path_changed = _absolute_path(old_remote.mount_path) != _absolute_path(new_remote.mount_path)
             flags_changed = old_remote.flags != new_remote.flags
-            rclone_changed = old_remote.extra_info != new_remote.extra_info
+            old_mount_config = {
+                key: value
+                for key, value in old_remote.extra_info.items()
+                if key not in REMOUNT_IGNORED_RCLONE_FIELDS
+            }
+            new_mount_config = {
+                key: value
+                for key, value in new_remote.extra_info.items()
+                if key not in REMOUNT_IGNORED_RCLONE_FIELDS
+            }
+            rclone_changed = old_mount_config != new_mount_config
             if path_changed or flags_changed or rclone_changed:
                 changes.append((old_remote, new_remote))
         return changes
@@ -10841,6 +11273,7 @@ class MountletWindow:
         self._usage_pending.clear()
         getattr(self, "_connection_cache", {}).clear()
         self._action_pending.clear()
+        getattr(self, "_deferred_reauth_requests", {}).clear()
         self._hide_window_stack()
         with suppress(Exception):
             self.file_browser.dispose()
@@ -10890,7 +11323,8 @@ class MountletTray:
         self.icon = self._icon()
         self.app.setWindowIcon(self.icon)
         self.tray = qt.QSystemTrayIcon(self.icon, self.app)
-        self.tray.setToolTip("Mountlet")
+        build_label = build_info.visible_label()
+        self.tray.setToolTip(f"Mountlet\n{build_label}" if build_label else "Mountlet")
         if not self._manual_context_menu:
             self.tray.setContextMenu(self.app_menu)
         self.tray.show()
@@ -10931,6 +11365,7 @@ class MountletTray:
             return 1
 
         locked = _license_locked()
+        remotes = _load_visible_remotes()
         if locked:
             self.main_window.show()
         else:
@@ -10941,9 +11376,47 @@ class MountletTray:
         self.qt.QTimer.singleShot(1200, self.main_window._maybe_prompt_crash_report)
         self.qt.QTimer.singleShot(2500, self._check_notices)
         self._reschedule_notice_timer()
-        if not locked:
-            self._schedule_auto_mounts()
+        self._start_startup_mount_cleanup(remotes, allow_auto_mount=not locked)
         return int(self.app.exec() or 0)
+
+    def _start_startup_mount_cleanup(
+        self,
+        remotes: list[core.RemoteInfo],
+        *,
+        allow_auto_mount: bool,
+    ) -> None:
+        def worker() -> None:
+            released, failures = core.cleanup_orphaned_mounts(remotes)
+            self.main_window._bridge.startup_cleanup_ready.emit(
+                remotes,
+                released,
+                failures,
+                allow_auto_mount,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_startup_cleanup_ready(
+        self,
+        remotes: object,
+        released: object,
+        failures: object,
+        allow_auto_mount: bool,
+    ) -> None:
+        if getattr(self, "_quitting", False):
+            return
+        released_paths = list(released) if isinstance(released, list) else []
+        cleanup_failures = list(failures) if isinstance(failures, list) else []
+        if released_paths:
+            print("Startup cleanup: released stale mounts: " + ", ".join(released_paths))
+        if cleanup_failures:
+            self._notify(
+                "Mount folder cleanup",
+                "\n".join(str(item) for item in cleanup_failures),
+                success=False,
+            )
+        if allow_auto_mount and isinstance(remotes, list):
+            self._schedule_auto_mounts(remotes)
 
     def _reschedule_notice_timer(self) -> None:
         with suppress(Exception):
@@ -11266,10 +11739,11 @@ class MountletTray:
             return
         self.main_window._mount_all()
 
-    def _schedule_auto_mounts(self) -> None:
+    def _schedule_auto_mounts(self, remotes: list[core.RemoteInfo] | None = None) -> None:
         if getattr(self, "_quitting", False) or _license_locked():
             return
-        remotes = [remote for remote in _load_visible_remotes() if remote.auto_mount]
+        candidates = remotes if remotes is not None else _load_visible_remotes()
+        remotes = [remote for remote in candidates if remote.auto_mount]
         if not remotes:
             return
         delay_ms = int(load_app_settings().auto_mount_delay * 1000)

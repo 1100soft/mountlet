@@ -2,21 +2,23 @@ import {readFileSync} from "node:fs";
 
 const baseUrl = String(process.argv[2] || process.env.MOUNTLET_SITE_URL || "http://127.0.0.1:8788").replace(/\/+$/, "");
 const releaseFiles = JSON.parse(readFileSync("web/release-files.json", "utf8"));
-const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || releaseFiles.downloads?.linux;
+const downloadKey = process.argv[3] || process.env.MOUNTLET_DOWNLOAD_CHECK_KEY || "linux";
 
 let health;
 let download;
 let publicKey;
 let beta;
+let releases;
 try {
   health = await readJson(`${baseUrl}/api/health`);
+  releases = await readJson(`${baseUrl}/api/releases`);
   publicKey = await readJson(`${baseUrl}/api/license/public-key`);
   const siteConfig = await fetch(`${baseUrl}/config.js`).then((response) => response.text());
   const betaKey = siteConfig.match(/publicBetaKey:\s*"([^"]+)"/)?.[1] || "";
   beta = betaKey
     ? await postJson(`${baseUrl}/api/license/validate`, {licenseKey: betaKey})
     : {ok: false, error: "Public beta key is missing from config.js."};
-  download = await fetch(`${baseUrl}/api/download/${encodeURIComponent(downloadKey)}`, {redirect: "manual"});
+  download = await fetch(`${baseUrl}/api/download/${encodeURIComponent(downloadKey)}?version=${encodeURIComponent(releases.latest)}`, {redirect: "manual"});
 } catch (error) {
   console.error(error.message || String(error));
   process.exit(1);
@@ -31,6 +33,7 @@ const result = {
   },
   download: {
     key: downloadKey,
+    version: releases.latest,
     status: download.status,
     contentType: download.headers.get("content-type") || "",
   },
@@ -46,6 +49,9 @@ if (!health.dbBound) {
 }
 if (!health.downloadsBound) {
   fail("DOWNLOADS R2 binding is missing.");
+}
+if (!releases.latest || !releases.releases?.length || releases.releases.length > Number(releaseFiles.retention || 5)) {
+  fail("The published release index is missing, empty, or exceeds its retention limit.");
 }
 if (!health.stripeConfigured) {
   fail("STRIPE_SECRET_KEY is missing.");

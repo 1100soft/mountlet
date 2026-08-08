@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS notices (
   url TEXT NOT NULL DEFAULT '',
   starts_at TEXT NOT NULL DEFAULT '',
   ends_at TEXT NOT NULL DEFAULT '',
+  audience TEXT NOT NULL DEFAULT 'preview',
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

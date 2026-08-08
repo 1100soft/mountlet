@@ -6,6 +6,7 @@ import json
 import configparser
 import subprocess
 import threading
+from urllib.parse import urlencode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ _ACTIVE_CONFIG_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 _ACTIVE_CONFIG_LOCK = threading.Lock()
 PLATFORM = get_platform()
 _BACKEND_CACHE: set[str] | None = None
+MOUNTLET_GOOGLE_ACCOUNT_KEY = "mountlet_google_account"
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/auth"
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,10 @@ def continue_drive_remote(
 
 def start_remote(remote_name: str, remote_type: str, args: list[str] | None = None) -> RcloneConfigStep:
     return _run_config_create(remote_name, remote_type, list(args or []))
+
+
+def start_update_remote(remote_name: str, args: list[str] | None = None) -> RcloneConfigStep:
+    return _run_config_update(remote_name, list(args or []))
 
 
 def open_config_in_external_terminal() -> str:
@@ -171,6 +178,13 @@ def continue_remote(
     )
 
 
+def continue_update_remote(remote_name: str, state: str, result: str) -> RcloneConfigStep:
+    return _run_config_update(
+        remote_name,
+        ["--continue", "--state", state, "--result", result],
+    )
+
+
 def cancel_remote_config(remote_name: str) -> bool:
     with _ACTIVE_CONFIG_LOCK:
         process = _ACTIVE_CONFIG_PROCESSES.pop(remote_name, None)
@@ -214,6 +228,18 @@ def _drive_config_args(
     return args
 
 
+def google_account_config_args(account: str) -> list[str]:
+    account = account.strip()
+    if not account:
+        return []
+    return [
+        MOUNTLET_GOOGLE_ACCOUNT_KEY,
+        account,
+        "auth_url",
+        f"{GOOGLE_AUTH_URL}?{urlencode({'login_hint': account})}",
+    ]
+
+
 def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> RcloneConfigStep:
     binary = find_rclone()
     if not binary:
@@ -221,6 +247,7 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
 
     config_path = default_config_path()
     _ensure_config_parent(config_path)
+    command_args, metadata = _split_mountlet_metadata(args)
     command = [
         binary,
         "--config",
@@ -230,7 +257,7 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
         remote_name,
         remote_type,
         "--non-interactive",
-        *args,
+        *command_args,
     ]
     try:
         process = subprocess.Popen(
@@ -259,9 +286,62 @@ def _run_config_create(remote_name: str, remote_type: str, args: list[str]) -> R
     if process.returncode != 0:
         raise RcloneWizardError(output.strip() or f"rclone exited with code {process.returncode}.")
 
+    if metadata:
+        _write_remote_metadata(remote_name, metadata)
+
     if not output.strip():
         return RcloneConfigStep(state="", option={})
 
+    data = _extract_json_object(output)
+    return RcloneConfigStep(
+        state=str(data.get("State", "")),
+        option=data.get("Option") or {},
+        error=str(data.get("Error", "")),
+        result=str(data.get("Result", "")),
+    )
+
+
+def _run_config_update(remote_name: str, args: list[str]) -> RcloneConfigStep:
+    binary = find_rclone()
+    if not binary:
+        raise RcloneWizardError("rclone is not installed or RCLONE_PATH is not set.")
+    config_path = default_config_path()
+    _ensure_config_parent(config_path)
+    command = [
+        binary,
+        "--config",
+        str(config_path),
+        "config",
+        "update",
+        remote_name,
+        "--non-interactive",
+        *args,
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            **process_group_options(PLATFORM),
+        )
+        with _ACTIVE_CONFIG_LOCK:
+            _ACTIVE_CONFIG_PROCESSES[remote_name] = process
+        stdout, stderr = process.communicate(timeout=RCLONE_BROWSER_AUTH_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process(process)
+        raise RcloneWizardError("iCloud authentication timed out. Request a new verification code and try again.") from exc
+    except OSError as exc:
+        raise RcloneWizardError(f"Could not run rclone: {exc}") from exc
+    finally:
+        with _ACTIVE_CONFIG_LOCK:
+            if _ACTIVE_CONFIG_PROCESSES.get(remote_name) is locals().get("process"):
+                _ACTIVE_CONFIG_PROCESSES.pop(remote_name, None)
+    output = "\n".join(part for part in (stdout, stderr) if part.strip())
+    if process.returncode != 0:
+        raise RcloneWizardError(output.strip() or f"rclone exited with code {process.returncode}.")
+    if not output.strip():
+        return RcloneConfigStep(state="", option={})
     data = _extract_json_object(output)
     return RcloneConfigStep(
         state=str(data.get("State", "")),
@@ -296,6 +376,33 @@ def _ensure_remote_config(remote_name: str, remote_type: str, args: list[str] | 
         if key.startswith("--") or key.startswith("config_"):
             continue
         section[key] = value
+    with config_path.open("w", encoding="utf-8") as handle:
+        config.write(handle)
+
+
+def _split_mountlet_metadata(args: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    command_args: list[str] = []
+    metadata: list[tuple[str, str]] = []
+    index = 0
+    while index < len(args):
+        key = args[index]
+        if key.startswith("mountlet_") and index + 1 < len(args):
+            metadata.append((key, args[index + 1]))
+            index += 2
+            continue
+        command_args.append(key)
+        index += 1
+    return command_args, metadata
+
+
+def _write_remote_metadata(remote_name: str, metadata: list[tuple[str, str]]) -> None:
+    config_path = default_config_path()
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(config_path, encoding="utf-8")
+    if not config.has_section(remote_name):
+        config.add_section(remote_name)
+    for key, value in metadata:
+        config[remote_name][key] = value
     with config_path.open("w", encoding="utf-8") as handle:
         config.write(handle)
 
@@ -336,6 +443,8 @@ __all__ = [
     "cancel_remote_config",
     "continue_drive_remote",
     "continue_remote",
+    "continue_update_remote",
     "start_drive_remote",
     "start_remote",
+    "start_update_remote",
 ]

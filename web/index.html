@@ -66,12 +66,15 @@
             <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
           </div>
         </div>
-        <div class="demo-video" aria-label="Mountlet video demonstration placeholder">
-          <div class="demo-video-content">
-            <span class="demo-play" aria-hidden="true"></span>
-            <strong>Video demonstration</strong>
-            <small>Coming soon</small>
-          </div>
+        <div class="hero-workflows" aria-label="Mountlet file access workflows">
+          <article>
+            <img src="assets/mode-managed.svg" alt="" />
+            <div><strong>Mountlet file management</strong><span>Browse, cache, search, and keep files offline.</span></div>
+          </article>
+          <article>
+            <img src="assets/mode-mounted.svg" alt="" />
+            <div><strong>Mounted folder access</strong><span>Use cloud files from desktop apps and system file managers.</span></div>
+          </article>
         </div>
       </section>
 
@@ -90,50 +93,39 @@
           <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
         </section>
 
-        <div class="platform-picker" role="tablist" aria-label="Choose platform">
-          <button class="platform-choice active" type="button" data-platform="windows" aria-selected="true">Windows</button>
-          <button class="platform-choice" type="button" data-platform="macos" aria-selected="false">macOS</button>
-          <button class="platform-choice" type="button" data-platform="linux" aria-selected="false">Linux</button>
-        </div>
-
-        <div class="download-panels">
-          <article class="download-card emphasized platform-panel active" data-platform-panel="windows">
-            <h3>Windows</h3>
-            <p>For Windows 10 and 11 on Intel or AMD 64-bit systems.</p>
-            <button class="button full primary download-button" data-download="windows">Download for Windows</button>
-            <details>
-              <summary>Lean build</summary>
-              <button class="button full secondary download-button" data-download="windowsLean">Download lean Windows build</button>
-            </details>
-          </article>
-          <article class="download-card emphasized platform-panel" data-platform-panel="macos" hidden>
-            <h3>macOS</h3>
-            <p>Choose the build matching the Mac processor.</p>
-            <button class="button full primary download-button" data-download="macos">Download for Apple silicon Mac</button>
-            <button class="button full secondary download-button" data-download="macosX64">Download for Intel Mac</button>
-            <details>
-              <summary>Lean builds</summary>
-              <p>Mounted folders require the official rclone binary; Homebrew rclone does not support mounting on macOS.</p>
-              <button class="button full secondary download-button" data-download="macosLean">Download lean Apple silicon build</button>
-              <button class="button full secondary download-button" data-download="macosLeanX64">Download lean Intel build</button>
-            </details>
-          </article>
-          <article class="download-card emphasized platform-panel" data-platform-panel="linux" hidden>
-            <h3>Linux: Debian-based</h3>
-            <p>The current <code>.deb</code> package supports Debian, Ubuntu, Linux Mint, and compatible distributions on x86-64.</p>
-            <button class="button full primary download-button" data-download="linux">Download Debian/Ubuntu package</button>
-            <details>
-              <summary>Lean Debian-based build</summary>
-              <button class="button full secondary download-button" data-download="linuxLean">Download lean Debian/Ubuntu package</button>
-            </details>
-            <div class="future-linux" aria-label="Linux packages under development">
-              <strong>Under development</strong>
-              <span>Fedora and RHEL-compatible <code>.rpm</code></span>
-              <span>Arch Linux package</span>
-              <span>openSUSE package</span>
-            </div>
-          </article>
-        </div>
+        <section class="download-card emphasized download-selector" aria-labelledby="download-selector-title">
+          <h3 id="download-selector-title">Choose platform and architecture</h3>
+          <div class="download-matrix-wrap">
+            <table class="download-matrix">
+              <colgroup><col class="platform-column" /><col class="architecture-column" /><col class="architecture-column" /></colgroup>
+              <thead><tr><th scope="col">Platform</th><th scope="col">x64</th><th scope="col">ARM64</th></tr></thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/windows.svg" alt="" /> <span>Windows</span></th>
+                  <td><label><input type="radio" name="download-target" value="windows-x64" data-download-standard="windows" data-download-lean="windowsLean" aria-label="Windows x64" checked /></label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/macos.svg" alt="" /> <span>macOS</span></th>
+                  <td><label><input type="radio" name="download-target" value="macos-x64" data-download-standard="macosX64" data-download-lean="macosLeanX64" aria-label="macOS x64" /></label></td>
+                  <td><label><input type="radio" name="download-target" value="macos-arm64" data-download-standard="macos" data-download-lean="macosLean" aria-label="macOS ARM64" /></label></td>
+                </tr>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/linux.svg" alt="" /> <span>Linux <small>Debian/Ubuntu</small></span></th>
+                  <td><label><input type="radio" name="download-target" value="linux-x64" data-download-standard="linux" data-download-lean="linuxLean" aria-label="Linux x64" /></label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="download-options">
+            <label class="release-version-choice" for="release-version">Version <select id="release-version" aria-label="Mountlet version"><option value="">Latest</option></select></label>
+            <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build (requires a compatible system rclone)</label>
+          </div>
+          <p class="download-selection-status" id="download-selection-status" role="status"></p>
+          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
+          <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
+        </section>
 
         <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
           <div class="mount-dependencies-heading">
@@ -539,6 +531,25 @@
         <details>
           <summary>Can Mountlet replace provider desktop apps?</summary>
           <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
+        </details>
+        <details id="google-photos">
+          <summary>What should I know about Google Photos?</summary>
+          <p>Google limits third-party access. Mountlet can download only media previously uploaded through rclone, and uploads accept images and videos only. Uploads use original quality and count against your Google storage. Drops outside a specific album are sent through Google Photos' upload area rather than the displayed virtual folder.</p>
+          <p>Some virtual views, especially date-based folders, can be slow. Downloaded media may differ from the original: location metadata is removed, images may use a different resolution, and videos may be compressed.</p>
+          <p>Google Photos is not a normal filesystem. Media views are read-only; rclone can remove media only from albums it created and cannot permanently delete it from Google Photos.</p>
+          <p>To conserve Google's restricted API quota, Mountlet does not recursively index Photos or poll cached Photos files for cloud changes. Folders refresh when visited; use Sync now for a manual cached-file check. Custom OAuth clients also need sufficient Photos Library API quota.</p>
+          <p>Uploads require the Google Photos Library API. Mountlet's built-in credentials are prepared for it; if you use your own Google OAuth client, enable the API before uploading. See the <a class="external-link" href="https://rclone.org/googlephotos/#limitations" target="_blank" rel="noopener">rclone Google Photos limitations</a>.</p>
+        </details>
+        <details>
+          <summary>How does Open in web choose a Google account?</summary>
+          <p>Drive and Google Photos remotes can include an optional Google account email. Mountlet passes it to Google when opening the provider website so Google can select the matching browser session.</p>
+          <p>The account must already be signed in within your default browser. This hint does not start a new Google sign-in or redirect an unsigned-in account through authentication. If no matching session exists, Google may keep the current account or show its normal account chooser.</p>
+        </details>
+        <details id="icloud-authentication">
+          <summary>Why does iCloud ask me to sign in again?</summary>
+          <p>Apple can expire an iCloud session even when the remote worked previously. If mounting detects an invalid session or missing authentication cookies, open Mountlet's main window. Mountlet shows one reauthentication prompt there and retries the mount after saving the refreshed session.</p>
+          <p>Approve the sign-in on a trusted Apple device and enter its verification code in Mountlet. To receive a text message instead, enter <code>sms</code>, select a trusted phone number when asked, then enter the SMS code.</p>
+          <p>Use your regular Apple Account password, not an app-specific password. With Advanced Data Protection, enable <strong>Access iCloud Data on the Web</strong> and approve the access request on an Apple device. Account recovery and security-key challenges must still be completed through Apple.</p>
         </details>
         <details>
           <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>

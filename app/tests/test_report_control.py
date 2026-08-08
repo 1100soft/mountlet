@@ -5,7 +5,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -72,6 +71,8 @@ class ReportControlTests(unittest.TestCase):
 
         self.assertEqual(payload["kind"], "bug")
         self.assertEqual(payload["contact"], "user@example.test")
+        self.assertEqual(payload["metadata"]["buildChannel"], "local")
+        self.assertTrue(payload["metadata"]["buildId"])
         self.assertNotIn("MNT-ABC12345-DEF67890", payload_json)
         self.assertNotIn("runtime-secret", payload_json)
         self.assertNotIn("rclone-secret", payload_json)
@@ -81,24 +82,13 @@ class ReportControlTests(unittest.TestCase):
         self.assertIn("mountlet.app", report_control.REPORT_USER_AGENT)
 
     def test_packaged_report_api_url_uses_build_info(self):
-        encodings: list[str] = []
-
-        class FakeResource:
-            def is_file(self) -> bool:
-                return True
-
-            def read_text(self, *, encoding: str) -> str:
-                encodings.append(encoding)
-                return '{"reportApiUrl":"https://wip.mountlet.pages.dev/api/report"}'
-
-        fake_files = mock.Mock(return_value=SimpleNamespace(joinpath=mock.Mock(return_value=FakeResource())))
-        with mock.patch("mountlet.report_control.files", fake_files):
+        packaged = {"reportApiUrl": "https://wip.mountlet.pages.dev/api/report"}
+        with mock.patch.object(report_control.build_info, "data", return_value=packaged):
             with mock.patch.dict("os.environ", {}, clear=True):
                 self.assertEqual(
                     report_control.report_api_url(),
                     "https://wip.mountlet.pages.dev/api/report",
                 )
-        self.assertEqual(encodings, ["utf-8"])
 
     def test_http_error_detail_extracts_nested_resend_message(self):
         detail = report_control._http_error_detail(

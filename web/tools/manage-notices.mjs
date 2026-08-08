@@ -54,7 +54,7 @@ function noticeBody(values, requireCore) {
   const body = {};
   const mappings = {
     id: "id", title: "title", message: "message", level: "level", type: "type",
-    url: "url", starts: "startsAt", ends: "endsAt", status: "status",
+    url: "url", starts: "startsAt", ends: "endsAt", status: "status", audience: "audience",
   };
   for (const [option, field] of Object.entries(mappings)) {
     if (values[option] !== undefined && values[option] !== true) body[field] = String(values[option]);
@@ -91,7 +91,10 @@ function printList(notices) {
     return;
   }
   for (const notice of notices) {
-    console.log(`${notice.id}  v${notice.version}  ${notice.status}  ${notice.level}  ${notice.title}`);
+    console.log(
+      `${notice.id}  v${notice.version}  ${notice.status}  ${notice.audience || "preview"}  `
+      + `${notice.level}  ${notice.title}`
+    );
   }
 }
 

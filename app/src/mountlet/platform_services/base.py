@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -111,6 +112,9 @@ class PlatformServices:
     def is_mounted(self, path: str) -> bool:
         return os.path.ismount(path)
 
+    def invalidate_mount_cache(self) -> None:
+        return
+
     def prepare_mount_path(self, path: str) -> OperationResult:
         mountpoint = Path(path)
         try:
@@ -121,20 +125,33 @@ class PlatformServices:
             return OperationResult(False, f"Mount folder {path} is not writable.")
         if not self.is_mounted(path):
             try:
+                self.remove_empty_mount_descendants(mountpoint)
                 if any(mountpoint.iterdir()):
                     return OperationResult(
                         False,
-                        f"Mount folder {path} is not empty. Choose an empty folder or move its files first.",
+                        f"Mount folder {path} contains local files, possibly saved after it was unmounted. "
+                        "Move those files elsewhere before mounting so they are not hidden.",
                     )
             except OSError as exc:
                 return OperationResult(False, f"Cannot inspect mount folder {path}: {exc}")
         return OperationResult(True)
 
+    def remove_empty_mount_descendants(self, mountpoint: Path) -> None:
+        """Remove empty real directories below a mount root without touching files."""
+        if not mountpoint.is_dir() or mountpoint.is_symlink():
+            return
+        for child in tuple(mountpoint.iterdir()):
+            if not child.is_dir() or child.is_symlink():
+                continue
+            self.remove_empty_mount_descendants(child)
+            with suppress(OSError):
+                child.rmdir()
+
     def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         command = shutil.which("umount")
         if not command:
             return ()
-        return ([command, path], [command, "-l", path])
+        return ([command, path],)
 
     def terminate_pid(self, pid: int) -> None:
         with suppress(OSError, ProcessLookupError):
@@ -157,8 +174,32 @@ class PlatformServices:
             if result.returncode == 0:
                 if pid:
                     self.terminate_pid(pid)
+                self.invalidate_mount_cache()
                 return OperationResult(True)
+        if pid:
+            # A stale rclone FUSE owner can keep an otherwise unused mount busy.
+            # Stop only the explicitly identified owner, then retry the normal
+            # unmount commands. Do not use a lazy detach: it can hide live work.
+            self.terminate_pid(pid)
+            time.sleep(0.2)
+            for command in commands:
+                try:
+                    result = subprocess.run(
+                        command,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if result.returncode == 0:
+                    self.invalidate_mount_cache()
+                    return OperationResult(True)
         return OperationResult(False, "The mount is busy or could not be released.")
+
+    def detach_disconnected_mount(self, path: str) -> OperationResult:
+        """Detach a proven-dead filesystem endpoint when supported."""
+        return OperationResult(False, "Disconnected mount cleanup is not supported on this platform.")
 
     def autostart_path(self, app_name: str) -> Path:
         raise NotImplementedError

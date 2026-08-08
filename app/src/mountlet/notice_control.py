@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, build_info
 from .config_tools.shared import app_state_dir, apply_permissions
 from .license_control import HTTP_TIMEOUT_SECONDS, license_site_url
 
@@ -46,7 +46,13 @@ class Notice:
 
 def fetch_notices(api_url: str | None = None) -> list[Notice]:
     endpoint = _notice_api_url(api_url)
-    query = urllib.parse.urlencode({"appVersion": __version__})
+    query = urllib.parse.urlencode(
+        {
+            "appVersion": __version__,
+            "buildChannel": build_info.channel(),
+            "buildId": build_info.identifier(),
+        }
+    )
     response = _get_json(f"{endpoint}?{query}")
     raw_notices = response.get("notices", [])
     if not isinstance(raw_notices, list):
@@ -160,6 +166,9 @@ def _notice_api_url(api_url: str | None = None) -> str:
     configured = os.environ.get(NOTICE_API_URL_ENV, "").strip()
     if configured:
         return configured.rstrip("/")
+    packaged = build_info.notice_api_url()
+    if packaged:
+        return packaged.rstrip("/")
     if api_url:
         return api_url.rstrip("/")
     return f"{license_site_url().rstrip('/')}/api/notices"
@@ -233,7 +242,7 @@ def _get_json(url: str) -> dict[str, Any]:
 
 
 def _seen_path() -> Path:
-    return app_state_dir() / "notices.json"
+    return app_state_dir() / f"notices-{build_info.channel()}.json"
 
 
 _STATE_LOCK = threading.RLock()

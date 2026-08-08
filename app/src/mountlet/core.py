@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 from contextlib import suppress
+import errno
 import json
 import os
 import shlex
@@ -11,6 +12,8 @@ import subprocess
 import tempfile
 import time
 import re
+from pathlib import Path
+from urllib.parse import urlencode
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Tuple
 
@@ -200,8 +203,8 @@ TYPE_FLAG_PRESETS: Dict[str, List[str]] = {
 DEFAULT_FLAGS = ["--vfs-cache-mode", "full"]
 COMMON_SAFE_RCLONE_KEYS = ("description",)
 SAFE_RCLONE_CONFIG_KEYS: Dict[str, Tuple[str, ...]] = {
-    "drive": ("client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
-    "gphotos": ("client_id", "client_secret", "read_only", "read_size", "include_archived", "start_year"),
+    "drive": ("mountlet_google_account", "client_id", "client_secret", "shared_with_me", "root_folder_id", "team_drive", "scope"),
+    "gphotos": ("mountlet_google_account", "client_id", "client_secret", "read_only", "read_size", "include_archived", "start_year"),
     "onedrive": ("drive_type", "region", "drive_id"),
     "webdav": ("url", "vendor", "user", "pass", "bearer_token"),
     "s3": (
@@ -274,10 +277,10 @@ def remote_name_with_alias(remote_name: str, alias: str) -> str:
     return new_alias
 
 
-def _build_mount_path(provider: str, alias: str) -> str:
+def _build_mount_path(provider: str, remote_name: str) -> str:
     provider_component = _slugify(provider.lower())
-    alias_component = _slugify(alias)
-    return os.path.join(BASE_MOUNT_DIR, provider_component, alias_component)
+    remote_component = _slugify(remote_name)
+    return os.path.join(BASE_MOUNT_DIR, provider_component, remote_component)
 
 
 def _resolve_configured_mount_path(path: str) -> str:
@@ -301,6 +304,106 @@ def _cleanup_mount_dir(path: str) -> None:
         except OSError:
             break
         parent = os.path.abspath(os.path.dirname(parent))
+
+
+def _legacy_default_mount_path(remote: RemoteInfo) -> str | None:
+    """Return the old alias-only path when this remote uses the new default path."""
+    current = Path(remote.mount_path)
+    if current.name != _slugify(remote.name):
+        return None
+    legacy = current.with_name(_slugify(remote.alias))
+    return str(legacy) if legacy != current else None
+
+
+def _cleanup_legacy_default_mount(remote: RemoteInfo) -> None:
+    legacy_path = _legacy_default_mount_path(remote)
+    if not legacy_path or PLATFORM.is_mounted(legacy_path):
+        return
+    _cleanup_mount_dir(legacy_path)
+
+
+def _orphan_mount_pid(path: str) -> int | None:
+    """Find an rclone mount process with this exact mount-point argument."""
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    normalized = os.path.normcase(os.path.abspath(path))
+    try:
+        processes = tuple(proc.iterdir())
+    except OSError:
+        return None
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        try:
+            raw = (process / "cmdline").read_bytes()
+            arguments = [item.decode(errors="replace") for item in raw.split(b"\0") if item]
+        except OSError:
+            continue
+        if len(arguments) < 3 or Path(arguments[0]).name.casefold() not in {"rclone", "rclone.exe"}:
+            continue
+        if "mount" not in arguments[1:]:
+            continue
+        if any(
+            os.path.normcase(os.path.abspath(argument)) == normalized
+            for argument in arguments[1:]
+        ):
+            return int(process.name)
+    return None
+
+
+def _mount_endpoint_disconnected(path: str) -> bool:
+    try:
+        os.stat(path)
+    except OSError as exc:
+        return exc.errno == errno.ENOTCONN
+    return False
+
+
+def cleanup_orphaned_mounts(remotes: Iterable[RemoteInfo]) -> Tuple[List[str], List[str]]:
+    """Release mounted folders in Mountlet's managed tree with no current remote.
+
+    Default Mountlet mount points are always two levels below BASE_MOUNT_DIR.
+    Limiting discovery to that shape prevents this recovery pass from touching
+    custom paths or mounts managed by other applications.
+    """
+    remotes = list(remotes)
+    for remote in remotes:
+        _cleanup_legacy_default_mount(remote)
+    configured_paths = {
+        os.path.normcase(os.path.abspath(mount_path(remote)))
+        for remote in remotes
+    }
+    released: List[str] = []
+    failures: List[str] = []
+    base = Path(BASE_MOUNT_DIR)
+    try:
+        provider_dirs = tuple(base.iterdir())
+    except OSError:
+        return released, failures
+
+    for provider_dir in provider_dirs:
+        try:
+            if provider_dir.is_symlink() or not provider_dir.is_dir():
+                continue
+            candidates = tuple(provider_dir.iterdir())
+        except OSError:
+            continue
+        for candidate in candidates:
+            path = str(candidate)
+            normalized = os.path.normcase(os.path.abspath(path))
+            if normalized in configured_paths or not PLATFORM.is_mounted(path):
+                continue
+            result = PLATFORM.unmount(path, _orphan_mount_pid(path))
+            if not result.success and _mount_endpoint_disconnected(path):
+                result = PLATFORM.detach_disconnected_mount(path)
+            if not result.success or PLATFORM.is_mounted(path):
+                detail = f" {result.detail}" if result.detail else ""
+                failures.append(f"[!] Failed to release stale mount {path}.{detail}")
+                continue
+            released.append(path)
+            _cleanup_mount_dir(path)
+    return released, failures
 
 
 def _load_config() -> configparser.ConfigParser:
@@ -378,6 +481,13 @@ def save_rclone_fields(remote_name: str, updates: Dict[str, str]) -> None:
             config[remote_name][key] = text
         else:
             config.remove_option(remote_name, key)
+        if key == "mountlet_google_account":
+            if text:
+                config[remote_name]["auth_url"] = (
+                    "https://accounts.google.com/o/oauth2/auth?" + urlencode({"login_hint": text})
+                )
+            elif "login_hint=" in config[remote_name].get("auth_url", ""):
+                config.remove_option(remote_name, "auth_url")
     _save_config(config)
 
 
@@ -488,7 +598,7 @@ def load_remotes(*, include_incomplete: bool = True) -> List[RemoteInfo]:
         mount_path = (
             _resolve_configured_mount_path(remote_settings.mount_path)
             if remote_settings and remote_settings.mount_path
-            else _build_mount_path(mount_provider, alias)
+            else _build_mount_path(mount_provider, name)
         )
         auto_mount = (
             remote_settings.auto_mount
@@ -578,6 +688,16 @@ def wait_for(remote: RemoteInfo, want_mounted: bool, timeout: float = 5.0, inter
     return False
 
 
+def _rollback_failed_mount(remote: RemoteInfo) -> None:
+    """Return a failed mount attempt to a known unmounted, clean state."""
+    if is_mounted(remote):
+        result = PLATFORM.unmount(remote.mount_path)
+        if result.success:
+            wait_for(remote, False, timeout=2.0)
+    if not is_mounted(remote):
+        _cleanup_mount_dir(remote.mount_path)
+
+
 def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: float = 10.0) -> Tuple[bool, str]:
     rclone_log.append_raw(f"$ {shlex.join(args)}\n")
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as error_output:
@@ -592,6 +712,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
             return False, f"[!] Failed to mount {remote.name}: {exc}"
 
         PIDS[remote.name] = proc.pid
+        PLATFORM.invalidate_mount_cache()
 
         if wait_for(remote, True, timeout=wait_timeout):
             rclone_log.append_raw(f"mounted {remote.name} at {remote.mount_path} (pid {proc.pid})\n")
@@ -611,6 +732,7 @@ def _launch_mount_process(remote: RemoteInfo, args: List[str], wait_timeout: flo
             exit_code = proc.poll()
 
         PIDS.pop(remote.name, None)
+        _rollback_failed_mount(remote)
         error_output.seek(0)
         detail = error_output.read().strip()
         if detail:
@@ -651,6 +773,7 @@ def mount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if not connected:
         return False, connection_message
 
+    _cleanup_legacy_default_mount(remote)
     ok, err = _ensure_mount_dir(mount_path(remote))
     if not ok:
         return False, err or "[!] Unable to prepare mount directory."
@@ -708,6 +831,28 @@ def check_remote_connection(remote: RemoteInfo, rclone_bin: str | None = None) -
     if result.returncode == 0:
         return True, f"[*] connected {remote.display_name}."
     detail = result.stderr.strip()
+    if "didn't find backend called" in detail.casefold():
+        return (
+            False,
+            f"[!] The selected rclone ({binary}) does not include the {remote.backend_type} backend needed by "
+            f"{remote.display_name}. Install Mountlet's standard bundled-rclone build or set RCLONE_PATH to a "
+            "compatible official rclone binary.",
+        )
+    icloud_auth_errors = (
+        "invalid global session",
+        "missing x-apple-webauth-token cookie",
+        "missing pcs cookies",
+    )
+    if remote.backend_type.casefold() == "iclouddrive" and any(
+        indicator in detail.casefold() for indicator in icloud_auth_errors
+    ):
+        return (
+            False,
+            f"[!] The saved iCloud session for {remote.display_name} is no longer valid. Reauthenticate the "
+            "remote with your Apple ID and two-factor authentication, then try again. If Apple still rejects "
+            "the session, sign in at iCloud.com first, confirm that Access iCloud Data on the Web is enabled, "
+            "and accept any pending account or Advanced Data Protection prompts.",
+        )
     summary = detail or f"rclone exited with code {result.returncode}."
     return False, f"[!] {remote.display_name} is not connected to {source}:\n{summary}"
 
@@ -729,8 +874,11 @@ def unmount_remote(remote: RemoteInfo) -> Tuple[bool, str]:
 
 def refresh_remote(remote: RemoteInfo) -> Tuple[bool, str]:
     if is_mounted(remote):
-        unmount_remote(remote)
-        wait_for(remote, False)
+        success, message = unmount_remote(remote)
+        if not success:
+            return False, message
+        if not wait_for(remote, False):
+            return False, f"[!] {remote.name} did not finish unmounting. Mount was not restarted."
         time.sleep(0.5)
     return mount_remote(remote)
 
@@ -835,6 +983,7 @@ __all__ = [
     "get_storage_usage",
     "get_storage_usage_details",
     "is_mounted",
+    "cleanup_orphaned_mounts",
     "load_remotes",
     "mount_all",
     "mount_remote",

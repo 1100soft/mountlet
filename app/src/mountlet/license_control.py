@@ -18,7 +18,6 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 from . import __version__
+from . import build_info
 from .config_tools.shared import app_cache_dir, app_config_dir, app_state_dir, apply_permissions, ensure_app_directories
 
 TRIAL_DAYS = 7
@@ -187,14 +187,7 @@ def is_beta_status(status: LicenseStatus | None = None) -> bool:
 
 
 def _packaged_build_info() -> dict[str, Any]:
-    try:
-        resource = files("mountlet").joinpath("mountlet-build-info.json")
-        if not resource.is_file():
-            return {}
-        data = json.loads(resource.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+    return build_info.data()
 
 
 def _packaged_license_api_url() -> str:

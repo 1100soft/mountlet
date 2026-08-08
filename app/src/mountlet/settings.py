@@ -64,6 +64,7 @@ class AppSettings:
     window_mode: str = WINDOW_MODE_MULTIPLE
     theme: str = THEME_SYSTEM
     integrated_file_edits: bool = False
+    file_list_max_items: int = 0
     remote_sync_interval_seconds: float = 30.0
     notice_info_display: str = NOTICE_DISPLAY_TRAY
     notice_important_display: str = NOTICE_DISPLAY_DIALOG
@@ -110,6 +111,8 @@ focus_file_manager = true
 # Wayland always uses single because separate tray-style windows are restricted.
 window_mode = "multiple"
 theme = "system"
+# Maximum file-list rows visible at once. 0 means use all available space.
+file_list_max_items = 0
 
 [sync]
 # Seconds between background checks for cloud-side changes in cached/offline files.
@@ -157,7 +160,7 @@ DEFAULT_MOUNTS_CONFIG = """# Per-remote Mountlet settings.
 # [remotes."Work__Drive"]
 # auto_mount = true
 # order = 10
-# mount_path = "drive/Work"
+# mount_path = "drive/Work__Drive"
 # remote_path = ""
 # mount_flags = "--read-only --dir-cache-time 10m"
 """
@@ -363,6 +366,7 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
         window_mode=_choice_value(ui.get("window_mode"), WINDOW_MODE_MULTIPLE, WINDOW_MODES),
         theme=_choice_value(ui.get("theme"), THEME_SYSTEM, THEMES),
+        file_list_max_items=max(int(_float_value(ui.get("file_list_max_items"), 0.0)), 0),
         remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
         notice_info_display=_choice_value(
             notices.get("info", notices.get("display")),
@@ -496,6 +500,8 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# Wayland always uses single because separate tray-style windows are restricted.",
             f"window_mode = {_toml_string(settings.window_mode if settings.window_mode in WINDOW_MODES else WINDOW_MODE_MULTIPLE)}",
             f"theme = {_toml_string(settings.theme if settings.theme in THEMES else THEME_SYSTEM)}",
+            "# Maximum file-list rows visible at once. 0 means use all available space.",
+            f"file_list_max_items = {max(int(settings.file_list_max_items), 0)}",
             "",
             "[sync]",
             "# Seconds between background checks for cloud-side changes in cached/offline files.",

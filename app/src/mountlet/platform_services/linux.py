@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import posixpath
+import re
 import shlex
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -12,6 +16,11 @@ from .base import OperationResult, PlatformServices, UserDirectories
 
 class LinuxPlatformServices(PlatformServices):
     system_name = "Linux"
+
+    def __init__(self) -> None:
+        self._mount_cache_lock = threading.Lock()
+        self._mount_cache_time = 0.0
+        self._mount_cache: frozenset[str] = frozenset()
 
     def user_directories(self, app_name: str) -> UserDirectories:
         home = Path.home() if not all(
@@ -30,13 +39,67 @@ class LinuxPlatformServices(PlatformServices):
     def legacy_mount_bases(self) -> tuple[Path, ...]:
         return (Path.home() / "gdrive", Path.home() / "GDrive", Path("/mnt/gdrive"))
 
+    def is_mounted(self, path: str) -> bool:
+        """Consult mountinfo so disconnected FUSE endpoints still count."""
+        target = posixpath.normpath(str(path).replace("\\", "/"))
+        return target in self._mounted_paths()
+
+    def _mounted_paths(self) -> frozenset[str]:
+        now = time.monotonic()
+        with self._mount_cache_lock:
+            if now - self._mount_cache_time < 0.1:
+                return self._mount_cache
+            try:
+                lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+            except OSError:
+                self._mount_cache_time = now
+                self._mount_cache = frozenset()
+                return self._mount_cache
+            paths: set[str] = set()
+            for line in lines:
+                fields = line.split()
+                if len(fields) < 5:
+                    continue
+                mountpoint = re.sub(
+                    r"\\([0-7]{3})",
+                    lambda match: chr(int(match.group(1), 8)),
+                    fields[4],
+                )
+                paths.add(posixpath.normpath(mountpoint))
+            self._mount_cache_time = now
+            self._mount_cache = frozenset(paths)
+            return self._mount_cache
+
+    def invalidate_mount_cache(self) -> None:
+        with self._mount_cache_lock:
+            self._mount_cache_time = 0.0
+            self._mount_cache = frozenset()
+
     def unmount_commands(self, path: str) -> tuple[list[str], ...]:
         command = shutil.which("fusermount3") or shutil.which("fusermount") or shutil.which("umount")
         if not command:
             return ()
         if Path(command).name == "umount":
-            return ([command, path], [command, "-l", path])
-        return ([command, "-u", path], [command, "-uz", path])
+            return ([command, path],)
+        return ([command, "-u", path],)
+
+    def detach_disconnected_mount(self, path: str) -> OperationResult:
+        command = shutil.which("fusermount3") or shutil.which("fusermount")
+        if not command:
+            return OperationResult(False, "No FUSE unmount command was found.")
+        try:
+            result = subprocess.run(
+                [command, "-u", "-z", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return OperationResult(False, f"Could not detach disconnected FUSE mount: {exc}")
+        if result.returncode == 0:
+            self.invalidate_mount_cache()
+            return OperationResult(True)
+        return OperationResult(False, "The disconnected FUSE mount could not be detached.")
 
     def autostart_path(self, app_name: str) -> Path:
         config = (

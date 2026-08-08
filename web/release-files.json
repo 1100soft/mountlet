@@ -1,5 +1,8 @@
 {
-  "downloads": {
+  "schemaVersion": 2,
+  "objectPrefix": "releases",
+  "retention": 5,
+  "legacyDownloads": {
     "windows": "mountlet-windows-x64-bundled-rclone-setup.exe",
     "macos": "mountlet-macos-arm64-bundled-rclone.dmg",
     "macosX64": "mountlet-macos-x64-bundled-rclone.dmg",
@@ -8,5 +11,15 @@
     "macosLean": "mountlet-macos-arm64-system-rclone.dmg",
     "macosLeanX64": "mountlet-macos-x64-system-rclone.dmg",
     "linuxLean": "mountlet-linux-x64-system-rclone.deb"
+  },
+  "artifacts": {
+    "windows": {"source": "mountlet-windows-x64-bundled-rclone-setup.exe", "platform": "windows", "architecture": "x64", "variant": "standard", "suffix": "-setup.exe"},
+    "windowsLean": {"source": "mountlet-windows-x64-system-rclone-setup.exe", "platform": "windows", "architecture": "x64", "variant": "lean", "suffix": "-setup.exe"},
+    "macos": {"source": "mountlet-macos-arm64-bundled-rclone.dmg", "platform": "macos", "architecture": "arm64", "variant": "standard", "suffix": ".dmg"},
+    "macosLean": {"source": "mountlet-macos-arm64-system-rclone.dmg", "platform": "macos", "architecture": "arm64", "variant": "lean", "suffix": ".dmg"},
+    "macosX64": {"source": "mountlet-macos-x64-bundled-rclone.dmg", "platform": "macos", "architecture": "x64", "variant": "standard", "suffix": ".dmg"},
+    "macosLeanX64": {"source": "mountlet-macos-x64-system-rclone.dmg", "platform": "macos", "architecture": "x64", "variant": "lean", "suffix": ".dmg"},
+    "linux": {"source": "mountlet-linux-x64-bundled-rclone.deb", "platform": "linux", "architecture": "x64", "variant": "standard", "suffix": ".deb"},
+    "linuxLean": {"source": "mountlet-linux-x64-system-rclone.deb", "platform": "linux", "architecture": "x64", "variant": "lean", "suffix": ".deb"}
   }
 }
