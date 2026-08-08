@@ -254,51 +254,36 @@ h3 {
   width: 100%;
 }
 
-.demo-video {
-  align-items: center;
-  aspect-ratio: 16 / 9;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--panel-soft) 86%, var(--accent) 14%), var(--panel));
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  display: flex;
-  justify-content: center;
-  min-width: 0;
-  overflow: hidden;
-  position: relative;
+.hero-workflows {
+  display: grid;
+  gap: 14px;
   width: 100%;
 }
 
-.demo-video::before {
-  background: url("assets/mountlet-icon.png") center / 42% auto no-repeat;
-  content: "";
-  inset: 0;
-  opacity: 0.08;
-  position: absolute;
-}
-
-.demo-video-content {
+.hero-workflows article {
   align-items: center;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  position: relative;
-  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 54px minmax(0, 1fr);
+  padding: 22px;
 }
 
-.demo-video-content strong {
-  font-size: 1.2rem;
-}
-
-.demo-video-content small {
-  color: var(--muted);
-}
-
-.demo-play {
-  background: var(--accent);
+.hero-workflows img {
   height: 54px;
-  mask: url("assets/ui-play.svg") center / contain no-repeat;
   width: 54px;
+}
+
+.hero-workflows strong,
+.hero-workflows span {
+  display: block;
+}
+
+.hero-workflows span {
+  color: var(--muted);
+  margin-top: 4px;
 }
 
 .note,

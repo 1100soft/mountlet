@@ -6,12 +6,18 @@ import {
   releaseObjectKey,
   removedObjectKeys,
   updatedReleaseIndex,
+  validateReleaseRef,
 } from "./release-layout.mjs";
 
 const artifact = {platform: "windows", architecture: "x64", variant: "standard", suffix: "-setup.exe"};
 assert.equal(normalizeVersion("v0.6.3"), "0.6.3");
 assert.ok(compareVersions("0.7.0", "0.6.9") > 0);
 assert.ok(compareVersions("0.7.0", "0.7.0-beta.2") > 0);
+assert.doesNotThrow(() => validateReleaseRef("0.6.4", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.6.4"}));
+assert.throws(
+  () => validateReleaseRef("0.6.4", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.6.3"}),
+  /does not match project version/
+);
 assert.equal(releaseFileName("0.6.3", artifact), "mountlet-v0.6.3-windows-x64-standard-setup.exe");
 assert.equal(
   releaseObjectKey("releases", "0.6.3", artifact),

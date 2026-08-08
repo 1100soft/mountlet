@@ -12,6 +12,7 @@ import {
   releaseObjectKey,
   removedObjectKeys,
   updatedReleaseIndex,
+  validateReleaseRef,
 } from "./release-layout.mjs";
 
 const cliArgs = process.argv.slice(2);
@@ -23,6 +24,7 @@ const positionalArgs = cliArgs.filter((arg) => !arg.startsWith("--"));
 const bucket = positionalArgs[0] || process.env.MOUNTLET_R2_BUCKET || "";
 const sourcePath = positionalArgs[1] || process.env.MOUNTLET_RELEASE_SOURCE || resolve("release-artifacts");
 const version = normalizeVersion(requestedVersion);
+validateReleaseRef(version);
 const config = readReleaseConfig();
 const retention = Math.max(1, Number(requestedRetention || config.retention || 5));
 

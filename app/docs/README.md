@@ -3,24 +3,14 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
-## Current Handoff (2026-08-03)
+## Current Release (0.6.4)
 
-### Repository state
+Version `0.6.4` consolidates the file-browser, mounting, authentication,
+window-layout, theme, website, and release-publication work completed after
+`0.6.3`. See `CHANGELOG.md` for the user-facing summary and `RELEASE.md` for
+the release procedure.
 
-- The active repository is `/home/eh930/project/apps/mountlet`, on branch
-  `wip`. Some tool sessions still start in the deprecated
-  `cloud_mount_manager` directory; do not inspect or modify that project.
-- The public app version is `0.6.3`. No new release, tag, or commit has been
-  made for the work described below.
-- The working tree is intentionally dirty. Current changes span
-  `app/README.md`, the cloud-browser backend and UI, tray/icon code, their
-  tests, and website FAQ/script content. Treat all of them as active work and
-  never reset or replace them with `HEAD` wholesale.
-- The last committed revision at handoff was `af7e3ee` (`Support direct folder
-  and remote drops`). The uncommitted work extends that drag-and-drop design
-  and contains the Google Photos fixes below.
-
-### Current implementation
+### Implementation invariants
 
 - External and internal drag-and-drop can target the displayed folder, a
   visible child folder, or a remote row. Remote-row drops use that remote's
@@ -65,8 +55,8 @@ user-facing document used for package publication.
 - `web/` is the Cloudflare Pages site and Functions backend. D1 stores license,
   device, payment, and notice data; R2 stores installers. Stripe handles test
   or production checkout, and Resend is optional for transactional mail.
-- `main`/version tags use production services at `https://mountlet.app`;
-  `wip` builds use `https://wip.mountlet.pages.dev`; local builds default to
+- Version tags use production services at `https://mountlet.app`; `wip` builds
+  use `https://wip.mountlet.pages.dev`; local builds default to
   local endpoints. Keep build-channel URLs in `build_info.py` and generated
   build metadata instead of scattering literals through UI code.
 - Production and preview require separate Cloudflare bindings and Stripe keys.
@@ -81,7 +71,7 @@ user-facing document used for package publication.
   then publishes versioned installers and a five-version release index to the
   preview or production R2 bucket.
 
-### Latest Google Photos diagnosis
+### Google Photos compatibility
 
 The reported symptoms were an apparent `/media` root, inaccessible albums,
 only `media/all` being visible, failed JPEG drops, and dim file-browser icons.
@@ -105,29 +95,11 @@ older cached folder contents, making the namespace appear truncated. The
 capability probe fixes listings and transfers without dropping the anti-stall
 batch setting on newer rclone versions.
 
-### Verification and next steps
-
-- `PYTHONPATH=src python packaging/run_tests.py`: 662 tests passed, 1 skipped.
-- Focused cloud-browser tests: 172 passed.
-- Ruff checks and Python compilation passed for the changed cloud-browser
-  files and tests. `git diff --check` passed.
-- The capability probe was exercised against both local binaries: rclone
-  `1.60.1` receives only `--gphotos-read-size=false`; rclone `1.74.3` also
-  receives `--gphotos-batch-mode=off`.
-
-The next required step is user validation from a newly built preview installer:
-
-1. Open the Photos remote root and confirm albums and all four `media` views.
-2. Drop a JPEG and confirm it reaches `upload` without an unknown-flag error.
-3. Open a specific album and confirm a drop targets that album.
-4. Switch themes with the file list already visible and confirm existing row
-   icons repaint immediately.
-
-If a Photos folder still fails, collect the selected rclone version and raw
-rclone output before changing the namespace code. Distinguish a real listing
-failure from the remembered browser path and cached fallback. Google Photos
-also has daily API quotas; quota exhaustion must remain a bounded, explicit
-error rather than trigger broad retries or background scans.
+If a Photos folder fails, collect the selected rclone version and raw rclone
+output before changing namespace code. Distinguish a real listing failure from
+the remembered browser path and cached fallback. Google Photos also has daily
+API quotas; quota exhaustion must remain a bounded, explicit error rather than
+trigger broad retries or background scans.
 
 ## Development
 
@@ -347,8 +319,8 @@ syncing the complete Mountlet config bundle.
   Apple Developer ID notarization are configured.
 
 Native packages embed a build channel and build identifier separately from the
-public version. `main` and version tags produce production builds; `wip`
-produces preview builds; other local packaging runs produce local builds.
+public version. Version tags produce production builds; `wip` produces preview
+builds; other local packaging runs produce local builds.
 Preview and local builds expose that identity in the main toolbar, window
 title, tray tooltip, and About dialog. Keep notice endpoints and local notice
 history channel-specific so preview messages cannot appear in production.

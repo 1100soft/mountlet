@@ -46,3 +46,24 @@ jobs:
         run: |
           python -m pip install build
           python -m build
+
+  web:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install website tools
+        run: npm ci
+
+      - name: Validate website release system
+        run: |
+          node --check web/script.js
+          npm run web:release:check
+          npm run web:release:test
+          npm run web:notices:test

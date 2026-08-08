@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.4 - 2026-08-08
+
+- Added direct external and internal drag-and-drop into the displayed folder,
+  child folders, and remote rows, with provider-aware Google Photos upload
+  targets and bounded background work.
+- Improved Google Photos navigation, cached date views, quota-conscious
+  behavior, compatibility with older rclone releases, and restrictions around
+  provider read-only media paths.
+- Added optional Google account hints for Drive and Photos authorization and
+  account-aware web links without forcing reauthentication or remounting.
+- Added guided iCloud reauthentication, trusted-device and SMS verification
+  flows, deferred startup prompts, and automatic mount retry after refreshed
+  credentials are saved.
+- Kept provider-qualified remote names in mounted folders while preserving
+  short aliases in the app, and added safer cleanup for stale or disconnected
+  mounts.
+- Restored live system-theme updates throughout the remote list, main window,
+  file browser, controls, file rows, and search fields.
+- Fixed live single/multiple-window mode switching, avoided unchanged settings
+  writes, improved layout responsiveness, and made file-list height adaptive
+  with an optional item limit.
+- Clarified managed file access versus mounted-folder access across the app,
+  documentation, and website, including the different edit-safety behavior.
+- Added a platform/architecture download matrix, safer macOS architecture
+  fallback, platform marks, standard/lean selection, and a single contextual
+  download action.
+- Added versioned R2 release folders, consistent installer names, a public
+  five-version catalog, version selection on the website, and automatic
+  retirement of older installer objects.
+- Separated preview and production build metadata, service endpoints, notice
+  audiences, and local client state.
+
 ## 0.6.3 - 2026-07-23
 
 - Made tray opening, remote hover and keyboard navigation, file selection, and

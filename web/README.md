@@ -127,9 +127,9 @@ The upload tool reads artifact definitions from `web/release-files.json`, finds
 the installers recursively, and publishes them under versioned keys such as:
 
 ```text
-releases/v0.6.3/windows/x64/standard/mountlet-v0.6.3-windows-x64-standard-setup.exe
-releases/v0.6.3/macos/arm64/lean/mountlet-v0.6.3-macos-arm64-lean.dmg
-releases/v0.6.3/linux/x64/standard/mountlet-v0.6.3-linux-x64-standard.deb
+releases/v0.6.4/windows/x64/standard/mountlet-v0.6.4-windows-x64-standard-setup.exe
+releases/v0.6.4/macos/arm64/lean/mountlet-v0.6.4-macos-arm64-lean.dmg
+releases/v0.6.4/linux/x64/standard/mountlet-v0.6.4-linux-x64-standard.deb
 ```
 
 It publishes `releases/index.json` only after every installer succeeds. The
@@ -245,8 +245,9 @@ access. Wrangler's Cloudflare REST upload path requires broader account-level
 R2 permissions, so Mountlet uploads release artifacts through the
 S3-compatible API instead.
 
-The `wip` branch uploads to the preview bucket. `main` and version tags upload
-to the production bucket.
+The `wip` branch uploads to the preview bucket. Version tags upload to the
+production bucket. Ordinary `main` pushes deploy the production website but do
+not duplicate the tagged native-package publication.
 
 Preview app builds also embed the preview license and report API defaults:
 `https://wip.mountlet.pages.dev/api/license` and

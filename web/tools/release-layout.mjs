@@ -28,6 +28,14 @@ export function normalizeVersion(value) {
   return version;
 }
 
+export function validateReleaseRef(version, environment = process.env) {
+  if (environment.GITHUB_REF_TYPE !== "tag") return;
+  const tagVersion = normalizeVersion(environment.GITHUB_REF_NAME || "");
+  if (tagVersion !== normalizeVersion(version)) {
+    throw new Error(`Release tag v${tagVersion} does not match project version ${normalizeVersion(version)}.`);
+  }
+}
+
 export function releaseFileName(version, artifact) {
   const normalized = normalizeVersion(version);
   return `mountlet-v${normalized}-${artifact.platform}-${artifact.architecture}-${artifact.variant}${artifact.suffix}`;

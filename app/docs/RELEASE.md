@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` inside `app/` first:
 
 ```bash
-VERSION=0.6.3
+VERSION=0.6.4
 python packaging/run_tests.py
 python -m unittest tests.test_tray
 python -m compileall -q src tests packaging
@@ -85,7 +85,7 @@ git tag -a "v$VERSION" -m "Release v$VERSION"
 git push origin main --tags
 ```
 
-Pushing a version tag starts the native package workflow. The workflow builds
+Pushing a version tag starts the production native package workflow. The workflow builds
 the installers, verifies them, and uploads versioned objects defined by
 `web/release-files.json` to the production R2 bucket. It replaces an existing
 entry for the same app version or adds a new entry and removes versions beyond
