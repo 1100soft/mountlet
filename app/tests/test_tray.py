@@ -450,7 +450,7 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(tray._effective_window_mode(config, is_wayland=False), settings.WINDOW_MODE_SINGLE)
 
-    def test_single_window_managed_size_detects_full_height_docking(self):
+    def test_single_window_geometry_alone_does_not_disable_zoom_management(self):
         class Rect:
             def __init__(self, width: int, height: int) -> None:
                 self._width = width
@@ -473,9 +473,9 @@ class TrayTests(unittest.TestCase):
         )
         screen = SimpleNamespace(availableGeometry=lambda: Rect(1200, 804))
 
-        self.assertTrue(window._single_window_size_managed(screen))
+        self.assertFalse(window._single_window_size_managed(screen))
 
-    def test_single_window_managed_size_detects_quarter_tiling(self):
+    def test_single_window_half_size_geometry_does_not_disable_zoom_management(self):
         class Rect:
             def __init__(self, width: int, height: int) -> None:
                 self._width = width
@@ -498,7 +498,14 @@ class TrayTests(unittest.TestCase):
         )
         screen = SimpleNamespace(availableGeometry=lambda: Rect(1200, 804))
 
-        self.assertTrue(window._single_window_size_managed(screen))
+        self.assertFalse(window._single_window_size_managed(screen))
+
+    def test_single_window_explicit_maximized_state_disables_zoom_management(self):
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = SimpleNamespace(_embedded=True)
+        window.window = SimpleNamespace(isMaximized=lambda: True, isFullScreen=lambda: False)
+
+        self.assertTrue(window._single_window_size_managed())
 
     def test_local_port_available_detects_bound_port(self):
         try:
@@ -3054,13 +3061,13 @@ class TrayTests(unittest.TestCase):
         mountlet_window._tray_is_quitting = mock.Mock(return_value=False)
         mountlet_window._fit_to_content = mock.Mock()
         mountlet_window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
-        mountlet_window._reposition_file_browser = mock.Mock()
+        mountlet_window._position_file_browser = mock.Mock()
 
         mountlet_window._finish_content_fit(root, scroll, container)
 
         mountlet_window._fit_to_content.assert_called_once_with(root, scroll, container)
         mountlet_window._position_window_stack_near_tray_with_stable_anchor.assert_called_once_with()
-        mountlet_window._reposition_file_browser.assert_not_called()
+        mountlet_window._position_file_browser.assert_not_called()
         self.assertFalse(mountlet_window._position_after_fit)
 
     def test_file_browser_show_settles_main_position_before_showing(self):
@@ -3130,20 +3137,78 @@ class TrayTests(unittest.TestCase):
 
         self.assertIsNone(request)
 
-    def test_reposition_file_browser_only_moves_existing_browser_window(self):
+    def test_position_file_browser_uses_one_calculated_geometry_path(self):
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x, self._y, self._width, self._height = x, y, width, height
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
         remote = SimpleNamespace(name="remote")
-        row = SimpleNamespace(frame=object())
+        row_widget = SimpleNamespace(
+            mapTo=lambda _parent, _point: SimpleNamespace(x=lambda: 8, y=lambda: 50),
+            mapToGlobal=lambda _point: SimpleNamespace(x=lambda: 708, y=lambda: 180),
+            width=lambda: 384,
+            height=lambda: 40,
+        )
+        row = SimpleNamespace(frame=row_widget)
         file_browser = mock.Mock()
         file_browser.is_visible.return_value = True
         file_browser.remote = remote
+        file_browser.window.width.return_value = 500
+        file_browser.window.height.return_value = 390
+        file_browser.window.frameGeometry.return_value = Rect(0, 0, 504, 394)
         window = object.__new__(tray.MountletWindow)
         window.file_browser = file_browser
         window._row_widgets = {"remote": row}
+        window.window = SimpleNamespace(
+            frameGeometry=lambda: Rect(100, 100, 300, 400),
+            geometry=lambda: Rect(100, 130, 300, 370),
+            screen=lambda: SimpleNamespace(availableGeometry=lambda: Rect(0, 0, 1200, 800)),
+            _mountlet_calculated_frame=(700, 100, 400, 500),
+            _mountlet_frame_client_inset=(0, 30),
+        )
+        window.qt = SimpleNamespace(
+            QPoint=lambda x, y: (x, y),
+            QApplication=SimpleNamespace(primaryScreen=lambda: None),
+        )
 
-        window._reposition_file_browser()
+        window._position_file_browser()
 
-        file_browser.reposition.assert_called_once_with(row.frame)
+        file_browser.move_to.assert_called_once_with((156, 150), main_x=700)
         file_browser.show_remote.assert_not_called()
+
+    def test_mounted_status_icon_renders_from_base_size_at_each_zoom(self):
+        rendered_sizes = []
+
+        class Icon:
+            def __init__(self, _path: str) -> None:
+                pass
+
+            def pixmap(self, width: int, height: int):
+                rendered_sizes.append((width, height))
+                return SimpleNamespace(isNull=lambda: False)
+
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(QIcon=Icon)
+        window.tray_app = SimpleNamespace(ui_zoom=SimpleNamespace(steps=3))
+
+        with mock.patch.object(tray, "_packaged_asset_path", return_value="status-mounted.svg"):
+            window._status_asset_pixmap("status-mounted.svg")
+            window.tray_app.ui_zoom.steps = -2
+            window._status_asset_pixmap("status-mounted.svg")
+
+        self.assertEqual(rendered_sizes, [(29, 29), (18, 18)])
 
     def test_resize_anchored_preserves_only_explicit_right_tray_edge(self):
         class Rect:
@@ -3174,6 +3239,7 @@ class TrayTests(unittest.TestCase):
         moves: list[tuple[int, int]] = []
         window = object.__new__(tray.MountletWindow)
         window._last_tray_edge = "right"
+        window._last_tray_anchor = SimpleNamespace(x=lambda: 1192, y=lambda: 640)
         window.window = SimpleNamespace(
             resize=mock.Mock(),
             frameGeometry=lambda: Rect(880, 500, 320, 280),
@@ -3185,7 +3251,96 @@ class TrayTests(unittest.TestCase):
 
         window._resize_anchored(260, 200, screen)
 
-        self.assertEqual(moves, [(941, 500)])
+        self.assertEqual(moves, [(940, 540)])
+
+    def test_main_frame_origin_is_converted_with_native_frame_margins(self):
+        moves: list[tuple[int, int]] = []
+        margins = SimpleNamespace(
+            left=lambda: 17,
+            top=lambda: 6,
+            right=lambda: 0,
+            bottom=lambda: 0,
+        )
+        window = object.__new__(tray.MountletWindow)
+        window.window = SimpleNamespace(
+            windowHandle=lambda: SimpleNamespace(frameMargins=lambda: margins),
+            move=lambda x, y: moves.append((x, y)),
+        )
+
+        window._move_main_frame(4282, 229)
+
+        self.assertEqual(moves, [(4299, 235)])
+
+    def test_initial_position_caches_edge_until_screen_work_area_changes(self):
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self._x, self._y, self._width, self._height = x, y, width, height
+
+            def x(self) -> int:
+                return self._x
+
+            def y(self) -> int:
+                return self._y
+
+            def width(self) -> int:
+                return self._width
+
+            def height(self) -> int:
+                return self._height
+
+            def left(self) -> int:
+                return self._x
+
+            def right(self) -> int:
+                return self._x + self._width
+
+            def top(self) -> int:
+                return self._y
+
+            def bottom(self) -> int:
+                return self._y + self._height
+
+        window = object.__new__(tray.MountletWindow)
+        window._last_tray_edge = None
+        window._last_tray_edge_signature = None
+        window._tray_edge_for_point = mock.Mock(side_effect=["right", "top"])
+        available = Rect(0, 0, 1200, 760)
+        screen = SimpleNamespace(geometry=lambda: Rect(0, 0, 1200, 800))
+        right_anchor = SimpleNamespace(x=lambda: 1190, y=lambda: 400)
+        other_anchor = SimpleNamespace(x=lambda: 600, y=lambda: 10)
+
+        self.assertEqual(window._cache_tray_edge(right_anchor, available, screen), "right")
+        self.assertEqual(window._cache_tray_edge(other_anchor, available, screen), "right")
+        moved_available = Rect(0, 40, 1200, 760)
+        self.assertEqual(window._cache_tray_edge(other_anchor, moved_available, screen), "top")
+        self.assertEqual(window._tray_edge_for_point.call_count, 2)
+
+    def test_final_zoom_fit_uses_cached_edge_without_tray_reposition(self):
+        root, scroll, container = object(), object(), object()
+        screen = object()
+        window = object.__new__(tray.MountletWindow)
+        window._application_zoom_generation = 4
+        window._content_fit_widgets = (root, scroll, container)
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._invalidate_widget_tree = mock.Mock()
+        window.window = SimpleNamespace(screen=lambda: screen)
+        window.qt = SimpleNamespace(
+            QApplication=SimpleNamespace(primaryScreen=lambda: None),
+        )
+        window._fit_to_content = mock.Mock(
+            side_effect=lambda *_args, **_kwargs: setattr(window, "_pending_zoom_main_frame", (10, 20, 304, 228))
+        )
+        window._position_file_browser = mock.Mock()
+        window._position_window_stack_near_tray_with_stable_anchor = mock.Mock()
+
+        window._finish_application_zoom(4)
+
+        window._fit_to_content.assert_called_once_with(root, scroll, container, preserve_position=False)
+        window._position_file_browser.assert_called_once_with(
+            main_rect=(10, 20, 304, 228),
+            trigger="zoom",
+        )
+        window._position_window_stack_near_tray_with_stable_anchor.assert_not_called()
 
     def test_request_quit_stops_refresh_and_hides_ui(self):
         tray_app = object.__new__(tray.MountletTray)
@@ -4103,12 +4258,10 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(row.focus_reason, "mouse")
         select_remote.assert_called_once_with(remote, row)
 
-    def test_remote_preview_coalesces_rapid_selection_changes(self):
+    def test_remote_preview_reflects_every_selection_immediately(self):
         first = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/tmp/alpha")
         second = core.RemoteInfo("Beta", "Beta", "Drive", "drive", "/tmp/beta")
-        timer = mock.Mock()
         window = object.__new__(tray.MountletWindow)
-        window._remote_preview_timer = timer
         window._pending_browser_remote_name = ""
         window._set_browser_selected = mock.Mock()
         window._show_file_browser_for_remote = mock.Mock()
@@ -4122,16 +4275,13 @@ class TrayTests(unittest.TestCase):
         window._select_browser_remote(first, "first-row")
         window._select_browser_remote(second, "second-row")
 
-        window._show_file_browser_for_remote.assert_not_called()
-        self.assertEqual(window._pending_browser_remote_name, second.name)
-        self.assertEqual(timer.start.call_count, 2)
-
-        window._flush_remote_preview()
-
-        window._show_file_browser_for_remote.assert_called_once_with(
-            second,
-            "second-row",
-            focus_browser=False,
+        self.assertEqual(window._pending_browser_remote_name, "")
+        self.assertEqual(
+            window._show_file_browser_for_remote.call_args_list,
+            [
+                mock.call(first, "first-row", focus_browser=False),
+                mock.call(second, "second-row", focus_browser=False),
+            ],
         )
 
     def test_shortcut_conflicts_are_scoped_to_context(self):
@@ -4343,13 +4493,27 @@ class TrayTests(unittest.TestCase):
         window._tray_is_quitting = mock.Mock(return_value=False)
         window._invalidate_widget_tree = mock.Mock()
         window._fit_to_content = mock.Mock()
-        window._reposition_file_browser = mock.Mock()
+        window._position_file_browser = mock.Mock()
         window.qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=mock.Mock(side_effect=lambda _delay, cb: cb())))
 
         window._browser_layout_changed()
 
         self.assertEqual(window._fit_to_content.call_count, 2)
-        self.assertEqual(window._reposition_file_browser.call_count, 2)
+        self.assertEqual(window._position_file_browser.call_count, 2)
+
+    def test_detached_browser_layout_change_never_refits_main_window(self):
+        window = object.__new__(tray.MountletWindow)
+        window.file_browser = SimpleNamespace(_embedded=False)
+        window._content_fit_widgets = (mock.Mock(), mock.Mock(), mock.Mock())
+        window._tray_is_quitting = mock.Mock(return_value=False)
+        window._invalidate_widget_tree = mock.Mock()
+        window._fit_to_content = mock.Mock()
+        window._position_file_browser = mock.Mock()
+
+        window._browser_layout_changed()
+
+        window._fit_to_content.assert_not_called()
+        window._position_file_browser.assert_called_once_with()
 
     def test_app_settings_layout_change_reopens_through_normal_show_path(self):
         old_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
@@ -4996,6 +5160,30 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(changes, [])
 
+    def test_remount_changes_ignore_refreshed_oauth_token(self):
+        old_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            extra_info={"type": "drive", "token": "old-token"},
+        )
+        new_remote = core.RemoteInfo(
+            "Docs",
+            "Docs",
+            "drive",
+            "drive",
+            "/same/docs",
+            extra_info={"type": "drive", "token": "refreshed-token"},
+        )
+        window = object.__new__(tray.MountletWindow)
+
+        with mock.patch.object(tray.core, "load_remotes", return_value=[new_remote]):
+            changes = window._remount_changes([old_remote], {"Docs"})
+
+        self.assertEqual(changes, [])
+
     def test_schedule_auto_mounts_only_schedules_configured_unmounted_remotes(self):
         remotes = [
             core.RemoteInfo("Docs", "Docs", "drive", "drive", "/tmp/docs", auto_mount=True),
@@ -5060,7 +5248,7 @@ class TrayTests(unittest.TestCase):
             tray.core.mount_all,
         )
 
-    def test_remote_action_finish_invalidates_file_browser_cache(self):
+    def test_remote_action_finish_preserves_content_and_usage_caches(self):
         tray_app = mock.Mock()
         window = object.__new__(tray.MountletWindow)
         window.tray_app = tray_app
@@ -5073,8 +5261,8 @@ class TrayTests(unittest.TestCase):
         window._handle_action_finished("Docs", True, "[*] mounted Docs")
 
         self.assertNotIn("Docs", window._action_pending)
-        self.assertNotIn("Docs", window._usage_cache)
-        window.file_browser.invalidate.assert_called_once_with("Docs")
+        self.assertIn("Docs", window._usage_cache)
+        window.file_browser.invalidate.assert_not_called()
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
 
@@ -5495,7 +5683,7 @@ class TrayTests(unittest.TestCase):
             "unmounted\nreauthenticated\nmounted",
         )
 
-    def test_bulk_action_finish_invalidates_pending_file_browser_caches(self):
+    def test_bulk_action_finish_preserves_content_and_usage_caches(self):
         tray_app = mock.Mock()
         window = object.__new__(tray.MountletWindow)
         window.tray_app = tray_app
@@ -5508,8 +5696,8 @@ class TrayTests(unittest.TestCase):
         window._handle_bulk_action_finished("Mount all", ["Docs"], [])
 
         self.assertEqual(window._action_pending, set())
-        self.assertEqual(window._usage_cache, {})
-        window.file_browser.invalidate.assert_has_calls([mock.call("Docs"), mock.call("Photos")], any_order=True)
+        self.assertIn("Docs", window._usage_cache)
+        window.file_browser.invalidate.assert_not_called()
         tray_app.rebuild_menus.assert_called_once_with()
         window._request_refresh.assert_called_once_with()
 

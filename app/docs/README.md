@@ -3,12 +3,12 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
-## Current Release (0.6.4)
+## Current Release (0.6.5)
 
-Version `0.6.4` consolidates the file-browser, mounting, authentication,
-window-layout, theme, website, and release-publication work completed after
-`0.6.3`. See `CHANGELOG.md` for the user-facing summary and `RELEASE.md` for
-the release procedure.
+Version `0.6.5` makes application zoom and window geometry deterministic and
+makes cached file-browser navigation the foreground priority. See
+`CHANGELOG.md` for the user-facing summary and `RELEASE.md` for the release
+procedure.
 
 ### Implementation invariants
 
@@ -142,13 +142,45 @@ and broader end-to-end testing are complete.
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
 paths, and offline snapshots. `cloud_browser_ui.py` owns the compact Qt view
 and must keep every rclone operation off the UI thread.
-UI responsiveness is a release requirement. Pointer and keyboard handlers may
-change selection, focus, and already-cached visuals only; they must not wait on
-rclone, subprocesses, filesystem scans, settings reads, license verification,
-or remote mount probes. Run those operations in bounded background workers,
-discard stale results, and update only the affected rows or controls. Avoid
-periodic menu reconstruction, full-window repainting, and repeated parsing on
-hot input paths.
+
+### UI performance and geometry invariants
+
+Responsiveness is the highest UI priority. Pointer and keyboard navigation may
+change selection, focus, and already-cached visuals only. It must not wait on
+rclone, subprocesses, filesystem scans, settings reads, usage probes, license
+verification, mount probes, theme refresh, icon regeneration, model rebuilds,
+or per-item loops. The embedded and detached browser paths should perform
+equivalent cache-only foreground work.
+
+Persist folder metadata, usage values, and the selected item for each remote so
+startup and mode changes can paint useful stale data immediately. Queue live
+metadata as soon as a folder is selected, in bounded background work, but do
+not commit results or trigger other foreground work while the user is moving
+through remotes. A stale result may update the cache; it must not replace a
+newer view. Refresh cached usage only after a known file-size mutation or when
+new folder metadata reveals a changed aggregate size. Do not add a separate
+polling loop for that comparison.
+
+Retain path-to-item maps and complete cached item trees. Swap them with updates
+disabled instead of reconstructing every row. Never make selection refresh the
+palette, icons, usage, window size, or unrelated controls. Theme and icon
+refresh belongs only to actual theme or zoom changes. Mode, theme, and layout
+changes must not remount remotes or start authentication.
+
+All supported zoom levels are discrete. Precompute integer pixels for the
+lowest-level constants—font, icon, row, spacing, margins, and fixed browser
+chrome—and derive all higher-level geometry from them once per zoom level.
+Never use a rendered `sizeHint`, current widget geometry, or a post-render move
+as an input to window placement. Never cache a folder's total list height:
+derive it from fixed chrome plus integer row height times the current item
+count. Dialog and detached-window positions must come from the cached tray
+anchor, inferred panel edge, selected remote row, theoretical target sizes, and
+the screen's available geometry before the native window is shown.
+
+Keep diagnostic geometry logging for startup, mode, zoom, remote selection,
+and first-open dialogs. When changing the hot path, compare single- and
+multi-window navigation using those logs and add a regression test for any
+loop, layout activation, or background result that reaches the foreground.
 Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
@@ -164,13 +196,21 @@ cut, paste, and delete keys should be shown as fixed guidance. Optional
 alternatives for common list navigation, remote reordering, browser entry,
 per-remote actions, and file-browser actions can be reused between contexts,
 but conflicts inside one context should remain blocked in the shortcut editor.
-Folder listings are session caches and are preloaded for each remembered remote
-path. When a folder is displayed, Mountlet silently prefetches one displayed
-level deeper with a bounded queue so navigation into visible folders is often
-instant without scanning an entire remote. Deeper recursive indexing must stay
-opt-in per remote: it can improve navigation after the first scan, but it
-consumes provider API quota, stores more metadata locally, and needs
-invalidation rules for changes made outside Mountlet. Offline snapshot
+Ctrl++ and Ctrl+- scale the complete application, including fonts, controls,
+icons, spacing, rows, and open windows. Ctrl+0 restores the system-derived
+baseline. The zoom level is saved as `ui.zoom_steps` and follows config sync.
+The main-window footer places Add remote at the left and the current percentage
+plus minus, plus, and reset controls at the right. Zoom resizing preserves the
+tray edge cached during initial popup placement and positions the file browser
+from the final calculated window geometry. Windows stay inside the available
+desktop; constrained combined layouts expose scrollbars instead of expanding
+beyond it.
+Folder listings are persistent caches for remembered paths. Selecting a folder
+queues that folder's live metadata immediately, but Mountlet does not eagerly
+prefetch its parent or visible children: speculative requests compete with
+navigation and consume provider API quota. Deeper recursive indexing remains
+opt-in per remote and needs invalidation rules for changes made outside
+Mountlet. Offline snapshot
 metadata records relative path, type, size, modification time, and local cache
 state when available. Uncached files must remain metadata-only entries rather
 than fake local filesystem placeholders. Do not treat rclone VFS blocks as an

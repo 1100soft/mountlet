@@ -24,7 +24,6 @@ from mountlet.cloud_browser import (
     remote_target,
 )
 from mountlet.cloud_browser_ui import (
-    CHILD_FOLDER_PREFETCH_LIMIT,
     EMBEDDED_BROWSER_MIN_HEIGHT,
     OFFLINE_JOB_CONCURRENCY,
     CompactCloudBrowser,
@@ -1787,6 +1786,17 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(right, (408, 180))
         self.assertEqual(left, (292, 410))
 
+    def test_browser_cascade_supports_an_explicit_window_overlap(self):
+        position = cascade_position(
+            (700, 100, 400, 500),
+            180,
+            (0, 0, 1200, 800),
+            (500, 390),
+            gap=-4,
+        )
+
+        self.assertEqual(position, (204, 180))
+
     def test_browser_cascade_uses_minimum_size_before_window_is_laid_out(self):
         position = cascade_position((800, 100, 300, 400), 700, (0, 0, 1200, 800), (0, 0))
 
@@ -1886,7 +1896,7 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 38)
+        self.assertEqual(browser.tree.minimum_height, 72)
         self.assertEqual(browser.tree.maximum_height, 16_777_215)
         self.assertEqual(browser.root.minimum_height, EMBEDDED_BROWSER_MIN_HEIGHT)
         self.assertEqual(browser.root.maximum_height, 16_777_215)
@@ -1894,7 +1904,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._file_list_max_items = 2
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.maximum_height, 58)
+        self.assertEqual(browser.tree.maximum_height, 108)
 
     def test_file_browser_resize_can_shrink_window(self):
         class Tree:
@@ -1952,8 +1962,49 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 38)
-        self.assertEqual(browser.window.size, (620, 260))
+        self.assertEqual(browser.tree.minimum_height, 72)
+        self.assertEqual(browser.window.size, (620, 253))
+
+    def test_application_zoom_uses_baseline_browser_width_without_compounding(self):
+        class Window:
+            def __init__(self) -> None:
+                self.current_width = 520
+
+            def width(self) -> int:
+                return self.current_width
+
+            def height(self) -> int:
+                return 390
+
+            def resize(self, width: int, _height: int) -> None:
+                self.current_width = width
+
+            def setFixedWidth(self, width: int) -> None:
+                self.current_width = width
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._zoom_steps = 0
+        browser._embedded = False
+        browser._base_window_width = 520
+        browser.window = Window()
+        browser.root = SimpleNamespace(
+            setMinimumWidth=lambda _width: None,
+            setMinimumHeight=lambda _height: None,
+            setMaximumHeight=lambda _height: None,
+        )
+        browser.mount_switch = SimpleNamespace(update=lambda: None)
+        browser.tree = SimpleNamespace(resizeColumnToContents=lambda _column: None)
+        browser._resize_to_rendered_items = mock.Mock()
+        browser._layout_changed = mock.Mock()
+
+        for steps in (1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, 0):
+            browser.apply_application_zoom(steps)
+
+        self.assertEqual(browser.window.current_width, 540)
+        browser.apply_application_zoom(6)
+        self.assertEqual(browser.window.current_width, 864)
+        browser.apply_application_zoom(-4)
+        self.assertEqual(browser.window.current_width, 324)
 
     def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2105,21 +2156,6 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertNotIn(key, browser._loads_pending)
         self.assertNotIn("Photos", browser._active_listing_by_remote)
 
-    def test_preload_skips_google_photos_virtual_tree(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser._folder_cache = {}
-        browser._loads_pending = set()
-        browser.backend = mock.Mock()
-        browser._load_folder = mock.Mock()
-        browser._start_missing_index = mock.Mock()
-        docs = _remote()
-        photos = _remote_with_backend("Photos", "gphotos", "Google Photos")
-        browser.backend.current_path.return_value = ""
-
-        browser.preload([photos, docs])
-
-        browser._load_folder.assert_called_once_with(docs, "")
-
     def test_pending_folder_refresh_shows_loading_message(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.remote = _remote()
@@ -2170,39 +2206,6 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual(browser.entries, [])
         browser.tree.clear.assert_called_once_with()
         browser._load_folder.assert_called_once_with(browser.remote, "")
-
-    def test_prefetch_related_folders_fetches_parent_and_children(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote()
-        browser.path = "Reports/Deep"
-        browser._folder_cache = {}
-        browser._loads_pending = set()
-        browser._load_folder = mock.Mock()
-
-        browser._prefetch_related_folders([BrowserEntry("Child", "Reports/Deep/Child", True)])
-
-        browser._load_folder.assert_has_calls(
-            [
-                mock.call(browser.remote, "Reports"),
-                mock.call(browser.remote, "Reports/Deep/Child"),
-            ]
-        )
-
-    def test_automatic_index_skips_google_photos_recursive_tree(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser._auto_index_requested = False
-        browser.backend = mock.Mock()
-        browser.backend.remote_fully_indexed.return_value = False
-        browser._index_remotes = mock.Mock()
-        photos = _remote_with_backend("Photos", "gphotos", "Google Photos")
-        docs = _remote()
-
-        browser._start_missing_index([photos, docs])
-
-        browser._index_remotes.assert_called_once_with(
-            [docs],
-            "Indexing metadata for search…",
-        )
 
     def test_display_entries_preserves_current_item_by_path(self):
         class Item:
@@ -2913,12 +2916,12 @@ class CloudBrowserTests(unittest.TestCase):
         browser.window = mock.Mock()
         browser.window.isVisible.return_value = True
         browser.refresh = mock.Mock()
-        browser._position = mock.Mock()
+        browser._reposition_request = mock.Mock()
 
         browser.show_remote(remote, mock.Mock(), show_browser=True, focus_browser=False)
 
         browser.refresh.assert_not_called()
-        browser._position.assert_not_called()
+        browser._reposition_request.assert_not_called()
 
     def test_browser_focus_uses_focused_widget_not_active_window(self):
         browser = object.__new__(CompactCloudBrowser)
@@ -4155,58 +4158,6 @@ class CloudBrowserTests(unittest.TestCase):
         browser._set_item_foreground(item, "#facc15")
 
         self.assertEqual(item.setForeground.call_args_list, [mock.call(0, "color:#facc15"), mock.call(1, "color:#facc15")])
-
-    def test_prefetch_child_folders_schedules_uncached_displayed_folders(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote()
-        browser._folder_cache = {("Docs", "Projects/Cached"): []}
-        browser._loads_pending = {("Docs", "Projects/Pending")}
-        browser._load_folder = mock.Mock()
-        entries = [
-            BrowserEntry("Cached", "Projects/Cached", True),
-            BrowserEntry("Pending", "Projects/Pending", True),
-            BrowserEntry("Ready", "Projects/Ready", True),
-            BrowserEntry("a.txt", "Projects/a.txt", False),
-        ]
-
-        browser._prefetch_child_folders(entries)
-
-        browser._load_folder.assert_called_once_with(browser.remote, "Projects/Ready")
-
-    def test_prefetch_child_folders_is_bounded(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote()
-        browser._folder_cache = {}
-        browser._loads_pending = set()
-        browser._load_folder = mock.Mock()
-        entries = [BrowserEntry(f"Folder{i}", f"Folder{i}", True) for i in range(CHILD_FOLDER_PREFETCH_LIMIT + 5)]
-
-        browser._prefetch_child_folders(entries)
-
-        self.assertEqual(browser._load_folder.call_count, CHILD_FOLDER_PREFETCH_LIMIT)
-
-    def test_google_photos_does_not_prefetch_virtual_child_folders(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
-        browser._folder_cache = {}
-        browser._loads_pending = set()
-        browser._load_folder = mock.Mock()
-
-        browser._prefetch_child_folders([BrowserEntry("by-day", "media/by-day", True)])
-
-        browser._load_folder.assert_not_called()
-
-    def test_google_photos_does_not_prefetch_parent_folder(self):
-        browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
-        browser.path = "album/Trips"
-        browser._folder_cache = {}
-        browser._loads_pending = set()
-        browser._load_folder = mock.Mock()
-
-        browser._prefetch_parent_folder()
-
-        browser._load_folder.assert_not_called()
 
     def test_google_photos_search_verification_uses_index_without_api_requests(self):
         browser = object.__new__(CompactCloudBrowser)

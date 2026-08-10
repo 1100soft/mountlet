@@ -85,6 +85,12 @@ may change for future renewals with advance notice.
 ## Daily Use
 
 - Select a remote to show its file browser.
+- Use Ctrl++ or Ctrl+- to scale the complete interface, or Ctrl+0 to return to
+  the system-derived size. The same controls are available in the lower-right
+  corner of the main window, and the selected zoom persists across restarts.
+- Mountlet shows cached folder contents, selection, and usage immediately while
+  it refreshes live metadata in the background. Briefly stale information is
+  intentional: moving through remotes should never wait on the cloud service.
 - For Google Drive and Google Photos, the optional **Google account** setting
   helps **Open in web** choose the matching account. The account must already
   be signed in within the default browser; the hint does not start a new Google

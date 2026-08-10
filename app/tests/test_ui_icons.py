@@ -120,6 +120,60 @@ class UiIconTests(unittest.TestCase):
 
         self.assertEqual(button.property("mountletIconColor"), "")
 
+    def test_scale_widget_icon_rerenders_svg_at_scaled_size(self):
+        class Button:
+            def __init__(self) -> None:
+                self.properties = {
+                    "mountletIconName": "ui-copy",
+                    "mountletIconFallback": "Copy",
+                    "mountletIconSize": 18,
+                    "mountletIconColor": "#ffffff",
+                }
+                self.icon_size = None
+
+            def setIcon(self, _icon) -> None:
+                pass
+
+            def setIconSize(self, size) -> None:
+                self.icon_size = size
+
+            def setText(self, _text: str) -> None:
+                pass
+
+            def setProperty(self, key: str, value) -> None:
+                self.properties[key] = value
+
+            def property(self, key: str):
+                return self.properties.get(key)
+
+        button = Button()
+        qt = mock.Mock()
+        qt.QSize.side_effect = lambda width, height: (width, height)
+
+        with mock.patch.object(ui_icons, "mountlet_icon", return_value=object()) as render:
+            self.assertTrue(ui_icons.scale_widget_icon(qt, button, 1.5))
+
+        render.assert_called_once_with(qt, "ui-copy", size=27, color="#ffffff")
+        self.assertEqual(button.icon_size, (27, 27))
+        self.assertEqual(button.property("mountletIconSize"), 18)
+        self.assertEqual(button.property("mountletIconScale"), 1.5)
+
+    def test_late_button_icon_refresh_preserves_current_zoom(self):
+        button = mock.Mock()
+        properties = {"mountletIconScale": 1.5}
+        button.property.side_effect = properties.get
+        button.setProperty.side_effect = lambda key, value: properties.__setitem__(key, value)
+        qt = mock.Mock()
+        qt.QSize.side_effect = lambda width, height: (width, height)
+
+        with mock.patch.object(ui_icons, "mountlet_icon", return_value=object()) as render:
+            self.assertTrue(ui_icons.apply_button_icon(qt, button, "ui-copy", size=18, color="#ffffff"))
+
+        render.assert_called_once_with(qt, "ui-copy", size=27, color="#ffffff")
+        button.setIconSize.assert_called_once_with((27, 27))
+        self.assertEqual(properties["mountletIconSize"], 18)
+        self.assertEqual(properties["mountletIconScale"], 1.5)
+
     def test_palette_change_event_recolors_dynamic_icon(self):
         class QObject:
             def __init__(self, _parent=None) -> None:

@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.5 - 2026-08-10
+
+- Expanded Ctrl++ and Ctrl+- from file-list zoom into persistent application-wide
+  scaling for fonts, controls, icons, spacing, rows, styles, and open windows;
+  added Ctrl+0 and bottom-right zoom controls, scalable SVG button icons, and
+  stable cached-edge window anchoring without cumulative browser growth; the
+  compact footer shares one row with Add remote and uses overflow scrolling
+  when desktop bounds prevent controls from fitting. Ordinary half-screen and
+  near-desktop window sizes no longer get mistaken for externally managed
+  tiling and disable subsequent zoom repositioning. Main and file-browser
+  rectangles are calculated directly from the cached tray anchor and their new
+  theoretical sizes, without post-render clamping or geometry corrections;
+  remote selection, zoom, layout changes, and manual movement now share one
+  browser-positioning function so overlap and row alignment remain consistent.
+  SVG button, provider, and mounted-state icons render deterministically from
+  their immutable base size and current zoom instead of accumulating refresh
+  and startup scaling state.
+- Made cached folder contents, the remembered selection, and cached usage text
+  available immediately at startup, after mode changes, and while moving
+  rapidly between remotes. Live folder metadata is queued in one background
+  worker, but results update the foreground only after the user remains on the
+  same view; stale results still warm the persistent cache.
+- Removed eager neighboring-folder prefetch and repeated selection-time tree,
+  theme, icon, usage, and layout work. Single-window navigation now swaps
+  retained item trees in batches and follows the same cache-only hot-path
+  rules as the detached browser.
+- Replaced rendered size hints and cumulative scaling with integer metrics for
+  every discrete zoom level. Detached list height is derived from fixed chrome
+  plus row height times the current item count, while deterministic columns
+  reserve fixed Size and Modified widths and give remaining space to Name.
+- Stabilized first-open dialog centering and window placement, added geometry
+  diagnostics to bug reports, and prevented mode or presentation changes from
+  triggering unrelated remount and reauthentication prompts.
+
 ## 0.6.4 - 2026-08-08
 
 - Added direct external and internal drag-and-drop into the displayed folder,

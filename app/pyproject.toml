@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mountlet"
-version = "0.6.4"
+version = "0.6.5"
 description = "Desktop app for managing many cloud storage accounts in one place"
 readme = "README.md"
 requires-python = ">=3.10"

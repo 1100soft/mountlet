@@ -55,6 +55,23 @@ def rclone_log_path() -> Path:
     return app_state_dir() / "rclone-output.log"
 
 
+def ui_geometry_log_path() -> Path:
+    return app_state_dir() / "ui-geometry.log"
+
+
+def append_ui_geometry_log(message: str) -> None:
+    path = ui_geometry_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > 100_000:
+            path.write_text("", encoding="utf-8")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(message.rstrip() + "\n")
+        apply_permissions(path)
+    except OSError:
+        return
+
+
 def crash_report_marker_path() -> Path:
     return app_state_dir() / "last-crash-report.json"
 
@@ -133,10 +150,13 @@ def report_payload(
     if include_logs:
         runtime = crash_log or read_text_tail(runtime_log_path())
         rclone = read_text_tail(rclone_log_path())
+        ui_geometry = read_text_tail(ui_geometry_log_path())
         if runtime:
             logs["runtime"] = redact_text(runtime)
         if rclone:
             logs["rclone"] = redact_text(rclone)
+        if ui_geometry:
+            logs["uiGeometry"] = redact_text(ui_geometry)
     return {
         "kind": kind,
         "message": redact_text(message.strip())[:MAX_MESSAGE_CHARS],
