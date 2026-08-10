@@ -3311,7 +3311,7 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(moves, [(940, 540)])
 
-    def test_main_frame_origin_is_converted_with_native_frame_margins(self):
+    def test_main_frame_origin_is_not_offset_by_native_frame_margins(self):
         moves: list[tuple[int, int]] = []
         margins = SimpleNamespace(
             left=lambda: 17,
@@ -3327,7 +3327,7 @@ class TrayTests(unittest.TestCase):
 
         window._move_main_frame(4282, 229)
 
-        self.assertEqual(moves, [(4299, 235)])
+        self.assertEqual(moves, [(4282, 229)])
 
     def test_initial_position_caches_edge_until_screen_work_area_changes(self):
         class Rect:

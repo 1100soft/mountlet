@@ -28,6 +28,9 @@ procedure.
   calculating pane height. Child minimum sizes must never exceed the capped
   client geometry; moving an oversized native frame cannot repair a missing
   scrollbar or chrome term.
+- Top-level `QWidget.move()` coordinates are already native-frame origins.
+  Never add `frameMargins()` to a calculated or clamped position; margins are
+  used only to convert the available outer-frame size into a client-size cap.
 - `python packaging/run_tests.py --resource-report build/test-resources.json`
   records wall time, child-process CPU time, logical CPU count, and peak child
   RSS where the platform exposes it. This is a reproducible regression baseline,

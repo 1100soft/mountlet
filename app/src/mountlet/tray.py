@@ -9995,15 +9995,11 @@ class MountletWindow:
         self._move_main_frame(x, y)
 
     def _move_main_frame(self, x: int, y: int) -> None:
-        """Convert a desired native frame origin to QWidget.move coordinates."""
-        left = top = 0
-        with suppress(Exception):
-            handle = self.window.windowHandle()
-            margins = handle.frameMargins() if handle is not None else None
-            if margins is not None:
-                left = max(int(margins.left()), 0)
-                top = max(int(margins.top()), 0)
-        self.window.move(x + left, y + top)
+        """Move the top-level widget to the requested native frame origin."""
+        # QWidget.pos()/move() already use frame-inclusive desktop coordinates
+        # for top-level widgets. Adding frameMargins here shifts the actual
+        # frame right and down, defeating an otherwise correct clamp.
+        self.window.move(x, y)
 
     def _remember_calculated_main_frame(self, x: int, y: int, width: int, height: int) -> None:
         try:
