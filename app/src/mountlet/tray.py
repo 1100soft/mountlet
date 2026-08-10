@@ -9868,19 +9868,32 @@ class MountletWindow:
     def _window_frame_overhead(self) -> tuple[int, int]:
         """Return stable native-frame width and height outside the client."""
         observed_width = observed_height = 0
-        margin_width = margin_height = 0
+        left, top, right, bottom = self._window_frame_margins()
         with suppress(Exception):
             frame = self.window.frameGeometry()
             client = self.window.size()
             observed_width = max(int(frame.width()) - int(client.width()), 0)
             observed_height = max(int(frame.height()) - int(client.height()), 0)
+        margin_width = left + right
+        margin_height = top + bottom
+        return max(observed_width, margin_width), max(observed_height, margin_height)
+
+    def _window_frame_margins(self) -> tuple[int, int, int, int]:
+        """Return the compositor-reported client-to-frame offsets."""
         with suppress(Exception):
             handle = self.window.windowHandle()
             margins = handle.frameMargins() if handle is not None else None
             if margins is not None:
-                margin_width = max(int(margins.left()), 0) + max(int(margins.right()), 0)
-                margin_height = max(int(margins.top()), 0) + max(int(margins.bottom()), 0)
-        return max(observed_width, margin_width), max(observed_height, margin_height)
+                return tuple(
+                    max(int(value), 0)
+                    for value in (
+                        margins.left(),
+                        margins.top(),
+                        margins.right(),
+                        margins.bottom(),
+                    )
+                )
+        return 0, 0, 0, 0
 
     def _apply_fitted_window_geometry(
         self,
@@ -9987,19 +10000,23 @@ class MountletWindow:
             self._set_main_window_geometry(self.window.x(), self.window.y(), width, height)
 
     def _set_main_window_geometry(self, x: int, y: int, width: int, height: int) -> None:
+        """Apply a requested outer-frame origin and client size atomically."""
         set_fixed_size = getattr(self.window, "setFixedSize", None)
         if callable(set_fixed_size):
             set_fixed_size(width, height)
         else:
             self.window.resize(width, height)
-        self._move_main_frame(x, y)
+        left, top, _right, _bottom = self._window_frame_margins()
+        set_geometry = getattr(self.window, "setGeometry", None)
+        if callable(set_geometry):
+            set_geometry(x + left, y + top, width, height)
+        else:
+            self.window.move(x + left, y + top)
 
     def _move_main_frame(self, x: int, y: int) -> None:
         """Move the top-level widget to the requested native frame origin."""
-        # QWidget.pos()/move() already use frame-inclusive desktop coordinates
-        # for top-level widgets. Adding frameMargins here shifts the actual
-        # frame right and down, defeating an otherwise correct clamp.
-        self.window.move(x, y)
+        left, top, _right, _bottom = self._window_frame_margins()
+        self.window.move(x + left, y + top)
 
     def _remember_calculated_main_frame(self, x: int, y: int, width: int, height: int) -> None:
         try:
