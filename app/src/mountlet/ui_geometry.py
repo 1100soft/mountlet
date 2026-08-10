@@ -16,7 +16,9 @@ FILE_BROWSER_LAYOUT_GAP_COUNT = 5
 FILE_BROWSER_EMBEDDED_MAX_HEIGHT = 460
 FILE_LIST_ROW_HEIGHT = 36
 FILE_LIST_HEADER_HEIGHT = 28
-FILE_LIST_FRAME_PADDING = 8
+# The file tree has no native frame.  Its total height is therefore exactly
+# the fixed header plus the fixed rows, independent of the desktop style.
+FILE_LIST_FRAME_PADDING = 0
 FILE_NAME_COLUMN_MIN_WIDTH = 80
 FILE_SIZE_COLUMN_WIDTH = 76
 FILE_MODIFIED_COLUMN_WIDTH = 124

@@ -12,6 +12,23 @@ procedure.
 
 ### Implementation invariants
 
+- Foreground remote and folder navigation must not enumerate the folder being
+  left, copy its entry list, compare complete entry lists, or repaint every row
+  when background metadata arrives. Selection caching is constant-time. Large
+  offline-state scans may run in the background, but their results are consumed
+  by a later ordinary render rather than triggering a front-end row loop.
+- Once either window mode is constructed, navigation must not change runtime
+  layout geometry. Keep the file-list scrollbar reserved, column widths stable,
+  and window dimensions unchanged across remote/folder selection. Remote
+  addition and removal are the only ordinary operations allowed to change the
+  main content layout; mode, zoom, and explicit configuration changes remain
+  deliberate user-requested rebuilds.
+- `python packaging/run_tests.py --resource-report build/test-resources.json`
+  records wall time, child-process CPU time, logical CPU count, and peak child
+  RSS where the platform exposes it. This is a reproducible regression baseline,
+  not the application's maximum memory requirement; test it on each release
+  platform before revising the user-facing minimum and recommended resources.
+
 - External and internal drag-and-drop can target the displayed folder, a
   visible child folder, or a remote row. Remote-row drops use that remote's
   remembered folder. Google Photos drops go to `upload`, except when a
@@ -173,7 +190,16 @@ chrome—and derive all higher-level geometry from them once per zoom level.
 Never use a rendered `sizeHint`, current widget geometry, or a post-render move
 as an input to window placement. Never cache a folder's total list height:
 derive it from fixed chrome plus integer row height times the current item
-count. Dialog and detached-window positions must come from the cached tray
+count. The file tree is deliberately frameless because native frame extents
+vary by Qt style and make that equality impossible; do not restore a native
+frame without adding its exact, deterministic geometry to every zoom metric.
+Its item delegate enforces the cached integer row height for every item; an
+item icon, cached state, folder change, or stale `QTreeWidgetItem` size hint
+must never be allowed to choose the effective row height.
+The file-tree headers and icon sizes are owned by the file-browser zoom metrics
+and are excluded from the generic application zoom walker. Otherwise the
+startup and show-event passes can scale an already-scaled metric a second time.
+Dialog and detached-window positions must come from the cached tray
 anchor, inferred panel edge, selected remote row, theoretical target sizes, and
 the screen's available geometry before the native window is shown.
 
@@ -181,6 +207,9 @@ Keep diagnostic geometry logging for startup, mode, zoom, remote selection,
 and first-open dialogs. When changing the hot path, compare single- and
 multi-window navigation using those logs and add a regression test for any
 loop, layout activation, or background result that reaches the foreground.
+Release cleanup must preserve these behavioral tests. Required regression
+tests are named explicitly by `packaging/run_tests.py`, so removing or renaming
+one must fail the release rather than quietly reducing coverage.
 Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.

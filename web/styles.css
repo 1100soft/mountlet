@@ -1245,6 +1245,22 @@ h3 {
   margin-bottom: 0;
 }
 
+.resource-guidance {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) repeat(3, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.resource-guidance h4,
+.resource-guidance p {
+  margin: 0;
+}
+
 .technical-details {
   border-top: 1px solid var(--line);
   display: grid;
@@ -1664,6 +1680,7 @@ h3 {
   .build-explanation,
   .dependency-grid,
   .platform-support-grid,
+  .resource-guidance,
   .technical-grid {
     grid-template-columns: 1fr;
   }

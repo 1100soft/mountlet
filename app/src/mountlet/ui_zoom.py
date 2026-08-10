@@ -191,7 +191,8 @@ class ApplicationZoom:
         if scalable_fixed:
             self._scale_fixed_dimensions(widget)
 
-        icon_scaled = scale_widget_icon(self.qt, widget, factor)
+        icon_managed = bool(getattr(widget, "_mountlet_zoom_icon_managed", False))
+        icon_scaled = icon_managed or scale_widget_icon(self.qt, widget, factor)
         if not icon_scaled:
             with suppress(Exception):
                 icon_size = widget.iconSize()

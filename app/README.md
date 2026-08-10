@@ -45,6 +45,20 @@ Mounted folder access uses a platform filesystem driver:
 Mountlet file management runs through the integrated browser. The two workflows
 operate independently and can be used together, per remote.
 
+### System resources
+
+Mountlet is intended for a 64-bit desktop with at least 2 CPU cores and 2 GB of
+available memory. Four CPU cores and 4 GB of available memory are recommended
+for many remotes, folders containing thousands of items, concurrent transfers,
+or mounted-drive use. Cloud cache and offline files require additional disk
+space equal to the content retained locally.
+
+These are operating headroom guidelines rather than fixed allocations:
+Mountlet loads cached folder metadata immediately and performs provider I/O in
+the background. Maintainers can record the test workload's CPU time and peak
+resident memory with `python packaging/run_tests.py --resource-report
+build/test-resources.json`; see the development notes for interpretation.
+
 ### Unsigned Builds
 
 Current builds are not code-signed or Apple-notarized. Use only installers from

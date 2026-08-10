@@ -19,6 +19,8 @@ Run these from `wip` inside `app/` first:
 ```bash
 VERSION=0.6.5
 python packaging/run_tests.py
+python -m unittest tests.test_ui_zoom.UiZoomTests.test_production_qt_namespace_constructs_file_browser
+python -m unittest tests.test_ui_zoom.UiZoomTests.test_file_list_integer_height_has_no_scrollbar_at_every_zoom
 python -m unittest tests.test_tray
 python -m compileall -q src tests packaging
 python -m pip wheel . -w /tmp/mountlet-release --no-deps --no-build-isolation
@@ -26,6 +28,10 @@ python -m pip wheel . -w /tmp/mountlet-release --no-deps --no-build-isolation
 
 Confirm:
 
+- Cleanup commits are behavior-preserving: do not delete, rename, weaken, or
+  replace release-critical behavioral tests with mock-only assertions. The
+  release runner invokes required regressions by stable name so missing tests
+  fail instead of silently lowering the test count.
 - `README.md` describes the user flow and current installer status.
 - `README.md` documents tested and untested provider setup paths.
 - `CHANGELOG.md` has a section for the version being released.

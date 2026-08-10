@@ -105,6 +105,99 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(loaded.current_path("Docs"), "Projects/Current")
 
+    def test_current_item_cache_does_not_enumerate_file_rows(self):
+        entry = BrowserEntry("report.pdf", "Projects/report.pdf", False)
+        item = SimpleNamespace(data=lambda _column, _role: entry)
+        scroll = SimpleNamespace(value=lambda: 3)
+        tree = SimpleNamespace(
+            currentItem=lambda: item,
+            indexOfTopLevelItem=lambda _item: 7,
+            verticalScrollBar=lambda: scroll,
+            selectedItems=mock.Mock(side_effect=AssertionError("must remain O(1)")),
+        )
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole=1)))
+        browser.tree = tree
+        browser.backend = mock.Mock()
+        browser._rendered_key = ("Docs", "Projects")
+        browser._folder_selection_cache = {}
+
+        browser._remember_current_item()
+
+        browser.backend.cache_selection.assert_called_once_with(
+            "Docs", "Projects", "Projects/report.pdf", 7, 3
+        )
+        tree.selectedItems.assert_not_called()
+
+    def test_empty_model_does_not_overwrite_last_valid_file_index(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole=1)))
+        browser.tree = SimpleNamespace(currentItem=lambda: None)
+        browser.backend = mock.Mock()
+        browser._rendered_key = ("Docs", "Projects")
+        browser._folder_selection_cache = {("Docs", "Projects"): (7, 3)}
+
+        browser._remember_current_item()
+
+        self.assertEqual(browser._folder_selection_cache[("Docs", "Projects")], (7, 3))
+        browser.backend.cache_selection.assert_not_called()
+
+    def test_entry_state_scan_does_not_walk_folder_on_ui_thread(self):
+        class Entries(list):
+            def __iter__(self):
+                raise AssertionError("folder entries must be consumed only by the worker")
+
+        browser = object.__new__(CompactCloudBrowser)
+        browser._bridge = SimpleNamespace(entry_states_ready=mock.Mock())
+        browser._entry_state_scans_pending = set()
+        browser._entry_state_scanned_keys = set()
+        browser._entry_state_scan_slots = threading.BoundedSemaphore(1)
+        browser._entry_state_cache = {}
+        entries = Entries([BrowserEntry("a", "a", False)])
+
+        with mock.patch("mountlet.cloud_browser_ui.threading.Thread") as thread:
+            browser._request_entry_state_scan(_remote(), "", entries)
+
+        thread.assert_called_once()
+
+    def test_remote_switch_caches_old_current_item_before_remote_changes(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote("Old")
+        browser.path = "Folder"
+        browser.backend = mock.Mock()
+        browser.backend.current_path.return_value = ""
+        browser._cancel_folder_loads = mock.Mock()
+        browser.refresh = mock.Mock()
+        browser._embedded = True
+        browser._closed_until_selected = False
+        browser._folder_view_generation = 0
+        browser._pending_live_entries = None
+        browser._rendered_key = ("Old", "Folder")
+        observed: list[str] = []
+        browser._remember_current_item = mock.Mock(
+            side_effect=lambda **_kwargs: observed.append(browser.remote.name)
+        )
+
+        browser.show_remote(_remote("New"), mock.Mock(), show_browser=False)
+
+        self.assertEqual(observed, ["Old"])
+        browser._remember_current_item.assert_called_once_with(schedule_save=True)
+
+    def test_file_selection_is_persisted_per_remote_folder(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            state = Path(tempdir) / "browser.json"
+            cache = Path(tempdir) / "cache"
+            backend = CloudBrowserBackend(state_path=state, cache_root=cache)
+            backend.cache_selection("Docs", "Projects", "Projects/report.pdf", 4, 2)
+            backend.save_selection_cache()
+
+            loaded = CloudBrowserBackend(state_path=state, cache_root=cache)
+
+        self.assertEqual(
+            loaded.remembered_selection("Docs", "Projects"),
+            ("Projects/report.pdf", 4, 2),
+        )
+
     def test_listing_maps_rclone_json_to_sorted_entries(self):
         response = SimpleNamespace(
             returncode=0,
@@ -1896,7 +1989,7 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 72)
+        self.assertEqual(browser.tree.minimum_height, 64)
         self.assertEqual(browser.tree.maximum_height, 16_777_215)
         self.assertEqual(browser.root.minimum_height, EMBEDDED_BROWSER_MIN_HEIGHT)
         self.assertEqual(browser.root.maximum_height, 16_777_215)
@@ -1904,7 +1997,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._file_list_max_items = 2
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.maximum_height, 108)
+        self.assertEqual(browser.tree.maximum_height, 100)
 
     def test_file_browser_resize_can_shrink_window(self):
         class Tree:
@@ -1962,8 +2055,8 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser._resize_to_rendered_items()
 
-        self.assertEqual(browser.tree.minimum_height, 72)
-        self.assertEqual(browser.window.size, (620, 253))
+        self.assertEqual(browser.tree.minimum_height, 64)
+        self.assertEqual(browser.window.size, (620, 245))
 
     def test_application_zoom_uses_baseline_browser_width_without_compounding(self):
         class Window:
@@ -2015,6 +2108,7 @@ class CloudBrowserTests(unittest.TestCase):
                 manifest_path=root / "offline.json",
             )
             backend.remember_path("Old__Drive", "Reports")
+            backend.cache_selection("Old__Drive", "Reports", "Reports/a.txt", 2, 1)
             old_cache = backend.offline_path("Old__Drive", "a.txt")
             old_cache.parent.mkdir(parents=True)
             old_cache.write_text("snapshot", encoding="utf-8")
@@ -2035,6 +2129,10 @@ class CloudBrowserTests(unittest.TestCase):
             backend.rename_remote("Old__Drive", "New__Drive")
 
             self.assertEqual(backend.current_path("New__Drive"), "Reports")
+            self.assertEqual(
+                backend.remembered_selection("New__Drive", "Reports"),
+                ("Reports/a.txt", 2, 1),
+            )
             self.assertFalse((root / "offline" / "Old__Drive").exists())
             self.assertEqual(backend.offline_path("New__Drive", "a.txt").read_text(encoding="utf-8"), "snapshot")
             self.assertIn("New__Drive", json.loads((root / "offline.json").read_text(encoding="utf-8"))["remotes"])
@@ -2172,6 +2270,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._rendered_key = ("Other", "")
         browser._update_actions = mock.Mock()
         browser._resize_to_rendered_items = mock.Mock()
+        browser._detach_rendered_folder = mock.Mock()
         browser._display_entries = mock.Mock()
         browser._load_folder = mock.Mock()
 
@@ -2179,7 +2278,8 @@ class CloudBrowserTests(unittest.TestCase):
 
         browser.status.setText.assert_called_once_with("Loading…")
         self.assertEqual(browser.entries, [])
-        browser.tree.clear.assert_called_once_with()
+        browser._detach_rendered_folder.assert_called_once_with(("Docs", "Reports"))
+        browser.tree.clear.assert_not_called()
         browser._display_entries.assert_not_called()
         browser._load_folder.assert_not_called()
 
@@ -2199,12 +2299,14 @@ class CloudBrowserTests(unittest.TestCase):
         browser.tree = mock.Mock()
         browser._update_actions = mock.Mock()
         browser._resize_to_rendered_items = mock.Mock()
+        browser._detach_rendered_folder = mock.Mock()
         browser._load_folder = mock.Mock()
 
         browser.refresh()
 
         self.assertEqual(browser.entries, [])
-        browser.tree.clear.assert_called_once_with()
+        browser._detach_rendered_folder.assert_called_once_with(("Photos", ""))
+        browser.tree.clear.assert_not_called()
         browser._load_folder.assert_called_once_with(browser.remote, "")
 
     def test_display_entries_preserves_current_item_by_path(self):

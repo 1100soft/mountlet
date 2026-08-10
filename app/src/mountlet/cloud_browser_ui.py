@@ -58,6 +58,7 @@ ENTRY_STATE_SCAN_IDLE_MS = 320
 FOLDER_LISTING_CONCURRENCY = 1
 OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
+ENTRY_ICON_SIZE_LEVELS = metric_levels(ENTRY_ICON_SIZE)
 FILE_LIST_ROW_HEIGHT_LEVELS = metric_levels(FILE_LIST_ROW_HEIGHT)
 FILE_LIST_HEADER_HEIGHT_LEVELS = metric_levels(FILE_LIST_HEADER_HEIGHT)
 FILE_BROWSER_CHROME_ROW_HEIGHT_LEVELS = metric_levels(FILE_BROWSER_CHROME_ROW_HEIGHT)
@@ -189,7 +190,7 @@ class CompactCloudBrowser:
             tuple[str, str], tuple[list[BrowserEntry], list[Any]]
         ] = OrderedDict()
         self._rendered_item_maps: dict[tuple[str, str], dict[str, Any]] = {}
-        self._folder_selection_cache: dict[tuple[str, str], tuple[str, frozenset[str], int, int]] = {}
+        self._folder_selection_cache: dict[tuple[str, str], tuple[int, int]] = {}
         self._display_generation = 0
         self._folder_view_generation = 0
         self._pending_live_entries: tuple[tuple[str, str], int, list[BrowserEntry]] | None = None
@@ -199,6 +200,7 @@ class CompactCloudBrowser:
         self._listing_request_ids: dict[tuple[str, str], int] = {}
         self._next_listing_request_id = 1
         self._entry_state_cache: dict[tuple[str, str, bool], tuple[bool, bool, bool, bool, bool]] = {}
+        self._entry_state_scanned_keys: set[tuple[str, str]] = set()
         self._remote_managed_cache: dict[str, bool] = {}
         self._entry_state_scans_pending: set[tuple[str, str]] = set()
         self._entry_state_scan_slots = threading.BoundedSemaphore(1)
@@ -453,8 +455,10 @@ class CompactCloudBrowser:
         layout.addLayout(search_layout)
 
         self.search_results = qt.QTreeWidget()
+        self.search_results._mountlet_zoom_icon_managed = True
         self.search_results.setColumnCount(3)
         self.search_results.setHeaderLabels(["Name", "Path", "Modified"])
+        self.search_results.header()._mountlet_zoom_geometry_managed = True
         self.search_results.setRootIsDecorated(False)
         self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
         self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -580,15 +584,31 @@ class CompactCloudBrowser:
                 outer._schedule_file_column_fit()
 
         self.tree = FileTree()
+        self.tree._mountlet_zoom_icon_managed = True
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Name", "Size", "Modified"])
+        self.tree.header()._mountlet_zoom_geometry_managed = True
+        self._file_row_delegate = self._make_file_row_delegate()
+        self.tree.setItemDelegate(self._file_row_delegate)
         self.tree.header().setStretchLastSection(False)
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(False)
+        # Native StyledPanel frames have style-dependent extents.  A fixed
+        # integer list-height formula cannot be exact while that frame is
+        # present, so make the viewport boundary explicit and frameless.
+        with suppress(Exception):
+            self.tree.setFrameShape(qt.QFrame.Shape.NoFrame)
         with suppress(Exception):
             self.tree.setUniformRowHeights(True)
         self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        # Adding/removing the vertical scrollbar changes the viewport and
+        # columns and can propagate into a parent-window relayout.  Reserve it
+        # permanently in both modes so folder size never changes geometry.
+        with suppress(Exception):
+            self.tree.setVerticalScrollBarPolicy(
+                qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+            )
         self.tree.setDragDropMode(qt.QAbstractItemView.DragDropMode.DragDrop)
         self.tree.setDragEnabled(False)
         self.tree.setAcceptDrops(True)
@@ -598,6 +618,7 @@ class CompactCloudBrowser:
         self.tree.customContextMenuRequested.connect(self._show_tree_menu)
         self.tree.itemDoubleClicked.connect(self._open_item)
         self.tree.itemSelectionChanged.connect(self._selection_changed)
+        self.tree.currentItemChanged.connect(self._current_item_changed)
         with suppress(Exception):
             self.tree.setIconSize(qt.QSize(ENTRY_ICON_SIZE, ENTRY_ICON_SIZE))
         self.tree.setColumnWidth(0, 282)
@@ -997,11 +1018,23 @@ class CompactCloudBrowser:
     def _file_row_height(self) -> int:
         return metric_at_level(FILE_LIST_ROW_HEIGHT_LEVELS, self._zoom_steps)
 
+    def _make_file_row_delegate(self) -> Any:
+        """Enforce one deterministic row height regardless of item contents."""
+        outer = self
+
+        class FixedFileRowDelegate(self.qt.QStyledItemDelegate):
+            def sizeHint(self, option: Any, index: Any) -> Any:
+                size = super().sizeHint(option, index)
+                size.setHeight(outer._file_row_height())
+                return size
+
+        return FixedFileRowDelegate(self.tree)
+
     def _apply_file_row_heights(self) -> None:
         qt = getattr(self, "qt", None)
         if qt is None or not hasattr(qt, "QSize"):
             return
-        size = qt.QSize(0, self._file_row_height())
+        icon_size = metric_at_level(ENTRY_ICON_SIZE_LEVELS, self._zoom_steps)
         for tree_name in ("tree", "search_results"):
             tree = getattr(self, tree_name, None)
             if tree is None:
@@ -1010,16 +1043,10 @@ class CompactCloudBrowser:
                 tree.header().setFixedHeight(
                     metric_at_level(FILE_LIST_HEADER_HEIGHT_LEVELS, self._zoom_steps)
                 )
-            for index in range(tree.topLevelItemCount()):
-                with suppress(Exception):
-                    tree.topLevelItem(index).setSizeHint(0, size)
-        # Detached QTreeWidgetItems keep their QSizeHint while stored in the
-        # rendered-folder cache.  Normalize them once per discrete zoom
-        # change, never while the user is switching remotes.
-        for _entries, items in getattr(self, "_rendered_folder_cache", {}).values():
-            for item in items:
-                with suppress(Exception):
-                    item.setSizeHint(0, size)
+            with suppress(Exception):
+                tree.setIconSize(qt.QSize(icon_size, icon_size))
+            with suppress(Exception):
+                tree.doItemsLayout()
 
     def _offline_icon(self) -> Any | None:
         color = None
@@ -1459,6 +1486,9 @@ class CompactCloudBrowser:
         self.window.close()
 
     def dispose(self) -> None:
+        with suppress(Exception):
+            self._remember_folder_selection(schedule_save=False)
+            self.backend.save_selection_cache()
         self._disposed = True
         self._cancel_folder_loads()
         executor = getattr(self, "_listing_executor", None)
@@ -1560,6 +1590,11 @@ class CompactCloudBrowser:
     ) -> None:
         previous_remote_name = self.remote.name if self.remote is not None else ""
         previous_key = (previous_remote_name, self.path) if previous_remote_name else None
+        # Capture the old folder while its items are still attached.  Once the
+        # remote changes, a model reset must never be allowed to replace this
+        # state with the empty/reset current index.
+        if previous_key is not None:
+            self._remember_current_item(schedule_save=True)
         if previous_remote_name and previous_remote_name != remote.name:
             self._cancel_folder_loads(previous_remote_name)
         self.remote = remote
@@ -1810,8 +1845,8 @@ class CompactCloudBrowser:
                 cached = indexed
                 self._folder_cache[key] = indexed
         if cached is None and getattr(self, "_rendered_key", None) != key:
+            self._detach_rendered_folder(key)
             self.entries = []
-            self.tree.clear()
             self._update_actions()
             self._resize_to_rendered_items()
         if cached is not None and not force:
@@ -2412,6 +2447,28 @@ class CompactCloudBrowser:
             evicted_key, _evicted = cache.popitem(last=False)
             getattr(self, "_rendered_item_maps", {}).pop(evicted_key, None)
 
+    def _detach_rendered_folder(self, next_key: tuple[str, str]) -> None:
+        """Bulk-detach the current folder without firing row-change handlers."""
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return
+        self._rendering_entries = True
+        signals_were_blocked = False
+        updates_disabled = False
+        with suppress(Exception):
+            signals_were_blocked = bool(tree.blockSignals(True))
+        with suppress(Exception):
+            tree.setUpdatesEnabled(False)
+            updates_disabled = True
+        self._stash_rendered_folder()
+        self._rendered_key = next_key
+        self._rendering_entries = False
+        with suppress(Exception):
+            tree.blockSignals(signals_were_blocked)
+        if updates_disabled:
+            with suppress(Exception):
+                tree.setUpdatesEnabled(True)
+
     def _take_cached_rendered_folder(
         self,
         key: tuple[str, str] | None,
@@ -2423,17 +2480,16 @@ class CompactCloudBrowser:
         if cached is None:
             return None
         cached_entries, items = cached
-        if cached_entries is entries or cached_entries == entries:
+        if cached_entries is entries:
             return items
         getattr(self, "_rendered_item_maps", {}).pop(key, None)
         return None
 
     def _display_entries(self, entries: list[BrowserEntry]) -> None:
-        previous_path = ""
         previous_index = 0
         previous_scroll = 0
         pending_select_path = getattr(self, "_pending_select_path", "")
-        selected_paths: set[str] = set()
+        transient_selected_paths: set[str] = set()
         remote = self.remote
         render_key = (remote.name, getattr(self, "path", "")) if remote is not None else None
         if (
@@ -2441,37 +2497,34 @@ class CompactCloudBrowser:
             and render_key == getattr(self, "_rendered_key", None)
             and (
                 entries is getattr(self, "entries", None)
-                or entries == getattr(self, "entries", [])
             )
             and self.tree.topLevelItemCount() == len(entries)
         ):
             self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
             return
         cached_selection = getattr(self, "_folder_selection_cache", {}).get(render_key) if render_key is not None else None
+        if cached_selection is None and render_key is not None:
+            persisted = self.backend.remembered_selection(*render_key)
+            if isinstance(persisted, tuple) and len(persisted) == 3:
+                _previous_path, previous_index, previous_scroll = persisted
+                cached_selection = (previous_index, previous_scroll)
         same_folder = getattr(self, "_rendered_key", None) in {None, render_key}
         if cached_selection is not None:
-            previous_path, cached_paths, previous_index, previous_scroll = cached_selection
-            selected_paths = set(cached_paths)
+            previous_index, previous_scroll = cached_selection
         elif same_folder:
             with suppress(Exception):
                 previous_scroll = int(self.tree.verticalScrollBar().value())
         current_item = self.tree.currentItem()
         if current_item is not None and cached_selection is None and same_folder:
-            previous = current_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
-            if isinstance(previous, BrowserEntry):
-                previous_path = previous.path
             with suppress(Exception):
                 previous_index = max(self.tree.indexOfTopLevelItem(current_item), 0)
-        if cached_selection is None and same_folder:
+        # Preserve an active multi-selection only for an in-place refresh.
+        # Never enumerate selection while leaving a folder/remote.
+        if same_folder and render_key == getattr(self, "_rendered_key", None):
             for selected_item in self.tree.selectedItems():
                 selected = selected_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
                 if isinstance(selected, BrowserEntry):
-                    selected_paths.add(selected.path)
-        self._stash_rendered_folder()
-        cached_items = self._take_cached_rendered_folder(render_key, entries)
-        self.entries = entries
-        if remote is not None:
-            self._rendered_key = (remote.name, getattr(self, "path", ""))
+                    transient_selected_paths.add(selected.path)
         self._rendering_entries = True
         self._painted_selected_items = set()
         updates_disabled = False
@@ -2481,6 +2534,13 @@ class CompactCloudBrowser:
         with suppress(Exception):
             self.tree.setUpdatesEnabled(False)
             updates_disabled = True
+        # Detaching a large model changes both selection and current index.
+        # Do it only after the hot-path handlers have been suppressed.
+        self._stash_rendered_folder()
+        cached_items = self._take_cached_rendered_folder(render_key, entries)
+        self.entries = entries
+        if remote is not None:
+            self._rendered_key = (remote.name, getattr(self, "path", ""))
         # _stash_rendered_folder already detached every prior item.  Calling
         # clear() here forces a redundant model reset and a second layout pass.
         if self.tree.topLevelItemCount() > 0:
@@ -2494,7 +2554,7 @@ class CompactCloudBrowser:
         )
         rendered_items = cached_items or []
         if cached_items is not None and items_by_path:
-            current_target = items_by_path.get(pending_select_path or previous_path)
+            current_target = items_by_path.get(pending_select_path) if pending_select_path else None
             if rendered_items:
                 fallback_target = rendered_items[min(max(previous_index, 0), len(rendered_items) - 1)]
         else:
@@ -2515,13 +2575,9 @@ class CompactCloudBrowser:
                     item = self.qt.QTreeWidgetItem(
                         [entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified]
                     )
-                    with suppress(Exception):
-                        item.setSizeHint(0, self.qt.QSize(0, self._file_row_height()))
                     item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
                 items_by_path[entry.path] = item
                 if pending_select_path and entry.path == pending_select_path:
-                    current_target = item
-                if current_target is None and previous_path and entry.path == previous_path:
                     current_target = item
                 if remote is not None and cached_item is None:
                     self._apply_entry_state(
@@ -2547,16 +2603,18 @@ class CompactCloudBrowser:
         else:
             for item in rendered_items:
                 self.tree.addTopLevelItem(item)
+        if current_target is None and rendered_items:
+            current_target = rendered_items[min(max(previous_index, 0), len(rendered_items) - 1)]
         target = current_target or fallback_target
         if target is not None:
             self.tree.setCurrentItem(target)
             if pending_select_path:
                 with suppress(Exception):
                     self.tree.scrollToItem(target)
-        if selected_paths and cached_items is None:
+        if len(transient_selected_paths) > 1:
             for path, item in items_by_path.items():
-                item.setSelected(path in selected_paths)
-        elif target is not None and target not in self.tree.selectedItems():
+                item.setSelected(path in transient_selected_paths)
+        elif target is not None:
             target.setSelected(True)
         if pending_select_path:
             self._pending_select_path = ""
@@ -2686,8 +2744,8 @@ class CompactCloudBrowser:
         self._file_height_constraint_key = constraint_key
         row_height = metric_at_level(FILE_LIST_ROW_HEIGHT_LEVELS, self._zoom_steps)
         header_height = metric_at_level(FILE_LIST_HEADER_HEIGHT_LEVELS, self._zoom_steps)
-        # QTreeWidget's native frame remains in device pixels; unlike rows and
-        # its explicitly fixed header, application zoom does not scale it.
+        # The tree is explicitly frameless, so this is zero.  Keep the named
+        # term in the formula to make any future frame addition deliberate.
         frame_padding = FILE_LIST_FRAME_PADDING
         minimum_tree_height = header_height + row_height + frame_padding
         desired_tree_height = header_height + row_height * visible_rows + frame_padding
@@ -2837,23 +2895,12 @@ class CompactCloudBrowser:
         key = (remote.name, path)
         if key in self._entry_state_scans_pending:
             return
-        normalized_path = normalize_browser_path(path)
-        state_cache = getattr(self, "_entry_state_cache", {})
-        expected_keys = {
-            (remote.name, "", True),
-            (remote.name, normalized_path, True),
-            *{
-                (remote.name, normalize_browser_path(entry.path), entry.is_dir)
-                for entry in entries
-            },
-        }
-        if (
-            expected_keys.issubset(state_cache)
-            and remote.name in getattr(self, "_remote_managed_cache", {})
-        ):
+        if key in getattr(self, "_entry_state_scanned_keys", set()):
             return
         self._entry_state_scans_pending.add(key)
-        snapshot = list(entries)
+        # Folder entry lists are immutable snapshots in the browser cache.
+        # Keep the reference so navigation never copies or walks a large list.
+        snapshot = entries
 
         def worker() -> None:
             states: dict[tuple[str, bool], tuple[bool, bool, bool, bool, bool]] = {}
@@ -2882,9 +2929,19 @@ class CompactCloudBrowser:
                             entry,
                         )
                     managed = bool(self.backend.managed_record_paths(remote.name))
+                    # Publish cache data in one operation from the background.
+                    # A later render consumes it; never repaint every row as a
+                    # side effect of background metadata arriving.
+                    self._entry_state_cache.update(
+                        {
+                            (remote.name, str(state_key[0]), bool(state_key[1])): value
+                            for state_key, value in states.items()
+                        }
+                    )
+                    self._entry_state_scanned_keys.add(key)
                 except Exception as exc:
                     error = str(exc)
-            self._bridge.entry_states_ready.emit(remote.name, path, states, managed, error)
+            self._bridge.entry_states_ready.emit(remote.name, path, {}, managed, error)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2910,10 +2967,9 @@ class CompactCloudBrowser:
                     self._entry_state_cache[(remote_name, str(key[0]), bool(key[1]))] = value
         if isinstance(managed, bool):
             self._remote_managed_cache[remote_name] = managed
-        if self.remote is None or self.remote.name != remote_name or self.path != path:
-            return
-        self._refresh_entry_icons()
-        self._update_actions()
+        # Cached state is intentionally consumed on the next ordinary render.
+        # Repainting the whole folder here makes navigation latency proportional
+        # to item count, particularly in the embedded browser.
 
     def _set_item_foreground(self, item: Any, color: str) -> None:
         qt_color = self.qt.QColor(color)
@@ -4271,7 +4327,16 @@ class CompactCloudBrowser:
         self._refresh_selection_backgrounds()
         self._update_actions()
 
-    def _remember_folder_selection(self) -> None:
+    def _current_item_changed(self, _current: Any = None, _previous: Any = None) -> None:
+        if getattr(self, "_rendering_entries", False):
+            return
+        self._remember_current_item()
+
+    def _remember_folder_selection(self, *, schedule_save: bool = True) -> None:
+        self._remember_current_item(schedule_save=schedule_save)
+
+    def _remember_current_item(self, *, schedule_save: bool = True) -> None:
+        """Cache the current row without enumerating any file-list items."""
         key = getattr(self, "_rendered_key", None)
         tree = getattr(self, "tree", None)
         if key is None or tree is None:
@@ -4279,28 +4344,22 @@ class CompactCloudBrowser:
         current_path = ""
         current_index = 0
         scroll = 0
-        selected_paths: set[str] = set()
         current = tree.currentItem()
-        if current is not None:
-            entry = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
-            if isinstance(entry, BrowserEntry):
-                current_path = entry.path
-            with suppress(Exception):
-                current_index = max(tree.indexOfTopLevelItem(current), 0)
+        # A model reset or an empty folder has no selected index.  It must not
+        # erase the last valid index remembered for this remote/folder.
+        if current is None:
+            return
+        entry = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if isinstance(entry, BrowserEntry):
+            current_path = entry.path
+        with suppress(Exception):
+            current_index = max(tree.indexOfTopLevelItem(current), 0)
         with suppress(Exception):
             scroll = int(tree.verticalScrollBar().value())
-        for item in tree.selectedItems():
-            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
-            if isinstance(entry, BrowserEntry):
-                selected_paths.add(entry.path)
         if not hasattr(self, "_folder_selection_cache"):
             self._folder_selection_cache = {}
-        self._folder_selection_cache[key] = (
-            current_path,
-            frozenset(selected_paths),
-            current_index,
-            scroll,
-        )
+        self._folder_selection_cache[key] = (current_index, scroll)
+        self.backend.cache_selection(key[0], key[1], current_path, current_index, scroll)
 
     def _refresh_selection_backgrounds(self) -> None:
         tree = getattr(self, "tree", None)
