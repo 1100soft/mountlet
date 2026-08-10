@@ -543,6 +543,28 @@ class TrayTests(unittest.TestCase):
         window._resize_in_place.assert_not_called()
         window._resize_anchored.assert_not_called()
 
+    def test_embedded_horizontal_overflow_is_reserved_in_window_height(self):
+        window = object.__new__(tray.MountletWindow)
+        bar = SimpleNamespace(sizeHint=lambda: SimpleNamespace(height=lambda: 17))
+        window._embedded_panes_scroll = SimpleNamespace(horizontalScrollBar=lambda: bar)
+
+        self.assertEqual(window._embedded_horizontal_scroll_height(1400, 1200, 20), 17)
+        self.assertEqual(window._embedded_horizontal_scroll_height(1180, 1200, 20), 0)
+
+    def test_native_frame_overhead_uses_compositor_margins_when_observation_is_stale(self):
+        window = object.__new__(tray.MountletWindow)
+        frame = SimpleNamespace(width=lambda: 1200, height=lambda: 800)
+        client = SimpleNamespace(width=lambda: 1200, height=lambda: 800)
+        margins = SimpleNamespace(left=lambda: 4, right=lambda: 6, top=lambda: 28, bottom=lambda: 3)
+        handle = SimpleNamespace(frameMargins=lambda: margins)
+        window.window = SimpleNamespace(
+            frameGeometry=lambda: frame,
+            size=lambda: client,
+            windowHandle=lambda: handle,
+        )
+
+        self.assertEqual(window._window_frame_overhead(), (10, 31))
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

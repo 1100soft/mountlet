@@ -23,6 +23,11 @@ procedure.
   addition and removal are the only ordinary operations allowed to change the
   main content layout; mode, zoom, and explicit configuration changes remain
   deliberate user-requested rebuilds.
+- When a high zoom level makes the single-window panes wider than the usable
+  desktop, reserve the containing horizontal scrollbar's integer height before
+  calculating pane height. Child minimum sizes must never exceed the capped
+  client geometry; moving an oversized native frame cannot repair a missing
+  scrollbar or chrome term.
 - `python packaging/run_tests.py --resource-report build/test-resources.json`
   records wall time, child-process CPU time, logical CPU count, and peak child
   RSS where the platform exposes it. This is a reproducible regression baseline,

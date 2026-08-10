@@ -9736,10 +9736,7 @@ class MountletWindow:
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
             available = self._usable_screen_geometry(screen)
-            frame = self.window.frameGeometry()
-            client = self.window.size()
-            frame_width = max(frame.width() - client.width(), 0)
-            frame_height = max(frame.height() - client.height(), 0)
+            frame_width, frame_height = self._window_frame_overhead()
             max_width = max(1, available.width() - frame_width)
             max_height = max(1, available.height() - frame_height)
         else:
@@ -9809,13 +9806,14 @@ class MountletWindow:
                 central_margins = central_layout.contentsMargins()
                 width = max(panes_width, footer_size.width())
                 width += central_margins.left() + central_margins.right()
-                height = menu_height + panes_height + footer_size.height()
-                height += max(central_layout.spacing(), 0)
-                height += central_margins.top() + central_margins.bottom()
-
                 central_chrome_height = menu_height + footer_size.height()
                 central_chrome_height += max(central_layout.spacing(), 0)
                 central_chrome_height += central_margins.top() + central_margins.bottom()
+                central_chrome_height += self._embedded_horizontal_scroll_height(
+                    panes_width,
+                    max_width,
+                    central_margins.left() + central_margins.right(),
+                )
                 available_panes_height = max(1, max_height - central_chrome_height)
                 panes_height = min(panes_height, available_panes_height)
                 remote_chrome_height = max(root_size.height() - scroll_height, 0)
@@ -9848,6 +9846,41 @@ class MountletWindow:
             screen,
             preserve_position=preserve_position,
         )
+
+    def _embedded_horizontal_scroll_height(
+        self,
+        panes_width: int,
+        maximum_window_width: int,
+        outer_horizontal_margins: int,
+    ) -> int:
+        """Return the deterministic height consumed by pane overflow."""
+        viewport_width = max(int(maximum_window_width) - int(outer_horizontal_margins), 1)
+        if int(panes_width) <= viewport_width:
+            return 0
+        panes_scroll = getattr(self, "_embedded_panes_scroll", None)
+        if panes_scroll is None:
+            return 0
+        try:
+            return max(int(panes_scroll.horizontalScrollBar().sizeHint().height()), 0)
+        except Exception:
+            return 0
+
+    def _window_frame_overhead(self) -> tuple[int, int]:
+        """Return stable native-frame width and height outside the client."""
+        observed_width = observed_height = 0
+        margin_width = margin_height = 0
+        with suppress(Exception):
+            frame = self.window.frameGeometry()
+            client = self.window.size()
+            observed_width = max(int(frame.width()) - int(client.width()), 0)
+            observed_height = max(int(frame.height()) - int(client.height()), 0)
+        with suppress(Exception):
+            handle = self.window.windowHandle()
+            margins = handle.frameMargins() if handle is not None else None
+            if margins is not None:
+                margin_width = max(int(margins.left()), 0) + max(int(margins.right()), 0)
+                margin_height = max(int(margins.top()), 0) + max(int(margins.bottom()), 0)
+        return max(observed_width, margin_width), max(observed_height, margin_height)
 
     def _apply_fitted_window_geometry(
         self,
@@ -9932,14 +9965,7 @@ class MountletWindow:
         try:
             self._ensure_initial_panel_boundary()
             available = self._usable_screen_geometry(screen)
-            frame = self.window.frameGeometry()
-            try:
-                client = self.window.size()
-                frame_width = max(frame.width() - client.width(), 0)
-                frame_height = max(frame.height() - client.height(), 0)
-            except Exception:
-                frame_width = 0
-                frame_height = 0
+            frame_width, frame_height = self._window_frame_overhead()
             edge = getattr(self, "_last_tray_edge", None)
             anchor = getattr(self, "_last_tray_anchor", None)
             if edge not in {"left", "right", "top", "bottom"} or anchor is None:
