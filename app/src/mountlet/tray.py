@@ -9842,11 +9842,28 @@ class MountletWindow:
             panes_scroll.setVerticalScrollBarPolicy(
                 self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
+        self._apply_fitted_window_geometry(
+            target_width,
+            target_height,
+            screen,
+            preserve_position=preserve_position,
+        )
+
+    def _apply_fitted_window_geometry(
+        self,
+        target_width: int,
+        target_height: int,
+        screen: Any | None,
+        *,
+        preserve_position: bool,
+    ) -> None:
         if self._single_window_size_managed(screen):
+            self._clamp_to_screen(screen)
             return
         try:
             current_size = self.window.size()
             if current_size.width() == target_width and current_size.height() == target_height:
+                self._clamp_to_screen(screen)
                 return
         except Exception:
             pass

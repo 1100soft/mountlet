@@ -507,6 +507,42 @@ class TrayTests(unittest.TestCase):
 
         self.assertTrue(window._single_window_size_managed())
 
+    def test_unchanged_fitted_window_size_is_still_clamped(self):
+        window = object.__new__(tray.MountletWindow)
+        window.window = SimpleNamespace(
+            size=lambda: SimpleNamespace(width=lambda: 800, height=lambda: 600)
+        )
+        window._single_window_size_managed = mock.Mock(return_value=False)
+        window._clamp_to_screen = mock.Mock()
+        window._resize_in_place = mock.Mock()
+        window._resize_anchored = mock.Mock()
+        screen = object()
+
+        window._apply_fitted_window_geometry(
+            800, 600, screen, preserve_position=False
+        )
+
+        window._clamp_to_screen.assert_called_once_with(screen)
+        window._resize_in_place.assert_not_called()
+        window._resize_anchored.assert_not_called()
+
+    def test_managed_single_window_is_still_clamped(self):
+        window = object.__new__(tray.MountletWindow)
+        window.window = mock.Mock()
+        window._single_window_size_managed = mock.Mock(return_value=True)
+        window._clamp_to_screen = mock.Mock()
+        window._resize_in_place = mock.Mock()
+        window._resize_anchored = mock.Mock()
+        screen = object()
+
+        window._apply_fitted_window_geometry(
+            800, 600, screen, preserve_position=True
+        )
+
+        window._clamp_to_screen.assert_called_once_with(screen)
+        window._resize_in_place.assert_not_called()
+        window._resize_anchored.assert_not_called()
+
     def test_local_port_available_detects_bound_port(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -17,7 +17,7 @@ Create release branches only if a maintained older line needs fixes while
 Run these from `wip` inside `app/` first:
 
 ```bash
-VERSION=0.6.5
+VERSION=0.6.6
 python packaging/run_tests.py
 python -m unittest tests.test_ui_zoom.UiZoomTests.test_production_qt_namespace_constructs_file_browser
 python -m unittest tests.test_ui_zoom.UiZoomTests.test_file_list_integer_height_has_no_scrollbar_at_every_zoom

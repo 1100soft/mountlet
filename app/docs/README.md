@@ -3,10 +3,10 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
-## Current Release (0.6.5)
+## Current Development Version (0.6.6)
 
-Version `0.6.5` makes application zoom and window geometry deterministic and
-makes cached file-browser navigation the foreground priority. See
+Version `0.6.6` continues the deterministic geometry and foreground-priority
+file-browser work released in `0.6.5`. See
 `CHANGELOG.md` for the user-facing summary and `RELEASE.md` for the release
 procedure.
 

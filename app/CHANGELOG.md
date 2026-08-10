@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.6 - 2026-08-11
+
+- Kept file-list scrollbars reserved in both window modes so folder changes do
+  not alter viewport or column geometry, and removed scroll-position caching in
+  favor of revealing the remembered current row directly.
+- Restored strict available-desktop clamping even when the calculated window
+  size is unchanged or the window manager reports a managed window state.
+- Persisted per-folder selected row indices, moved large offline-state updates
+  entirely off the navigation path, and documented resource guidance and test
+  resource reporting.
+- Added a detected-platform download action to the website home page while
+  retaining the full download page for versions, lean builds, and alternatives.
+
 ## 0.6.5 - 2026-08-10
 
 - Expanded Ctrl++ and Ctrl+- from file-list zoom into persistent application-wide

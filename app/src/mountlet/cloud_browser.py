@@ -212,7 +212,7 @@ class CloudBrowserBackend:
 
     def remembered_selection(
         self, remote_name: str, folder_path: str
-    ) -> tuple[str, int, int] | None:
+    ) -> tuple[str, int] | None:
         folder = normalize_browser_path(folder_path)
         with self._state_lock:
             value = self._selections.get(remote_name, {}).get(folder)
@@ -224,11 +224,10 @@ class CloudBrowserBackend:
         folder_path: str,
         item_path: str,
         index: int,
-        scroll: int,
     ) -> None:
         """Update selection state in memory; callers decide when to persist it."""
         folder = normalize_browser_path(folder_path)
-        selection = (normalize_browser_path(item_path), max(int(index), 0), max(int(scroll), 0))
+        selection = (normalize_browser_path(item_path), max(int(index), 0))
         with self._state_lock:
             self._selections.setdefault(remote_name, {})[folder] = selection
 
@@ -270,7 +269,7 @@ class CloudBrowserBackend:
                 "paths": dict(self._paths),
                 "selections": {
                     remote: {
-                        folder: {"path": value[0], "index": value[1], "scroll": value[2]}
+                        folder: {"path": value[0], "index": value[1]}
                         for folder, value in folders.items()
                     }
                     for remote, folders in self._selections.items()
@@ -1460,7 +1459,7 @@ class CloudBrowserBackend:
             return {}
         return {str(name): normalize_browser_path(str(path)) for name, path in paths.items()}
 
-    def _load_selections(self) -> dict[str, dict[str, tuple[str, int, int]]]:
+    def _load_selections(self) -> dict[str, dict[str, tuple[str, int]]]:
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1468,23 +1467,21 @@ class CloudBrowserBackend:
         raw_remotes = data.get("selections", {}) if isinstance(data, dict) else {}
         if not isinstance(raw_remotes, dict):
             return {}
-        selections: dict[str, dict[str, tuple[str, int, int]]] = {}
+        selections: dict[str, dict[str, tuple[str, int]]] = {}
         for remote_name, raw_folders in raw_remotes.items():
             if not isinstance(raw_folders, dict):
                 continue
-            folders: dict[str, tuple[str, int, int]] = {}
+            folders: dict[str, tuple[str, int]] = {}
             for folder_path, raw_value in raw_folders.items():
                 if not isinstance(raw_value, dict):
                     continue
                 try:
                     index = max(int(raw_value.get("index", 0)), 0)
-                    scroll = max(int(raw_value.get("scroll", 0)), 0)
                 except (TypeError, ValueError):
                     continue
                 folders[normalize_browser_path(str(folder_path))] = (
                     normalize_browser_path(str(raw_value.get("path", ""))),
                     index,
-                    scroll,
                 )
             if folders:
                 selections[str(remote_name)] = folders

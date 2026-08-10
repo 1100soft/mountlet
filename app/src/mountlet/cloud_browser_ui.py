@@ -190,7 +190,7 @@ class CompactCloudBrowser:
             tuple[str, str], tuple[list[BrowserEntry], list[Any]]
         ] = OrderedDict()
         self._rendered_item_maps: dict[tuple[str, str], dict[str, Any]] = {}
-        self._folder_selection_cache: dict[tuple[str, str], tuple[int, int]] = {}
+        self._folder_selection_cache: dict[tuple[str, str], int] = {}
         self._display_generation = 0
         self._folder_view_generation = 0
         self._pending_live_entries: tuple[tuple[str, str], int, list[BrowserEntry]] | None = None
@@ -2101,7 +2101,6 @@ class CompactCloudBrowser:
             return
         previous_index = 0
         previous_path = ""
-        previous_scroll = 0
         current = tree.currentItem()
         if current is not None:
             previous = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
@@ -2487,7 +2486,6 @@ class CompactCloudBrowser:
 
     def _display_entries(self, entries: list[BrowserEntry]) -> None:
         previous_index = 0
-        previous_scroll = 0
         pending_select_path = getattr(self, "_pending_select_path", "")
         transient_selected_paths: set[str] = set()
         remote = self.remote
@@ -2505,15 +2503,12 @@ class CompactCloudBrowser:
         cached_selection = getattr(self, "_folder_selection_cache", {}).get(render_key) if render_key is not None else None
         if cached_selection is None and render_key is not None:
             persisted = self.backend.remembered_selection(*render_key)
-            if isinstance(persisted, tuple) and len(persisted) == 3:
-                _previous_path, previous_index, previous_scroll = persisted
-                cached_selection = (previous_index, previous_scroll)
+            if isinstance(persisted, tuple) and len(persisted) == 2:
+                _previous_path, previous_index = persisted
+                cached_selection = previous_index
         same_folder = getattr(self, "_rendered_key", None) in {None, render_key}
         if cached_selection is not None:
-            previous_index, previous_scroll = cached_selection
-        elif same_folder:
-            with suppress(Exception):
-                previous_scroll = int(self.tree.verticalScrollBar().value())
+            previous_index = cached_selection
         current_item = self.tree.currentItem()
         if current_item is not None and cached_selection is None and same_folder:
             with suppress(Exception):
@@ -2608,9 +2603,8 @@ class CompactCloudBrowser:
         target = current_target or fallback_target
         if target is not None:
             self.tree.setCurrentItem(target)
-            if pending_select_path:
-                with suppress(Exception):
-                    self.tree.scrollToItem(target)
+            with suppress(Exception):
+                self.tree.scrollToItem(target)
         if len(transient_selected_paths) > 1:
             for path, item in items_by_path.items():
                 item.setSelected(path in transient_selected_paths)
@@ -2624,9 +2618,6 @@ class CompactCloudBrowser:
             self._ensure_tree_selection()
         self._refresh_selection_backgrounds()
         self._update_open_folder_button()
-        if not pending_select_path:
-            with suppress(Exception):
-                self.tree.verticalScrollBar().setValue(previous_scroll)
         self._remember_folder_selection()
         with suppress(Exception):
             self.tree.blockSignals(signals_were_blocked)
@@ -4343,7 +4334,6 @@ class CompactCloudBrowser:
             return
         current_path = ""
         current_index = 0
-        scroll = 0
         current = tree.currentItem()
         # A model reset or an empty folder has no selected index.  It must not
         # erase the last valid index remembered for this remote/folder.
@@ -4354,12 +4344,10 @@ class CompactCloudBrowser:
             current_path = entry.path
         with suppress(Exception):
             current_index = max(tree.indexOfTopLevelItem(current), 0)
-        with suppress(Exception):
-            scroll = int(tree.verticalScrollBar().value())
         if not hasattr(self, "_folder_selection_cache"):
             self._folder_selection_cache = {}
-        self._folder_selection_cache[key] = (current_index, scroll)
-        self.backend.cache_selection(key[0], key[1], current_path, current_index, scroll)
+        self._folder_selection_cache[key] = current_index
+        self.backend.cache_selection(key[0], key[1], current_path, current_index)
 
     def _refresh_selection_backgrounds(self) -> None:
         tree = getattr(self, "tree", None)

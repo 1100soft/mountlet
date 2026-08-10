@@ -125,7 +125,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser._remember_current_item()
 
         browser.backend.cache_selection.assert_called_once_with(
-            "Docs", "Projects", "Projects/report.pdf", 7, 3
+            "Docs", "Projects", "Projects/report.pdf", 7
         )
         tree.selectedItems.assert_not_called()
 
@@ -135,11 +135,11 @@ class CloudBrowserTests(unittest.TestCase):
         browser.tree = SimpleNamespace(currentItem=lambda: None)
         browser.backend = mock.Mock()
         browser._rendered_key = ("Docs", "Projects")
-        browser._folder_selection_cache = {("Docs", "Projects"): (7, 3)}
+        browser._folder_selection_cache = {("Docs", "Projects"): 7}
 
         browser._remember_current_item()
 
-        self.assertEqual(browser._folder_selection_cache[("Docs", "Projects")], (7, 3))
+        self.assertEqual(browser._folder_selection_cache[("Docs", "Projects")], 7)
         browser.backend.cache_selection.assert_not_called()
 
     def test_entry_state_scan_does_not_walk_folder_on_ui_thread(self):
@@ -188,14 +188,14 @@ class CloudBrowserTests(unittest.TestCase):
             state = Path(tempdir) / "browser.json"
             cache = Path(tempdir) / "cache"
             backend = CloudBrowserBackend(state_path=state, cache_root=cache)
-            backend.cache_selection("Docs", "Projects", "Projects/report.pdf", 4, 2)
+            backend.cache_selection("Docs", "Projects", "Projects/report.pdf", 4)
             backend.save_selection_cache()
 
             loaded = CloudBrowserBackend(state_path=state, cache_root=cache)
 
         self.assertEqual(
             loaded.remembered_selection("Docs", "Projects"),
-            ("Projects/report.pdf", 4, 2),
+            ("Projects/report.pdf", 4),
         )
 
     def test_listing_maps_rclone_json_to_sorted_entries(self):
@@ -2108,7 +2108,7 @@ class CloudBrowserTests(unittest.TestCase):
                 manifest_path=root / "offline.json",
             )
             backend.remember_path("Old__Drive", "Reports")
-            backend.cache_selection("Old__Drive", "Reports", "Reports/a.txt", 2, 1)
+            backend.cache_selection("Old__Drive", "Reports", "Reports/a.txt", 2)
             old_cache = backend.offline_path("Old__Drive", "a.txt")
             old_cache.parent.mkdir(parents=True)
             old_cache.write_text("snapshot", encoding="utf-8")
@@ -2131,7 +2131,7 @@ class CloudBrowserTests(unittest.TestCase):
             self.assertEqual(backend.current_path("New__Drive"), "Reports")
             self.assertEqual(
                 backend.remembered_selection("New__Drive", "Reports"),
-                ("Reports/a.txt", 2, 1),
+                ("Reports/a.txt", 2),
             )
             self.assertFalse((root / "offline" / "Old__Drive").exists())
             self.assertEqual(backend.offline_path("New__Drive", "a.txt").read_text(encoding="utf-8"), "snapshot")
@@ -2365,6 +2365,9 @@ class CloudBrowserTests(unittest.TestCase):
                 item.setSelected(True)
                 self.current = item
 
+            def scrollToItem(self, item: Item) -> None:
+                self.scrolled_to = item
+
             def verticalScrollBar(self) -> mock.Mock:
                 return self.scroll
 
@@ -2403,7 +2406,8 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser.tree.current.data(0, 1).path, "Reports/b.txt")
         self.assertTrue(browser.tree.current.selected)
-        browser.tree.scroll.setValue.assert_called_once_with(37)
+        self.assertIs(browser.tree.scrolled_to, browser.tree.current)
+        browser.tree.scroll.setValue.assert_not_called()
 
     def test_display_entries_preserves_multiple_selected_paths_when_focused(self):
         class Item:
