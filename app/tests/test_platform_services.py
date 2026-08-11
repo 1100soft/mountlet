@@ -24,6 +24,7 @@ from mountlet.platform_services.macos import MacOSPlatformServices
 from mountlet.platform_services.processes import terminate_process
 from mountlet.platform_services.processes import external_process_environment
 from mountlet.platform_services.windows import WindowsPlatformServices
+from mountlet.platform_services.work_area import WorkAreaResolver, parse_x11_work_area
 
 
 class PlatformServicesTests(unittest.TestCase):
@@ -34,6 +35,77 @@ class PlatformServicesTests(unittest.TestCase):
         self.assertIsInstance(get_platform("Linux"), LinuxPlatformServices)
         self.assertIsInstance(get_platform("Windows"), WindowsPlatformServices)
         self.assertIsInstance(get_platform("Darwin"), MacOSPlatformServices)
+
+    def test_parse_x11_work_area_selects_current_desktop(self):
+        output = (
+            "_NET_CURRENT_DESKTOP(CARDINAL) = 1\n"
+            "_NET_WORKAREA(CARDINAL) = 0, 36, 5074, 1564, "
+            "10, 40, 5000, 1500, 20, 50, 4900, 1400\n"
+        )
+
+        self.assertEqual(parse_x11_work_area(output), (10, 40, 5000, 1500))
+
+    def test_parse_x11_work_area_rejects_missing_desktop_entry(self):
+        output = (
+            "_NET_CURRENT_DESKTOP(CARDINAL) = 3\n"
+            "_NET_WORKAREA(CARDINAL) = 0, 36, 5074, 1564\n"
+        )
+
+        self.assertIsNone(parse_x11_work_area(output))
+
+    def test_x11_work_area_is_intersected_with_active_monitor_and_cached(self):
+        class Rect:
+            def __init__(self, x: int, y: int, width: int, height: int) -> None:
+                self.values = x, y, width, height
+
+            def x(self) -> int:
+                return self.values[0]
+
+            def y(self) -> int:
+                return self.values[1]
+
+            def width(self) -> int:
+                return self.values[2]
+
+            def height(self) -> int:
+                return self.values[3]
+
+        result = SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "_NET_CURRENT_DESKTOP(CARDINAL) = 1\n"
+                "_NET_WORKAREA(CARDINAL) = 0, 36, 5074, 1564, "
+                "0, 36, 5074, 1564\n"
+            ),
+        )
+        runner = mock.Mock(return_value=result)
+        resolver = WorkAreaResolver(
+            system_name="Linux",
+            environment={"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"},
+            executable_finder=lambda _name: "/usr/bin/xprop",
+            command_runner=runner,
+        )
+        right_screen = SimpleNamespace(
+            geometry=lambda: Rect(2560, 0, 2560, 1600),
+            availableGeometry=lambda: Rect(2560, 0, 2560, 1600),
+        )
+
+        self.assertEqual(resolver.usable_screen_rect(right_screen), (2560, 36, 2514, 1564))
+        self.assertEqual(resolver.usable_screen_rect(right_screen), (2560, 36, 2514, 1564))
+        runner.assert_called_once()
+
+    def test_wayland_work_area_uses_compositor_approved_qt_geometry(self):
+        rect = SimpleNamespace(x=lambda: 10, y=lambda: 30, width=lambda: 1200, height=lambda: 770)
+        screen = SimpleNamespace(availableGeometry=lambda: rect)
+        runner = mock.Mock()
+        resolver = WorkAreaResolver(
+            system_name="Linux",
+            environment={"DISPLAY": ":1", "XDG_SESSION_TYPE": "wayland"},
+            command_runner=runner,
+        )
+
+        self.assertEqual(resolver.usable_screen_rect(screen), (10, 30, 1200, 770))
+        runner.assert_not_called()
 
     def test_linux_paths_follow_xdg_environment(self):
         with tempfile.TemporaryDirectory() as tempdir:

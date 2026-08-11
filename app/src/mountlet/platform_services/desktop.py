@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .processes import external_process_environment
+from .work_area import WorkAreaResolver
 
 
 class DesktopServices:
@@ -28,6 +29,7 @@ class DesktopServices:
         window_workspace_check: Callable[[Any], bool | None] | None = None,
         window_workspace_mover: Callable[[Any], bool] | None = None,
         keep_above_setter: Callable[[Any, bool], bool] | None = None,
+        work_area_resolver: WorkAreaResolver | None = None,
     ) -> None:
         self.qt = qt
         self._folder_opener = folder_opener
@@ -36,6 +38,7 @@ class DesktopServices:
         self._window_workspace_check = window_workspace_check
         self._window_workspace_mover = window_workspace_mover
         self._keep_above_setter = keep_above_setter
+        self._work_area_resolver = work_area_resolver or WorkAreaResolver()
 
     def file_manager_label(self) -> str:
         if self._file_manager_name:
@@ -89,6 +92,9 @@ class DesktopServices:
         if not self._keep_above_setter:
             return False
         return self._keep_above_setter(window, enabled)
+
+    def usable_screen_rect(self, screen: Any) -> tuple[int, int, int, int]:
+        return self._work_area_resolver.usable_screen_rect(screen)
 
 
 def _file_opener_command() -> list[str]:
