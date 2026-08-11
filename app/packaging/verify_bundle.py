@@ -35,7 +35,11 @@ def bundled_rclone_candidates(dist: Path, system: str) -> list[Path]:
     else:
         app = dist / "Mountlet"
         roots = [app, app / "_internal"]
-    return [root / "vendor" / "rclone" / name for root in roots]
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.extend((root / "vendor" / "rclone").glob(f"*/{name}"))
+        candidates.append(root / "vendor" / "rclone" / name)
+    return candidates
 
 
 def _verify_bundled_rclone(dist: Path, executable: Path, system: str) -> None:

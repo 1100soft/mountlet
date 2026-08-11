@@ -35,6 +35,16 @@ def _load_build_linux_bundle():
 
 
 class StageRcloneTests(unittest.TestCase):
+    def test_windows_installer_preserves_running_rclone_mounts(self):
+        root = Path(__file__).resolve().parents[1]
+        installer = (root / "packaging" / "windows" / "mountlet.iss").read_text(
+            encoding="utf-8"
+        )
+        spec = (root / "packaging" / "mountlet.spec").read_text(encoding="utf-8")
+
+        self.assertIn("CloseApplicationsFilterExcludes=rclone.exe", installer)
+        self.assertIn('f"vendor/rclone/{version}"', spec)
+
     def test_windows_tiny_executable_is_rejected_as_shim(self):
         stage_rclone = _load_stage_rclone()
         with tempfile.TemporaryDirectory() as tempdir:

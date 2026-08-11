@@ -327,8 +327,13 @@ testing another compatible binary. The staged binary is copied into
 `vendor/rclone/`, included in the native bundle, and ignored by git. On
 Windows, explicit staging rejects package-manager shim executables and requires
 the real `rclone.exe`. Lean installs discover `RCLONE_PATH` or a system rclone;
-bundled installs use their app-local binary. FUSE, WinFsp, and macFUSE are not
-bundled; they remain optional native-folder support.
+bundled installs use their app-local binary. Windows packages place that binary
+under an app-versioned directory and exclude persistent rclone mount processes
+from installer close detection. An upgrade can therefore replace Mountlet while
+existing mounts continue using the preceding rclone copy; the new app uses its
+own copy. Never restore a shared overwrite-in-place rclone path on Windows.
+FUSE, WinFsp, and macFUSE are not bundled; they remain optional native-folder
+support.
 
 The `Native package CI` workflow builds visible `system-rclone` and
 `bundled-rclone` artifacts. Each artifact contains a portable bundle plus a

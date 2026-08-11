@@ -19,6 +19,8 @@ def _verify_windows_bundled_rclone(destination: Path, executable: Path) -> None:
         destination / "vendor" / "rclone" / "rclone.exe",
         destination / "_internal" / "vendor" / "rclone" / "rclone.exe",
     ]
+    candidates.extend((destination / "vendor" / "rclone").glob("*/rclone.exe"))
+    candidates.extend((destination / "_internal" / "vendor" / "rclone").glob("*/rclone.exe"))
     bundled = next((candidate for candidate in candidates if candidate.is_file()), None)
     if bundled is None:
         raise RuntimeError("The installed bundled-rclone build does not contain rclone.exe.")

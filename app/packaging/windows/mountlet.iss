@@ -35,6 +35,9 @@ WizardStyle=modern
 UninstallDisplayName=Mountlet
 UninstallDisplayIcon={app}\Mountlet.exe
 CloseApplications=yes
+; Mounted remotes run a versioned rclone outside every file updated by this
+; installer. Do not offer to terminate those persistent filesystem processes.
+CloseApplicationsFilterExcludes=rclone.exe
 RestartApplications=no
 
 [Tasks]

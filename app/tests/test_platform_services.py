@@ -202,6 +202,19 @@ class PlatformServicesTests(unittest.TestCase):
 
         self.assertEqual(found, str(bundled))
 
+    def test_frozen_bundle_prefers_app_versioned_rclone(self):
+        platform = WindowsPlatformServices()
+        with tempfile.TemporaryDirectory() as tempdir:
+            executable = Path(tempdir) / "Mountlet.exe"
+            with mock.patch("mountlet.platform_services.base.sys.executable", str(executable)):
+                with mock.patch("mountlet.platform_services.base.sys.frozen", True, create=True):
+                    candidates = platform.bundled_rclone_candidates()
+
+        self.assertEqual(
+            candidates[0],
+            executable.parent / "vendor" / "rclone" / "0.6.6" / "rclone.exe",
+        )
+
     def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):
         process = mock.Mock()
         process.poll.return_value = None
