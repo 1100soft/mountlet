@@ -526,10 +526,14 @@ class TrayTests(unittest.TestCase):
         window._resize_in_place.assert_not_called()
         window._resize_anchored.assert_not_called()
 
-    def test_managed_single_window_is_still_clamped(self):
+    def test_managed_single_window_is_normalized_and_resized(self):
         window = object.__new__(tray.MountletWindow)
         window.window = mock.Mock()
         window._single_window_size_managed = mock.Mock(return_value=True)
+        window._usable_screen_geometry = mock.Mock(
+            return_value=SimpleNamespace(width=lambda: 1200, height=lambda: 800)
+        )
+        window._window_frame_overhead = mock.Mock(return_value=(10, 30))
         window._clamp_to_screen = mock.Mock()
         window._resize_in_place = mock.Mock()
         window._resize_anchored = mock.Mock()
@@ -539,9 +543,30 @@ class TrayTests(unittest.TestCase):
             800, 600, screen, preserve_position=True
         )
 
-        window._clamp_to_screen.assert_called_once_with(screen)
-        window._resize_in_place.assert_not_called()
+        window.window.showNormal.assert_called_once_with()
+        window._resize_in_place.assert_called_once_with(800, 600, screen)
         window._resize_anchored.assert_not_called()
+
+    def test_final_fitted_geometry_reapplies_native_frame_desktop_cap(self):
+        window = object.__new__(tray.MountletWindow)
+        window.window = SimpleNamespace(
+            size=lambda: SimpleNamespace(width=lambda: 1400, height=lambda: 900)
+        )
+        window._single_window_size_managed = mock.Mock(return_value=False)
+        window._usable_screen_geometry = mock.Mock(
+            return_value=SimpleNamespace(width=lambda: 1200, height=lambda: 800)
+        )
+        window._window_frame_overhead = mock.Mock(return_value=(10, 30))
+        window._clamp_to_screen = mock.Mock()
+        window._resize_in_place = mock.Mock()
+        window._resize_anchored = mock.Mock()
+        screen = object()
+
+        window._apply_fitted_window_geometry(
+            1400, 900, screen, preserve_position=False
+        )
+
+        window._resize_anchored.assert_called_once_with(1190, 770, screen)
 
     def test_embedded_horizontal_overflow_is_reserved_in_window_height(self):
         window = object.__new__(tray.MountletWindow)

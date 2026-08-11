@@ -9903,9 +9903,28 @@ class MountletWindow:
         *,
         preserve_position: bool,
     ) -> None:
+        # Reapply the hard desktop cap at the final mutation boundary.  The
+        # first pre-show fit may not have native frame margins yet, while this
+        # deferred/zoom fit does.  Never allow a stale earlier measurement to
+        # reach QWidget as an oversized client rectangle.
+        if screen is not None:
+            with suppress(Exception):
+                available = self._usable_screen_geometry(screen)
+                frame_width, frame_height = self._window_frame_overhead()
+                target_width = min(
+                    int(target_width), max(int(available.width()) - frame_width, 1)
+                )
+                target_height = min(
+                    int(target_height), max(int(available.height()) - frame_height, 1)
+                )
         if self._single_window_size_managed(screen):
-            self._clamp_to_screen(screen)
-            return
+            # KDE can mark the oversized pre-show window as maximized.  That
+            # state makes later resize requests ineffective and used to leave
+            # the frame alternating between top and bottom overflow.  Content-
+            # fitted single-window geometry owns its size, so normalize it
+            # before applying the correctly capped client rectangle.
+            with suppress(Exception):
+                self.window.showNormal()
         try:
             current_size = self.window.size()
             if current_size.width() == target_width and current_size.height() == target_height:
