@@ -212,7 +212,7 @@ class PlatformServicesTests(unittest.TestCase):
 
         self.assertEqual(
             candidates[0],
-            executable.parent / "vendor" / "rclone" / "0.6.6" / "rclone.exe",
+            executable.resolve().parent / "vendor" / "rclone" / "0.6.6" / "rclone.exe",
         )
 
     def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):
