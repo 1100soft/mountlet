@@ -33,10 +33,10 @@ procedure.
   left/top `frameMargins()`, while subtracting all frame margins from the client
   size cap. Apply size and position together so no oversized intermediate frame
   can escape the available desktop.
-- Never treat a compositor-maximized single window as exempt from content-fit
-  sizing. An oversized pre-show layout can itself cause KDE to set that state;
-  normalize it and reapply the current available-desktop cap at the final
-  geometry mutation boundary.
+- Native frame margins are unavailable before a top-level window is mapped.
+  Use style-derived decoration reserves for the hidden fit, perform one exact
+  mapped fit, and cache the measured normal-window margins. Normalize before
+  measuring; a maximized zero-margin report must never replace that cache.
 - `python packaging/run_tests.py --resource-report build/test-resources.json`
   records wall time, child-process CPU time, logical CPU count, and peak child
   RSS where the platform exposes it. This is a reproducible regression baseline,

@@ -5671,6 +5671,7 @@ class MountletWindow:
         self._last_tray_edge_signature: tuple[int, ...] | None = None
         self._panel_frame_boundary: int | None = None
         self._usable_screen_rects: dict[str, tuple[int, int, int, int]] = {}
+        self._normal_frame_margins: tuple[int, int, int, int] | None = None
         self._last_popup_position: tuple[int, int] | None = None
         self._skip_background_refresh_once = False
         self._drag_offset: Any | None = None
@@ -6335,10 +6336,28 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
         if not was_visible:
+            # The window manager creates native decorations only after map.
+            # Replace the conservative hidden-window fit with one exact fit.
+            timer = getattr(getattr(self, "qt", None), "QTimer", None)
+            if timer is not None:
+                timer.singleShot(0, self._fit_mapped_main_window)
+        if not was_visible:
             self._show_deferred_reauthentication()
         if not was_visible and browser_restore is not None:
             remote_name, focus_browser = browser_restore
             self._show_file_browser_for_remote_name(remote_name, focus_browser=focus_browser)
+
+    def _fit_mapped_main_window(self, normalized: bool = False) -> None:
+        if not self.is_visible() or self._tray_is_quitting():
+            return
+        if not normalized and self._single_window_size_managed():
+            with suppress(Exception):
+                self.window.showNormal()
+            self.qt.QTimer.singleShot(0, lambda: self._fit_mapped_main_window(True))
+            return
+        widgets = getattr(self, "_content_fit_widgets", None)
+        if widgets is not None:
+            self._fit_to_content(*widgets, preserve_position=False)
 
     def _window_is_active(self) -> bool:
         try:
@@ -6642,14 +6661,15 @@ class MountletWindow:
             screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
             if screen is None:
                 return
+            self._cache_tray_edge(anchor, screen.availableGeometry(), screen)
             available = self._usable_screen_geometry(screen)
             edge = self._cache_tray_edge(anchor, available, screen)
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
-            frame = self.window.frameGeometry()
-            frame_width = size.width() + max(frame.width() - size.width(), 0)
-            frame_height = size.height() + max(frame.height() - size.height(), 0)
+            frame_overhead_width, frame_overhead_height = self._window_frame_overhead()
+            frame_width = size.width() + frame_overhead_width
+            frame_height = size.height() + frame_overhead_height
             frame_size = self.qt.QSize(frame_width, frame_height)
             if getattr(self.tray_app, "_is_gnome_wayland", False) and not geometry_valid and edge is None:
                 x = available.left() + available.width() - frame_width - 8
@@ -6855,6 +6875,10 @@ class MountletWindow:
         with suppress(Exception):
             tray_geometry = self.tray_app.tray.geometry()
             if tray_geometry.isValid():
+                if getattr(self, "_last_tray_edge", None) not in {
+                    "left", "right", "top", "bottom"
+                }:
+                    self._cache_tray_edge(tray_geometry.center(), available, screen)
                 current = exclude_tray_panel(
                     current,
                     rect_tuple(tray_geometry),
@@ -7117,6 +7141,11 @@ class MountletWindow:
         self.qt.QTimer.singleShot(0, lambda: self._fit_after_layout_settles(*widgets))
 
     def application_zoom_changed(self, steps: int) -> None:
+        # Normalize before the deferred measurement. Maximized windows report
+        # zero frame margins; normalizing inside the apply step is too late.
+        if self._single_window_size_managed():
+            with suppress(Exception):
+                self.window.showNormal()
         file_browser = getattr(self, "file_browser", None)
         if file_browser is not None:
             file_browser.apply_application_zoom(steps)
@@ -9879,12 +9908,22 @@ class MountletWindow:
         return max(observed_width, margin_width), max(observed_height, margin_height)
 
     def _window_frame_margins(self) -> tuple[int, int, int, int]:
-        """Return the compositor-reported client-to-frame offsets."""
+        """Return stable normal-window client-to-frame offsets."""
+        measured: tuple[int, int, int, int] | None = None
+        with suppress(Exception):
+            client = self.window.geometry()
+            frame = self.window.frameGeometry()
+            measured = (
+                max(int(client.left()) - int(frame.left()), 0),
+                max(int(client.top()) - int(frame.top()), 0),
+                max(int(frame.right()) - int(client.right()), 0),
+                max(int(frame.bottom()) - int(client.bottom()), 0),
+            )
         with suppress(Exception):
             handle = self.window.windowHandle()
             margins = handle.frameMargins() if handle is not None else None
             if margins is not None:
-                return tuple(
+                native = tuple(
                     max(int(value), 0)
                     for value in (
                         margins.left(),
@@ -9893,6 +9932,28 @@ class MountletWindow:
                         margins.bottom(),
                     )
                 )
+                if any(native):
+                    measured = native
+        if measured is not None and any(measured):
+            self._normal_frame_margins = measured
+            return measured
+        cached = getattr(self, "_normal_frame_margins", None)
+        if cached is not None:
+            return cached
+        return self._estimated_window_frame_margins()
+
+    def _estimated_window_frame_margins(self) -> tuple[int, int, int, int]:
+        """Reserve decorations before the compositor maps the first frame."""
+        style = getattr(self.window, "style", lambda: None)()
+        pixel_metric = getattr(style, "pixelMetric", None)
+        qstyle = getattr(getattr(self, "qt", None), "QStyle", None)
+        enum = getattr(qstyle, "PixelMetric", None)
+        if not callable(pixel_metric) or enum is None:
+            return 0, 0, 0, 0
+        with suppress(Exception):
+            border = max(int(pixel_metric(enum.PM_DefaultFrameWidth)), 0)
+            title = max(int(pixel_metric(enum.PM_TitleBarHeight)), 0)
+            return border, title + border, border, border
         return 0, 0, 0, 0
 
     def _apply_fitted_window_geometry(
@@ -9917,14 +9978,6 @@ class MountletWindow:
                 target_height = min(
                     int(target_height), max(int(available.height()) - frame_height, 1)
                 )
-        if self._single_window_size_managed(screen):
-            # KDE can mark the oversized pre-show window as maximized.  That
-            # state makes later resize requests ineffective and used to leave
-            # the frame alternating between top and bottom overflow.  Content-
-            # fitted single-window geometry owns its size, so normalize it
-            # before applying the correctly capped client rectangle.
-            with suppress(Exception):
-                self.window.showNormal()
         try:
             current_size = self.window.size()
             if current_size.width() == target_width and current_size.height() == target_height:
@@ -10038,14 +10091,7 @@ class MountletWindow:
         self.window.move(x + left, y + top)
 
     def _remember_calculated_main_frame(self, x: int, y: int, width: int, height: int) -> None:
-        try:
-            frame = self.window.frameGeometry()
-            client = self.window.size()
-            frame_width = max(frame.width() - client.width(), 0)
-            frame_height = max(frame.height() - client.height(), 0)
-        except Exception:
-            frame_width = 0
-            frame_height = 0
+        frame_width, frame_height = self._window_frame_overhead()
         self.window._mountlet_calculated_frame = (x, y, width + frame_width, height + frame_height)
 
     def _resize_in_place(self, width: int, height: int, screen: Any | None) -> None:

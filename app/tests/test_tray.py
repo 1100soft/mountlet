@@ -526,7 +526,7 @@ class TrayTests(unittest.TestCase):
         window._resize_in_place.assert_not_called()
         window._resize_anchored.assert_not_called()
 
-    def test_managed_single_window_is_normalized_and_resized(self):
+    def test_final_geometry_application_does_not_change_window_state(self):
         window = object.__new__(tray.MountletWindow)
         window.window = mock.Mock()
         window._single_window_size_managed = mock.Mock(return_value=True)
@@ -543,7 +543,7 @@ class TrayTests(unittest.TestCase):
             800, 600, screen, preserve_position=True
         )
 
-        window.window.showNormal.assert_called_once_with()
+        window.window.showNormal.assert_not_called()
         window._resize_in_place.assert_called_once_with(800, 600, screen)
         window._resize_anchored.assert_not_called()
 
@@ -589,6 +589,26 @@ class TrayTests(unittest.TestCase):
         )
 
         self.assertEqual(window._window_frame_overhead(), (10, 31))
+
+    def test_normal_frame_margins_survive_maximized_zero_margin_report(self):
+        margins = SimpleNamespace(left=lambda: 4, right=lambda: 6, top=lambda: 28, bottom=lambda: 3)
+        handle = SimpleNamespace(frameMargins=lambda: margins)
+        window = object.__new__(tray.MountletWindow)
+        window.window = SimpleNamespace(
+            geometry=lambda: (_ for _ in ()).throw(RuntimeError()),
+            frameGeometry=lambda: (_ for _ in ()).throw(RuntimeError()),
+            windowHandle=lambda: handle,
+        )
+
+        self.assertEqual(window._window_frame_margins(), (4, 28, 6, 3))
+        zero = SimpleNamespace(left=lambda: 0, right=lambda: 0, top=lambda: 0, bottom=lambda: 0)
+        window.window = SimpleNamespace(
+            geometry=lambda: (_ for _ in ()).throw(RuntimeError()),
+            frameGeometry=lambda: (_ for _ in ()).throw(RuntimeError()),
+            windowHandle=lambda: SimpleNamespace(frameMargins=lambda: zero),
+        )
+
+        self.assertEqual(window._window_frame_margins(), (4, 28, 6, 3))
 
     def test_local_port_available_detects_bound_port(self):
         try:
@@ -2835,7 +2855,7 @@ class TrayTests(unittest.TestCase):
         mountlet_window.window.show.assert_called_once_with()
         mountlet_window.window.raise_.assert_not_called()
         mountlet_window.window.activateWindow.assert_not_called()
-        self.assertEqual(single_shot.call_count, 6)
+        self.assertEqual(single_shot.call_count, 7)
 
     def test_activate_main_window_skips_when_window_still_on_other_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
