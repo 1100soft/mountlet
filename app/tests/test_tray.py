@@ -3661,6 +3661,23 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(tray._parse_xprop_cardinal("_NET_CURRENT_DESKTOP(CARDINAL) = 3"), 3)
         self.assertIsNone(tray._parse_xprop_cardinal("_NET_CURRENT_DESKTOP:  not found."))
 
+    def test_parse_x11_work_area_selects_current_desktop(self):
+        output = (
+            "_NET_CURRENT_DESKTOP(CARDINAL) = 1\n"
+            "_NET_WORKAREA(CARDINAL) = 0, 36, 5074, 1564, "
+            "10, 40, 5000, 1500, 20, 50, 4900, 1400\n"
+        )
+
+        self.assertEqual(tray._parse_x11_work_area(output), (10, 40, 5000, 1500))
+
+    def test_parse_x11_work_area_rejects_missing_desktop_entry(self):
+        output = (
+            "_NET_CURRENT_DESKTOP(CARDINAL) = 3\n"
+            "_NET_WORKAREA(CARDINAL) = 0, 36, 5074, 1564\n"
+        )
+
+        self.assertIsNone(tray._parse_x11_work_area(output))
+
     def test_current_desktop_targets_filter_dolphin_windows_by_x11_desktop(self):
         windows = [
             ("org.kde.dolphin-1234", "/dolphin/Dolphin_1"),

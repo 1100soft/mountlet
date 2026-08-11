@@ -37,6 +37,10 @@ procedure.
   Use style-derived decoration reserves for the hidden fit, perform one exact
   mapped fit, and cache the measured normal-window margins. Normalize before
   measuring; a maximized zero-margin report must never replace that cache.
+- On X11, use the window manager's `_NET_WORKAREA` for panel-excluded desktop
+  bounds and intersect it with the active monitor. `QScreen.availableGeometry()`
+  is only a fallback: some KDE panel configurations expose the full monitor
+  there even though KWin publishes the correct top/right reserved area.
 - `python packaging/run_tests.py --resource-report build/test-resources.json`
   records wall time, child-process CPU time, logical CPU count, and peak child
   RSS where the platform exposes it. This is a reproducible regression baseline,

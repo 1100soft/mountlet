@@ -83,6 +83,8 @@ _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
 _dolphin_tab_target_cache: tuple[str, str] | None = None
 _file_manager_label_cache: str | None = None
 _CARDINAL_RE = re.compile(r"=\s*(\d+)")
+_XPROP_CURRENT_DESKTOP_RE = re.compile(r"_NET_CURRENT_DESKTOP[^=]*=\s*(\d+)")
+_XPROP_WORKAREA_RE = re.compile(r"_NET_WORKAREA[^=]*=\s*([-\d, \t]+)")
 LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
 REMOTE_CHANGE_POLLING_ENV = "MOUNTLET_REMOTE_CHANGE_POLLING"
 BACKGROUND_RCLONE_CHECKS_ENV = "MOUNTLET_BACKGROUND_RCLONE_CHECKS"
@@ -1931,6 +1933,44 @@ def _x11_current_desktop() -> int | None:
     if not os.environ.get("DISPLAY"):
         return None
     return _xprop_cardinal(["-root", "_NET_CURRENT_DESKTOP"])
+
+
+def _parse_x11_work_area(output: str) -> tuple[int, int, int, int] | None:
+    desktop_match = _XPROP_CURRENT_DESKTOP_RE.search(output)
+    workarea_match = _XPROP_WORKAREA_RE.search(output)
+    if desktop_match is None or workarea_match is None:
+        return None
+    values = [int(value) for value in re.findall(r"-?\d+", workarea_match.group(1))]
+    offset = int(desktop_match.group(1)) * 4
+    if offset + 4 > len(values):
+        return None
+    x, y, width, height = values[offset : offset + 4]
+    if width <= 0 or height <= 0:
+        return None
+    return x, y, width, height
+
+
+def _x11_work_area() -> tuple[int, int, int, int] | None:
+    if platform.system() != "Linux" or not os.environ.get("DISPLAY"):
+        return None
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return None
+    xprop = shutil.which("xprop")
+    if not xprop:
+        return None
+    try:
+        result = subprocess.run(
+            [xprop, "-root", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_x11_work_area(result.stdout)
 
 
 def _x11_window_desktop(window_id: int) -> int | None:
@@ -5671,6 +5711,8 @@ class MountletWindow:
         self._last_tray_edge_signature: tuple[int, ...] | None = None
         self._panel_frame_boundary: int | None = None
         self._usable_screen_rects: dict[str, tuple[int, int, int, int]] = {}
+        self._x11_work_area_loaded = False
+        self._x11_work_area_rect: tuple[int, int, int, int] | None = None
         self._normal_frame_margins: tuple[int, int, int, int] | None = None
         self._last_popup_position: tuple[int, int] | None = None
         self._skip_background_refresh_once = False
@@ -6872,6 +6914,14 @@ class MountletWindow:
         """Return a stable panel-excluded work area reported by Qt."""
         available = screen.availableGeometry()
         current = rect_tuple(available)
+        if not getattr(self, "_x11_work_area_loaded", False):
+            self._x11_work_area_loaded = True
+            self._x11_work_area_rect = _x11_work_area()
+        wm_work_area = getattr(self, "_x11_work_area_rect", None)
+        if wm_work_area is not None:
+            with suppress(Exception):
+                current = intersect_rects(rect_tuple(screen.geometry()), wm_work_area)
+                current = intersect_rects(current, rect_tuple(available))
         with suppress(Exception):
             tray_geometry = self.tray_app.tray.geometry()
             if tray_geometry.isValid():
