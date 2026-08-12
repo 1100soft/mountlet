@@ -3162,7 +3162,7 @@ class TrayTests(unittest.TestCase):
         owner = SimpleNamespace(dialog=mock.Mock())
         on_accepted = mock.Mock()
 
-        with mock.patch.object(mountlet_window, "_raise_child_windows") as raise_child:
+        with mock.patch.object(mountlet_window, "_show_tracked_child_dialog") as show_child:
             mountlet_window._open_child_dialog(owner, on_accepted)
 
         self.assertEqual(mountlet_window._child_dialogs, [owner.dialog])
@@ -3172,8 +3172,7 @@ class TrayTests(unittest.TestCase):
         owner.dialog.setWindowFlags.assert_not_called()
         owner.dialog.setModal.assert_called_once_with(True)
         owner.dialog.setWindowModality.assert_called_once_with("window-modal")
-        owner.dialog.show.assert_called_once_with()
-        raise_child.assert_called_once_with()
+        show_child.assert_called_once_with(owner.dialog)
 
     def test_open_child_dialog_shows_main_window_before_hidden_parent_dialog(self):
         mountlet_window = object.__new__(tray.MountletWindow)

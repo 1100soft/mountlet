@@ -34,6 +34,17 @@ def _load_build_linux_bundle():
     return module
 
 
+def _load_test_runner():
+    root = Path(__file__).resolve().parents[1]
+    path = root / "packaging" / "run_tests.py"
+    spec = importlib.util.spec_from_file_location("mountlet_run_tests_test", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load run_tests.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class StageRcloneTests(unittest.TestCase):
     def test_windows_installer_preserves_running_rclone_mounts(self):
         root = Path(__file__).resolve().parents[1]
@@ -219,6 +230,53 @@ class BuildLinuxBundleTests(unittest.TestCase):
             build_linux_bundle.install_build_info(Path(tempdir))
 
             self.assertTrue((package / "mountlet-build-info.json").is_file())
+
+
+class TestRunnerTests(unittest.TestCase):
+    def test_methods_are_discovered_in_stable_bounded_batches(self):
+        runner = _load_test_runner()
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_zeta.py").write_text(
+                "import unittest\n"
+                "class ZetaTests(unittest.TestCase):\n"
+                "    def test_two(self): pass\n",
+                encoding="utf-8",
+            )
+            (tests / "helper.py").touch()
+            (tests / "test_alpha.py").write_text(
+                "import unittest\n"
+                "class AlphaTests(unittest.TestCase):\n"
+                "    def test_one(self): pass\n"
+                "    def test_two(self): pass\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                runner._test_batches(root, batch_size=1),
+                (
+                    ("tests.test_alpha.AlphaTests.test_one",),
+                    ("tests.test_alpha.AlphaTests.test_two",),
+                    ("tests.test_zeta.ZetaTests.test_two",),
+                ),
+            )
+
+    def test_each_batch_runs_in_its_own_interpreter(self):
+        runner = _load_test_runner()
+        completed = SimpleNamespace(returncode=0)
+        targets = (
+            "tests.test_core.CoreTests.test_one",
+            "tests.test_core.CoreTests.test_two",
+        )
+        with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(runner._run_test_batch(targets), 0)
+
+        run.assert_called_once_with(
+            [runner.sys.executable, "-m", "unittest", *targets],
+            check=False,
+        )
 
 
 class WebsiteReleaseTests(unittest.TestCase):

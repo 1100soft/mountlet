@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,43 @@ REQUIRED_REGRESSION_TESTS = (
     "tests.test_ui_zoom.UiZoomTests.test_production_qt_namespace_constructs_file_browser",
     "tests.test_ui_zoom.UiZoomTests.test_file_list_integer_height_has_no_scrollbar_at_every_zoom",
 )
+TEST_BATCH_SIZE = 40
+
+
+def _test_batches(root: Path, *, batch_size: int = TEST_BATCH_SIZE) -> tuple[tuple[str, ...], ...]:
+    """Return stable, bounded batches without importing application modules."""
+    batches: list[tuple[str, ...]] = []
+    for path in sorted((root / "tests").glob("test_*.py")):
+        module = f"tests.{path.stem}"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        targets = [
+            f"{module}.{node.name}.{member.name}"
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            for member in node.body
+            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and member.name.startswith("test")
+        ]
+        if not targets:
+            targets = [module]
+        for offset in range(0, len(targets), batch_size):
+            batches.append(tuple(targets[offset : offset + batch_size]))
+    return tuple(batches)
+
+
+def _run_test_batch(targets: tuple[str, ...]) -> int:
+    # Qt and its Python wrappers retain process-global objects after individual
+    # test cases finish.  A fresh interpreter per module bounds that retained
+    # memory and prevents the complete suite from exhausting CI runners.
+    label = targets[0].rsplit(".", 2)[0]
+    print(f"\n== {label} ({len(targets)} tests) ==", flush=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "unittest", *targets],
+        check=False,
+    )
+    if result.returncode:
+        print(f"::error title=Unit tests failed::{_workflow_escape(label)} batch failed")
+    return result.returncode
 
 
 def _workflow_escape(value: str) -> str:
@@ -59,17 +97,11 @@ def main() -> int:
     args = parser.parse_args()
     started = time.perf_counter()
     cpu_before, _peak_before = _child_usage()
-    result = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-        capture_output=True,
-        text=True,
-    )
-    sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    if result.returncode:
-        detail = (result.stdout + result.stderr)[-10000:]
-        print(f"::error title=Unit tests failed::{_workflow_escape(detail)}")
-        return result.returncode
+    root = Path(__file__).resolve().parents[1]
+    for targets in _test_batches(root):
+        returncode = _run_test_batch(targets)
+        if returncode:
+            return returncode
     # Discovery alone succeeds if a regression test is accidentally removed
     # during cleanup.  Run release-critical behavioral tests by stable name so
     # deletion or renaming fails the release gate instead of reducing coverage

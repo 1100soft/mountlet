@@ -28,7 +28,7 @@ jobs:
 
       - name: Run tests
         working-directory: app
-        run: python -m unittest discover -s tests
+        run: python packaging/run_tests.py
 
       - name: Compile source
         working-directory: app
