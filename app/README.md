@@ -110,8 +110,15 @@ may change for future renewals with advance notice.
   be signed in within the default browser; the hint does not start a new Google
   sign-in session. Leave the setting blank to use the browser's current
   account.
-- Type in the main search box to search all indexed remotes.
-- Type in the file-browser search box to search the current remote.
+- Type in the main search box to search all indexed remotes, or use the
+  file-browser search box to limit results to the current remote. Space-separated
+  words are an unordered AND search across the filename and parent path; quote a
+  phrase to keep it contiguous. At least one term must match the filename, so a
+  matching folder does not return every descendant. Exact and filename matches
+  rank above mixed filename/path matches. Search reads only the local SQLite
+  index; choosing a result opens its folder immediately and queues the normal
+  background refresh. Result counts show `80+` globally or `50+` per remote when
+  capped.
 - Open files directly. Mountlet opens a managed local cache copy whether or
   not the remote is mounted. This also lets rclone export native Google
   documents for local editing.

@@ -1,6 +1,22 @@
 # Changelog
 
-## 0.6.6 - 2026-08-11
+## 0.6.6 - 2026-08-12
+
+- Reworked global and per-remote search around one local SQLite query: unordered
+  AND terms and quoted phrases match filenames and parent paths, path-only hits
+  are excluded, and exact/filename/mixed matches are ranked and color-coded.
+  SQLite performs filtering, scoring, ordering, and limiting before returning
+  at most 81 global or 51 remote rows; capped counts display as `80+` or `50+`,
+  and search no longer performs a separate cloud verification pass.
+- Made search result viewports exactly one integer header plus six integer rows,
+  reserved scrollbars to prevent layout shifts, constrained columns to the
+  viewport, retained queries across window modes, and reran active remote search
+  when selecting another remote.
+- Added drag-and-drop remote reordering, simplified remote cards and controls,
+  centralized semantic and theme colors, and fixed stale selection brushes that
+  could highlight unrelated file rows while navigating search results.
+- Unified child-dialog centering and platform work-area resolution, and fixed
+  detached-browser sizing and placement against panel-excluded desktop bounds.
 
 - Kept file-list scrollbars reserved in both window modes so folder changes do
   not alter viewport or column geometry, and removed scroll-position caching in

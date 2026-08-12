@@ -30,6 +30,7 @@ from mountlet.cloud_browser_ui import (
     cascade_position,
 )
 from mountlet.metadata_index import MetadataIndex
+from mountlet.ui_geometry import FILE_BROWSER_LAYOUT_SPACING
 
 
 def _remote(name: str = "Docs") -> core.RemoteInfo:
@@ -243,6 +244,99 @@ class CloudBrowserTests(unittest.TestCase):
         self.assertEqual([entry.name for entry in cached], ["Notes", "Report.pdf"])
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].path, "Projects/Report.pdf")
+
+    def test_metadata_search_ands_terms_across_name_and_parent_and_ranks_quality(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            index = MetadataIndex(Path(tempdir) / "metadata.sqlite3")
+            remote = _remote("Docs__Drive")
+            index.upsert_entries(
+                remote,
+                [
+                    BrowserEntry("tax 2025", "tax 2025", False),
+                    BrowserEntry("2025-tax-summary.pdf", "2025-tax-summary.pdf", False),
+                    BrowserEntry("tax notes.pdf", "Archive/2025/tax notes.pdf", False),
+                    BrowserEntry("report.pdf", "Tax/2025/report.pdf", False),
+                    BrowserEntry("tax only.pdf", "tax only.pdf", False),
+                ],
+            )
+
+            results = index.search("tax 2025", remotes=[remote])
+
+        self.assertEqual(
+            [(entry.name, entry.match_quality) for entry in results],
+            [
+                ("tax 2025", "exact"),
+                ("2025-tax-summary.pdf", "filename"),
+                ("tax notes.pdf", "mixed"),
+            ],
+        )
+
+    def test_metadata_search_preserves_quoted_phrases(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            index = MetadataIndex(Path(tempdir) / "metadata.sqlite3")
+            remote = _remote("Docs__Drive")
+            index.upsert_folder(
+                remote,
+                "Records",
+                [
+                    BrowserEntry("annual tax report.pdf", "Records/annual tax report.pdf", False),
+                    BrowserEntry("tax annual report.pdf", "Records/tax annual report.pdf", False),
+                ],
+            )
+
+            results = index.search('"annual tax"', remotes=[remote])
+
+        self.assertEqual([entry.name for entry in results], ["annual tax report.pdf"])
+        self.assertEqual(results[0].match_quality, "phrase")
+
+    def test_metadata_search_treats_sql_wildcard_characters_literally(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            index = MetadataIndex(Path(tempdir) / "metadata.sqlite3")
+            remote = _remote("Docs__Drive")
+            index.upsert_folder(
+                remote,
+                "",
+                [
+                    BrowserEntry("100% complete.txt", "100% complete.txt", False),
+                    BrowserEntry("1000 complete.txt", "1000 complete.txt", False),
+                ],
+            )
+
+            results = index.search("100%", remotes=[remote])
+
+        self.assertEqual([entry.name for entry in results], ["100% complete.txt"])
+
+    def test_metadata_search_ignores_path_only_matches(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            index = MetadataIndex(Path(tempdir) / "metadata.sqlite3")
+            remote = _remote("Docs__Drive")
+            index.upsert_folder(
+                remote,
+                "Tax/2025",
+                [BrowserEntry("unrelated.pdf", "Tax/2025/unrelated.pdf", False)],
+            )
+
+            results = index.search("tax 2025", remotes=[remote])
+
+        self.assertEqual(results, [])
+
+    def test_metadata_search_applies_quality_order_before_sql_limit(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            index = MetadataIndex(Path(tempdir) / "metadata.sqlite3")
+            remote = _remote("Docs__Drive")
+            index.upsert_folder(
+                remote,
+                "2025",
+                [
+                    BrowserEntry("tax notes.pdf", "2025/tax notes.pdf", False),
+                    BrowserEntry("tax 2025", "2025/tax 2025", False),
+                    BrowserEntry("2025 tax.pdf", "2025/2025 tax.pdf", False),
+                ],
+            )
+
+            results = index.search("tax 2025", remotes=[remote], limit=1)
+
+        self.assertEqual([(entry.name, entry.match_quality) for entry in results], [("tax 2025", "exact")])
 
     def test_backend_indexes_full_remote_tree(self):
         response = SimpleNamespace(
@@ -2099,6 +2193,52 @@ class CloudBrowserTests(unittest.TestCase):
         browser.apply_application_zoom(-4)
         self.assertEqual(browser.window.current_width, 324)
 
+    def test_detached_zoom_caps_both_window_and_root_to_resolved_work_area(self):
+        area = SimpleNamespace(width=lambda: 300, height=lambda: 500)
+        screen = object()
+        root = mock.Mock()
+        window = mock.Mock()
+        window.screen.return_value = screen
+        window.width.return_value = 280
+        window.height.return_value = 300
+        window.frameGeometry.return_value = SimpleNamespace(width=lambda: 290)
+        browser = object.__new__(CompactCloudBrowser)
+        browser._zoom_steps = 0
+        browser._embedded = False
+        browser._base_window_height = 390
+        browser._usable_screen_geometry = mock.Mock(return_value=area)
+        browser.window = window
+        browser.root = root
+        browser.entries = [BrowserEntry("one", "one", False)]
+        browser.mount_switch = mock.Mock()
+        browser._apply_file_row_heights = mock.Mock()
+        browser._refresh_entry_icons = mock.Mock()
+        browser._fit_file_columns = mock.Mock()
+        browser._resize_to_rendered_items = mock.Mock()
+        browser._layout_changed = mock.Mock()
+
+        browser.apply_application_zoom(6)
+
+        root.setFixedWidth.assert_called_once_with(290)
+        window.setFixedWidth.assert_called_once_with(290)
+        browser._usable_screen_geometry.assert_called_once_with(screen)
+
+    def test_clearing_painted_selection_removes_cached_row_backgrounds(self):
+        first = mock.Mock()
+        second = mock.Mock()
+        tree = mock.Mock()
+        tree.columnCount.return_value = 3
+        browser = object.__new__(CompactCloudBrowser)
+        browser.tree = tree
+        browser.qt = SimpleNamespace(QBrush=mock.Mock(return_value="clear"))
+        browser._painted_selected_items = {first, second}
+
+        browser._clear_painted_selection_backgrounds()
+
+        self.assertEqual(first.setBackground.call_count, 3)
+        self.assertEqual(second.setBackground.call_count, 3)
+        self.assertEqual(browser._painted_selected_items, set())
+
     def test_browser_backend_renames_remembered_paths_and_offline_cache(self):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -2338,6 +2478,7 @@ class CloudBrowserTests(unittest.TestCase):
             def __init__(self, current: Item) -> None:
                 self.current = current
                 self.items: list[Item] = []
+                self.clear_selection_calls = 0
                 self.scroll = mock.Mock()
                 self.scroll.value.return_value = 37
 
@@ -2355,6 +2496,11 @@ class CloudBrowserTests(unittest.TestCase):
 
             def addTopLevelItem(self, item: Item) -> None:
                 self.items.append(item)
+
+            def clearSelection(self) -> None:
+                self.clear_selection_calls += 1
+                for item in self.items:
+                    item.setSelected(False)
 
             def topLevelItemCount(self) -> int:
                 return len(self.items)
@@ -2406,6 +2552,8 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(browser.tree.current.data(0, 1).path, "Reports/b.txt")
         self.assertTrue(browser.tree.current.selected)
+        self.assertEqual(browser.tree.clear_selection_calls, 1)
+        self.assertEqual(sum(item.selected for item in browser.tree.items), 1)
         self.assertIs(browser.tree.scrolled_to, browser.tree.current)
         browser.tree.scroll.setValue.assert_not_called()
 
@@ -4265,19 +4413,77 @@ class CloudBrowserTests(unittest.TestCase):
 
         self.assertEqual(item.setForeground.call_args_list, [mock.call(0, "color:#facc15"), mock.call(1, "color:#facc15")])
 
-    def test_google_photos_search_verification_uses_index_without_api_requests(self):
+    def test_search_results_reserve_one_fixed_height_per_active_session(self):
         browser = object.__new__(CompactCloudBrowser)
-        browser.remote = _remote_with_backend("Photos", "gphotos", "Google Photos")
-        browser._search_results = [SimpleNamespace(parent_path="album/Trips")]
-        browser._search_verify_pending = True
+        browser._search_active = False
+        browser._zoom_steps = 0
+        browser.search_results = mock.Mock()
+        browser._resize_to_rendered_items = mock.Mock()
+        browser._layout_changed = mock.Mock()
+
+        browser._set_search_active(True)
+        first_height = browser.search_results.setMinimumHeight.call_args.args[0]
+        browser._set_search_active(True)
+
+        self.assertGreater(first_height, 0)
+        browser.search_results.setMinimumHeight.assert_called_once_with(first_height)
+        browser.search_results.setMaximumHeight.assert_called_once_with(first_height)
+        browser._resize_to_rendered_items.assert_called_once_with()
+        browser._layout_changed.assert_called_once_with()
+        self.assertEqual(first_height, 160)
+
+    def test_remote_search_status_marks_capped_results(self):
+        browser = object.__new__(CompactCloudBrowser)
         browser.search_field = mock.Mock()
+        browser.search_field.text.return_value = "report"
+        browser.search_status = mock.Mock()
+        browser._display_search_results = mock.Mock()
+        results = [mock.Mock() for _ in range(51)]
+
+        browser._search_ready("report", results, "")
+
+        self.assertEqual(len(browser._search_results), 50)
+        self.assertTrue(browser._search_capped)
+        browser._display_search_results.assert_called_once_with(results[:50])
+        browser.search_status.setText.assert_called_once_with("50+ indexed results")
+
+    def test_detached_browser_chrome_includes_fixed_search_viewport(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser._zoom_steps = 0
+        browser._search_active = False
+
+        inactive_height = browser._browser_chrome_height()
+        browser._search_active = True
+        active_height = browser._browser_chrome_height()
+
+        self.assertEqual(
+            active_height - inactive_height,
+            browser._search_results_height() + FILE_BROWSER_LAYOUT_SPACING,
+        )
+
+    def test_switching_remote_reruns_active_search_query(self):
+        old_remote = _remote_with_backend("Old", "drive", "Drive")
+        new_remote = _remote_with_backend("New", "dropbox", "Dropbox")
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = old_remote
+        browser.path = ""
         browser.backend = mock.Mock()
-        browser._finish_search_verification = mock.Mock()
+        browser.backend.current_path.return_value = ""
+        browser.search_field = mock.Mock()
+        browser.search_field.text.return_value = "report"
+        browser._remember_current_item = mock.Mock()
+        browser._cancel_folder_loads = mock.Mock()
+        browser._folder_view_generation = 0
+        browser._rendered_key = None
+        browser._pending_live_entries = None
+        browser._closed_until_selected = False
+        browser._embedded = True
+        browser.refresh = mock.Mock()
+        browser.search_index = mock.Mock()
 
-        browser._verify_visible_search_results()
+        browser.show_remote(new_remote, object(), show_browser=False)
 
-        browser._finish_search_verification.assert_called_once_with()
-        browser.backend.list_entries.assert_not_called()
+        browser.search_index.assert_called_once_with()
 
 
 if __name__ == "__main__":

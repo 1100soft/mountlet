@@ -291,13 +291,17 @@ class TrayTests(unittest.TestCase):
         background = SimpleNamespace(red=lambda: 245, green=lambda: 245, blue=lambda: 245)
         palette = mock.Mock()
         palette.color.side_effect = lambda role: foreground if role == "foreground" else background
+        palette.link.return_value.color.return_value = SimpleNamespace(
+            isValid=lambda: True,
+            name=lambda: "#336699",
+        )
         widget = mock.Mock()
         widget.palette.return_value = palette
         widget.foregroundRole.return_value = "foreground"
         widget.backgroundRole.return_value = "background"
 
         self.assertEqual(tray._provider_status_color("tested", widget), "#202020")
-        self.assertEqual(tray._provider_status_color("untested", widget), "#92400e")
+        self.assertEqual(tray._provider_status_color("untested", widget), "#336699")
 
     def test_system_theme_releases_color_scheme_without_replacing_live_style(self):
         palette = object()
@@ -334,12 +338,58 @@ class TrayTests(unittest.TestCase):
 
         hints.setColorScheme.assert_called_once_with("dark")
         app.setPalette.assert_called_once_with(palette)
+        self.assertIn("QToolTip", app.setStyleSheet.call_args.args[0])
+        self.assertIn("color: palette(window-text)", app.setStyleSheet.call_args.args[0])
+        self.assertIn("border: 1px solid palette(window-text)", app.setStyleSheet.call_args.args[0])
 
     def test_muted_text_style_remains_palette_dynamic(self):
         widget = mock.Mock()
 
         self.assertEqual(tray._muted_text_style(widget), "color: palette(mid);")
         widget.palette.assert_not_called()
+
+    def test_empty_global_search_status_keeps_reserved_inline_slot(self):
+        status = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window._global_search_status = status
+
+        window._set_global_search_status("")
+
+        status.setText.assert_called_once_with("")
+        status.setVisible.assert_not_called()
+
+    def test_global_search_resizes_only_when_active_state_changes(self):
+        tree = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window._global_search_active = False
+        window._global_search_results = tree
+        window._content_fit_widgets = None
+        window.tray_app = SimpleNamespace(ui_zoom=SimpleNamespace(steps=0))
+
+        window._set_global_search_active(True)
+        first_height = tree.setMinimumHeight.call_args.args[0]
+        window._set_global_search_active(True)
+
+        self.assertGreater(first_height, 0)
+        self.assertEqual(first_height, 160)
+        tree.setMinimumHeight.assert_called_once_with(first_height)
+        tree.setMaximumHeight.assert_called_once_with(first_height)
+        tree.setVisible.assert_called_once_with(True)
+
+    def test_global_search_status_marks_capped_results(self):
+        window = object.__new__(tray.MountletWindow)
+        window._global_search_field = mock.Mock()
+        window._global_search_field.text.return_value = "report"
+        window._display_global_search_results = mock.Mock()
+        window._set_global_search_status = mock.Mock()
+        results = [mock.Mock() for _ in range(81)]
+
+        window._handle_global_search_ready("report", results, "")
+
+        self.assertEqual(len(window._global_search_items), 80)
+        self.assertTrue(window._global_search_capped)
+        window._display_global_search_results.assert_called_once_with(results[:80])
+        window._set_global_search_status.assert_called_once_with("80+ results")
 
     def test_platform_without_driver_config_hides_config_action(self):
         platform = mock.Mock()
@@ -1885,13 +1935,12 @@ class TrayTests(unittest.TestCase):
     def test_mountlet_window_moves_existing_remote_row_without_rebuilding(self):
         alpha = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/tmp/alpha")
         beta = core.RemoteInfo("Beta", "Beta", "Dropbox", "dropbox", "/tmp/beta")
-        alpha_row = SimpleNamespace(frame=object(), remote=alpha, up_button=object(), down_button=object())
-        beta_row = SimpleNamespace(frame=object(), remote=beta, up_button=object(), down_button=object())
+        alpha_row = SimpleNamespace(frame=object(), remote=alpha)
+        beta_row = SimpleNamespace(frame=object(), remote=beta)
         window = object.__new__(tray.MountletWindow)
         window._current_remote_names = ["Alpha", "Beta"]
         window._row_widgets = {"Alpha": alpha_row, "Beta": beta_row}
         window._remote_rows_layout = mock.Mock()
-        window._update_remote_move_buttons = mock.Mock()
         window._ensure_remote_row_visible = mock.Mock()
         window._queue_remote_order_save = mock.Mock()
         window.tray_app = mock.Mock()
@@ -1901,10 +1950,29 @@ class TrayTests(unittest.TestCase):
         self.assertEqual(window._current_remote_names, ["Beta", "Alpha"])
         window._remote_rows_layout.removeWidget.assert_called_once_with(beta_row.frame)
         window._remote_rows_layout.insertWidget.assert_called_once_with(0, beta_row.frame)
-        window._update_remote_move_buttons.assert_called_once_with({"Alpha", "Beta"})
         window._ensure_remote_row_visible.assert_called_once_with(beta_row.frame)
         window._queue_remote_order_save.assert_called_once_with(["Beta", "Alpha"])
         window.tray_app.rebuild_menus.assert_not_called()
+
+    def test_mountlet_window_multi_position_move_inserts_row_at_final_target(self):
+        rows = {
+            name: SimpleNamespace(frame=object(), remote=object())
+            for name in ("Alpha", "Beta", "Gamma", "Delta")
+        }
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta", "Gamma", "Delta"]
+        window._row_widgets = rows
+        window._remote_rows_layout = mock.Mock()
+        window._ensure_remote_row_visible = mock.Mock()
+        window._queue_remote_order_save = mock.Mock()
+
+        window._move_remote("Delta", -3)
+
+        self.assertEqual(window._current_remote_names, ["Delta", "Alpha", "Beta", "Gamma"])
+        window._remote_rows_layout.insertWidget.assert_called_once_with(0, rows["Delta"].frame)
+        window._queue_remote_order_save.assert_called_once_with(
+            ["Delta", "Alpha", "Beta", "Gamma"]
+        )
 
     def test_mountlet_window_ignores_superseded_remote_order_save(self):
         window = object.__new__(tray.MountletWindow)
@@ -2058,7 +2126,7 @@ class TrayTests(unittest.TestCase):
                 window._sort_remote_order("name")
 
         save.assert_called_once_with(["Alpha", "Beta"])
-        self.assertEqual(window._current_remote_names, [])
+        self.assertEqual(window._current_remote_names, ["Alpha", "Beta"])
         window.tray_app.rebuild_menus.assert_called_once_with()
 
     def test_mountlet_window_registration_sort_clears_manual_order(self):
@@ -2086,7 +2154,7 @@ class TrayTests(unittest.TestCase):
         self.assertIsNone(saved["Beta"].order)
         self.assertEqual(saved["Beta"].mount_path, "dropbox/Beta")
         self.assertEqual(saved["Beta"].remote_path, "bucket/beta")
-        self.assertEqual(window._current_remote_names, [])
+        self.assertEqual(window._current_remote_names, ["Beta", "Alpha"])
         window.tray_app.rebuild_menus.assert_called_once_with()
 
     def test_mountlet_window_reverse_action_saves_reversed_order(self):
@@ -2103,8 +2171,28 @@ class TrayTests(unittest.TestCase):
                 window._reverse_remote_order()
 
         save.assert_called_once_with(["Beta", "Alpha"])
-        self.assertEqual(window._current_remote_names, [])
+        self.assertEqual(window._current_remote_names, ["Beta", "Alpha"])
         window.tray_app.rebuild_menus.assert_called_once_with()
+
+    def test_mountlet_window_sort_reorders_live_rows(self):
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Beta", "Alpha"]
+        window._remote_rows_layout = mock.Mock()
+        window._row_widgets = {
+            "Alpha": SimpleNamespace(frame=object()),
+            "Beta": SimpleNamespace(frame=object()),
+        }
+
+        window._apply_remote_order_to_rows(["Alpha", "Beta"])
+
+        self.assertEqual(window._current_remote_names, ["Alpha", "Beta"])
+        self.assertEqual(window._remote_rows_layout.insertWidget.call_count, 2)
+        window._remote_rows_layout.insertWidget.assert_has_calls(
+            [
+                mock.call(0, window._row_widgets["Alpha"].frame),
+                mock.call(1, window._row_widgets["Beta"].frame),
+            ]
+        )
 
     def test_mountlet_window_toggle_hides_visible_window_on_current_desktop(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -3118,6 +3206,28 @@ class TrayTests(unittest.TestCase):
 
         self.assertEqual(events, ["main", "timer", "child"])
         owner.dialog.show.assert_not_called()
+
+    def test_nested_child_dialog_uses_nearest_tracked_parent_window(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        parent_dialog = mock.Mock()
+        nested_dialog = mock.Mock()
+        nested_dialog.parentWidget.return_value = parent_dialog
+        mountlet_window._child_dialogs = [parent_dialog]
+
+        self.assertIs(mountlet_window._child_window_parent(nested_dialog), parent_dialog)
+
+    def test_unrelated_dialog_is_not_managed_by_child_centering_policy(self):
+        mountlet_window = object.__new__(tray.MountletWindow)
+        mountlet_window.window = mock.Mock()
+        unrelated_window = mock.Mock()
+        unrelated_window.isWindow.return_value = True
+        unrelated_window.parentWidget.return_value = None
+        dialog = mock.Mock()
+        dialog.parentWidget.return_value = unrelated_window
+        mountlet_window._child_dialogs = []
+
+        self.assertIsNone(mountlet_window._child_window_parent(dialog))
 
     def test_restore_child_offsets_moves_subwindow_with_main_window(self):
         mountlet_window = object.__new__(tray.MountletWindow)
@@ -4640,6 +4750,15 @@ class TrayTests(unittest.TestCase):
         window._fit_to_content.assert_not_called()
         window._position_file_browser.assert_called_once_with()
 
+    def test_file_browser_is_not_positioned_before_main_anchor_fit_finishes(self):
+        window = object.__new__(tray.MountletWindow)
+        window._position_after_fit = True
+        window.file_browser = mock.Mock(remote=SimpleNamespace(name="Docs"))
+
+        window._position_file_browser(row=mock.Mock())
+
+        window.file_browser.move_to.assert_not_called()
+
     def test_app_settings_layout_change_reopens_through_normal_show_path(self):
         old_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_MULTIPLE)
         new_settings = settings.AppSettings(window_mode=settings.WINDOW_MODE_SINGLE)
@@ -5426,6 +5545,142 @@ class TrayTests(unittest.TestCase):
             destination_remote=remote,
             destination_path="Inbox/Reports",
         )
+
+    def test_remote_card_internal_reorder_drop_inserts_before_target(self):
+        source = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/mnt/alpha")
+        target = core.RemoteInfo("Gamma", "Gamma", "Drive", "drive", "/mnt/gamma")
+        mime = SimpleNamespace(
+            hasFormat=lambda value: value == tray.REMOTE_ORDER_MIME_TYPE,
+            data=lambda _value: b"Alpha",
+        )
+        point = SimpleNamespace(y=lambda: 5)
+        event = SimpleNamespace(
+            mimeData=lambda: mime,
+            position=lambda: SimpleNamespace(toPoint=lambda: point),
+            acceptProposedAction=mock.Mock(),
+        )
+        target_row = mock.Mock()
+        target_row.height.return_value = 40
+        window = object.__new__(tray.MountletWindow)
+        window._current_remote_names = ["Alpha", "Beta", "Gamma"]
+        window._row_widgets = {"Gamma": SimpleNamespace(frame=target_row)}
+        window._clear_remote_drop_markers = mock.Mock()
+        window._apply_remote_order_to_rows = mock.Mock()
+        window._save_remote_order = mock.Mock()
+        window.tray_app = mock.Mock()
+
+        self.assertTrue(window._drop_remote_reorder(event, target))
+
+        expected = ["Beta", "Alpha", "Gamma"]
+        window._apply_remote_order_to_rows.assert_called_once_with(expected)
+        window._save_remote_order.assert_called_once_with(expected)
+        event.acceptProposedAction.assert_called_once_with()
+
+    def test_remote_card_reorder_mime_is_not_forwarded_as_file_drop(self):
+        remote = core.RemoteInfo("Beta", "Beta", "Drive", "drive", "/mnt/beta")
+        row = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window._preview_remote_reorder = mock.Mock(return_value=True)
+        window._preview_remote_drop = mock.Mock()
+
+        window._remote_drag_enter(mock.Mock(), row, remote)
+
+        window._preview_remote_drop.assert_not_called()
+
+    def test_remote_card_drag_starts_after_global_pointer_crosses_threshold(self):
+        class Point:
+            def __init__(self, x: int, y: int) -> None:
+                self.x = x
+                self.y = y
+
+            def __sub__(self, other: "Point") -> "Point":
+                return Point(self.x - other.x, self.y - other.y)
+
+            def manhattanLength(self) -> int:
+                return abs(self.x) + abs(self.y)
+
+        remote = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/mnt/alpha")
+        mime = mock.Mock()
+        drag = mock.Mock()
+        event = SimpleNamespace(
+            buttons=lambda: 1,
+            globalPosition=lambda: SimpleNamespace(toPoint=lambda: Point(20, 0)),
+        )
+        window = object.__new__(tray.MountletWindow)
+        window._remote_drag_start = ("Alpha", Point(0, 0))
+        window._suppress_remote_click_once = ""
+        window._clear_remote_drop_markers = mock.Mock()
+        window.qt = SimpleNamespace(
+            Qt=SimpleNamespace(
+                MouseButton=SimpleNamespace(LeftButton=1),
+                DropAction=SimpleNamespace(MoveAction="move"),
+            ),
+            QApplication=SimpleNamespace(startDragDistance=lambda: 10),
+            QMimeData=mock.Mock(return_value=mime),
+            QDrag=mock.Mock(return_value=drag),
+        )
+        row = object()
+
+        window._remote_row_mouse_move(event, row, remote)
+
+        mime.setData.assert_called_once_with(tray.REMOTE_ORDER_MIME_TYPE, b"Alpha")
+        drag.setMimeData.assert_called_once_with(mime)
+        drag.exec.assert_called_once_with("move", "move")
+        self.assertEqual(window._suppress_remote_click_once, "Alpha")
+
+    def test_remote_card_click_opens_remote_configuration(self):
+        remote = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/mnt/alpha")
+        event = SimpleNamespace(
+            button=lambda: 1,
+            position=lambda: SimpleNamespace(toPoint=lambda: object()),
+        )
+        row = mock.Mock()
+        row.childAt.return_value = None
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(Qt=SimpleNamespace(MouseButton=SimpleNamespace(LeftButton=1)))
+        window._suppress_remote_click_once = ""
+        window._release_remote_hover_suppression = mock.Mock()
+        window._show_mount_config_editor = mock.Mock()
+
+        window._handle_remote_row_click(event, row, remote)
+
+        window._show_mount_config_editor.assert_called_once_with(remote)
+
+    def test_remote_usage_bar_is_hidden_when_usage_is_unavailable(self):
+        window = object.__new__(tray.MountletWindow)
+        indicator = mock.Mock()
+
+        window._apply_usage_indicator(indicator, core.StorageUsage("?"), checking_usage=False)
+
+        indicator.setVisible.assert_called_once_with(False)
+
+    def test_remote_usage_status_inherits_theme_text_color(self):
+        window = object.__new__(tray.MountletWindow)
+        label = mock.Mock()
+        usage = core.StorageUsage("1.0/2.0 GB", used=1024**3, total=2 * 1024**3)
+
+        window._set_status_text(label, usage, action_pending=False)
+
+        label.setStyleSheet.assert_called_once_with("color: palette(text);")
+
+    def test_unavailable_remote_usage_uses_info_icon_without_question_mark(self):
+        remote = core.RemoteInfo("Alpha", "Alpha", "Drive", "drive", "/mnt/alpha")
+        usage = core.StorageUsage("?")
+        label = mock.Mock()
+        window = object.__new__(tray.MountletWindow)
+        window.qt = SimpleNamespace(
+            QCursor=mock.Mock(),
+            QToolTip=mock.Mock(),
+            Qt=SimpleNamespace(CursorShape=SimpleNamespace(PointingHandCursor="pointer")),
+        )
+        window._show_immediate_tooltip = mock.Mock()
+
+        self.assertEqual(window._usage_status_html(usage, checking_usage=False), "")
+        window._update_usage_note(label, remote, usage, checking_usage=False)
+
+        label.setText.assert_called_once_with("ⓘ")
+        self.assertIn("Storage usage is unavailable", label.setToolTip.call_args.args[0])
+        label.setStyleSheet.assert_called_once_with("color: palette(text); font-weight: 700;")
 
     def test_remote_card_drag_hover_previews_destination_even_when_hover_was_suppressed(self):
         remote = core.RemoteInfo("Docs", "Docs", "Drive", "drive", "/mnt/docs")

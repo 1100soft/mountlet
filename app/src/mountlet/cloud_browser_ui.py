@@ -20,10 +20,19 @@ from .cloud_browser import (
     normalize_browser_path,
     parent_browser_path,
 )
-from .metadata_index import IndexedEntry
+from .metadata_index import IndexedEntry, search_quality_label
 from .settings import load_app_settings
 from .shortcuts import matches_shortcut
 from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
+from .ui_colors import (
+    CACHE_PROTECTED,
+    CACHE_TEMPORARY,
+    DANGER,
+    DOWNLOAD,
+    SUCCESS,
+    WARNING,
+    search_quality_color,
+)
 from .ui_geometry import (
     FILE_BROWSER_EMBEDDED_MIN_HEIGHT,
     FILE_BROWSER_CHROME_ROW_COUNT,
@@ -45,6 +54,10 @@ from .ui_geometry import (
 from .ui_zoom import metric_at_level, metric_levels, zoom_factor
 
 MIME_TYPE = "application/x-mountlet-remote-files"
+SEARCH_RESULT_VISIBLE_ROWS = 6
+SEARCH_RESULT_ROW_HEIGHT = 22
+SEARCH_RESULT_ROW_HEIGHT_LEVELS = metric_levels(SEARCH_RESULT_ROW_HEIGHT)
+REMOTE_SEARCH_RESULT_LIMIT = 50
 EMBEDDED_BROWSER_MIN_WIDTH = FILE_BROWSER_REFERENCE_WIDTH
 EMBEDDED_BROWSER_MIN_HEIGHT = FILE_BROWSER_EMBEDDED_MIN_HEIGHT
 FILE_BROWSER_MIN_HEIGHT = FILE_BROWSER_WINDOW_MIN_HEIGHT
@@ -56,7 +69,6 @@ RENDERED_FOLDER_CACHE_LIMIT = 32
 LIVE_FOLDER_RENDER_DWELL_MS = 240
 ENTRY_STATE_SCAN_IDLE_MS = 320
 FOLDER_LISTING_CONCURRENCY = 1
-OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
 ENTRY_ICON_SIZE = 30
 ENTRY_ICON_SIZE_LEVELS = metric_levels(ENTRY_ICON_SIZE)
 FILE_LIST_ROW_HEIGHT_LEVELS = metric_levels(FILE_LIST_ROW_HEIGHT)
@@ -153,6 +165,7 @@ class CompactCloudBrowser:
         zoom_steps: int = 0,
         application_zoom: Callable[[int], None] | None = None,
         reposition_request: Callable[[Any], None] | None = None,
+        usable_screen_geometry: Callable[[Any], Any] | None = None,
     ) -> None:
         self.qt = qt
         self.main_window = main_window
@@ -185,6 +198,7 @@ class CompactCloudBrowser:
         self._zoom_steps = min(max(int(zoom_steps), -4), 6)
         self._application_zoom = application_zoom
         self._reposition_request = reposition_request or (lambda _row: None)
+        self._usable_screen_geometry = usable_screen_geometry or (lambda screen: screen.availableGeometry())
         self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
         self._rendered_folder_cache: OrderedDict[
             tuple[str, str], tuple[list[BrowserEntry], list[Any]]
@@ -219,9 +233,9 @@ class CompactCloudBrowser:
         self._search_dialog: Any | None = None
         self._search_tree: Any | None = None
         self._search_results: list[IndexedEntry] = []
+        self._search_active = False
+        self._search_capped = False
         self._search_pending = False
-        self._search_verify_pending = False
-        self._search_timer: Any | None = None
         self._search_filters: list[Any] = []
         self._rclone_output_lines: list[str] = []
         self._rclone_progress_block: list[str] = []
@@ -274,7 +288,6 @@ class CompactCloudBrowser:
             self.apply_application_zoom(self._zoom_steps)
         else:
             self._apply_file_row_heights()
-        self._setup_search_timer()
         self._setup_working_animation()
 
     def _make_bridge(self) -> Any:
@@ -452,6 +465,10 @@ class CompactCloudBrowser:
         self.search_field.returnPressed.connect(self._open_current_search_result)
         self.search_field.installEventFilter(self._make_search_key_filter())
         search_layout.addWidget(self.search_field, 1)
+        self.search_status = qt.QLabel("")
+        self.search_status.setFixedWidth(110)
+        self.search_status.setStyleSheet("color: palette(window-text);")
+        search_layout.addWidget(self.search_status)
         layout.addLayout(search_layout)
 
         self.search_results = qt.QTreeWidget()
@@ -459,6 +476,13 @@ class CompactCloudBrowser:
         self.search_results.setColumnCount(3)
         self.search_results.setHeaderLabels(["Name", "Path", "Modified"])
         self.search_results.header()._mountlet_zoom_geometry_managed = True
+        self.search_results.header().setStretchLastSection(False)
+        with suppress(Exception):
+            self.search_results.header().setMinimumSectionSize(0)
+            self.search_results.header().setFixedHeight(FILE_LIST_HEADER_HEIGHT)
+            self.search_results.header()._mountlet_zoom_base_fixed_height = FILE_LIST_HEADER_HEIGHT
+            self.search_results.setFrameShape(qt.QFrame.Shape.NoFrame)
+            self.search_results.setVerticalScrollBarPolicy(qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.search_results.setRootIsDecorated(False)
         self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
         self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -874,14 +898,14 @@ class CompactCloudBrowser:
         field.setStyleSheet(
             """
             QLineEdit {
-                border: 1px solid rgba(107, 114, 128, 130);
+                border: 1px solid palette(mid);
                 border-radius: 14px;
                 padding: 2px 8px;
                 background: palette(base);
                 color: palette(text);
             }
             QLineEdit:focus {
-                border: 1px solid #3b82f6;
+                border: 1px solid palette(highlight);
             }
             """
         )
@@ -918,12 +942,17 @@ class CompactCloudBrowser:
                 painter = qt.QPainter(self)
                 painter.setRenderHint(qt.QPainter.RenderHint.Antialiasing)
                 painter.setPen(qt.Qt.PenStyle.NoPen)
-                track = qt.QColor("#16a34a" if self.isChecked() else "#9ca3af")
+                track_role = (
+                    qt.QPalette.ColorRole.Highlight
+                    if self.isChecked()
+                    else qt.QPalette.ColorRole.Mid
+                )
+                track = self.palette().color(track_role)
                 if not self.isEnabled():
-                    track = qt.QColor("#6b7280")
+                    track = self.palette().color(qt.QPalette.ColorRole.Dark)
                 painter.setBrush(track)
                 painter.drawRoundedRect(metric(1), metric(2), metric(40), metric(18), metric(9), metric(9))
-                painter.setBrush(qt.QColor("#ffffff"))
+                painter.setBrush(self.palette().color(qt.QPalette.ColorRole.HighlightedText))
                 painter.drawEllipse(metric(22 if self.isChecked() else 4), metric(4), metric(14), metric(14))
 
             def hitButton(self, position: Any) -> bool:
@@ -976,42 +1005,62 @@ class CompactCloudBrowser:
         steps = min(max(int(steps), -4), 6)
         self._zoom_steps = steps
         target_width = round(EMBEDDED_BROWSER_MIN_WIDTH * zoom_factor(steps))
-        with suppress(Exception):
-            self.root._mountlet_zoom_base_fixed_size = (EMBEDDED_BROWSER_MIN_WIDTH, 0)
-            self.root.setFixedWidth(target_width)
-        if not self._embedded:
+        if self._embedded:
+            with suppress(Exception):
+                self.root._mountlet_zoom_base_fixed_size = (EMBEDDED_BROWSER_MIN_WIDTH, 0)
+                self.root.setFixedWidth(target_width)
+        else:
             with suppress(Exception):
                 self.root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
                 self.root.setMaximumHeight(16_777_215)
-                maximum_width = None
-                try:
-                    screen = self.window.screen() or self.qt.QApplication.primaryScreen()
-                    if screen is not None:
-                        available = screen.availableGeometry()
-                        frame_overhead = max(self.window.frameGeometry().width() - self.window.width(), 0)
-                        maximum_width = max(1, available.width() - frame_overhead)
-                except Exception:
-                    pass
-                if maximum_width is not None:
-                    target_width = min(target_width, maximum_width)
-                # A QMainWindow can retain the previous central-layout minimum
-                # until the next layout event.  Fix the top-level width at the
-                # committed zoom level so shrinking happens in this cycle.
-                set_fixed_width = getattr(self.window, "setFixedWidth", None)
-                if callable(set_fixed_width):
-                    set_fixed_width(target_width)
-                else:
-                    self.window.resize(target_width, self.window.height())
-                if not getattr(self, "entries", []):
-                    target_height = round(self._base_window_height * zoom_factor(steps))
-                    if screen is not None:
-                        target_height = min(target_height, screen.availableGeometry().height())
-                    self.window.resize(target_width, target_height)
+            maximum_width = None
+            screen = None
+            try:
+                screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+                if screen is not None:
+                    available = self._usable_screen_geometry(screen)
+                    frame_overhead = max(self.window.frameGeometry().width() - self.window.width(), 0)
+                    maximum_width = max(1, available.width() - frame_overhead)
+            except Exception:
+                pass
+            if maximum_width is not None:
+                target_width = min(target_width, maximum_width)
+            with suppress(Exception):
+                self.root._mountlet_zoom_base_fixed_size = (EMBEDDED_BROWSER_MIN_WIDTH, 0)
+                self.root.setFixedWidth(target_width)
+            # A QMainWindow can retain the previous central-layout minimum
+            # until the next layout event.  Fix the top-level width at the
+            # committed zoom level so shrinking happens in this cycle.
+            set_fixed_width = getattr(self.window, "setFixedWidth", None)
+            if callable(set_fixed_width):
+                set_fixed_width(target_width)
+            else:
+                self.window.resize(target_width, self.window.height())
+            if not getattr(self, "entries", []):
+                target_height = round(
+                    getattr(self, "_base_window_height", FILE_BROWSER_REFERENCE_HEIGHT)
+                    * zoom_factor(steps)
+                )
+                if screen is not None:
+                    target_height = min(target_height, self._usable_screen_geometry(screen).height())
+                self.window.resize(target_width, target_height)
         with suppress(Exception):
             self.mount_switch.update()
         self._apply_file_row_heights()
         self._refresh_entry_icons()
         self._fit_file_columns()
+        if getattr(self, "_search_active", False):
+            search_height = self._search_results_height()
+            self.search_results.setMinimumHeight(search_height)
+            self.search_results.setMaximumHeight(search_height)
+            row_height = metric_at_level(SEARCH_RESULT_ROW_HEIGHT_LEVELS, steps)
+            with suppress(Exception):
+                for index in range(self.search_results.topLevelItemCount()):
+                    self.search_results.topLevelItem(index).setSizeHint(
+                        0,
+                        self.qt.QSize(0, row_height),
+                    )
+            self._fit_search_result_columns()
         self._resize_to_rendered_items()
         self._layout_changed()
 
@@ -1200,7 +1249,7 @@ class CompactCloudBrowser:
             base_pixmap = base_icon.pixmap(size)
             painter.drawPixmap(0, 0, base_pixmap)
             if temporary_cached or protected_cached:
-                color = "#00ff00" if protected_cached else "#ff0000"
+                color = CACHE_PROTECTED if protected_cached else CACHE_TEMPORARY
                 painter.setOpacity(0.5 if cache_partial else 1.0)
                 badge = mountlet_icon(
                     self.qt,
@@ -1215,18 +1264,22 @@ class CompactCloudBrowser:
             if changed:
                 painter.setOpacity(1.0)
                 painter.setPen(self.qt.Qt.PenStyle.NoPen)
-                painter.setBrush(self.qt.QColor(0, 0, 0, 180))
+                backdrop = self.window.palette().color(self.qt.QPalette.ColorRole.Base)
+                backdrop.setAlpha(180)
+                painter.setBrush(backdrop)
                 painter.drawEllipse(19, -1, 12, 12)
-                painter.setBrush(self.qt.QColor("#ef4444"))
+                painter.setBrush(self.qt.QColor(DANGER))
                 painter.drawEllipse(21, 1, 8, 8)
             if working:
                 opacity = 0.45 if self._working_phase % 2 else 1.0
-                color = "#38bdf8" if working == "download" else "#f59e0b"
+                color = self.qt.QColor(DOWNLOAD if working == "download" else WARNING)
                 painter.setOpacity(opacity)
                 painter.setPen(self.qt.Qt.PenStyle.NoPen)
-                painter.setBrush(self.qt.QColor(0, 0, 0, 165))
+                backdrop = self.window.palette().color(self.qt.QPalette.ColorRole.Base)
+                backdrop.setAlpha(165)
+                painter.setBrush(backdrop)
                 painter.drawEllipse(1, 1, 14, 14)
-                pen = self.qt.QPen(self.qt.QColor(color))
+                pen = self.qt.QPen(color)
                 pen.setWidth(2)
                 painter.setPen(pen)
                 painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
@@ -1495,7 +1548,7 @@ class CompactCloudBrowser:
         if executor is not None:
             with suppress(Exception):
                 executor.shutdown(wait=False, cancel_futures=True)
-        for timer_name in ("_working_timer", "_search_timer"):
+        for timer_name in ("_working_timer",):
             timer = getattr(self, timer_name, None)
             if timer is not None:
                 with suppress(Exception):
@@ -1609,6 +1662,18 @@ class CompactCloudBrowser:
             show_browser = False
         if changed or getattr(self, "_rendered_key", None) != (remote.name, self.path):
             self.refresh(force=False)
+        search_text = ""
+        search_field = getattr(self, "search_field", None)
+        if search_field is not None:
+            with suppress(Exception):
+                candidate = search_field.text()
+                search_text = candidate if isinstance(candidate, str) else ""
+        if (
+            previous_remote_name != remote.name
+            and isinstance(search_text, str)
+            and search_text.strip()
+        ):
+            self.search_index()
         if not self._embedded and (changed or not self.window.isVisible()):
             getattr(self, "_reposition_request", lambda _row: None)(row)
         if show_browser:
@@ -1720,7 +1785,7 @@ class CompactCloudBrowser:
             return
         if active is None:
             active = self._focus_owner_is_browser()
-        color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
+        color = "palette(highlight)" if active else "palette(mid)"
         root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
     def _handle_key(self, event: Any) -> bool:
@@ -2013,13 +2078,6 @@ class CompactCloudBrowser:
         else:
             timer.singleShot(LIVE_FOLDER_RENDER_DWELL_MS, commit)
 
-    def _setup_search_timer(self) -> None:
-        timer = self.qt.QTimer()
-        timer.setSingleShot(True)
-        timer.setInterval(500)
-        timer.timeout.connect(self._verify_visible_search_results)
-        self._search_timer = timer
-
     def _make_search_key_filter(self) -> Any:
         outer = self
 
@@ -2058,10 +2116,29 @@ class CompactCloudBrowser:
         return event_filter
 
     def _search_text_changed(self, _text: str) -> None:
+        self._set_search_active(bool(_text.strip()))
         self.search_index()
-        timer = getattr(self, "_search_timer", None)
-        if timer is not None:
-            timer.start()
+
+    def _search_results_height(self) -> int:
+        return max(
+            1,
+            metric_at_level(FILE_LIST_HEADER_HEIGHT_LEVELS, self._zoom_steps)
+            + SEARCH_RESULT_VISIBLE_ROWS
+            * metric_at_level(SEARCH_RESULT_ROW_HEIGHT_LEVELS, self._zoom_steps),
+        )
+
+    def _set_search_active(self, active: bool) -> None:
+        if active == getattr(self, "_search_active", False):
+            return
+        self._search_active = active
+        tree = getattr(self, "search_results", None)
+        if tree is not None:
+            height = self._search_results_height() if active else 0
+            tree.setMinimumHeight(height)
+            tree.setMaximumHeight(height)
+            tree.setVisible(active)
+        self._resize_to_rendered_items()
+        self._layout_changed()
 
     def search_index(self) -> None:
         query = self.search_field.text().strip()
@@ -2073,9 +2150,13 @@ class CompactCloudBrowser:
             self._clear_search_results()
             return
         self._search_pending = True
-        self.status.setText("Searching index…")
+        self.search_status.setText("Searching…")
         try:
-            results = self.backend.search_index(query, remotes=[remote], limit=50)
+            results = self.backend.search_index(
+                query,
+                remotes=[remote],
+                limit=REMOTE_SEARCH_RESULT_LIMIT + 1,
+            )
         except Exception as exc:
             self._search_ready(query, None, str(exc))
             return
@@ -2086,13 +2167,16 @@ class CompactCloudBrowser:
             return
         self._search_pending = False
         if error or not isinstance(results, list):
-            self.status.setText(error or "Search failed")
+            self.search_status.setText(error or "Search failed")
             return
-        self._search_results = results
-        self._display_search_results(results)
-        suffix = "Checking…" if self._search_verify_pending else ""
-        self.status.setText(
-            f"{len(results)} indexed result{'s' if len(results) != 1 else ''} {suffix}".strip()
+        capped = len(results) > REMOTE_SEARCH_RESULT_LIMIT
+        displayed = results[:REMOTE_SEARCH_RESULT_LIMIT]
+        self._search_capped = capped
+        self._search_results = displayed
+        self._display_search_results(displayed)
+        count_text = f"{REMOTE_SEARCH_RESULT_LIMIT}+" if capped else str(len(displayed))
+        self.search_status.setText(
+            f"{count_text} indexed result{'s' if len(displayed) != 1 else ''}"
         )
 
     def _display_search_results(self, results: list[IndexedEntry]) -> None:
@@ -2117,8 +2201,19 @@ class CompactCloudBrowser:
             path_text = result.parent_path or "Remote root"
             item = self.qt.QTreeWidgetItem([result.name, path_text, result.modified])
             with suppress(Exception):
-                item.setSizeHint(0, self.qt.QSize(0, self._file_row_height()))
+                item.setSizeHint(
+                    0,
+                    self.qt.QSize(
+                        0,
+                        metric_at_level(SEARCH_RESULT_ROW_HEIGHT_LEVELS, self._zoom_steps),
+                    ),
+                )
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
+            with suppress(Exception):
+                brush = self.qt.QBrush(self.qt.QColor(search_quality_color(result.match_quality)))
+                for column in range(3):
+                    item.setForeground(column, brush)
+                item.setToolTip(0, search_quality_label(result.match_quality))
             tree.addTopLevelItem(item)
             if previous_path and result.path == previous_path:
                 selected_item = item
@@ -2128,24 +2223,13 @@ class CompactCloudBrowser:
         if target is not None:
             tree.setCurrentItem(target)
             target.setSelected(True)
-        visible_rows = min(max(len(results), 1), 8)
-        try:
-            row_height = tree.sizeHintForRow(0)
-            if row_height <= 0:
-                row_height = tree.fontMetrics().height() + 8
-            header_height = tree.header().sizeHint().height()
-        except Exception:
-            row_height = 24
-            header_height = 28
-        height = int(header_height + row_height * visible_rows + 8) if results else 0
+        height = self._search_results_height()
         tree.setMaximumHeight(height)
         tree.setMinimumHeight(height)
-        tree.setVisible(bool(results))
+        tree.setVisible(True)
         self._fit_search_result_columns()
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
-        self._resize_to_rendered_items()
-        self._layout_changed()
 
     def _preview_search_result(self, item: Any, _previous: Any | None = None) -> None:
         if item is None:
@@ -2193,14 +2277,15 @@ class CompactCloudBrowser:
 
     def _clear_search_results(self) -> None:
         self._search_results = []
+        self._search_capped = False
         tree = getattr(self, "search_results", None)
         if tree is not None:
             tree.clear()
-            tree.setMaximumHeight(0)
-            tree.setMinimumHeight(0)
-            tree.setVisible(False)
-        self._resize_to_rendered_items()
-        self._layout_changed()
+        field = getattr(self, "search_field", None)
+        if field is None or not field.text().strip():
+            self._set_search_active(False)
+        if hasattr(self, "search_status"):
+            self.search_status.setText("")
 
     def focus_search(self) -> None:
         field = getattr(self, "search_field", None)
@@ -2240,10 +2325,12 @@ class CompactCloudBrowser:
                 self.window.raise_()
         if previous_remote_name == remote.name and previous_path == result.parent_path and self._select_visible_entry(result.path):
             self._pending_select_path = ""
+            self.refresh(force=False)
             if focus_browser:
                 self.focus()
             return
         if self._display_cached_search_parent(remote, result):
+            self.refresh(force=False)
             if focus_browser:
                 self.focus()
             return
@@ -2291,64 +2378,22 @@ class CompactCloudBrowser:
         with suppress(Exception):
             tree.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         try:
-            width = tree.viewport().width()
+            width = max(tree.viewport().width() - 1, 0)
             if width <= 0:
                 width = tree.width()
         except Exception:
             width = 0
         if width <= 0:
             return
-        widths = (0.46, 0.38, 0.16)
-        for column, fraction in enumerate(widths):
-            with suppress(Exception):
-                tree.setColumnWidth(column, max(56, int(width * fraction)))
-
-    def _verify_visible_search_results(self) -> None:
-        if not self._search_results or self.remote is None:
-            self._search_verify_pending = False
-            return
-        query = self.search_field.text().strip()
-        remote = self.remote
-        if remote.backend_type.casefold() == "gphotos":
-            # Photos exposes virtual folders through a tightly quota-limited
-            # API. Navigation refreshes visited folders; search verification
-            # must not multiply those requests in the background.
-            self._finish_search_verification()
-            return
-        parents: list[str] = []
-        seen: set[str] = set()
-        for result in self._search_results:
-            parent = result.parent_path
-            if parent in seen:
-                continue
-            seen.add(parent)
-            parents.append(parent)
-            if len(parents) >= 5:
-                break
-        self._search_verify_pending = True
-        self.status.setText("Checking search results…")
-
-        def worker() -> None:
-            for parent in parents:
-                try:
-                    self.backend.list_entries(remote, parent)
-                except Exception:
-                    continue
-            try:
-                results = self.backend.search_index(query, remotes=[remote], limit=50)
-            except Exception as exc:
-                self._search_verify_pending = False
-                self._bridge.search_ready.emit(query, None, str(exc))
-                return
-            self._search_verify_pending = False
-            self._bridge.search_ready.emit(query, results, "")
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _finish_search_verification(self) -> None:
-        self._search_verify_pending = False
-        if self._search_results:
-            self.status.setText(f"{len(self._search_results)} indexed result{'s' if len(self._search_results) != 1 else ''}")
+        modified_width = metric_at_level(FILE_MODIFIED_COLUMN_WIDTH_LEVELS, self._zoom_steps)
+        modified_width = min(modified_width, width)
+        remaining = max(width - modified_width, 0)
+        path_width = round(remaining * 0.42)
+        name_width = max(remaining - path_width, 0)
+        with suppress(Exception):
+            tree.setColumnWidth(0, name_width)
+            tree.setColumnWidth(1, path_width)
+            tree.setColumnWidth(2, modified_width)
 
     def index_current_remote(self) -> None:
         if self.remote is None:
@@ -2521,7 +2566,7 @@ class CompactCloudBrowser:
                 if isinstance(selected, BrowserEntry):
                     transient_selected_paths.add(selected.path)
         self._rendering_entries = True
-        self._painted_selected_items = set()
+        self._clear_painted_selection_backgrounds()
         updates_disabled = False
         signals_were_blocked = False
         with suppress(Exception):
@@ -2598,6 +2643,11 @@ class CompactCloudBrowser:
         else:
             for item in rendered_items:
                 self.tree.addTopLevelItem(item)
+        # Cached QTreeWidgetItems retain their native selection bit while they
+        # are detached.  Clear that state after reattaching the folder, then
+        # restore only this folder's intended selection below.
+        with suppress(Exception):
+            self.tree.clearSelection()
         if current_target is None and rendered_items:
             current_target = rendered_items[min(max(previous_index, 0), len(rendered_items) - 1)]
         target = current_target or fallback_target
@@ -2729,6 +2779,7 @@ class CompactCloudBrowser:
             self._zoom_steps,
             visible_rows if item_limit or not getattr(self, "_embedded", False) else -1,
             item_limit,
+            bool(getattr(self, "_search_active", False)),
         )
         if getattr(self, "_embedded", False) and getattr(self, "_file_height_constraint_key", None) == constraint_key:
             return
@@ -2754,26 +2805,28 @@ class CompactCloudBrowser:
         try:
             screen = self.window.screen() or self.qt.QApplication.primaryScreen()
             if screen is not None:
-                available_height = screen.availableGeometry().height()
+                available_height = self._usable_screen_geometry(screen).height()
             frame_overhead = max(self.window.frameGeometry().height() - self.window.height(), 0)
         except Exception:
             pass
         non_tree_height = self._browser_chrome_height()
-        maximum_tree_height = max(
-            minimum_tree_height,
-            available_height - frame_overhead - non_tree_height,
-        )
+        # The work area is authoritative.  When even one normal row would not
+        # fit, shrink the viewport instead of allowing the decorated window to
+        # cross a panel boundary; the permanent scrollbar keeps rows usable.
+        maximum_tree_height = max(0, available_height - frame_overhead - non_tree_height)
         tree_height = min(desired_tree_height, maximum_tree_height)
         with suppress(Exception):
             tree.setMinimumHeight(tree_height)
             tree.setMaximumHeight(tree_height)
         try:
-            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            maximum_client_height = max(1, available_height - frame_overhead)
+            minimum_window_height = min(FILE_BROWSER_MIN_HEIGHT, maximum_client_height)
+            root.setMinimumHeight(minimum_window_height)
             with suppress(Exception):
-                self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+                self.window.setMinimumHeight(minimum_window_height)
             desired_height = min(
-                max(FILE_BROWSER_MIN_HEIGHT, non_tree_height + tree_height),
-                available_height - frame_overhead,
+                max(minimum_window_height, non_tree_height + tree_height),
+                maximum_client_height,
             )
             root.setMinimumHeight(desired_height)
             self.window.resize(self.window.width(), desired_height)
@@ -2786,10 +2839,16 @@ class CompactCloudBrowser:
         row_height = metric_at_level(FILE_BROWSER_CHROME_ROW_HEIGHT_LEVELS, self._zoom_steps)
         margin = metric_at_level(FILE_BROWSER_LAYOUT_MARGIN_LEVELS, self._zoom_steps)
         spacing = metric_at_level(FILE_BROWSER_LAYOUT_SPACING_LEVELS, self._zoom_steps)
+        search_height = (
+            self._search_results_height() + spacing
+            if getattr(self, "_search_active", False)
+            else 0
+        )
         return (
             FILE_BROWSER_CHROME_ROW_COUNT * row_height
             + 2 * margin
             + FILE_BROWSER_LAYOUT_GAP_COUNT * spacing
+            + search_height
         )
 
     def _apply_entry_state(
@@ -3824,7 +3883,10 @@ class CompactCloudBrowser:
         if item is None:
             return
         self._drop_hover_item = item
-        brush = self._item_brush("#dcfce7")
+        try:
+            brush = tree.palette().brush(self.qt.QPalette.ColorRole.Highlight)
+        except Exception:
+            brush = self._item_brush("")
         with suppress(RuntimeError):
             for column in range(tree.columnCount()):
                 item.setBackground(column, brush)
@@ -4364,13 +4426,26 @@ class CompactCloudBrowser:
         try:
             selected_brush = tree.palette().brush(self.qt.QPalette.ColorRole.Highlight)
         except Exception:
-            selected_brush = self._item_brush("#3daee9")
+            selected_brush = self._item_brush("")
         clear_brush = self._item_brush("")
         with suppress(Exception):
             for item in changed:
                 brush = selected_brush if item in selected else clear_brush
                 for column in range(tree.columnCount()):
                     item.setBackground(column, brush)
+
+    def _clear_painted_selection_backgrounds(self) -> None:
+        """Remove manual highlight brushes before cached rows are detached."""
+        tree = getattr(self, "tree", None)
+        painted = set(getattr(self, "_painted_selected_items", set()))
+        self._painted_selected_items = set()
+        if tree is None or not painted:
+            return
+        clear_brush = self._item_brush("")
+        with suppress(Exception):
+            for item in painted:
+                for column in range(tree.columnCount()):
+                    item.setBackground(column, clear_brush)
 
     def _item_brush(self, color: str) -> Any:
         brush_factory = getattr(self.qt, "QBrush", None)
@@ -4550,7 +4625,7 @@ class CompactCloudBrowser:
         )
         if self.offline_button.text():
             self.offline_button.setText("")
-        set_badge(self.offline_button, False, OFFLINE_SAVED_BADGE_COLOR)
+        set_badge(self.offline_button, False, SUCCESS)
         remove_button = getattr(self, "selection_remove_offline_button", None)
         if remove_button is not None:
             remove_enabled = selected and selected_has_offline and not operation_pending and not selected_remove_pending

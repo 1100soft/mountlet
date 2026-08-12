@@ -6,7 +6,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-NEUTRAL_ICON_RE = re.compile(r"#334155\b", re.IGNORECASE)
+from .ui_colors import NEUTRAL_ICON_SOURCE
+
+NEUTRAL_ICON_RE = re.compile(rf"{re.escape(NEUTRAL_ICON_SOURCE)}\b", re.IGNORECASE)
 
 
 def icon_path(name: str) -> str | None:

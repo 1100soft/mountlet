@@ -54,7 +54,7 @@ procedure.
 - Folder loads are cancellable and isolated per remote. A stalled Google
   Photos virtual-folder request must not block navigation or operations on
   other remotes. Photos skips recursive auto-indexing, neighboring-folder
-  prefetch, search-result API verification, and automatic cloud-side cache
+  prefetch and automatic cloud-side cache
   polling to conserve its restricted API quota.
 - Google Photos date leaves are projected from the cached `media/all` listing.
   Media views are read-only; destructive operations are allowed only for media
@@ -195,6 +195,14 @@ through remotes. A stale result may update the cache; it must not replace a
 newer view. Refresh cached usage only after a known file-size mutation or when
 new folder metadata reveals a changed aggregate size. Do not add a separate
 polling loop for that comparison.
+
+Search is a local-index operation. Keep parsing, filtering, quality scoring,
+ordering, remote filtering, and result limiting inside SQLite so Python receives
+only the final `limit` rows. Do not add search-result verification timers or
+remote API passes: navigating to a result queues the ordinary folder refresh.
+Every term must match the filename or parent path, at least one must match the
+filename, and quoted phrases remain contiguous. Global and remote searches ask
+for one row beyond their visible caps solely to render `80+` or `50+`.
 
 Retain path-to-item maps and complete cached item trees. Swap them with updates
 disabled instead of reconstructing every row. Never make selection refresh the

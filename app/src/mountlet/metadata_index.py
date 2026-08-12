@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import re
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,36 @@ class IndexedEntry:
     size: int = 0
     modified: str = ""
     updated_at: float = 0.0
+    match_quality: str = ""
+    match_score: int = 0
+
+
+SEARCH_QUALITY_LABELS = {
+    "exact": "Exact filename match",
+    "phrase": "Phrase match in filename",
+    "filename": "All terms match the filename",
+    "mixed": "Terms match the filename and parent path",
+}
+
+
+def search_quality_label(quality: str) -> str:
+    return SEARCH_QUALITY_LABELS.get(quality, "Search match")
+
+
+def _search_terms(query: str) -> list[tuple[str, bool]]:
+    """Parse ordinary AND terms while preserving text inside double quotes."""
+    parsed: list[tuple[str, bool]] = []
+    for match in re.finditer(r'"([^"]+)"|([^\s"]+)', query):
+        phrase = match.group(1)
+        value = phrase if phrase is not None else match.group(2)
+        folded = str(value or "").strip().casefold()
+        if folded:
+            parsed.append((folded, phrase is not None))
+    return parsed
+
+
+def _like_literal(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class MetadataIndex:
@@ -155,29 +186,69 @@ class MetadataIndex:
         return [_indexed_entry_from_row(row) for row in rows]
 
     def search(self, query: str, *, remotes: Iterable[core.RemoteInfo] = (), limit: int = 100) -> list[IndexedEntry]:
-        terms = [term.casefold() for term in query.split() if term.strip()]
-        if not terms:
+        terms = _search_terms(query)
+        result_limit = max(int(limit), 0)
+        if not terms or result_limit <= 0:
             return []
         remote_names = [remote.name for remote in remotes]
-        clauses = ["name_folded LIKE ?"] + ["(name_folded LIKE ? OR path LIKE ?)" for _ in terms[1:]]
-        params: list[object] = [f"%{terms[0]}%"]
-        for term in terms[1:]:
-            params.extend((f"%{term}%", f"%{term}%"))
+        parameters: dict[str, object] = {
+            "normalized_query": " ".join(term for term, _is_phrase in terms),
+            "limit": result_limit,
+        }
+        name_matches: list[str] = []
+        combined_matches: list[str] = []
+        phrase_name_matches: list[str] = []
+        for index, (term, is_phrase) in enumerate(terms):
+            parameter = f"term_{index}"
+            pattern = f"%{_like_literal(term)}%"
+            parameters[parameter] = pattern
+            name_match = f"name_folded LIKE :{parameter} ESCAPE '\\'"
+            name_matches.append(name_match)
+            combined_matches.append(
+                f"({name_match} OR lower(parent_path) LIKE :{parameter} ESCAPE '\\')"
+            )
+            if is_phrase:
+                phrase_name_matches.append(name_match)
+
+        all_name = " AND ".join(name_matches)
+        any_name = " OR ".join(name_matches)
+        all_combined = " AND ".join(combined_matches)
+        phrase_in_name = " OR ".join(phrase_name_matches) if phrase_name_matches else "0"
+        quality_case = (
+            "CASE "
+            "WHEN name_folded = :normalized_query THEN 'exact' "
+            f"WHEN ({all_name}) AND ({phrase_in_name}) THEN 'phrase' "
+            f"WHEN ({all_name}) THEN 'filename' "
+            "ELSE 'mixed' END"
+        )
+        score_case = (
+            "CASE "
+            "WHEN name_folded = :normalized_query THEN 500 "
+            f"WHEN ({all_name}) AND ({phrase_in_name}) THEN 450 "
+            f"WHEN ({all_name}) THEN 400 "
+            "ELSE 250 END"
+        )
+        clauses = [f"({all_combined})", f"({any_name})"]
         if remote_names:
-            clauses.append("remote_name IN (%s)" % ",".join("?" for _ in remote_names))
-            params.extend(remote_names)
-        params.append(limit)
+            remote_parameters: list[str] = []
+            for index, remote_name in enumerate(remote_names):
+                parameter = f"remote_{index}"
+                parameters[parameter] = remote_name
+                remote_parameters.append(f":{parameter}")
+            clauses.append(f"remote_name IN ({','.join(remote_parameters)})")
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 f"""
                 SELECT remote_name, remote_display, provider, backend_type, name, path,
-                       parent_path, is_dir, size, modified, updated_at
+                       parent_path, is_dir, size, modified, updated_at,
+                       {quality_case} AS match_quality,
+                       {score_case} AS match_score
                 FROM entries
                 WHERE {' AND '.join(clauses)}
-                ORDER BY is_dir ASC, name_folded ASC, path ASC
-                LIMIT ?
+                ORDER BY match_score DESC, is_dir ASC, name_folded ASC, path ASC
+                LIMIT :limit
                 """,
-                params,
+                parameters,
             ).fetchall()
         return [_indexed_entry_from_row(row) for row in rows]
 
@@ -309,6 +380,7 @@ class MetadataIndex:
 
 
 def _indexed_entry_from_row(row: sqlite3.Row) -> IndexedEntry:
+    columns = set(row.keys())
     return IndexedEntry(
         remote_name=str(row["remote_name"]),
         remote_display=str(row["remote_display"] or row["remote_name"]),
@@ -321,6 +393,8 @@ def _indexed_entry_from_row(row: sqlite3.Row) -> IndexedEntry:
         size=max(int(row["size"] or 0), 0),
         modified=str(row["modified"] or ""),
         updated_at=float(row["updated_at"] or 0),
+        match_quality=str(row["match_quality"] or "") if "match_quality" in columns else "",
+        match_score=int(row["match_score"] or 0) if "match_score" in columns else 0,
     )
 
 
