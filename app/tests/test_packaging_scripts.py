@@ -266,17 +266,18 @@ class TestRunnerTests(unittest.TestCase):
     def test_each_batch_runs_in_its_own_interpreter(self):
         runner = _load_test_runner()
         completed = SimpleNamespace(returncode=0)
+        root = Path("/checkout/app")
         targets = (
             "tests.test_core.CoreTests.test_one",
             "tests.test_core.CoreTests.test_two",
         )
         with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
-            self.assertEqual(runner._run_test_batch(targets), 0)
+            self.assertEqual(runner._run_test_batch(targets, root=root), 0)
 
-        run.assert_called_once_with(
-            [runner.sys.executable, "-m", "unittest", *targets],
-            check=False,
-        )
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], [runner.sys.executable, "-m", "unittest", *targets])
+        self.assertFalse(kwargs["check"])
+        self.assertEqual(kwargs["env"]["PYTHONPATH"].split(runner.os.pathsep)[0], str(root / "src"))
 
 
 class WebsiteReleaseTests(unittest.TestCase):

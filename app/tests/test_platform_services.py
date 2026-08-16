@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest import mock
 
+from mountlet import __version__
 from mountlet.platform_services import get_platform
 from mountlet.platform_services.console import ConsoleServices
 from mountlet.platform_services.desktop import DesktopServices
@@ -212,7 +213,7 @@ class PlatformServicesTests(unittest.TestCase):
 
         self.assertEqual(
             candidates[0],
-            executable.resolve().parent / "vendor" / "rclone" / "0.6.6" / "rclone.exe",
+            executable.resolve().parent / "vendor" / "rclone" / __version__ / "rclone.exe",
         )
 
     def test_windows_forced_process_shutdown_does_not_require_posix_signals(self):

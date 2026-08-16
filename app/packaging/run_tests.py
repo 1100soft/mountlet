@@ -44,7 +44,16 @@ def _test_batches(root: Path, *, batch_size: int = TEST_BATCH_SIZE) -> tuple[tup
     return tuple(batches)
 
 
-def _run_test_batch(targets: tuple[str, ...]) -> int:
+def _source_environment(root: Path) -> dict[str, str]:
+    """Force child tests to import this checkout, never an older installation."""
+    environment = os.environ.copy()
+    source = str(root / "src")
+    existing = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = source if not existing else source + os.pathsep + existing
+    return environment
+
+
+def _run_test_batch(targets: tuple[str, ...], *, root: Path) -> int:
     # Qt and its Python wrappers retain process-global objects after individual
     # test cases finish.  A fresh interpreter per module bounds that retained
     # memory and prevents the complete suite from exhausting CI runners.
@@ -53,6 +62,7 @@ def _run_test_batch(targets: tuple[str, ...]) -> int:
     result = subprocess.run(
         [sys.executable, "-m", "unittest", *targets],
         check=False,
+        env=_source_environment(root),
     )
     if result.returncode:
         print(f"::error title=Unit tests failed::{_workflow_escape(label)} batch failed")
@@ -99,7 +109,7 @@ def main() -> int:
     cpu_before, _peak_before = _child_usage()
     root = Path(__file__).resolve().parents[1]
     for targets in _test_batches(root):
-        returncode = _run_test_batch(targets)
+        returncode = _run_test_batch(targets, root=root)
         if returncode:
             return returncode
     # Discovery alone succeeds if a regression test is accidentally removed
@@ -110,6 +120,7 @@ def main() -> int:
         [sys.executable, "-m", "unittest", *REQUIRED_REGRESSION_TESTS],
         capture_output=True,
         text=True,
+        env=_source_environment(root),
     )
     sys.stdout.write(required.stdout)
     sys.stderr.write(required.stderr)
