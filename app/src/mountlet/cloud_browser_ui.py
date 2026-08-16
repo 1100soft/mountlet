@@ -220,6 +220,7 @@ class CompactCloudBrowser:
         self._entry_state_scan_slots = threading.BoundedSemaphore(1)
         self._painted_selected_items: set[Any] = set()
         self._rendering_entries = False
+        self._inline_rename_guard = False
         self._working_paths: dict[tuple[str, str], str] = {}
         self._working_directory_kinds: dict[tuple[str, str], str] = {}
         self._working_paths_by_kind: dict[tuple[str, str], set[str]] = {}
@@ -637,10 +638,14 @@ class CompactCloudBrowser:
         self.tree.setDragEnabled(False)
         self.tree.setAcceptDrops(True)
         self.tree.setDropIndicatorShown(True)
-        self.tree.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.setEditTriggers(
+            qt.QAbstractItemView.EditTrigger.SelectedClicked
+            | qt.QAbstractItemView.EditTrigger.EditKeyPressed
+        )
         self.tree.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_tree_menu)
         self.tree.itemDoubleClicked.connect(self._open_item)
+        self.tree.itemChanged.connect(self._inline_rename_changed)
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.currentItemChanged.connect(self._current_item_changed)
         with suppress(Exception):
@@ -1071,11 +1076,42 @@ class CompactCloudBrowser:
         """Enforce one deterministic row height regardless of item contents."""
         outer = self
 
+        class RenameEditor(self.qt.QLineEdit):
+            def __init__(self, parent: Any) -> None:
+                super().__init__(parent)
+                self._mountlet_basename_length = 0
+
+            def focusInEvent(self, event: Any) -> None:
+                super().focusInEvent(event)
+                if self._mountlet_basename_length > 0:
+                    self.setSelection(0, self._mountlet_basename_length)
+
         class FixedFileRowDelegate(self.qt.QStyledItemDelegate):
             def sizeHint(self, option: Any, index: Any) -> Any:
                 size = super().sizeHint(option, index)
                 size.setHeight(outer._file_row_height())
                 return size
+
+            def createEditor(self, parent: Any, option: Any, index: Any) -> Any:
+                if index.column() != 0:
+                    return None
+                return RenameEditor(parent)
+
+            def setEditorData(self, editor: Any, index: Any) -> None:
+                name = str(index.data() or "")
+                editor.setText(name)
+                entry = index.data(outer.qt.Qt.ItemDataRole.UserRole)
+                if not isinstance(entry, BrowserEntry) or entry.is_dir:
+                    return
+                # Match desktop file managers: keep the extension selected out
+                # so typing replaces the basename without changing its type.
+                dot = entry.name.rfind(".")
+                if dot > 0:
+                    editor._mountlet_basename_length = dot
+                    editor.setSelection(0, dot)
+
+            def setModelData(self, editor: Any, model: Any, index: Any) -> None:
+                model.setData(index, editor.text())
 
         return FixedFileRowDelegate(self.tree)
 
@@ -1135,9 +1171,18 @@ class CompactCloudBrowser:
             size = self.qt.QSize(FILE_ICON_SOURCE_SIZE, FILE_ICON_SOURCE_SIZE)
             pixmap = icon.pixmap(size)
             if not pixmap.isNull():
-                return self.qt.QIcon(pixmap)
+                return self._untinted_pixmap_icon(pixmap)
         except Exception:
             pass
+        return icon
+
+    def _untinted_pixmap_icon(self, pixmap: Any) -> Any:
+        """Use the source pixels unchanged for every enabled item state."""
+        icon = self.qt.QIcon()
+        mode = self.qt.QIcon.Mode
+        state = self.qt.QIcon.State.Off
+        for enabled_mode in (mode.Normal, mode.Active, mode.Selected):
+            icon.addPixmap(pixmap, enabled_mode, state)
         return icon
 
     def _base_entry_icon(
@@ -1169,7 +1214,7 @@ class CompactCloudBrowser:
                 icon = provider.icon(file_info_type(str(local)))
             else:
                 icon = provider.icon(file_info_type(entry.name))
-            resolved = icon or file_icon
+            resolved = self._stable_standard_icon(icon or file_icon)
             icon_cache[cache_key] = resolved
             return resolved
         except Exception:
@@ -1293,7 +1338,7 @@ class CompactCloudBrowser:
                     painter.drawLine(12, 5, 12, 9)
                     painter.drawLine(12, 5, 8, 5)
             painter.end()
-            return icon_type(pixmap)
+            return self._untinted_pixmap_icon(pixmap)
         except Exception:
             return base_icon
 
@@ -1451,6 +1496,75 @@ class CompactCloudBrowser:
                     file_icon,
                     refresh_state=False,
                 )
+
+    def _refresh_entry_icons_for_paths(self, remote_name: str, paths: list[str]) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or remote.name != remote_name or not paths:
+            return
+        current_path = normalize_browser_path(getattr(self, "path", ""))
+        prefix = f"{current_path}/" if current_path else ""
+        visible_paths: set[str] = set()
+        for raw_path in paths:
+            path = normalize_browser_path(raw_path)
+            if current_path and path == current_path:
+                continue
+            if current_path and not path.startswith(prefix):
+                continue
+            relative = path[len(prefix) :] if prefix else path
+            first = relative.split("/", 1)[0]
+            if first:
+                visible_paths.add(f"{prefix}{first}" if prefix else first)
+        item_map = getattr(self, "_rendered_item_maps", {}).get(
+            (remote_name, current_path),
+            {},
+        )
+        if not item_map or not visible_paths:
+            return
+        style = self.window.style()
+        directory_icon = self._stable_standard_icon(
+            style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
+        )
+        file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+        for path in visible_paths:
+            item = item_map.get(path)
+            if item is None:
+                continue
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(entry, BrowserEntry):
+                self._apply_entry_state(
+                    item,
+                    entry,
+                    remote,
+                    directory_icon,
+                    file_icon,
+                    refresh_state=False,
+                )
+
+    def _refresh_cached_entry_states_from_disk(self, remote_name: str, paths: list[str]) -> None:
+        """Refresh only cache entries affected by completed offline work."""
+        state_keys: set[tuple[str, bool]] = set()
+        for raw_path in paths:
+            path = normalize_browser_path(raw_path)
+            if not path:
+                continue
+            # The completed path can be either a file or a directory. Reading
+            # both keys avoids relying on stale manifest metadata after remove.
+            state_keys.add((path, False))
+            state_keys.add((path, True))
+            parent = parent_browser_path(path)
+            while parent:
+                state_keys.add((parent, True))
+                parent = parent_browser_path(parent)
+            state_keys.add(("", True))
+        cache = getattr(self, "_entry_state_cache", None)
+        if cache is None:
+            cache = self._entry_state_cache = {}
+        for path, is_dir in state_keys:
+            name = path.rsplit("/", 1)[-1] if path else ""
+            cache[(remote_name, path, is_dir)] = self._read_entry_state(
+                remote_name,
+                BrowserEntry(name, path, is_dir),
+            )
 
     def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
         return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
@@ -1812,6 +1926,8 @@ class CompactCloudBrowser:
             if not self._edits_enabled():
                 return self._edit_disabled()
             self.delete_selected()
+        elif key == getattr(self.qt.Qt.Key, "Key_F2", None):
+            self.rename_selected()
         elif key == self.qt.Qt.Key.Key_Escape:
             self.focus_main_window()
         elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
@@ -2604,6 +2720,12 @@ class CompactCloudBrowser:
                 style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
             )
             file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+            rename_enabled = bool(
+                self._edits_enabled()
+                and remote is not None
+                and remote.backend_type.casefold() != "gphotos"
+                and not self._remote_operation_pending(remote.name)
+            )
             source_items = (
                 zip(entries, rendered_items)
                 if cached_items is not None
@@ -2616,6 +2738,7 @@ class CompactCloudBrowser:
                         [entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified]
                     )
                     item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
+                self._set_item_rename_enabled(item, rename_enabled)
                 items_by_path[entry.path] = item
                 if pending_select_path and entry.path == pending_select_path:
                     current_target = item
@@ -3174,6 +3297,10 @@ class CompactCloudBrowser:
             except Exception as exc:
                 self._bridge.drag_export_ready.emit(remote.name, entries, str(exc))
                 return
+            self._refresh_cached_entry_states_from_disk(
+                remote.name,
+                [entry.path for entry in entries],
+            )
             self._bridge.drag_export_ready.emit(remote.name, entries, "")
 
         threading.Thread(target=worker, daemon=True).start()
@@ -3187,12 +3314,9 @@ class CompactCloudBrowser:
         if self._is_disposed():
             return
         self._finish_working_paths(remote_name, paths, "download")
-        for key in list(getattr(self, "_entry_state_cache", {})):
-            if key[0] == remote_name and _paths_overlap([key[1]], paths):
-                self._entry_state_cache.pop(key, None)
         getattr(self, "_remote_managed_cache", {}).pop(remote_name, None)
         self._local_files_changed()
-        self._refresh_entry_icons()
+        self._refresh_entry_icons_for_paths(remote_name, paths)
         self._update_actions()
         if error:
             self._notify("Drag and drop", error, False)
@@ -3303,21 +3427,50 @@ class CompactCloudBrowser:
         if self.remote.backend_type.casefold() == "gphotos":
             self._notify("Google Photos", "Google Photos does not support renaming media through rclone.", False)
             return
-        entry = entries[0]
-        name, accepted = self.qt.QInputDialog.getText(
-            self.window,
-            "Rename",
-            "New name",
-            self.qt.QLineEdit.EchoMode.Normal,
-            entry.name,
-        )
-        new_name = name.strip()
-        if not accepted or not new_name or new_name == entry.name:
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(entry, BrowserEntry) or entry.path != entries[0].path:
+            return
+        self.tree.editItem(item, 0)
+
+    def _set_item_rename_enabled(self, item: Any, editable: bool) -> None:
+        with suppress(Exception):
+            flag = self.qt.Qt.ItemFlag.ItemIsEditable
+            flags = item.flags()
+            item.setFlags(flags | flag if editable else flags & ~flag)
+        with suppress(Exception):
+            item.setToolTip(0, "Select the item and click its name again, or press F2, to rename")
+
+    def _restore_inline_name(self, item: Any, name: str) -> None:
+        self._inline_rename_guard = True
+        try:
+            item.setText(0, name)
+        finally:
+            self._inline_rename_guard = False
+
+    def _inline_rename_changed(self, item: Any, column: int) -> None:
+        if column != 0 or self._inline_rename_guard or self._rendering_entries:
+            return
+        entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        remote = self.remote
+        if not isinstance(entry, BrowserEntry) or remote is None:
+            return
+        new_name = item.text(0).strip()
+        if (
+            not self._edits_enabled()
+            or self._remote_operation_pending(remote.name)
+            or remote.backend_type.casefold() == "gphotos"
+            or not new_name
+            or new_name == entry.name
+        ):
+            self._restore_inline_name(item, entry.name)
             return
         if any(candidate.path != entry.path and candidate.name.casefold() == new_name.casefold() for candidate in self.entries):
+            self._restore_inline_name(item, entry.name)
             self._notify("Rename", f"An item named {new_name} already exists in this folder.", False)
             return
-        remote = self.remote
         parent = parent_browser_path(entry.path)
         self._run_operation(
             "Renaming…",
@@ -3656,6 +3809,7 @@ class CompactCloudBrowser:
             except Exception as exc:
                 self._bridge.offline_job_finished.emit(remote_name, paths, "remove", False, str(exc))
                 return
+            self._refresh_cached_entry_states_from_disk(remote_name, paths)
             self._bridge.offline_job_finished.emit(remote_name, paths, "remove", True, "")
 
         threading.Thread(target=worker, daemon=True).start()
@@ -4215,7 +4369,7 @@ class CompactCloudBrowser:
                     discovered_paths = [
                         normalize_browser_path(entry.path)
                         for entry in discovered_entries
-                        if not entry.is_dir and normalize_browser_path(entry.path)
+                        if normalize_browser_path(entry.path)
                     ]
                     self._bridge.offline_job_paths_ready.emit(job_remote_name, discovered_entries, job_kind)
 
@@ -4235,6 +4389,7 @@ class CompactCloudBrowser:
                 if discovery_error and not discovered_paths:
                     self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, False, discovery_error)
                     return
+                self._refresh_cached_entry_states_from_disk(job_remote_name, discovered_paths)
                 self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, True, "")
 
             threading.Thread(target=worker, daemon=True).start()
@@ -4326,6 +4481,8 @@ class CompactCloudBrowser:
             }
         if not success:
             self._notify("Offline files", message or "The operation failed.", False)
+        elif remote_name and isinstance(paths, list):
+            self._refresh_entry_icons_for_paths(remote_name, [str(path) for path in paths])
         self._local_files_changed()
         self.refresh(force=True)
         self._start_offline_jobs()
@@ -4923,6 +5080,7 @@ class CompactCloudBrowser:
             except Exception as exc:
                 self._bridge.cached_file_ready.emit(remote.name, entry.path, None, str(exc))
                 return
+            self._refresh_cached_entry_states_from_disk(remote.name, [entry.path])
             self._bridge.cached_file_ready.emit(remote.name, entry.path, local, "")
 
         threading.Thread(target=worker, daemon=True).start()
@@ -4934,6 +5092,7 @@ class CompactCloudBrowser:
             self.status.setText(error)
             self._update_actions()
             return
+        self._refresh_entry_icons_for_paths(remote_name, [path])
         if self.remote is None or self.remote.name != remote_name:
             return
         self._folder_cache.pop((remote_name, parent_browser_path(path)), None)

@@ -3,10 +3,11 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
-## Current Development Version (0.6.6)
+## Current Development Version (0.6.7)
 
-Version `0.6.6` continues the deterministic geometry and foreground-priority
-file-browser work released in `0.6.5`. See
+Version `0.6.7` adds inline renaming and restores immediate, targeted cache and
+offline-state icon updates without putting folder-wide work on the foreground
+navigation path. See
 `CHANGELOG.md` for the user-facing summary and `RELEASE.md` for the release
 procedure.
 
@@ -245,6 +246,12 @@ snapshot. Keep this location inside the user-visible app folder because
 sandboxed viewers and office applications may not be able to open files from
 hidden app cache directories. Do not make offline files OS-level read-only
 because some external viewers need write access for lock or temporary files.
+Treat the local offline store and manifest as authoritative when a cache,
+offline, export, or removal job completes. Refresh those state records before
+notifying the UI, then repaint only the directly affected visible rows and
+their visible ancestors. Never defer a completed cache badge until restart,
+and never repair it with a whole-folder foreground scan: both behaviors are
+regressions in correctness or navigation responsiveness.
 Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
 Down, Return, Escape, side-aware Left/Right handoff, and Qt's standard copy,
 cut, paste, and delete keys should be shown as fixed guidance. Optional

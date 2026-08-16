@@ -124,6 +124,11 @@ may change for future renewals with advance notice.
   documents for local editing.
 - Use **Make available offline** to protect selected files or folders from cache
   cleanup.
+- Rename a selected file or folder inline by clicking its name again or
+  pressing F2. File renaming initially selects only the basename so its
+  extension is preserved unless you deliberately change it.
+- Cache and offline badges update as soon as the local operation completes;
+  restarting Mountlet is not required.
 - Use **Sync now** to check cached/offline files immediately.
 - Drag local files and folders into the browser to upload them. Drag browser
   items into a system file manager to copy them out. Mountlet prepares

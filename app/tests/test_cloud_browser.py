@@ -2782,6 +2782,93 @@ class CloudBrowserTests(unittest.TestCase):
         browser._refresh_entry_icons.assert_called_once_with()
         browser._display_entries.assert_not_called()
 
+    def test_completed_offline_work_refreshes_state_from_actual_cache_file(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            backend = CloudBrowserBackend(
+                state_path=root / "browser.json",
+                cache_root=root / "offline",
+            )
+            browser = object.__new__(CompactCloudBrowser)
+            browser.backend = backend
+            browser._entry_state_cache = {
+                ("Docs", "Reports/a.txt", False): (False, False, False, False, False)
+            }
+            cached = backend.offline_path("Docs", "Reports/a.txt")
+            cached.parent.mkdir(parents=True)
+            cached.write_text("cached", encoding="utf-8")
+
+            browser._refresh_cached_entry_states_from_disk("Docs", ["Reports/a.txt"])
+
+            self.assertEqual(
+                browser._entry_state_cache[("Docs", "Reports/a.txt", False)][:3],
+                (True, True, False),
+            )
+            self.assertIn(("Docs", "Reports", True), browser._entry_state_cache)
+
+    def test_completed_offline_work_repaints_only_affected_visible_row(self):
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = _remote()
+        browser.path = "Reports"
+        affected = mock.Mock()
+        unaffected = mock.Mock()
+        affected.data.return_value = BrowserEntry("Deep", "Reports/Deep", True)
+        unaffected.data.return_value = BrowserEntry("Other", "Reports/Other", True)
+        browser._rendered_item_maps = {
+            ("Docs", "Reports"): {
+                "Reports/Deep": affected,
+                "Reports/Other": unaffected,
+            }
+        }
+        browser.window = SimpleNamespace(
+            style=lambda: SimpleNamespace(standardIcon=lambda _icon: object())
+        )
+        browser.qt = SimpleNamespace(
+            Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")),
+            QStyle=SimpleNamespace(StandardPixmap=SimpleNamespace(SP_DirIcon=1, SP_FileIcon=2)),
+        )
+        browser._stable_standard_icon = mock.Mock(return_value=object())
+        browser._apply_entry_state = mock.Mock()
+
+        browser._refresh_entry_icons_for_paths("Docs", ["Reports/Deep/a.txt"])
+
+        browser._apply_entry_state.assert_called_once()
+        self.assertIs(browser._apply_entry_state.call_args.args[0], affected)
+
+    def test_open_cache_download_updates_disk_state_before_ready_signal(self):
+        entry = BrowserEntry("a.txt", "Reports/a.txt", False)
+        remote = _remote()
+        local = Path("/cache/Docs/Reports/a.txt")
+        browser = object.__new__(CompactCloudBrowser)
+        browser.remote = remote
+        browser.backend = mock.Mock()
+        browser.backend.offline_path.return_value = Path("/missing/cache/file")
+        browser.backend.cache_file.return_value = local
+        browser._start_working_paths = mock.Mock()
+        browser._refresh_cached_entry_states_from_disk = mock.Mock()
+        browser.status = mock.Mock()
+        browser._update_actions = mock.Mock()
+        emitted: list[tuple[object, ...]] = []
+        browser._bridge = SimpleNamespace(
+            cached_file_ready=SimpleNamespace(emit=lambda *args: emitted.append(args))
+        )
+
+        class Thread:
+            def __init__(self, target, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with mock.patch("mountlet.cloud_browser_ui.threading.Thread", Thread):
+            browser._open_cached_file(entry)
+
+        browser._refresh_cached_entry_states_from_disk.assert_called_once_with(
+            remote.name,
+            [entry.path],
+        )
+        self.assertEqual(emitted, [(remote.name, entry.path, local, "")])
+
     def test_theme_refresh_repaints_existing_file_icons(self):
         browser = object.__new__(CompactCloudBrowser)
         browser.qt = SimpleNamespace()
@@ -2996,50 +3083,72 @@ class CloudBrowserTests(unittest.TestCase):
         browser.backend.remember_path.assert_called_once_with("Docs", "")
         browser.refresh.assert_called_once_with()
 
-    def test_rename_selected_runs_backend_operation_for_current_folder(self):
+    def test_rename_selected_starts_inline_edit(self):
         browser = object.__new__(CompactCloudBrowser)
         remote = _remote()
         entry = BrowserEntry("old.txt", "Reports/old.txt", False)
         browser.remote = remote
         browser.entries = [entry]
-        browser.window = mock.Mock()
+        item = mock.Mock()
+        item.data.return_value = entry
+        browser.tree = mock.Mock()
+        browser.tree.currentItem.return_value = item
         browser.backend = mock.Mock()
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")))
         browser._operation_pending = False
         browser._edits_enabled = mock.Mock(return_value=True)
         browser._selected_entries = mock.Mock(return_value=[entry])
         browser._notify = mock.Mock()
-        browser._run_operation = mock.Mock()
-        browser.qt = SimpleNamespace(
-            QInputDialog=SimpleNamespace(getText=mock.Mock(return_value=("new.txt", True))),
-            QLineEdit=SimpleNamespace(EchoMode=SimpleNamespace(Normal="normal")),
-        )
 
         browser.rename_selected()
+
+        browser.tree.editItem.assert_called_once_with(item, 0)
+
+    def test_inline_rename_runs_backend_operation_for_current_folder(self):
+        browser = object.__new__(CompactCloudBrowser)
+        remote = _remote()
+        entry = BrowserEntry("old.txt", "Reports/old.txt", False)
+        item = mock.Mock()
+        item.data.return_value = entry
+        item.text.return_value = "new.txt"
+        browser.remote = remote
+        browser.entries = [entry]
+        browser.backend = mock.Mock()
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")))
+        browser._operation_pending = False
+        browser._inline_rename_guard = False
+        browser._rendering_entries = False
+        browser._edits_enabled = mock.Mock(return_value=True)
+        browser._notify = mock.Mock()
+        browser._run_operation = mock.Mock()
+
+        browser._inline_rename_changed(item, 0)
 
         self.assertEqual(browser._run_operation.call_args.args[0], "Renaming…")
         self.assertEqual(browser._run_operation.call_args.kwargs["invalidate_keys"], {(remote.name, "Reports")})
         browser._run_operation.call_args.args[1]()
         browser.backend.rename_entry.assert_called_once_with(remote, entry, "new.txt")
 
-    def test_rename_selected_rejects_duplicate_sibling_name(self):
+    def test_inline_rename_rejects_duplicate_sibling_name(self):
         browser = object.__new__(CompactCloudBrowser)
         entry = BrowserEntry("old.txt", "Reports/old.txt", False)
         browser.remote = _remote()
         browser.entries = [entry, BrowserEntry("new.txt", "Reports/new.txt", False)]
-        browser.window = mock.Mock()
+        item = mock.Mock()
+        item.data.return_value = entry
+        item.text.return_value = "NEW.TXT"
         browser.backend = mock.Mock()
+        browser.qt = SimpleNamespace(Qt=SimpleNamespace(ItemDataRole=SimpleNamespace(UserRole="user")))
         browser._operation_pending = False
         browser._edits_enabled = mock.Mock(return_value=True)
-        browser._selected_entries = mock.Mock(return_value=[entry])
+        browser._inline_rename_guard = False
+        browser._rendering_entries = False
         browser._notify = mock.Mock()
         browser._run_operation = mock.Mock()
-        browser.qt = SimpleNamespace(
-            QInputDialog=SimpleNamespace(getText=mock.Mock(return_value=("NEW.TXT", True))),
-            QLineEdit=SimpleNamespace(EchoMode=SimpleNamespace(Normal="normal")),
-        )
 
-        browser.rename_selected()
+        browser._inline_rename_changed(item, 0)
 
+        item.setText.assert_called_once_with(0, "old.txt")
         browser._notify.assert_called_once()
         browser._run_operation.assert_not_called()
 
@@ -4195,6 +4304,7 @@ class CloudBrowserTests(unittest.TestCase):
         browser.status = mock.Mock()
         browser._display_entries = mock.Mock()
         browser._update_actions = mock.Mock()
+        browser._refresh_cached_entry_states_from_disk = mock.Mock()
         browser._bridge = SimpleNamespace(
             offline_job_paths_ready=SimpleNamespace(emit=lambda remote, paths, kind: events.append(("paths", paths))),
             offline_job_finished=SimpleNamespace(emit=lambda remote, paths, kind, success, message: events.append(("done", paths))),
@@ -4226,6 +4336,10 @@ class CloudBrowserTests(unittest.TestCase):
                 ),
                 ("done", ["Reports/a.txt", "Reports/Deep/b.txt"]),
             ],
+        )
+        browser._refresh_cached_entry_states_from_disk.assert_called_once_with(
+            "Docs",
+            ["Reports/a.txt", "Reports/Deep/b.txt"],
         )
 
     def test_remove_offline_job_waits_for_overlapping_download(self):

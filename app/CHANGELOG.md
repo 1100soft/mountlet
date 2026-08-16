@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.7 - 2026-08-16
+
+- Added Explorer-style inline file and folder renaming: select an item and
+  click its name again or press F2. For files, editing initially selects the
+  basename while preserving the extension.
+- Made newly downloaded cache and offline states appear immediately on the
+  affected file rows. The browser now reads the completed on-disk state before
+  repainting instead of waiting for a restart or a later folder scan.
+- Kept file and cache-overlay icons at their intended colors across startup,
+  selection, themes, and zoom levels by supplying stable pixmaps for every
+  enabled icon state.
+
 ## 0.6.6 - 2026-08-12
 
 - Reworked global and per-remote search around one local SQLite query: unordered

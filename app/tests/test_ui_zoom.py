@@ -19,6 +19,7 @@ from mountlet.ui_zoom import (
     zoom_factor,
 )
 from mountlet.cloud_browser_ui import CompactCloudBrowser
+from mountlet.cloud_browser import BrowserEntry
 from mountlet.tray import _load_qt_bindings
 from mountlet.ui_geometry import (
     FILE_LIST_FRAME_PADDING,
@@ -37,6 +38,49 @@ except ImportError:  # The core-only install intentionally has no Qt runtime.
 
 
 class UiZoomTests(unittest.TestCase):
+    @unittest.skipUnless(QtWidgets is not None, "PySide6 is not installed")
+    def test_file_icons_keep_source_color_in_selected_state(self):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = _load_qt_bindings()
+        pixmap = QtGui.QPixmap(24, 24)
+        source = QtGui.QColor("#00ff00")
+        pixmap.fill(source)
+
+        icon = browser._untinted_pixmap_icon(pixmap)
+        selected = icon.pixmap(
+            QtCore.QSize(24, 24),
+            QtGui.QIcon.Mode.Selected,
+            QtGui.QIcon.State.Off,
+        )
+
+        self.assertEqual(selected.toImage().pixelColor(12, 12), source)
+
+    @unittest.skipUnless(QtWidgets is not None, "PySide6 is not installed")
+    def test_inline_rename_selects_basename_after_editor_focus(self):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        browser = object.__new__(CompactCloudBrowser)
+        browser.qt = _load_qt_bindings()
+        browser._zoom_steps = 0
+        tree = QtWidgets.QTreeWidget()
+        tree.setColumnCount(3)
+        browser.tree = tree
+        delegate = browser._make_file_row_delegate()
+        tree.setItemDelegate(delegate)
+        item = QtWidgets.QTreeWidgetItem(["report.final.pdf", "", ""])
+        item.setData(0, QtCore.Qt.ItemDataRole.UserRole, BrowserEntry("report.final.pdf", "report.final.pdf", False))
+        item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
+        tree.addTopLevelItem(item)
+        tree.show()
+        tree.editItem(item, 0)
+        app.processEvents()
+        try:
+            editor = tree.findChild(QtWidgets.QLineEdit)
+            self.assertIsNotNone(editor)
+            self.assertEqual(editor.selectedText(), "report.final")
+        finally:
+            tree.close()
+
     @unittest.skipUnless(QtWidgets is not None, "PySide6 is not installed")
     @mock.patch("mountlet.cloud_browser_ui.CloudBrowserBackend")
     def test_production_qt_namespace_constructs_file_browser(self, _backend_type):
