@@ -3,9 +3,9 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
-## Current Development Version (0.6.7)
+## Current Development Version (0.6.8)
 
-Version `0.6.7` adds inline renaming and restores immediate, targeted cache and
+Version `0.6.8` adds inline renaming and restores immediate, targeted cache and
 offline-state icon updates without putting folder-wide work on the foreground
 navigation path. See
 `CHANGELOG.md` for the user-facing summary and `RELEASE.md` for the release

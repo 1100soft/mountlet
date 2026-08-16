@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.7 - 2026-08-16
+## 0.6.8 - 2026-08-16
 
 - Added Explorer-style inline file and folder renaming: select an item and
   click its name again or press F2. For files, editing initially selects the
@@ -11,6 +11,9 @@
 - Kept file and cache-overlay icons at their intended colors across startup,
   selection, themes, and zoom levels by supplying stable pixmaps for every
   enabled icon state.
+- Bound release-test subprocesses to the checked-out source and removed a
+  duplicated version literal that could let local tests pass against an older
+  installation while clean package builds failed.
 
 ## 0.6.6 - 2026-08-12
 
