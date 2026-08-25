@@ -1,0 +1,68 @@
+name: Tauri migration package CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/tauri-experiment.yml"
+      - "tauri-experiment/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-migration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: ${{ matrix.platform }} / ${{ matrix.variant }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64, runner: ubuntu-24.04, resource: linux-x86_64, variant: lean, bundled: false }
+          - { platform: linux-x64, runner: ubuntu-24.04, resource: linux-x86_64, variant: bundled-rclone, bundled: true }
+          - { platform: windows-x64, runner: windows-2025, resource: windows-x86_64, variant: lean, bundled: false }
+          - { platform: windows-x64, runner: windows-2025, resource: windows-x86_64, variant: bundled-rclone, bundled: true }
+          - { platform: macos-arm64, runner: macos-15, resource: macos-aarch64, variant: lean, bundled: false }
+          - { platform: macos-arm64, runner: macos-15, resource: macos-aarch64, variant: bundled-rclone, bundled: true }
+          - { platform: macos-x64, runner: macos-15-intel, resource: macos-x86_64, variant: lean, bundled: false }
+          - { platform: macos-x64, runner: macos-15-intel, resource: macos-x86_64, variant: bundled-rclone, bundled: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: tauri-experiment/package-lock.json }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: tauri-experiment/src-tauri }
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Stage official versioned rclone
+        if: matrix.bundled
+        working-directory: tauri-experiment
+        run: python ../app/packaging/stage_rclone.py --destination src-tauri/vendor/rclone/0.6.8/${{ matrix.resource }}
+      - name: Install frontend dependencies
+        working-directory: tauri-experiment
+        run: npm ci
+      - name: Frontend and Rust tests
+        working-directory: tauri-experiment
+        run: npm run build && cargo test -j 2 --manifest-path src-tauri/Cargo.toml
+      - name: Build native bundle
+        working-directory: tauri-experiment
+        run: npm run tauri:build
+      - name: Verify bundled rclone is present
+        if: matrix.bundled
+        shell: bash
+        run: test -n "$(find tauri-experiment/src-tauri/target/release/bundle -type f -name 'rclone*' -print -quit)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mountlet-tauri-${{ matrix.platform }}-${{ matrix.variant }}
+          path: tauri-experiment/src-tauri/target/release/bundle/**
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
