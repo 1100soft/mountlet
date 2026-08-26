@@ -3,50 +3,14 @@
 This directory contains maintainer-facing notes. `app/README.md` is the
 user-facing document used for package publication.
 
-## Current Development Version (0.6.8)
+## Current Release (0.6.4)
 
-Version `0.6.8` adds inline renaming and restores immediate, targeted cache and
-offline-state icon updates without putting folder-wide work on the foreground
-navigation path. See
-`CHANGELOG.md` for the user-facing summary and `RELEASE.md` for the release
-procedure.
+Version `0.6.4` consolidates the file-browser, mounting, authentication,
+window-layout, theme, website, and release-publication work completed after
+`0.6.3`. See `CHANGELOG.md` for the user-facing summary and `RELEASE.md` for
+the release procedure.
 
 ### Implementation invariants
-
-- Foreground remote and folder navigation must not enumerate the folder being
-  left, copy its entry list, compare complete entry lists, or repaint every row
-  when background metadata arrives. Selection caching is constant-time. Large
-  offline-state scans may run in the background, but their results are consumed
-  by a later ordinary render rather than triggering a front-end row loop.
-- Once either window mode is constructed, navigation must not change runtime
-  layout geometry. Keep the file-list scrollbar reserved, column widths stable,
-  and window dimensions unchanged across remote/folder selection. Remote
-  addition and removal are the only ordinary operations allowed to change the
-  main content layout; mode, zoom, and explicit configuration changes remain
-  deliberate user-requested rebuilds.
-- When a high zoom level makes the single-window panes wider than the usable
-  desktop, reserve the containing horizontal scrollbar's integer height before
-  calculating pane height. Child minimum sizes must never exceed the capped
-  client geometry; moving an oversized native frame cannot repair a missing
-  scrollbar or chrome term.
-- Top-level `QWidget` geometry addresses the client rectangle on X11. Convert
-  every calculated outer-frame origin to a client origin with the compositor's
-  left/top `frameMargins()`, while subtracting all frame margins from the client
-  size cap. Apply size and position together so no oversized intermediate frame
-  can escape the available desktop.
-- Native frame margins are unavailable before a top-level window is mapped.
-  Use style-derived decoration reserves for the hidden fit, perform one exact
-  mapped fit, and cache the measured normal-window margins. Normalize before
-  measuring; a maximized zero-margin report must never replace that cache.
-- On X11, use the window manager's `_NET_WORKAREA` for panel-excluded desktop
-  bounds and intersect it with the active monitor. `QScreen.availableGeometry()`
-  is only a fallback: some KDE panel configurations expose the full monitor
-  there even though KWin publishes the correct top/right reserved area.
-- `python packaging/run_tests.py --resource-report build/test-resources.json`
-  records wall time, child-process CPU time, logical CPU count, and peak child
-  RSS where the platform exposes it. This is a reproducible regression baseline,
-  not the application's maximum memory requirement; test it on each release
-  platform before revising the user-facing minimum and recommended resources.
 
 - External and internal drag-and-drop can target the displayed folder, a
   visible child folder, or a remote row. Remote-row drops use that remote's
@@ -55,7 +19,7 @@ procedure.
 - Folder loads are cancellable and isolated per remote. A stalled Google
   Photos virtual-folder request must not block navigation or operations on
   other remotes. Photos skips recursive auto-indexing, neighboring-folder
-  prefetch and automatic cloud-side cache
+  prefetch, search-result API verification, and automatic cloud-side cache
   polling to conserve its restricted API quota.
 - Google Photos date leaves are projected from the cached `media/all` listing.
   Media views are read-only; destructive operations are allowed only for media
@@ -178,65 +142,13 @@ and broader end-to-end testing are complete.
 `cloud_browser.py` owns provider-neutral rclone listing, transfer, remembered
 paths, and offline snapshots. `cloud_browser_ui.py` owns the compact Qt view
 and must keep every rclone operation off the UI thread.
-
-### UI performance and geometry invariants
-
-Responsiveness is the highest UI priority. Pointer and keyboard navigation may
-change selection, focus, and already-cached visuals only. It must not wait on
-rclone, subprocesses, filesystem scans, settings reads, usage probes, license
-verification, mount probes, theme refresh, icon regeneration, model rebuilds,
-or per-item loops. The embedded and detached browser paths should perform
-equivalent cache-only foreground work.
-
-Persist folder metadata, usage values, and the selected item for each remote so
-startup and mode changes can paint useful stale data immediately. Queue live
-metadata as soon as a folder is selected, in bounded background work, but do
-not commit results or trigger other foreground work while the user is moving
-through remotes. A stale result may update the cache; it must not replace a
-newer view. Refresh cached usage only after a known file-size mutation or when
-new folder metadata reveals a changed aggregate size. Do not add a separate
-polling loop for that comparison.
-
-Search is a local-index operation. Keep parsing, filtering, quality scoring,
-ordering, remote filtering, and result limiting inside SQLite so Python receives
-only the final `limit` rows. Do not add search-result verification timers or
-remote API passes: navigating to a result queues the ordinary folder refresh.
-Every term must match the filename or parent path, at least one must match the
-filename, and quoted phrases remain contiguous. Global and remote searches ask
-for one row beyond their visible caps solely to render `80+` or `50+`.
-
-Retain path-to-item maps and complete cached item trees. Swap them with updates
-disabled instead of reconstructing every row. Never make selection refresh the
-palette, icons, usage, window size, or unrelated controls. Theme and icon
-refresh belongs only to actual theme or zoom changes. Mode, theme, and layout
-changes must not remount remotes or start authentication.
-
-All supported zoom levels are discrete. Precompute integer pixels for the
-lowest-level constants—font, icon, row, spacing, margins, and fixed browser
-chrome—and derive all higher-level geometry from them once per zoom level.
-Never use a rendered `sizeHint`, current widget geometry, or a post-render move
-as an input to window placement. Never cache a folder's total list height:
-derive it from fixed chrome plus integer row height times the current item
-count. The file tree is deliberately frameless because native frame extents
-vary by Qt style and make that equality impossible; do not restore a native
-frame without adding its exact, deterministic geometry to every zoom metric.
-Its item delegate enforces the cached integer row height for every item; an
-item icon, cached state, folder change, or stale `QTreeWidgetItem` size hint
-must never be allowed to choose the effective row height.
-The file-tree headers and icon sizes are owned by the file-browser zoom metrics
-and are excluded from the generic application zoom walker. Otherwise the
-startup and show-event passes can scale an already-scaled metric a second time.
-Dialog and detached-window positions must come from the cached tray
-anchor, inferred panel edge, selected remote row, theoretical target sizes, and
-the screen's available geometry before the native window is shown.
-
-Keep diagnostic geometry logging for startup, mode, zoom, remote selection,
-and first-open dialogs. When changing the hot path, compare single- and
-multi-window navigation using those logs and add a regression test for any
-loop, layout activation, or background result that reaches the foreground.
-Release cleanup must preserve these behavioral tests. Required regression
-tests are named explicitly by `packaging/run_tests.py`, so removing or renaming
-one must fail the release rather than quietly reducing coverage.
+UI responsiveness is a release requirement. Pointer and keyboard handlers may
+change selection, focus, and already-cached visuals only; they must not wait on
+rclone, subprocesses, filesystem scans, settings reads, license verification,
+or remote mount probes. Run those operations in bounded background workers,
+discard stale results, and update only the affected rows or controls. Avoid
+periodic menu reconstruction, full-window repainting, and repeated parsing on
+hot input paths.
 Copy, move, mkdir, and delete actions are direct rclone operations and must stay
 behind the `integrated_file_edits` app setting. Do not present them as undoable
 or trash-backed until Mountlet has a provider-aware trash/restore design.
@@ -246,33 +158,19 @@ snapshot. Keep this location inside the user-visible app folder because
 sandboxed viewers and office applications may not be able to open files from
 hidden app cache directories. Do not make offline files OS-level read-only
 because some external viewers need write access for lock or temporary files.
-Treat the local offline store and manifest as authoritative when a cache,
-offline, export, or removal job completes. Refresh those state records before
-notifying the UI, then repaint only the directly affected visible rows and
-their visible ancestors. Never defer a completed cache badge until restart,
-and never repair it with a whole-folder foreground scan: both behaviors are
-regressions in correctness or navigation responsiveness.
 Keyboard shortcuts are scoped by context. Fixed navigation keys such as Up,
 Down, Return, Escape, side-aware Left/Right handoff, and Qt's standard copy,
 cut, paste, and delete keys should be shown as fixed guidance. Optional
 alternatives for common list navigation, remote reordering, browser entry,
 per-remote actions, and file-browser actions can be reused between contexts,
 but conflicts inside one context should remain blocked in the shortcut editor.
-Ctrl++ and Ctrl+- scale the complete application, including fonts, controls,
-icons, spacing, rows, and open windows. Ctrl+0 restores the system-derived
-baseline. The zoom level is saved as `ui.zoom_steps` and follows config sync.
-The main-window footer places Add remote at the left and the current percentage
-plus minus, plus, and reset controls at the right. Zoom resizing preserves the
-tray edge cached during initial popup placement and positions the file browser
-from the final calculated window geometry. Windows stay inside the available
-desktop; constrained combined layouts expose scrollbars instead of expanding
-beyond it.
-Folder listings are persistent caches for remembered paths. Selecting a folder
-queues that folder's live metadata immediately, but Mountlet does not eagerly
-prefetch its parent or visible children: speculative requests compete with
-navigation and consume provider API quota. Deeper recursive indexing remains
-opt-in per remote and needs invalidation rules for changes made outside
-Mountlet. Offline snapshot
+Folder listings are session caches and are preloaded for each remembered remote
+path. When a folder is displayed, Mountlet silently prefetches one displayed
+level deeper with a bounded queue so navigation into visible folders is often
+instant without scanning an entire remote. Deeper recursive indexing must stay
+opt-in per remote: it can improve navigation after the first scan, but it
+consumes provider API quota, stores more metadata locally, and needs
+invalidation rules for changes made outside Mountlet. Offline snapshot
 metadata records relative path, type, size, modification time, and local cache
 state when available. Uncached files must remain metadata-only entries rather
 than fake local filesystem placeholders. Do not treat rclone VFS blocks as an
@@ -342,13 +240,8 @@ testing another compatible binary. The staged binary is copied into
 `vendor/rclone/`, included in the native bundle, and ignored by git. On
 Windows, explicit staging rejects package-manager shim executables and requires
 the real `rclone.exe`. Lean installs discover `RCLONE_PATH` or a system rclone;
-bundled installs use their app-local binary. Windows packages place that binary
-under an app-versioned directory and exclude persistent rclone mount processes
-from installer close detection. An upgrade can therefore replace Mountlet while
-existing mounts continue using the preceding rclone copy; the new app uses its
-own copy. Never restore a shared overwrite-in-place rclone path on Windows.
-FUSE, WinFsp, and macFUSE are not bundled; they remain optional native-folder
-support.
+bundled installs use their app-local binary. FUSE, WinFsp, and macFUSE are not
+bundled; they remain optional native-folder support.
 
 The `Native package CI` workflow builds visible `system-rclone` and
 `bundled-rclone` artifacts. Each artifact contains a portable bundle plus a

@@ -20,9 +20,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections import OrderedDict
 from contextlib import suppress
-from dataclasses import replace
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -33,11 +31,11 @@ from urllib.parse import quote, urlencode
 from . import __version__, build_info, core, license_control, notice_control, rclone_wizard, report_control
 from .badged_button import create_badged_button, set_badge, set_checkmark
 from .cloud_browser import normalize_browser_path, parent_browser_path, remote_target
-from .cloud_browser_ui import CompactCloudBrowser, cascade_position
+from .cloud_browser_ui import CompactCloudBrowser
 from .config_tools import bundle_file
 from .config_tools import setup_wizard
 from .config_tools.shared import app_config_file, app_mounts_file, app_state_dir, ensure_app_directories
-from .metadata_index import IndexedEntry, search_quality_label
+from .metadata_index import IndexedEntry
 from .platform_services import get_platform
 from .platform_services.desktop import DesktopServices
 from .platform_services.file_managers import (
@@ -70,28 +68,6 @@ from .settings import (
 )
 from .shortcuts import matches_shortcut, normalize_shortcut_text, shortcut_values
 from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
-from .ui_colors import (
-    ALERT_BADGE,
-    DANGER,
-    DARK_THEME_COLORS,
-    INFO,
-    LIGHT_THEME_COLORS,
-    MUTED,
-    MUTED_CHECKING,
-    PROVIDER_COLORS,
-    PROVIDER_FALLBACK,
-    SUCCESS,
-    WARNING,
-    search_quality_color,
-)
-from .ui_geometry import (
-    FILE_BROWSER_REFERENCE_WIDTH,
-    FILE_LIST_HEADER_HEIGHT,
-    exclude_tray_panel,
-    intersect_rects,
-    rect_tuple,
-)
-from .ui_zoom import ApplicationZoom, metric_at_level, metric_levels, zoom_factor
 
 
 _DOLPHIN_MAIN_WINDOW_PATH = "/dolphin/Dolphin_1"
@@ -102,7 +78,6 @@ LICENSE_REQUIRE_ENV = "MOUNTLET_REQUIRE_LICENSE"
 REMOTE_CHANGE_POLLING_ENV = "MOUNTLET_REMOTE_CHANGE_POLLING"
 BACKGROUND_RCLONE_CHECKS_ENV = "MOUNTLET_BACKGROUND_RCLONE_CHECKS"
 CUSTOM_KEYBOARD_SHORTCUTS_ENV = "MOUNTLET_CUSTOM_KEYBOARD_SHORTCUTS"
-REMOTE_ORDER_MIME_TYPE = "application/x-mountlet-remote-order"
 OPEN_FOLDER_BEHAVIORS: tuple[tuple[str, str], ...] = (
     ("current_desktop", "Current desktop window"),
     ("existing_window", "Any existing file manager window"),
@@ -121,11 +96,9 @@ REMOTE_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
 STORAGE_SORT_MODES = {"size", "used", "remaining"}
 REMOTE_ROW_HEIGHT = 40
 REMOTE_LIST_MIN_HEIGHT = 180
-SEARCH_RESULT_VISIBLE_ROWS = 6
-SEARCH_RESULT_ROW_HEIGHT = 22
-SEARCH_RESULT_ROW_HEIGHT_LEVELS = metric_levels(SEARCH_RESULT_ROW_HEIGHT)
-SEARCH_RESULT_HEADER_HEIGHT_LEVELS = metric_levels(FILE_LIST_HEADER_HEIGHT)
-GLOBAL_SEARCH_RESULT_LIMIT = 80
+EMBEDDED_BROWSER_MIN_WIDTH = 540
+EMBEDDED_BROWSER_MIN_HEIGHT = 340
+EMBEDDED_BROWSER_MAX_HEIGHT = 460
 REMOTE_CACHE_CHECK_BATCH_SIZE = 20
 NOTIFICATION_CARD_WIDTH = 390
 NOTIFICATION_CARD_HEIGHT = 126
@@ -139,8 +112,6 @@ FIXED_SHORTCUT_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("Left / Right", "Move between the remote list and file browser when the key points toward the other pane"),
             ("Enter", "Select the focused remote or open the focused file item"),
             ("Esc", "Return from the file browser to the remote list"),
-            ("Ctrl++ / Ctrl+-", "Zoom the complete Mountlet interface"),
-            ("Ctrl+0", "Reset application zoom to the system-derived size"),
         ),
     ),
     (
@@ -171,8 +142,8 @@ BROWSER_SHORTCUT_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
     ("browser_parent", "Parent folder"),
     ("browser_root", "Remote root"),
     ("browser_refresh", "Refresh folder"),
-    ("browser_zoom_in", "Application zoom in"),
-    ("browser_zoom_out", "Application zoom out"),
+    ("browser_zoom_in", "Zoom in"),
+    ("browser_zoom_out", "Zoom out"),
     ("browser_open_folder", "Open folder in file manager"),
     ("browser_copy", "Copy selected items"),
     ("browser_cut", "Cut selected items"),
@@ -521,6 +492,21 @@ WEBDAV_VENDOR_OPTIONS: tuple[dict[str, str], ...] = (
         "instructions": '<a href="https://rclone.org/webdav/">rclone WebDAV guide</a>',
     },
 )
+PROVIDER_COLORS = {
+    "drive": "#34a853",
+    "gphotos": "#ea4335",
+    "dropbox": "#0061ff",
+    "onedrive": "#0078d4",
+    "box": "#0057c2",
+    "pcloud": "#17a2d4",
+    "iclouddrive": "#0a84ff",
+    "koofr": "#f59e0b",
+    "protondrive": "#6d4aff",
+    "mega": "#d9272e",
+    "nextcloud": "#0082c9",
+    "s3": "#ff9900",
+    "webdav": "#64748b",
+}
 REMOTE_BROWSER_URLS = {
     "drive": "https://drive.google.com/drive/my-drive",
     "gphotos": "https://photos.google.com/",
@@ -533,13 +519,7 @@ REMOTE_BROWSER_URLS = {
     "protondrive": "https://drive.proton.me/",
     "mega": "https://mega.nz/fm",
 }
-# These values can change as part of authentication or UI bookkeeping without
-# changing the mounted filesystem's effective configuration.
-REMOUNT_IGNORED_RCLONE_FIELDS = {
-    "auth_url",
-    "mountlet_google_account",
-    "token",
-}
+REMOUNT_IGNORED_RCLONE_FIELDS = {"mountlet_google_account", "auth_url"}
 _wizard_pending_remote_names: set[str] = set()
 
 
@@ -670,7 +650,6 @@ def _load_qt_bindings() -> SimpleNamespace:
             QScrollArea,
             QSizePolicy,
             QStyle,
-            QStyledItemDelegate,
             QSystemTrayIcon,
             QTabWidget,
             QToolTip,
@@ -742,7 +721,6 @@ def _load_qt_bindings() -> SimpleNamespace:
         QSize=QSize,
         QSizePolicy=QSizePolicy,
         QStyle=QStyle,
-        QStyledItemDelegate=QStyledItemDelegate,
         QSystemTrayIcon=QSystemTrayIcon,
         QTabWidget=QTabWidget,
         QTimer=QTimer,
@@ -819,7 +797,7 @@ def _remote_account_hint(remote: core.RemoteInfo) -> str:
 
 
 def _provider_color(remote: core.RemoteInfo) -> str:
-    return PROVIDER_COLORS.get(remote.backend_type.casefold(), PROVIDER_FALLBACK)
+    return PROVIDER_COLORS.get(remote.backend_type.casefold(), "#64748b")
 
 
 def _remote_provider_icon(qt: SimpleNamespace, remote: core.RemoteInfo, *, size: int = 22) -> Any:
@@ -869,7 +847,7 @@ def _apply_external_link_button(
     button.setText(text)
     with suppress(Exception):
         icon_size = 18 if compact else 20
-        icon = mountlet_icon(qt, "ui-external-link", size=icon_size, color=_palette_text_color(button))
+        icon = mountlet_icon(qt, "ui-external-link", size=icon_size, color="#ffffff")
         if icon is not None:
             button.setIcon(icon)
             button.setIconSize(qt.QSize(icon_size, icon_size))
@@ -880,11 +858,18 @@ def _apply_external_link_button(
             font.setBold(True)
             font.setPointSize(max(font.pointSize() + 2, 12))
         button.setFont(font)
-    padding = "6px 12px" if prominent else "4px 10px"
     style = (
-        "QPushButton { background: palette(highlight); color: palette(highlighted-text); "
-        f"border: 1px solid palette(mid); border-radius: 5px; padding: {padding}; }} "
-        "QPushButton:hover, QPushButton:pressed { background: palette(link); }"
+        "QPushButton { background: #16a34a; color: #ffffff; border: 1px solid #15803d; "
+        "border-radius: 5px; padding: 6px 12px; } "
+        "QPushButton:hover { background: #15803d; } "
+        "QPushButton:pressed { background: #166534; }"
+        if prominent
+        else (
+            "QPushButton { background: #2563eb; color: #ffffff; border: 1px solid #1d4ed8; "
+            "border-radius: 5px; padding: 4px 10px; } "
+            "QPushButton:hover { background: #1d4ed8; } "
+            "QPushButton:pressed { background: #1e40af; }"
+        )
     )
     with suppress(Exception):
         button.setStyleSheet(style)
@@ -913,62 +898,6 @@ def _status_tooltip(remotes: list[core.RemoteInfo], mounted_names: list[str]) ->
 
 def _config_sync_state_path() -> Path:
     return app_state_dir() / "config-sync.json"
-
-
-USAGE_CACHE_FILENAME = "usage-cache.json"
-USAGE_CACHE_VERSION = 1
-USAGE_REFRESH_IDLE_MS = 1200
-USAGE_REFRESH_BETWEEN_REMOTES_MS = 300
-USAGE_REFRESH_CONCURRENCY = 1
-
-
-def _usage_cache_path() -> Path:
-    return app_state_dir() / USAGE_CACHE_FILENAME
-
-
-def _load_usage_cache() -> tuple[dict[str, core.StorageUsage], dict[str, bool]]:
-    try:
-        payload = json.loads(_usage_cache_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}, {}
-    if not isinstance(payload, dict) or payload.get("version") != USAGE_CACHE_VERSION:
-        return {}, {}
-    usages: dict[str, core.StorageUsage] = {}
-    connections: dict[str, bool] = {}
-    for name, item in payload.get("remotes", {}).items():
-        if not isinstance(name, str) or not isinstance(item, dict):
-            continue
-        usages[name] = core.StorageUsage(
-            str(item.get("text", "?")),
-            used=item.get("used") if isinstance(item.get("used"), int) else None,
-            total=item.get("total") if isinstance(item.get("total"), int) else None,
-        )
-        connections[name] = bool(item.get("connected", False))
-    return usages, connections
-
-
-def _save_usage_cache(usages: dict[str, core.StorageUsage], connections: dict[str, bool]) -> None:
-    path = _usage_cache_path()
-    payload = {
-        "version": USAGE_CACHE_VERSION,
-        "remotes": {
-            name: {
-                "text": usage.text,
-                "used": usage.used,
-                "total": usage.total,
-                "connected": bool(connections.get(name, False)),
-            }
-            for name, usage in usages.items()
-        },
-    }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(path)
-    except OSError:
-        # A read-only state directory must never disturb the UI or its workers.
-        return
 
 
 def _load_config_sync_state() -> dict[str, Any]:
@@ -1122,22 +1051,11 @@ def _palette_text_color(widget: Any) -> str:
     return color.name()
 
 
-def _palette_brush_color(widget: Any, role: str) -> str:
-    """Resolve a named palette brush without freezing a theme-specific color."""
-    try:
-        brush = getattr(widget.palette(), role)()
-        color = brush.color()
-        if color.isValid():
-            return color.name()
-    except Exception:
-        pass
-    return _palette_text_color(widget)
-
-
 def _provider_status_color(status: str, widget: Any) -> str:
     if status != "untested":
         return _palette_text_color(widget)
-    return _palette_brush_color(widget, "link")
+    background = widget.palette().color(widget.backgroundRole())
+    return "#facc15" if _color_luminance(background) < 128 else "#92400e"
 
 
 def _command_version_line(command: list[str], *, timeout: int = 5) -> str:
@@ -2439,7 +2357,6 @@ def _path_relative_to_base(path: str | None, base_path: str) -> str:
 def _muted_text_style(widget: Any) -> str:
     # Palette roles are resolved whenever Qt repaints the widget, unlike a
     # color sampled here and frozen into the stylesheet at construction time.
-    del widget
     return "color: palette(mid);"
 
 
@@ -2488,7 +2405,6 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
             app.setPalette(app.style().standardPalette())
         except Exception:
             pass
-        _apply_global_theme_stylesheet(app)
         return
     try:
         native_palette = app.style().standardPalette()
@@ -2496,7 +2412,6 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
         native_is_dark = _color_luminance(native_palette.color(window_role)) < 128
         if scheme_applied and native_is_dark == (selected == THEME_DARK):
             app.setPalette(native_palette)
-            _apply_global_theme_stylesheet(app)
             return
     except Exception:
         pass
@@ -2510,26 +2425,40 @@ def _apply_theme(qt: SimpleNamespace, app: Any, theme: str) -> None:
         app.setPalette(palette)
     except Exception:
         pass
-    _apply_global_theme_stylesheet(app)
-
-
-def _apply_global_theme_stylesheet(app: Any) -> None:
-    """Keep shared transient UI colors tied to the active application palette."""
-    try:
-        app.setStyleSheet(
-            "QLabel { color: palette(window-text); }"
-            "QToolTip {"
-            "color: palette(window-text);"
-            "background-color: palette(window);"
-            "border: 1px solid palette(window-text);"
-            "}"
-        )
-    except Exception:
-        pass
 
 
 def _theme_colors(theme: str) -> dict[str, str]:
-    return dict(DARK_THEME_COLORS if theme == THEME_DARK else LIGHT_THEME_COLORS)
+    if theme == THEME_DARK:
+        return {
+            "Window": "#31363b",
+            "WindowText": "#eff0f1",
+            "Base": "#232629",
+            "AlternateBase": "#31363b",
+            "ToolTipBase": "#31363b",
+            "ToolTipText": "#eff0f1",
+            "Text": "#eff0f1",
+            "Button": "#31363b",
+            "ButtonText": "#eff0f1",
+            "BrightText": "#ffffff",
+            "Highlight": "#3daee9",
+            "HighlightedText": "#ffffff",
+            "PlaceholderText": "#a1a9b1",
+        }
+    return {
+        "Window": "#eff0f1",
+        "WindowText": "#232629",
+        "Base": "#ffffff",
+        "AlternateBase": "#f7f7f7",
+        "ToolTipBase": "#ffffff",
+        "ToolTipText": "#232629",
+        "Text": "#232629",
+        "Button": "#eff0f1",
+        "ButtonText": "#232629",
+        "BrightText": "#ffffff",
+        "Highlight": "#3daee9",
+        "HighlightedText": "#ffffff",
+        "PlaceholderText": "#707880",
+    }
 
 
 def _license_required() -> bool:
@@ -2625,10 +2554,10 @@ def _notice_display_time(notice: notice_control.Notice) -> str:
 
 def _notice_accent(notice: notice_control.Notice) -> str:
     if notice.critical:
-        return ALERT_BADGE
+        return "#ef4444"
     if notice.level == notice_control.NOTICE_LEVEL_IMPORTANT:
-        return WARNING
-    return INFO
+        return "#f59e0b"
+    return "#3b82f6"
 
 
 def _elide_notice_lines(qt: SimpleNamespace, message: str, font: Any, width: int, max_lines: int) -> str:
@@ -2836,7 +2765,6 @@ class AppConfigDialog(_ConfigDialogBase):
                 focus_file_manager=self.fields["focus_file_manager"].isChecked(),
                 window_mode=self._selected_window_mode(),
                 theme=self.fields["theme"].currentData() or THEME_SYSTEM,
-                ui_zoom_steps=current.ui_zoom_steps,
                 integrated_file_edits=self.fields["integrated_file_edits"].isChecked(),
                 file_list_max_items=max(file_list_max_items, 0),
                 remote_sync_interval_seconds=max(remote_sync_interval, 0.0),
@@ -2917,7 +2845,7 @@ class AppConfigDialog(_ConfigDialogBase):
             button.setIconSize(self.qt.QSize(28, 28))
             button.setStyleSheet(
                 "QPushButton { text-align: left; padding: 8px; border-radius: 6px; } "
-                "QPushButton:checked { border: 2px solid palette(highlight); font-weight: 700; }"
+                "QPushButton:checked { border: 2px solid #2563eb; font-weight: 700; }"
             )
             if mode == WINDOW_MODE_MULTIPLE and bool(os.environ.get("WAYLAND_DISPLAY")) and get_platform().system_name == "Linux":
                 button.setEnabled(False)
@@ -2993,7 +2921,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
         root.addWidget(scroll, 1)
 
         self.conflict_label = self.qt.QLabel("")
-        self.conflict_label.setStyleSheet("color: palette(window-text);")
+        self.conflict_label.setStyleSheet("color: #dc2626;")
         root.addWidget(self.conflict_label)
         restore = self.qt.QPushButton("Restore defaults")
         restore.clicked.connect(lambda _checked=False: self._restore_defaults())
@@ -3088,7 +3016,6 @@ class ShortcutConfigDialog(_ConfigDialogBase):
                 focus_file_manager=current.focus_file_manager,
                 window_mode=current.window_mode,
                 theme=current.theme,
-                ui_zoom_steps=current.ui_zoom_steps,
                 integrated_file_edits=current.integrated_file_edits,
                 file_list_max_items=current.file_list_max_items,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
@@ -3128,9 +3055,7 @@ class ShortcutConfigDialog(_ConfigDialogBase):
             for field in fields:
                 value = field.keySequence().toString(self.qt.QKeySequence.SequenceFormat.PortableText).strip()
                 normalized = normalize_shortcut_text(value)
-                field.setStyleSheet(
-                    "border: 1px solid palette(highlight);" if normalized in conflict_keys else ""
-                )
+                field.setStyleSheet("border: 1px solid #dc2626;" if normalized in conflict_keys else "")
         if self.conflict_label is not None:
             self.conflict_label.setText("\n".join(conflicts[:2]))
         try:
@@ -3223,7 +3148,6 @@ class ConfigSyncDialog(_ConfigDialogBase):
                 focus_file_manager=current.focus_file_manager,
                 window_mode=current.window_mode,
                 theme=current.theme,
-                ui_zoom_steps=current.ui_zoom_steps,
                 integrated_file_edits=current.integrated_file_edits,
                 file_list_max_items=current.file_list_max_items,
                 remote_sync_interval_seconds=current.remote_sync_interval_seconds,
@@ -3333,7 +3257,7 @@ class LicenseDialog(_ConfigDialogBase):
         status = license_control.current_status()
         if _license_required() and not status.allowed:
             self.status_label.setText(_license_lock_message())
-            self.status_label.setStyleSheet("color: palette(window-text); font-weight: 700;")
+            self.status_label.setStyleSheet("color: #ef4444; font-weight: 700;")
         else:
             self.status_label.setText(status.summary)
             self.status_label.setStyleSheet("")
@@ -3731,9 +3655,7 @@ class MountConfigDialog(_ConfigDialogBase):
             self.qt.QDialogButtonBox.StandardButton.Save | self.qt.QDialogButtonBox.StandardButton.Cancel
         )
         delete_button = buttons.addButton("Delete remote", self.qt.QDialogButtonBox.ButtonRole.DestructiveRole)
-        delete_button.setStyleSheet(
-            "QPushButton { color: palette(highlighted-text); background: palette(highlight); }"
-        )
+        delete_button.setStyleSheet("QPushButton { color: #ffffff; background: #dc2626; }")
         delete_button.clicked.connect(self._delete_remote)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.dialog.reject)
@@ -3953,7 +3875,7 @@ class NewRemoteWizard:
                     self.qt,
                     backend_type,
                     provider_name=REMOTE_CONFIG_SUFFIXES.get(backend_type, label),
-                    color=PROVIDER_COLORS.get(backend_type, PROVIDER_FALLBACK),
+                    color=PROVIDER_COLORS.get(backend_type, "#64748b"),
                     size=22,
                 ),
             )
@@ -5599,11 +5521,9 @@ class MountletWindow:
         self.tray_app = tray_app
         self.qt = tray_app.qt
         self.desktop = _desktop_services(self.qt)
-        self._usage_cache, self._connection_cache = _load_usage_cache()
-        self._usage_stale: set[str] = set()
+        self._usage_cache: dict[str, core.StorageUsage] = {}
+        self._connection_cache: dict[str, bool] = {}
         self._usage_pending: set[str] = set()
-        self._usage_refresh_queue: OrderedDict[str, core.RemoteInfo] = OrderedDict()
-        self._usage_refresh_generation = 0
         self._action_pending: set[str] = set()
         self._reauth_prompt_pending: set[str] = set()
         self._reauth_in_progress: set[str] = set()
@@ -5612,14 +5532,11 @@ class MountletWindow:
         self._current_remote_names: list[str] = []
         self._remote_rows_layout: Any | None = None
         self._remote_order_save_generation = 0
-        self._remote_drag_start: tuple[str, Any] | None = None
-        self._suppress_remote_click_once = ""
         self._selected_remote_name = ""
         self._name_column_width = 160
         self._refresh_pending = False
         self._child_dialogs: list[Any] = []
         self._child_dialog_owners: dict[Any, Any] = {}
-        self._placing_child_dialogs: set[int] = set()
         self._last_child_offsets: dict[Any, tuple[int, int]] = {}
         self._window_stack_hidden = False
         self._keep_above = False
@@ -5642,15 +5559,14 @@ class MountletWindow:
         self._clear_all_cache_button: Any | None = None
         self._global_search_field: Any | None = None
         self._global_search_results: Any | None = None
+        self._global_search_timer: Any | None = None
         self._global_search_filters: list[Any] = []
         self._global_search_items: list[IndexedEntry] = []
-        self._global_search_active = False
-        self._global_search_capped = False
-        self._pending_global_search_query = ""
-        self._zoom_level_label: Any | None = None
+        self._global_search_verify_pending = False
         self._remote_hover_suppressed = False
         self._remote_hover_suppression_token = 0
         self._pending_browser_remote_name = ""
+        self._remote_preview_timer: Any | None = None
         self._keyboard_remote_name = ""
         self._browser_selected_name = ""
         self._app_menu: Any | None = None
@@ -5675,10 +5591,6 @@ class MountletWindow:
         self._position_after_fit = False
         self._last_tray_anchor: Any | None = None
         self._last_tray_edge: str | None = None
-        self._last_tray_edge_signature: tuple[int, ...] | None = None
-        self._panel_frame_boundary: int | None = None
-        self._usable_screen_rects: dict[str, tuple[int, int, int, int]] = {}
-        self._normal_frame_margins: tuple[int, int, int, int] | None = None
         self._last_popup_position: tuple[int, int] | None = None
         self._skip_background_refresh_once = False
         self._drag_offset: Any | None = None
@@ -5700,23 +5612,19 @@ class MountletWindow:
         self._bridge.icloud_reauth_step_ready.connect(self._handle_icloud_reauth_step)
         self._bridge.startup_cleanup_ready.connect(self.tray_app._handle_startup_cleanup_ready)
         self.window = self._make_main_window()
-        self.window._mountlet_zoom_geometry_managed = True
-        self._child_window_center_filter = self._make_child_window_center_filter()
-        application = self.qt.QApplication.instance()
-        if application is not None:
-            application.installEventFilter(self._child_window_center_filter)
-        self._application_zoom_generation = 0
-        self._browser_attachment_geometry: dict[str, tuple[int, int, int, int]] = {}
         build_label = build_info.visible_label()
         self.window.setWindowTitle(f"Mountlet - {build_label}" if build_label else "Mountlet")
         self.window.setWindowIcon(self.tray_app.icon)
         self.file_browser = self._create_file_browser()
-        self._storage_load_slots = threading.BoundedSemaphore(USAGE_REFRESH_CONCURRENCY)
+        self._storage_load_slots = threading.BoundedSemaphore(2)
+        self._setup_remote_preview_timer()
         self.window.focus_remote_row = self._focus_current_remote_row
         self.window.update_focus_style = self._update_main_focus_style
         self.window.set_mountlet_focus_owner = self._set_focus_owner
         self.window.mountlet_focus_owner = lambda: getattr(self, "_focus_owner", "main")
         self.window.release_remote_hover_suppression = self._release_remote_hover_suppression
+        self.file_browser.preload(_load_visible_remotes())
+        self._setup_global_search_timer()
         self._setup_offline_change_tracking()
         self._close_filter = self._make_close_filter()
         self.window.installEventFilter(self._close_filter)
@@ -5742,11 +5650,6 @@ class MountletWindow:
             keyboard_shortcuts_enabled=_custom_keyboard_shortcuts_enabled(),
             layout_changed=self._browser_layout_changed,
             local_files_changed=self._local_browser_files_changed,
-            remote_content_changed=self._mark_remote_usage_stale,
-            zoom_steps=getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0),
-            application_zoom=self.tray_app.set_ui_zoom,
-            reposition_request=lambda row: self._position_file_browser(row=row, trigger="selection"),
-            usable_screen_geometry=self._usable_screen_geometry,
         )
         if backend is not None:
             browser.backend = backend
@@ -5767,18 +5670,6 @@ class MountletWindow:
     def _local_browser_files_changed(self) -> None:
         self._refresh_offline_file_watches()
         self._update_app_cache_buttons()
-
-    def _mark_remote_usage_stale(self, remote_name: str) -> None:
-        """Refresh after a known content mutation without blanking the snapshot."""
-        if not remote_name:
-            return
-        stale = getattr(self, "_usage_stale", None)
-        if stale is None:
-            stale = self._usage_stale = set()
-        stale.add(remote_name)
-        remote = self._remote_by_name(remote_name)
-        if remote is not None:
-            self._schedule_storage_load(remote)
 
     def _make_bridge(self) -> Any:
         qt = self.qt
@@ -5863,30 +5754,6 @@ class MountletWindow:
 
         return MainWindow()
 
-    def _cache_initial_panel_boundary(self, frame: Any) -> None:
-        if getattr(self, "_panel_frame_boundary", None) is not None:
-            return
-        edge = getattr(self, "_last_tray_edge", None)
-        x, y, width, height = rect_tuple(frame)
-        if edge == "right":
-            self._panel_frame_boundary = x + width
-        elif edge == "left":
-            self._panel_frame_boundary = x
-        elif edge == "top":
-            self._panel_frame_boundary = y
-        elif edge == "bottom":
-            self._panel_frame_boundary = y + height
-
-    def _ensure_initial_panel_boundary(self) -> None:
-        if getattr(self, "_panel_frame_boundary", None) is not None:
-            return
-        if getattr(self, "_last_tray_edge", None) not in {"left", "right", "top", "bottom"}:
-            return
-        frame = self.window.frameGeometry()
-        self._cache_initial_panel_boundary(frame)
-        if self._panel_frame_boundary is not None:
-            self.window._mountlet_calculated_frame = rect_tuple(frame)
-
     def _make_close_filter(self) -> Any:
         qt = self.qt
         outer = self
@@ -5948,6 +5815,16 @@ class MountletWindow:
         if remote is None or not file_browser.is_visible():
             return
         file_browser.invalidate(remote.name)
+
+    def _setup_remote_preview_timer(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        timer = timer_type(self.window)
+        timer.setSingleShot(True)
+        timer.setInterval(45)
+        timer.timeout.connect(self._flush_remote_preview)
+        self._remote_preview_timer = timer
 
     def _setup_offline_change_tracking(self) -> None:
         self._setup_offline_file_watcher()
@@ -6347,28 +6224,10 @@ class MountletWindow:
         self._window_stack_hidden = False
         self._focus_window(defer_activation=reopened_from_other_desktop)
         if not was_visible:
-            # The window manager creates native decorations only after map.
-            # Replace the conservative hidden-window fit with one exact fit.
-            timer = getattr(getattr(self, "qt", None), "QTimer", None)
-            if timer is not None:
-                timer.singleShot(0, self._fit_mapped_main_window)
-        if not was_visible:
             self._show_deferred_reauthentication()
         if not was_visible and browser_restore is not None:
             remote_name, focus_browser = browser_restore
             self._show_file_browser_for_remote_name(remote_name, focus_browser=focus_browser)
-
-    def _fit_mapped_main_window(self, normalized: bool = False) -> None:
-        if not self.is_visible() or self._tray_is_quitting():
-            return
-        if not normalized and self._single_window_size_managed():
-            with suppress(Exception):
-                self.window.showNormal()
-            self.qt.QTimer.singleShot(0, lambda: self._fit_mapped_main_window(True))
-            return
-        widgets = getattr(self, "_content_fit_widgets", None)
-        if widgets is not None:
-            self._fit_to_content(*widgets, preserve_position=False)
 
     def _window_is_active(self) -> bool:
         try:
@@ -6506,164 +6365,30 @@ class MountletWindow:
     def _show_tracked_child_dialog(self, dialog: Any) -> None:
         if dialog not in getattr(self, "_child_dialogs", []) or self._tray_is_quitting():
             return
-        try:
-            parent_handle = self.window.windowHandle()
-            child_handle = dialog.windowHandle()
-            if child_handle is None:
-                dialog.winId()
-                child_handle = dialog.windowHandle()
-            if child_handle is not None and parent_handle is not None:
-                child_handle.setTransientParent(parent_handle)
-        except Exception:
-            pass
-        dialog.adjustSize()
-        self._place_child_dialog(dialog)
-        # Some X11 window managers replace the requested client geometry when
-        # the decorated transient is mapped.  Keep that platform negotiation
-        # invisible, then apply the one authoritative placement to its final
-        # native frame before the first visible paint.
-        transparent_until_placed = False
-        with suppress(Exception):
-            dialog.setWindowOpacity(0.0)
-            transparent_until_placed = True
         dialog.show()
+        self._fit_child_dialog_to_screen(dialog)
         self._raise_child_windows()
-        if transparent_until_placed:
-            timer = getattr(self.qt, "QTimer", None)
-
-            def reveal() -> None:
-                if dialog not in getattr(self, "_child_dialogs", []):
-                    return
-                self._place_child_dialog(dialog)
-                with suppress(Exception):
-                    dialog.setWindowOpacity(1.0)
-                self._raise_child_window(dialog)
-
-            if timer is None:
-                reveal()
-            else:
-                timer.singleShot(0, reveal)
-
-    def _make_child_window_center_filter(self) -> Any:
-        outer = self
-        qt = self.qt
-
-        class ChildWindowCenterFilter(qt.QObject):
-            def eventFilter(self, watched: Any, event: Any) -> bool:
-                try:
-                    show_event = qt.QEvent.Type.Show
-                    placement_events = {
-                        show_event,
-                        qt.QEvent.Type.Move,
-                        qt.QEvent.Type.Resize,
-                    }
-                    dialog_type = qt.QDialog
-                    if event.type() not in placement_events or not isinstance(watched, dialog_type):
-                        return False
-                    if outer._child_window_parent(watched) is None:
-                        return False
-                    if id(watched) in getattr(outer, "_placing_child_dialogs", set()):
-                        return False
-                    if event.type() != show_event:
-                        # Native dialogs can receive a compositor-driven move
-                        # after Show. Correct it synchronously, before paint.
-                        outer._place_descendant_dialog(watched)
-                        return False
-                    # Center once before the first paint and once after the
-                    # native window manager has assigned the decorated frame.
-                    # Keep that negotiation invisible so a native child never
-                    # flashes at the compositor's fallback position (0, 0).
-                    transparent_until_placed = False
-                    try:
-                        watched.setWindowOpacity(0.0)
-                        transparent_until_placed = True
-                    except Exception:
-                        pass
-                    outer._place_descendant_dialog(watched)
-
-                    def finish_placement(child: Any = watched) -> None:
-                        outer._place_descendant_dialog(child)
-                        if transparent_until_placed:
-                            try:
-                                child.setWindowOpacity(1.0)
-                            except Exception:
-                                pass
-
-                    qt.QTimer.singleShot(0, finish_placement)
-                except Exception:
-                    pass
-                return False
-
-        return ChildWindowCenterFilter(self.window)
-
-    def _child_window_parent(self, dialog: Any) -> Any | None:
-        """Return the closest parent window belonging to Mountlet's window tree."""
-        try:
-            parent = dialog.parentWidget()
-        except Exception:
-            return None
-        while parent is not None:
-            try:
-                if parent is self.window or parent in getattr(self, "_child_dialogs", []):
-                    return parent
-                if parent.isWindow():
-                    return parent if self._window_belongs_to_mountlet(parent) else None
-                parent = parent.parentWidget()
-            except Exception:
-                return None
-        return None
-
-    def _window_belongs_to_mountlet(self, window: Any) -> bool:
-        current = window
-        while current is not None:
-            if current is self.window or current in getattr(self, "_child_dialogs", []):
-                return True
-            try:
-                current = current.parentWidget()
-            except Exception:
-                return False
-        return False
-
-    def _place_descendant_dialog(self, dialog: Any) -> None:
-        parent = self._child_window_parent(dialog)
-        if parent is None:
-            return
-        placing = getattr(self, "_placing_child_dialogs", None)
-        if placing is None:
-            placing = set()
-            self._placing_child_dialogs = placing
-        key = id(dialog)
-        if key in placing:
-            return
-        placing.add(key)
-        try:
-            parent_frame = parent.frameGeometry()
-            screen = parent.screen() or self.window.screen() or self.qt.QApplication.primaryScreen()
-            if screen is None:
-                return
-            available = self._usable_screen_geometry(screen)
-            size = dialog.size()
-            width = min(size.width(), available.width())
-            height = min(size.height(), available.height())
-            if width != size.width() or height != size.height():
-                dialog.resize(width, height)
-            x = parent_frame.x() + (parent_frame.width() - width) // 2
-            y = parent_frame.y() + (parent_frame.height() - height) // 2
-            x = min(max(x, available.left()), max(available.left(), available.right() - width + 1))
-            y = min(max(y, available.top()), max(available.top(), available.bottom() - height + 1))
-            dialog.setGeometry(x, y, width, height)
-        except Exception:
-            return
-        finally:
-            placing.discard(key)
-
-    def _place_child_dialog(self, dialog: Any) -> None:
-        if dialog not in getattr(self, "_child_dialogs", []):
-            return
-        self._place_descendant_dialog(dialog)
 
     def _fit_child_dialog_to_screen(self, dialog: Any) -> None:
-        self._place_child_dialog(dialog)
+        try:
+            screen = dialog.screen() or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            size = dialog.size()
+            width = min(size.width(), max(320, available.width()))
+            height = min(size.height(), max(240, available.height()))
+            if width != size.width() or height != size.height():
+                dialog.resize(width, height)
+            position = dialog.frameGeometry().topLeft()
+            max_x = max(available.left(), available.left() + available.width() - width)
+            max_y = max(available.top(), available.top() + available.height() - height)
+            x = min(max(position.x(), available.left()), max_x)
+            y = min(max(position.y(), available.top()), max_y)
+            if x != position.x() or y != position.y():
+                dialog.move(x, y)
+        except Exception:
+            return
 
     def _hide_window_stack(self) -> None:
         self._close_child_dialogs()
@@ -6768,74 +6493,32 @@ class MountletWindow:
             screen = self.qt.QApplication.screenAt(anchor) or self.qt.QApplication.primaryScreen()
             if screen is None:
                 return
-            self._cache_tray_edge(anchor, screen.availableGeometry(), screen)
-            available = self._usable_screen_geometry(screen)
-            edge = self._cache_tray_edge(anchor, available, screen)
+            available = screen.availableGeometry()
             size = self.window.size()
             if not size.isValid():
                 size = self.window.sizeHint()
-            frame_overhead_width, frame_overhead_height = self._window_frame_overhead()
-            frame_width = size.width() + frame_overhead_width
-            frame_height = size.height() + frame_overhead_height
-            frame_size = self.qt.QSize(frame_width, frame_height)
+            edge = getattr(self, "_last_tray_edge", None)
             if getattr(self.tray_app, "_is_gnome_wayland", False) and not geometry_valid and edge is None:
-                x = available.left() + available.width() - frame_width - 8
+                x = available.left() + available.width() - size.width() - 8
                 y = available.top() + 8
             else:
-                x, y = self._anchored_popup_position(
+                x, y = _popup_position(
                     anchor.x(),
                     anchor.y(),
                     (available.left(), available.top(), available.width(), available.height()),
-                    (frame_width, frame_height),
+                    (size.width(), size.height()),
                     center_on_anchor=not geometry_valid,
                     edge=edge,
                 )
-            x, y = self._safe_popup_position(x, y, available, frame_size)
-            self._set_main_window_geometry(x, y, size.width(), size.height())
-            self.window._mountlet_calculated_frame = (x, y, frame_width, frame_height)
+            x, y = self._safe_popup_position(x, y, available, size)
+            self.window.move(x, y)
             self._last_popup_position = (x, y)
         except Exception:
             return
 
-    def _anchored_popup_position(
-        self,
-        anchor_x: int,
-        anchor_y: int,
-        available: tuple[int, int, int, int],
-        window_size: tuple[int, int],
-        *,
-        center_on_anchor: bool = False,
-        edge: str | None = None,
-    ) -> tuple[int, int]:
-        x, y = _popup_position(
-            anchor_x,
-            anchor_y,
-            available,
-            window_size,
-            center_on_anchor=center_on_anchor,
-            edge=edge,
-        )
-        boundary = getattr(self, "_panel_frame_boundary", None)
-        if not isinstance(boundary, int):
-            return x, y
-        left, top, available_width, available_height = available
-        width, height = window_size
-        if edge == "right":
-            x = boundary - width
-        elif edge == "left":
-            x = boundary
-        elif edge == "top":
-            y = boundary
-        elif edge == "bottom":
-            y = boundary - height
-        return (
-            min(max(x, left), max(left, left + available_width - width)),
-            min(max(y, top), max(top, top + available_height - height)),
-        )
-
     def _position_window_stack_near_tray(self) -> None:
         self._position_near_tray()
-        self._position_file_browser()
+        self._reposition_file_browser()
 
     def _position_window_stack_near_tray_with_stable_anchor(self) -> None:
         if getattr(self, "_last_tray_anchor", None) is not None:
@@ -6849,7 +6532,7 @@ class MountletWindow:
             available = screen.availableGeometry() if screen is not None else None
             self._last_tray_anchor = anchor
             if available is not None:
-                self._cache_tray_edge(anchor, available, screen)
+                self._last_tray_edge = self._tray_edge_for_point(anchor, available)
             self._prefer_remembered_tray_anchor_once = True
         except Exception:
             return
@@ -6866,17 +6549,20 @@ class MountletWindow:
         if tray_geometry.isValid() and available is not None and not self._tray_geometry_is_suspicious(tray_geometry, available):
             anchor = tray_geometry.center()
             self._last_tray_anchor = anchor
+            self._last_tray_edge = self._tray_edge_for_point(anchor, available)
             return anchor, True
         cursor = self.qt.QCursor.pos()
         screen = self.qt.QApplication.screenAt(cursor) or primary_screen
         available = screen.availableGeometry() if screen is not None else available
         if available is not None and not self._point_is_suspicious_anchor(cursor, available):
             self._last_tray_anchor = cursor
+            self._last_tray_edge = self._tray_edge_for_point(cursor, available)
             return cursor, False
         if remembered is not None:
             return remembered, False
         if available is not None:
             point = self.qt.QPoint(available.right() - 8, available.top() + 8)
+            self._last_tray_edge = "right"
             return point, False
         return cursor, False
 
@@ -6963,51 +6649,17 @@ class MountletWindow:
             target_screen = screen or self.window.screen() or self.qt.QApplication.primaryScreen()
             if target_screen is None:
                 return
-            available = self._usable_screen_geometry(target_screen)
-            frame = self.window.frameGeometry()
-            position = frame.topLeft()
-            max_x = max(available.left(), available.right() - frame.width() + 1)
-            max_y = max(available.top(), available.bottom() - frame.height() + 1)
+            available = target_screen.availableGeometry()
+            position = self.window.frameGeometry().topLeft()
+            size = self.window.size()
+            max_x = max(available.left(), available.left() + available.width() - size.width())
+            max_y = max(available.top(), available.top() + available.height() - size.height())
             x = min(max(position.x(), available.left()), max_x)
             y = min(max(position.y(), available.top()), max_y)
             if x != position.x() or y != position.y():
-                self._move_main_frame(x, y)
+                self.window.move(x, y)
         except Exception:
             return
-
-    def _usable_screen_geometry(self, screen: Any) -> Any:
-        """Return a stable panel-excluded work area reported by Qt."""
-        available = screen.availableGeometry()
-        current = self._desktop_api().usable_screen_rect(screen)
-        with suppress(Exception):
-            tray_geometry = self.tray_app.tray.geometry()
-            if tray_geometry.isValid():
-                if getattr(self, "_last_tray_edge", None) not in {
-                    "left", "right", "top", "bottom"
-                }:
-                    self._cache_tray_edge(tray_geometry.center(), available, screen)
-                current = exclude_tray_panel(
-                    current,
-                    rect_tuple(tray_geometry),
-                    getattr(self, "_last_tray_edge", None),
-                )
-        key = "primary"
-        with suppress(Exception):
-            key = screen.name() or key
-        cache = getattr(self, "_usable_screen_rects", None)
-        if cache is None:
-            cache = {}
-            self._usable_screen_rects = cache
-        cached = cache.get(key)
-        rectangle = intersect_rects(cached, current) if cached is not None else current
-        cache[key] = rectangle
-        try:
-            return self.qt.QRect(*rectangle)
-        except Exception:
-            try:
-                return type(available)(*rectangle)
-            except Exception:
-                return available
 
     def refresh(self) -> None:
         if self._tray_is_quitting():
@@ -7050,7 +6702,6 @@ class MountletWindow:
         outer = self.qt.QVBoxLayout(root)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(4)
-        outer.addWidget(self._purchase_license_row())
         outer.addWidget(self._sort_toolbar())
         outer.addWidget(self._global_search_panel())
         if locked:
@@ -7058,13 +6709,12 @@ class MountletWindow:
 
         scroll = self.qt.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setMinimumHeight(0)
         container = self.qt.QWidget()
         rows = self.qt.QVBoxLayout(container)
         rows.setContentsMargins(0, 0, 0, 0)
-        rows.setSpacing(0)
+        rows.setSpacing(2)
         rows.setAlignment(self.qt.Qt.AlignmentFlag.AlignTop)
         self._row_widgets = {}
         self._remote_rows_layout = rows
@@ -7082,63 +6732,33 @@ class MountletWindow:
             rows.addWidget(self.qt.QLabel("No rclone remotes found"))
         scroll.setWidget(container)
         outer.addWidget(scroll)
-        footer_controls = self._footer_controls()
-        self._main_footer_controls = footer_controls
+        outer.addWidget(self._add_remote_row())
 
         root.setObjectName("mountletMainSurface")
         central = root
         if bool(getattr(self.file_browser, "_embedded", False)):
             central = self.qt.QWidget()
-            central_layout = self.qt.QVBoxLayout(central)
-            central_layout.setContentsMargins(0, 0, 0, 0)
-            central_layout.setSpacing(4)
-            panes = self.qt.QWidget()
-            shell = self.qt.QHBoxLayout(panes)
+            shell = self.qt.QHBoxLayout(central)
             shell.setContentsMargins(0, 0, 0, 0)
             shell.setSpacing(6)
             try:
                 root.setSizePolicy(
-                    self.qt.QSizePolicy.Policy.Preferred,
+                    self.qt.QSizePolicy.Policy.Fixed,
                     self.qt.QSizePolicy.Policy.Preferred,
                 )
             except Exception:
                 pass
             shell.addWidget(root, 0, self.qt.Qt.AlignmentFlag.AlignTop)
             self.file_browser.embed_into(shell)
-            panes_scroll = self.qt.QScrollArea()
-            # The pane geometry is calculated explicitly by _fit_to_content.
-            # Letting QScrollArea also resize it makes every file-model change
-            # renegotiate the entire single-window layout.
-            panes_scroll.setWidgetResizable(False)
-            panes_scroll.setFrameShape(self.qt.QFrame.Shape.NoFrame)
-            panes_scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            panes_scroll.setVerticalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            panes_scroll.setWidget(panes)
-            central_layout.addWidget(panes_scroll, 1)
-            central_layout.addWidget(footer_controls)
-            self._embedded_panes = panes
-            self._embedded_panes_scroll = panes_scroll
-            self._embedded_shell_layout = shell
-            self._embedded_central_layout = central_layout
-        else:
-            outer.addWidget(footer_controls)
-            self._embedded_panes = None
-            self._embedded_panes_scroll = None
-            self._embedded_shell_layout = None
-            self._embedded_central_layout = None
         self._main_surface = root
         self.window.setCentralWidget(central)
-        # A rebuilt view inherits the application's already-scaled font.  Scale
-        # it synchronously so those values are converted back to stable 100%
-        # baselines before the first size-hint calculation.
-        with suppress(Exception):
-            self.tray_app.ui_zoom.apply_window(central)
         self._update_main_focus_style()
         self._content_fit_widgets = (root, scroll, container)
+        if not locked:
+            self.file_browser.preload(remotes)
         self._update_license_lock_state()
         self._last_license_locked = locked
         self._fit_to_content(root, scroll, container)
-        self._cache_browser_attachment_geometry()
         self.qt.QTimer.singleShot(0, lambda: self._finish_content_fit(root, scroll, container, central))
         self._update_app_cache_buttons(remotes)
         self._update_license_lock_state()
@@ -7184,8 +6804,7 @@ class MountletWindow:
             self.file_browser.restore_focus_snapshot("tree")
 
     def _restore_embedded_browser_focus_on_activation(self) -> bool:
-        file_browser = getattr(self, "file_browser", None)
-        if file_browser is not None and not bool(getattr(file_browser, "_embedded", False)):
+        if not bool(getattr(self.file_browser, "_embedded", False)):
             return False
         if getattr(self, "_focus_owner", "main") != "browser":
             return False
@@ -7200,12 +6819,11 @@ class MountletWindow:
         if self.window.centralWidget() is not expected or self._tray_is_quitting():
             return
         self._fit_to_content(root, scroll, container)
-        self._cache_browser_attachment_geometry()
         if getattr(self, "_position_after_fit", False):
             self._position_after_fit = False
             self._position_window_stack_near_tray_with_stable_anchor()
             return
-        self._position_file_browser()
+        self._reposition_file_browser()
 
     def _file_browser_restore_request(self, *, include_visible: bool = False) -> tuple[str, bool] | None:
         file_browser = getattr(self, "file_browser", None)
@@ -7238,185 +6856,23 @@ class MountletWindow:
         widgets = getattr(self, "_content_fit_widgets", None)
         if widgets is None or self._tray_is_quitting():
             return
-        file_browser = getattr(self, "file_browser", None)
-        if file_browser is not None and not bool(getattr(file_browser, "_embedded", False)):
-            self._position_file_browser()
-            return
-        if file_browser is not None and bool(getattr(file_browser, "_embedded", False)):
-            self._invalidate_widget_tree(widgets[0])
-            self._fit_to_content(*widgets, preserve_position=True)
-            self._position_file_browser()
-            return
         self._invalidate_widget_tree(widgets[0])
         self._fit_to_content(*widgets, preserve_position=True)
-        self._position_file_browser()
+        self._reposition_file_browser()
         self.qt.QTimer.singleShot(0, lambda: self._fit_after_layout_settles(*widgets))
-
-    def application_zoom_changed(self, steps: int) -> None:
-        # Normalize before the deferred measurement. Maximized windows report
-        # zero frame margins; normalizing inside the apply step is too late.
-        if self._single_window_size_managed():
-            with suppress(Exception):
-                self.window.showNormal()
-        file_browser = getattr(self, "file_browser", None)
-        if file_browser is not None:
-            file_browser.apply_application_zoom(steps)
-        global_results = getattr(self, "_global_search_results", None)
-        if global_results is not None and getattr(self, "_global_search_active", False):
-            search_height = self._global_search_results_height()
-            global_results.setMinimumHeight(search_height)
-            global_results.setMaximumHeight(search_height)
-            row_height = metric_at_level(SEARCH_RESULT_ROW_HEIGHT_LEVELS, steps)
-            with suppress(Exception):
-                for index in range(global_results.topLevelItemCount()):
-                    global_results.topLevelItem(index).setSizeHint(
-                        0,
-                        self.qt.QSize(0, row_height),
-                    )
-        self._refresh_scaled_row_icons()
-        self._application_zoom_generation += 1
-        generation = self._application_zoom_generation
-        self._update_zoom_level(steps)
-        self.qt.QTimer.singleShot(0, lambda token=generation: self._finish_application_zoom(token))
-
-    def _finish_application_zoom(self, generation: int) -> None:
-        if generation != self._application_zoom_generation or self._tray_is_quitting():
-            return
-        self._pending_zoom_main_frame = None
-        widgets = getattr(self, "_content_fit_widgets", None)
-        if widgets is not None:
-            # _fit_to_content performs the two invalidations required around
-            # its constraint update.  Walking the complete widget tree both
-            # before and after it duplicated that work at every zoom commit.
-            self._fit_to_content(*widgets, preserve_position=False)
-            self._cache_browser_attachment_geometry()
-        if getattr(self, "_global_search_active", False):
-            self._fit_global_search_columns()
-        self._position_file_browser(
-            main_rect=getattr(self, "_pending_zoom_main_frame", None),
-            trigger="zoom",
-        )
-
-    def _cache_tray_edge(self, anchor: Any, available: Any, screen: Any | None) -> str:
-        signature = self._tray_edge_signature(available, screen)
-        edge = getattr(self, "_last_tray_edge", None)
-        if edge not in {"left", "right", "top", "bottom"} or signature != getattr(
-            self, "_last_tray_edge_signature", None
-        ):
-            edge = self._tray_edge_for_point(anchor, available)
-            self._last_tray_edge = edge
-            self._last_tray_edge_signature = signature
-        return edge
-
-    @staticmethod
-    def _tray_edge_signature(available: Any, screen: Any | None) -> tuple[int, ...]:
-        try:
-            geometry = screen.geometry() if screen is not None else available
-            return (
-                available.x(), available.y(), available.width(), available.height(),
-                geometry.x(), geometry.y(), geometry.width(), geometry.height(),
-            )
-        except Exception:
-            return ()
-
-    def _footer_controls(self) -> Any:
-        row = self.qt.QWidget()
-        layout = self.qt.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        locked = self._license_locked()
-        add_button = self._icon_button("ui-add", self._show_new_remote_wizard, fallback_text="+")
-        add_button.setEnabled(not locked)
-        add_button.setProperty("rowControl", True)
-        add_button.setToolTip(_license_lock_message() if locked else "Add a new remote")
-        layout.addWidget(add_button)
-        layout.addStretch(1)
-
-        build_status = self._build_status_label()
-        if build_status is not None:
-            layout.addWidget(build_status)
-            layout.addStretch(1)
-
-        minus = self.qt.QPushButton("−")
-        minus.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
-        minus.setToolTip("Zoom out (Ctrl+-)")
-        minus.setFixedSize(28, 26)
-        minus.setAutoRepeat(True)
-        minus.clicked.connect(lambda _checked=False: self.tray_app.ui_zoom.zoom_out())
-        layout.addWidget(minus)
-
-        label = self.qt.QLabel()
-        label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
-        label.setMinimumWidth(48)
-        self._zoom_level_label = label
-        self._update_zoom_level(getattr(self.tray_app.ui_zoom, "steps", 0))
-        layout.addWidget(label)
-
-        plus = self.qt.QPushButton("+")
-        plus.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
-        plus.setToolTip("Zoom in (Ctrl++)")
-        plus.setFixedSize(28, 26)
-        plus.setAutoRepeat(True)
-        plus.clicked.connect(lambda _checked=False: self.tray_app.ui_zoom.zoom_in())
-        layout.addWidget(plus)
-
-        reset = self.qt.QPushButton("Reset")
-        reset.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
-        reset.setToolTip("Reset zoom to the system-derived size (Ctrl+0)")
-        reset.setFixedHeight(26)
-        reset.clicked.connect(lambda _checked=False: self.tray_app.ui_zoom.reset())
-        layout.addWidget(reset)
-        return row
-
-    def _build_status_label(self) -> Any | None:
-        build_label = build_info.visible_label()
-        if not build_label:
-            return None
-        channel = build_info.channel()
-        status = self.qt.QLabel(build_label)
-        status.setObjectName("buildStatus")
-        status.setToolTip(
-            f"Build channel: {channel}\nBuild identifier: {build_info.identifier()}\n"
-            f"Public version: {__version__}"
-        )
-        if channel == "preview":
-            status.setStyleSheet(
-                "QLabel#buildStatus { color: palette(highlighted-text); background: palette(highlight); "
-                "border: 1px solid palette(mid); padding: 3px 6px; border-radius: 3px; }"
-            )
-        else:
-            status.setStyleSheet(
-                "QLabel#buildStatus { color: palette(highlighted-text); background: palette(highlight); "
-                "border: 1px solid palette(mid); padding: 3px 6px; border-radius: 3px; }"
-            )
-        return status
-
-    def _update_zoom_level(self, steps: int) -> None:
-        label = getattr(self, "_zoom_level_label", None)
-        if label is None:
-            return
-        percentage = round(zoom_factor(steps) * 100)
-        label.setText(f"{percentage}%")
-        label.setToolTip(f"Current application zoom: {percentage}%")
 
     def _fit_after_layout_settles(self, root: Any, scroll: Any, container: Any) -> None:
         self._invalidate_widget_tree(root)
         self._fit_to_content(root, scroll, container, preserve_position=True)
-        self._cache_browser_attachment_geometry()
-        self._position_file_browser()
+        self._reposition_file_browser()
 
     def _update_main_focus_style(self) -> None:
         root = getattr(self, "_main_surface", None)
         if root is None:
             return
         active = getattr(self, "_focus_owner", "main") == "main"
-        color = "palette(highlight)" if active else "palette(mid)"
-        root.setStyleSheet(
-            f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; "
-            "color: palette(text); }"
-            "QWidget#mountletMainSurface QLabel { color: palette(text); }"
-        )
+        color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
+        root.setStyleSheet(f"QWidget#mountletMainSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
 
     def _set_focus_owner(self, owner: str) -> None:
         owner = "browser" if owner == "browser" else "main"
@@ -7430,7 +6886,6 @@ class MountletWindow:
 
     def _toolbar_button(self, icon_name: str, fallback_text: str, tooltip: str, callback: Any) -> Any:
         button = create_badged_button(self.qt, fallback_text)
-        button.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
         button.setFixedSize(34, 30)
         button.setToolTip(tooltip)
         apply_button_icon(self.qt, button, icon_name, fallback_text=fallback_text, size=22)
@@ -7450,7 +6905,6 @@ class MountletWindow:
 
     def _notifications_toolbar_button(self) -> Any:
         button = create_badged_button(self.qt)
-        button.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
         button.setFixedSize(34, 30)
         button.setToolTip("Notifications")
         button.setFlat(True)
@@ -7648,11 +7102,7 @@ class MountletWindow:
         if button is None:
             return
         history = notice_control.notification_history()
-        set_badge(
-            button,
-            any(not notice_control.is_seen(notice) for notice in history),
-            ALERT_BADGE,
-        )
+        set_badge(button, any(not notice_control.is_seen(notice) for notice in history), "#ef4444")
 
     def _push_sync_toolbar_button(self) -> Any:
         button = self._toolbar_button(
@@ -7684,14 +7134,6 @@ class MountletWindow:
         self._purchase_license_button = button
         self._update_purchase_license_button()
         return button
-
-    def _purchase_license_row(self) -> Any:
-        row = self.qt.QWidget()
-        layout = self.qt.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addStretch(1)
-        layout.addWidget(self._purchase_license_toolbar_button())
-        return row
 
     def _all_cache_sync_toolbar_button(self) -> Any:
         button = self._toolbar_button("ui-sync", "⇄", "Sync cached files for all remotes", self._sync_all_cached_files)
@@ -7810,14 +7252,14 @@ class MountletWindow:
         remote_changed = bool(sync_configured and remote_hash and remote_hash not in known_remote_hashes | {last_synced_hash})
         if push_button is not None:
             self._apply_button_icon_if_available(push_button, "ui-config-push", "↑", size=22)
-            set_badge(push_button, local_changed, ALERT_BADGE)
+            set_badge(push_button, local_changed, "#ef4444")
             push_button.setEnabled(sync_configured)
             push_button.setToolTip(
                 "Local config changed since the last push." if local_changed else "Push config to sync location"
             )
         if pull_button is not None:
             self._apply_button_icon_if_available(pull_button, "ui-config-pull", "↓", size=22)
-            set_badge(pull_button, remote_changed, ALERT_BADGE)
+            set_badge(pull_button, remote_changed, "#ef4444")
             pull_button.setEnabled(sync_configured)
             if remote_changed:
                 detail = _sync_metadata_summary(remote_metadata)
@@ -7978,8 +7420,8 @@ class MountletWindow:
             if self._keep_above:
                 button.setToolTip("Stop keeping Mountlet above other windows")
                 button.setStyleSheet(
-                    "QPushButton { background: palette(highlight); color: palette(highlighted-text); "
-                    "border: 1px solid palette(mid); border-radius: 4px; }"
+                    "QPushButton { background: #2563eb; color: #ffffff; "
+                    "border: 1px solid #93c5fd; border-radius: 4px; }"
                 )
             else:
                 button.setToolTip("Keep Mountlet above other windows")
@@ -8022,7 +7464,7 @@ class MountletWindow:
         label.setWordWrap(True)
         label.setStyleSheet(
             "QLabel#licenseLockBanner {"
-            "color: palette(window-text);"
+            "color: #ef4444;"
             "font-weight: 700;"
             "padding: 4px 2px;"
             "}"
@@ -8103,9 +7545,19 @@ class MountletWindow:
                     else self.qt.Qt.CursorShape.PointingHandCursor
                 )
             )
-            widgets.frame.setToolTip(
-                _license_lock_message() if locked else self._remote_card_tooltip(widgets.remote)
-            )
+            widgets.frame.setToolTip(_license_lock_message() if locked else widgets.frame.toolTip())
+            if locked:
+                for name in ("config_button", "up_button", "down_button"):
+                    button = getattr(widgets, name, None)
+                    if button is not None:
+                        button.setEnabled(False)
+
+    def _setup_global_search_timer(self) -> None:
+        timer = self.qt.QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        timer.timeout.connect(self._verify_global_search_results)
+        self._global_search_timer = timer
 
     def _global_search_panel(self) -> Any:
         widget = self.qt.QWidget()
@@ -8125,25 +7577,15 @@ class MountletWindow:
         self._global_search_field = field
         row.addWidget(field, 1)
         status = self.qt.QLabel("")
-        status.setStyleSheet("color: palette(window-text);")
+        status.setStyleSheet(_muted_text_style(status))
         status.setFixedWidth(86)
         self._global_search_status = status
         row.addWidget(status)
         layout.addLayout(row)
 
         results = self.qt.QTreeWidget()
-        results._mountlet_zoom_icon_managed = True
         results.setColumnCount(2)
         results.setHeaderLabels(["Name", "Remote"])
-        results.header().setStretchLastSection(False)
-        with suppress(Exception):
-            results.header().setMinimumSectionSize(0)
-            results.header().setFixedHeight(FILE_LIST_HEADER_HEIGHT)
-            results.header()._mountlet_zoom_base_fixed_height = FILE_LIST_HEADER_HEIGHT
-            results.setFrameShape(self.qt.QFrame.Shape.NoFrame)
-            results.setVerticalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        with suppress(Exception):
-            results.setIconSize(self.qt.QSize(18, 18))
         results.setRootIsDecorated(False)
         results.setSelectionBehavior(self.qt.QAbstractItemView.SelectionBehavior.SelectRows)
         results.setEditTriggers(self.qt.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -8158,17 +7600,7 @@ class MountletWindow:
         results.installEventFilter(self._make_global_search_key_filter())
         self._global_search_results = results
         layout.addWidget(results)
-        pending_query = getattr(self, "_pending_global_search_query", "")
-        self._pending_global_search_query = ""
-        if pending_query:
-            field.setText(pending_query)
         return widget
-
-    def _set_global_search_status(self, text: str) -> None:
-        status = getattr(self, "_global_search_status", None)
-        if status is None:
-            return
-        status.setText(text)
 
     def _style_search_field(self, field: Any) -> None:
         with suppress(Exception):
@@ -8184,14 +7616,14 @@ class MountletWindow:
         field.setStyleSheet(
             """
             QLineEdit {
-                border: 1px solid palette(mid);
+                border: 1px solid rgba(107, 114, 128, 130);
                 border-radius: 14px;
                 padding: 2px 8px;
                 background: palette(base);
                 color: palette(text);
             }
             QLineEdit:focus {
-                border: 1px solid palette(highlight);
+                border: 1px solid #3b82f6;
             }
             """
         )
@@ -8235,33 +7667,10 @@ class MountletWindow:
         return event_filter
 
     def _global_search_text_changed(self, _text: str) -> None:
-        self._set_global_search_active(bool(_text.strip()))
         self._run_global_search()
-
-    def _global_search_results_height(self) -> int:
-        steps = getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0)
-        return max(
-            1,
-            metric_at_level(SEARCH_RESULT_HEADER_HEIGHT_LEVELS, steps)
-            + SEARCH_RESULT_VISIBLE_ROWS
-            * metric_at_level(SEARCH_RESULT_ROW_HEIGHT_LEVELS, steps),
-        )
-
-    def _set_global_search_active(self, active: bool) -> None:
-        if active == getattr(self, "_global_search_active", False):
-            return
-        self._global_search_active = active
-        tree = getattr(self, "_global_search_results", None)
-        if tree is not None:
-            height = self._global_search_results_height() if active else 0
-            tree.setMinimumHeight(height)
-            tree.setMaximumHeight(height)
-            tree.setVisible(active)
-        widgets = getattr(self, "_content_fit_widgets", None)
-        if widgets is not None:
-            self._invalidate_widget_tree(widgets[0])
-            self._fit_to_content(*widgets, preserve_position=True)
-            self._position_file_browser()
+        timer = getattr(self, "_global_search_timer", None)
+        if timer is not None:
+            timer.start()
 
     def _run_global_search(self) -> None:
         field = getattr(self, "_global_search_field", None)
@@ -8269,14 +7678,12 @@ class MountletWindow:
         if not query:
             self._clear_global_search_results()
             return
-        self._set_global_search_status("Searching…")
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            status.setText("Searching…")
         remotes = list(_load_visible_remotes())
         try:
-            results = self.file_browser.backend.search_index(
-                query,
-                remotes=remotes,
-                limit=GLOBAL_SEARCH_RESULT_LIMIT + 1,
-            )
+            results = self.file_browser.backend.search_index(query, remotes=remotes, limit=80)
         except Exception as exc:
             self._handle_global_search_ready(query, None, str(exc))
             return
@@ -8289,15 +7696,12 @@ class MountletWindow:
         if error or not isinstance(results, list):
             self.tray_app._notify("Search", error or "Search failed", success=False)
             return
-        capped = len(results) > GLOBAL_SEARCH_RESULT_LIMIT
-        displayed = results[:GLOBAL_SEARCH_RESULT_LIMIT]
-        self._global_search_capped = capped
-        self._global_search_items = displayed
-        self._display_global_search_results(displayed)
-        count_text = f"{GLOBAL_SEARCH_RESULT_LIMIT}+" if capped else str(len(displayed))
-        self._set_global_search_status(
-            f"{count_text} result{'s' if len(displayed) != 1 else ''}"
-        )
+        self._global_search_items = results
+        self._display_global_search_results(results)
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            suffix = " Checking…" if self._global_search_verify_pending else ""
+            status.setText(f"{len(results)} result{'s' if len(results) != 1 else ''}{suffix}")
 
     def _display_global_search_results(self, results: list[IndexedEntry]) -> None:
         tree = getattr(self, "_global_search_results", None)
@@ -8320,22 +7724,12 @@ class MountletWindow:
         fallback_item = None
         remotes_by_name = {remote.name: remote for remote in _load_visible_remotes()}
         for result in results:
-            remote = remotes_by_name.get(result.remote_name)
-            remote_label = remote.alias if remote is not None else result.remote_display
-            item = self.qt.QTreeWidgetItem([result.name, remote_label])
-            with suppress(Exception):
-                factor = zoom_factor(getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0))
-                item.setSizeHint(0, self.qt.QSize(0, round(SEARCH_RESULT_ROW_HEIGHT * factor)))
+            item = self.qt.QTreeWidgetItem([result.name, result.remote_display])
             item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
-            with suppress(Exception):
-                brush = self.qt.QBrush(self.qt.QColor(search_quality_color(result.match_quality)))
-                for column in range(2):
-                    item.setForeground(column, brush)
-                item.setToolTip(0, search_quality_label(result.match_quality))
+            remote = remotes_by_name.get(result.remote_name)
             if remote is not None:
                 with suppress(Exception):
-                    size = self._scaled_icon_metric(18)
-                    item.setIcon(1, _remote_provider_icon(self.qt, remote, size=size))
+                    item.setForeground(1, self.qt.QBrush(self.qt.QColor(_provider_color(remote))))
             tree.addTopLevelItem(item)
             if previous_key and (result.remote_name, result.path) == previous_key:
                 selected_item = item
@@ -8345,13 +7739,23 @@ class MountletWindow:
         if target is not None:
             tree.setCurrentItem(target)
             target.setSelected(True)
-        height = self._global_search_results_height()
+        visible_rows = min(max(len(results), 1), 8)
+        try:
+            row_height = tree.sizeHintForRow(0)
+            if row_height <= 0:
+                row_height = tree.fontMetrics().height() + 8
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            row_height = 24
+            header_height = 28
+        height = int(header_height + row_height * visible_rows + 8) if results else 0
         tree.setMaximumHeight(height)
         tree.setMinimumHeight(height)
-        tree.setVisible(True)
+        tree.setVisible(bool(results))
         self._fit_global_search_columns()
         with suppress(Exception):
             tree.verticalScrollBar().setValue(previous_scroll)
+        self._browser_layout_changed()
 
     def _preview_global_search_result(self, item: Any, _previous: Any | None = None) -> None:
         if item is None:
@@ -8407,7 +7811,7 @@ class MountletWindow:
         if tree is None:
             return
         try:
-            width = max(tree.viewport().width() - 1, 0)
+            width = tree.viewport().width()
             if width <= 0:
                 width = tree.width()
         except Exception:
@@ -8415,20 +7819,68 @@ class MountletWindow:
         if width <= 0:
             return
         with suppress(Exception):
-            first = round(width * 0.70)
-            tree.setColumnWidth(0, first)
-            tree.setColumnWidth(1, max(width - first, 0))
+            tree.setColumnWidth(0, max(120, int(width * 0.70)))
+            tree.setColumnWidth(1, max(90, width - tree.columnWidth(0) - 4))
 
     def _clear_global_search_results(self) -> None:
         self._global_search_items = []
-        self._global_search_capped = False
         tree = getattr(self, "_global_search_results", None)
         if tree is not None:
             tree.clear()
+            tree.setMaximumHeight(0)
+            tree.setMinimumHeight(0)
+            tree.setVisible(False)
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            status.setText("")
+        self._browser_layout_changed()
+
+    def _verify_global_search_results(self) -> None:
+        if not self._global_search_items:
+            self._global_search_verify_pending = False
+            return
         field = getattr(self, "_global_search_field", None)
-        if field is None or not field.text().strip():
-            self._set_global_search_active(False)
-        self._set_global_search_status("")
+        query = field.text().strip() if field is not None else ""
+        if not query:
+            return
+        remotes_by_name = {remote.name: remote for remote in _load_visible_remotes()}
+        targets: list[tuple[core.RemoteInfo, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for result in self._global_search_items:
+            remote = remotes_by_name.get(result.remote_name)
+            if remote is None:
+                continue
+            key = (remote.name, result.parent_path)
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append((remote, result.parent_path))
+            if len(targets) >= 6:
+                break
+        self._global_search_verify_pending = True
+        status = getattr(self, "_global_search_status", None)
+        if status is not None:
+            status.setText("Checking…")
+
+        def worker() -> None:
+            for remote, parent in targets:
+                try:
+                    self.file_browser.backend.list_entries(remote, parent)
+                except Exception:
+                    continue
+            try:
+                results = self.file_browser.backend.search_index(query, remotes=remotes_by_name.values(), limit=80)
+            except Exception as exc:
+                self._global_search_verify_pending = False
+                self._bridge.global_search_ready.emit(query, None, str(exc))
+                return
+            self._global_search_verify_pending = False
+            self._bridge.global_search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_global_search_verification(self) -> None:
+        self._global_search_verify_pending = False
 
     def _sort_toolbar(self) -> Any:
         widget = self.qt.QWidget()
@@ -8445,21 +7897,48 @@ class MountletWindow:
         drag_handle.mouseMoveEvent = self._continue_window_drag
         drag_handle.mouseReleaseEvent = self._end_window_drag
 
-        sort_button = self.qt.QPushButton("↕")
-        sort_button.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
-        sort_button.setFixedSize(34, 30)
-        apply_button_icon(self.qt, sort_button, "ui-reorder", fallback_text="↕", size=22)
+        sort_button = self.qt.QPushButton("Sort by")
         sort_menu = self.qt.QMenu(sort_button)
         for mode, label in REMOTE_SORT_OPTIONS:
             self.tray_app._add_action(sort_menu, label, lambda selected=mode: self._sort_remote_order(selected))
-        sort_menu.addSeparator()
-        self.tray_app._add_action(sort_menu, "Reverse order", self._reverse_remote_order)
         sort_button.setMenu(sort_menu)
-        sort_button.setToolTip("Sort or reverse the remote order.")
+        sort_button.setToolTip("Sort remotes and save the new order.")
         self._sort_button = sort_button
-        self._reverse_button = None
+
+        reverse_button = self.qt.QPushButton("↕")
+        reverse_button.setFixedSize(34, 30)
+        reverse_button.setToolTip("Reverse the current remote order.")
+        apply_button_icon(self.qt, reverse_button, "ui-reorder", fallback_text="↕", size=22)
+        try:
+            font = reverse_button.font()
+            font.setPointSize(max(font.pointSize() + 5, 16))
+            reverse_button.setFont(font)
+        except Exception:
+            pass
+        reverse_button.clicked.connect(lambda checked=False: self._reverse_remote_order())
+        self._reverse_button = reverse_button
 
         layout.addWidget(drag_handle)
+        build_label = build_info.visible_label()
+        if build_label:
+            channel = build_info.channel()
+            status = self.qt.QLabel(build_label)
+            status.setObjectName("buildStatus")
+            status.setToolTip(
+                f"Build channel: {channel}\nBuild identifier: {build_info.identifier()}\n"
+                f"Public version: {__version__}"
+            )
+            if channel == "preview":
+                status.setStyleSheet(
+                    "QLabel#buildStatus { color: #111827; background: #fbbf24; "
+                    "border: 1px solid #d97706; padding: 3px 6px; border-radius: 3px; }"
+                )
+            else:
+                status.setStyleSheet(
+                    "QLabel#buildStatus { color: #ffffff; background: #2563eb; "
+                    "border: 1px solid #1d4ed8; padding: 3px 6px; border-radius: 3px; }"
+                )
+            layout.addWidget(status)
         layout.addWidget(self._settings_toolbar_button())
         layout.addWidget(self._push_sync_toolbar_button())
         layout.addWidget(self._pull_sync_toolbar_button())
@@ -8467,7 +7946,9 @@ class MountletWindow:
         layout.addWidget(self._remove_all_offline_toolbar_button())
         layout.addWidget(self._clear_all_cache_toolbar_button())
         layout.addWidget(sort_button)
+        layout.addWidget(reverse_button)
         layout.addStretch(1)
+        layout.addWidget(self._purchase_license_toolbar_button())
         layout.addWidget(self._notifications_toolbar_button())
         layout.addWidget(self._pin_button())
         self._update_config_sync_buttons()
@@ -8483,7 +7964,6 @@ class MountletWindow:
         try:
             if event.button() != self.qt.Qt.MouseButton.LeftButton:
                 return
-            self.window._mountlet_calculated_frame = None
             handle = self.window.windowHandle() if hasattr(self.window, "windowHandle") else None
             if handle is not None and hasattr(handle, "startSystemMove") and handle.startSystemMove():
                 self._drag_offset = None
@@ -8500,8 +7980,7 @@ class MountletWindow:
         try:
             if not (event.buttons() & self.qt.Qt.MouseButton.LeftButton):
                 return
-            target = self._event_global_point(event) - self._drag_offset
-            self._move_main_frame(target.x(), target.y())
+            self.window.move(self._event_global_point(event) - self._drag_offset)
             event.accept()
         except Exception:
             return
@@ -8509,10 +7988,6 @@ class MountletWindow:
     def _end_window_drag(self, event: Any) -> None:
         self._drag_offset = None
         self._clamp_to_screen()
-        frame = self.window.frameGeometry()
-        size = self.window.size()
-        self._remember_calculated_main_frame(frame.x(), frame.y(), size.width(), size.height())
-        self._position_file_browser(trigger="manual")
         try:
             event.accept()
         except Exception:
@@ -8537,8 +8012,8 @@ class MountletWindow:
                 )
                 return
         sorted_names = [remote.name for remote in self._sorted_remotes(remotes, sort_mode)]
-        self._apply_remote_order_to_rows(sorted_names)
         self._save_remote_order(sorted_names)
+        self._current_remote_names = []
         self.tray_app.rebuild_menus()
 
     def _restore_registration_order(self, remote_names: list[str]) -> None:
@@ -8556,41 +8031,23 @@ class MountletWindow:
                 order=None,
             )
         save_mount_settings(settings)
-        registration_names = [remote.name for remote in _load_visible_remotes()]
-        self._apply_remote_order_to_rows(registration_names)
+        self._current_remote_names = []
         self._configuration_changed()
         self.tray_app.rebuild_menus()
 
     def _reverse_remote_order(self) -> None:
         names = [remote.name for remote in _load_visible_remotes()]
         names.reverse()
-        self._apply_remote_order_to_rows(names)
         self._save_remote_order(names)
+        self._current_remote_names = []
         self.tray_app.rebuild_menus()
-
-    def _apply_remote_order_to_rows(self, remote_names: list[str]) -> None:
-        """Apply an order to the existing rows without rebuilding the main UI."""
-        names = list(remote_names)
-        rows = getattr(self, "_row_widgets", {})
-        layout = getattr(self, "_remote_rows_layout", None)
-        current_names = list(getattr(self, "_current_remote_names", []))
-        if layout is None or not rows:
-            self._current_remote_names = names
-            return
-        if set(names) != set(current_names) or any(name not in rows for name in names):
-            self._current_remote_names = []
-            self.refresh()
-            return
-        for index, remote_name in enumerate(names):
-            layout.insertWidget(index, rows[remote_name].frame)
-        self._current_remote_names = names
 
     def _remote_row(self, remote: core.RemoteInfo, mounted: bool) -> Any:
         usage = self._row_usage(remote, mounted)
         checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        card_tooltip = self._remote_card_tooltip(remote)
-        title_tooltip = f"{card_tooltip}\n{remote.mount_path}"
+        open_tooltip = f"Browse {remote.display_name}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         frame = self.qt.QFrame()
         frame.setObjectName("remoteRow")
@@ -8599,11 +8056,11 @@ class MountletWindow:
         frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
         frame.setFocusPolicy(self.qt.Qt.FocusPolicy.StrongFocus)
         frame.setFixedHeight(REMOTE_ROW_HEIGHT)
-        frame.setToolTip(card_tooltip)
+        frame.setToolTip(open_tooltip)
         frame.setAcceptDrops(True)
         frame.mouseReleaseEvent = lambda event, row=frame, selected=remote: self._handle_remote_row_click(event, row, selected)
         frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
-        frame.enterEvent = lambda event, row=frame, tooltip=card_tooltip: self._highlight_remote_row(
+        frame.enterEvent = lambda event, row=frame, tooltip=open_tooltip: self._highlight_remote_row(
             row,
             highlighted=True,
             tooltip=tooltip,
@@ -8629,20 +8086,20 @@ class MountletWindow:
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(0)
         layout.setColumnMinimumWidth(0, 24)
-        layout.setColumnMinimumWidth(2, 150)
+        layout.setColumnMinimumWidth(2, 126)
+        layout.setColumnMinimumWidth(3, 116)
+        layout.setColumnMinimumWidth(4, 36)
+        layout.setColumnMinimumWidth(5, 36)
         layout.setColumnStretch(1, 1)
 
         status_icon = self._remote_status_icon(remote, mounted, checking=checking_usage)
         title = self.qt.QLabel(self._display_remote_name(remote))
         title.setTextFormat(self.qt.Qt.TextFormat.RichText)
         title.setToolTip(title_tooltip)
-        current_zoom = getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0)
-        title.setFixedWidth(round(self._name_column_width * zoom_factor(current_zoom)))
-        title._mountlet_zoom_base_fixed_size = (self._name_column_width, 0)
+        title.setFixedWidth(self._name_column_width)
         title.setSizePolicy(self.qt.QSizePolicy.Policy.Expanding, self.qt.QSizePolicy.Policy.Preferred)
         title.enterEvent = lambda event, widget=title, tooltip=title_tooltip: self._show_immediate_tooltip(widget, tooltip)
         provider_label = self.qt.QLabel()
-        provider_label.setProperty("rowControl", True)
         provider_label.setFixedSize(24, 24)
         provider_label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
         self._update_provider_label(provider_label, remote)
@@ -8654,28 +8111,40 @@ class MountletWindow:
         title_layout.addWidget(title, 1)
 
         usage_indicator = self._usage_indicator(usage, checking_usage=checking_usage)
+
         status = self.qt.QLabel()
-        status.setFixedWidth(130)
+        status.setFixedWidth(120)
         status.setOpenExternalLinks(True)
         status.setTextInteractionFlags(self.qt.Qt.TextInteractionFlag.TextBrowserInteraction)
         self._set_status_text(status, usage, action_pending=action_pending, remote=remote)
-        usage_note = self._usage_note_label(remote, usage, checking_usage=checking_usage)
+        usage_note = self._drive_usage_note_label(remote)
         status_group = self.qt.QWidget()
         status_layout = self.qt.QHBoxLayout(status_group)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(2)
         status_layout.addWidget(status)
         status_layout.addWidget(usage_note)
-        usage_group = self.qt.QWidget()
-        usage_layout = self.qt.QVBoxLayout(usage_group)
-        usage_layout.setContentsMargins(0, 0, 0, 0)
-        usage_layout.setSpacing(1)
-        usage_layout.addWidget(usage_indicator, 0, self.qt.Qt.AlignmentFlag.AlignLeft)
-        usage_layout.addWidget(status_group)
+        config_button = self._icon_button(
+            "ui-config",
+            lambda: self._show_mount_config_editor(remote),
+            enabled=not action_pending,
+            fallback_text="⚙",
+        )
+        config_button.setProperty("rowControl", True)
+        config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
+        config_button.setToolTip(config_tooltip)
+        config_button.enterEvent = lambda event, widget=config_button, tooltip=config_tooltip: self._show_immediate_tooltip(
+            widget,
+            tooltip,
+        )
+        move_controls, up_button, down_button = self._move_button_stack(remote)
 
         layout.addWidget(status_icon, 0, 0)
         layout.addWidget(title_group, 0, 1)
-        layout.addWidget(usage_group, 0, 2)
+        layout.addWidget(usage_indicator, 0, 2)
+        layout.addWidget(status_group, 0, 3)
+        layout.addWidget(config_button, 0, 4)
+        layout.addWidget(move_controls, 0, 5)
         self._row_widgets[remote.name] = SimpleNamespace(
             remote=remote,
             remote_signature=self._remote_row_signature(remote),
@@ -8686,8 +8155,38 @@ class MountletWindow:
             usage_indicator=usage_indicator,
             status=status,
             usage_note=usage_note,
+            config_button=config_button,
+            up_button=up_button,
+            down_button=down_button,
         )
-        self._install_remote_row_drag_filter(frame, remote.name)
+        return frame
+
+    def _add_remote_row(self) -> Any:
+        locked = self._license_locked()
+        frame = self.qt.QFrame()
+        frame.setObjectName("remoteRow")
+        frame.setFrameShape(self.qt.QFrame.Shape.StyledPanel)
+        frame.setFixedHeight(REMOTE_ROW_HEIGHT)
+        frame.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
+        tooltip = _license_lock_message() if locked else "Add a new remote"
+        frame.setToolTip(tooltip)
+        frame.setEnabled(not locked)
+        frame.mouseReleaseEvent = lambda event: self._show_license_dialog() if locked else self._show_new_remote_wizard()
+        frame.enterEvent = lambda event, widget=frame: self._show_immediate_tooltip(widget, tooltip)
+
+        layout = self.qt.QHBoxLayout(frame)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
+        add_button = self._icon_button("ui-add", self._show_new_remote_wizard, fallback_text="+")
+        add_button.setEnabled(not locked)
+        add_button.setProperty("rowControl", True)
+        add_button.setToolTip(tooltip)
+        add_button.enterEvent = lambda event, widget=add_button: self._show_immediate_tooltip(widget, tooltip)
+        label = self.qt.QLabel("Add remote")
+        label.setStyleSheet(_muted_text_style(label))
+        layout.addWidget(add_button)
+        layout.addWidget(label)
+        layout.addStretch(1)
         return frame
 
     def _update_remote_row(self, remote: core.RemoteInfo, mounted: bool) -> None:
@@ -8701,12 +8200,12 @@ class MountletWindow:
         usage = self._row_usage(remote, mounted)
         checking_usage = remote.name not in self._usage_cache
         action_pending = remote.name in self._action_pending
-        card_tooltip = self._remote_card_tooltip(remote)
-        title_tooltip = f"{card_tooltip}\n{remote.mount_path}"
+        open_tooltip = f"Browse {remote.display_name}"
+        title_tooltip = f"{open_tooltip}\n{remote.mount_path}"
 
         row.frame.setProperty("mounted", mounted)
         if remote_changed:
-            row.frame.setToolTip(card_tooltip)
+            row.frame.setToolTip(open_tooltip)
             row.frame.setAcceptDrops(True)
             row.frame.mouseReleaseEvent = (
                 lambda event, frame=row.frame, selected=remote: self._handle_remote_row_click(
@@ -8716,7 +8215,7 @@ class MountletWindow:
                 )
             )
             row.frame.contextMenuEvent = lambda event, selected=remote: self._show_remote_context_menu(event, selected)
-            row.frame.enterEvent = lambda event, frame=row.frame, tooltip=card_tooltip: self._highlight_remote_row(
+            row.frame.enterEvent = lambda event, frame=row.frame, tooltip=open_tooltip: self._highlight_remote_row(
                 frame,
                 highlighted=True,
                 tooltip=tooltip,
@@ -8749,16 +8248,22 @@ class MountletWindow:
                 tooltip,
             )
             self._update_provider_label(row.provider_label, remote)
-        zoom_steps = getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0)
-        row.title._mountlet_zoom_base_fixed_size = (self._name_column_width, 0)
-        row.title.setFixedWidth(round(self._name_column_width * zoom_factor(zoom_steps)))
+        row.title.setFixedWidth(self._name_column_width)
 
         self._apply_remote_status_icon(row.status_icon, remote, mounted, checking=checking_usage)
         row.usage_indicator.setEnabled(True)
         self._apply_usage_indicator(row.usage_indicator, usage, checking_usage=checking_usage)
 
         self._set_status_text(row.status, usage, action_pending=action_pending, remote=remote)
-        self._update_usage_note(row.usage_note, remote, usage, checking_usage=checking_usage)
+        row.config_button.setEnabled(not action_pending)
+        if remote_changed:
+            config_tooltip = f"Configure {remote.display_name}" + _shortcut_hint("remote_config")
+            row.config_button.setToolTip(config_tooltip)
+            row.config_button.enterEvent = lambda event, widget=row.config_button, tooltip=config_tooltip: (
+                self._show_immediate_tooltip(widget, tooltip)
+            )
+        self._update_move_button(row.up_button, remote, -1)
+        self._update_move_button(row.down_button, remote, 1)
 
     def _remote_row_signature(self, remote: core.RemoteInfo) -> tuple[object, ...]:
         return (
@@ -8775,8 +8280,7 @@ class MountletWindow:
 
     def _update_provider_label(self, label: Any, remote: core.RemoteInfo) -> None:
         url = _remote_browser_url(remote)
-        size = self._scaled_icon_metric(22)
-        label.setPixmap(_remote_provider_icon(self.qt, remote, size=size).pixmap(size, size))
+        label.setPixmap(_remote_provider_icon(self.qt, remote, size=22).pixmap(22, 22))
         if url:
             tooltip = _remote_browser_tooltip(remote) + _shortcut_hint("remote_open_browser")
             cursor = self.qt.Qt.CursorShape.PointingHandCursor
@@ -8795,6 +8299,36 @@ class MountletWindow:
         event.accept()
         self._open_remote_in_browser(remote)
 
+    def _move_button_stack(self, remote: core.RemoteInfo) -> tuple[Any, Any, Any]:
+        widget = self.qt.QWidget()
+        widget.setProperty("rowControl", True)
+        layout = self.qt.QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+        up_button = self._move_button(remote, -1)
+        down_button = self._move_button(remote, 1)
+        layout.addWidget(up_button)
+        layout.addWidget(down_button)
+        return widget, up_button, down_button
+
+    def _move_button(self, remote: core.RemoteInfo, delta: int) -> Any:
+        button = self._small_icon_button(
+            "ui-move-up" if delta < 0 else "ui-move-down",
+            lambda: self._move_remote(remote.name, delta),
+            fallback_text="▲" if delta < 0 else "▼",
+        )
+        button.setProperty("rowControl", True)
+        self._update_move_button(button, remote, delta)
+        return button
+
+    def _update_move_button(self, button: Any, remote: core.RemoteInfo, delta: int) -> None:
+        direction = "up" if delta < 0 else "down"
+        enabled = self._can_move_remote(remote.name, delta)
+        tooltip = f"Move {remote.display_name} {direction}"
+        button.setEnabled(enabled)
+        button.setToolTip(tooltip)
+        button.enterEvent = lambda event, widget=button, text=tooltip: self._show_immediate_tooltip(widget, text)
+
     def _can_move_remote(self, remote_name: str, delta: int) -> bool:
         try:
             index = self._current_remote_names.index(remote_name)
@@ -8809,13 +8343,11 @@ class MountletWindow:
             index = names.index(remote_name)
         except ValueError:
             return
-        target = min(max(index + delta, 0), len(names) - 1)
+        target = index + delta
         if not 0 <= target < len(names):
             return
-        if target == index:
-            return
-        names.pop(index)
-        names.insert(target, remote_name)
+        displaced_name = names[target]
+        names[index], names[target] = names[target], names[index]
         row = self._row_widgets.get(remote_name)
         layout = self._remote_rows_layout
         if row is None or layout is None:
@@ -8826,8 +8358,17 @@ class MountletWindow:
         layout.removeWidget(row.frame)
         layout.insertWidget(target, row.frame)
         self._current_remote_names = names
+        self._update_remote_move_buttons({remote_name, displaced_name})
         self._ensure_remote_row_visible(row.frame)
         self._queue_remote_order_save(names)
+
+    def _update_remote_move_buttons(self, remote_names: set[str]) -> None:
+        for remote_name in remote_names:
+            row = self._row_widgets.get(remote_name)
+            if row is None:
+                continue
+            self._update_move_button(row.up_button, row.remote, -1)
+            self._update_move_button(row.down_button, row.remote, 1)
 
     def _queue_remote_order_save(self, remote_names: list[str]) -> None:
         self._remote_order_save_generation += 1
@@ -8966,10 +8507,10 @@ class MountletWindow:
             return
         if mounted:
             label.setText("☁▲")
-            label.setStyleSheet("color: palette(link);")
+            label.setStyleSheet("color: #0ea5e9;")
         elif connected is True:
             label.setText("☁")
-            label.setStyleSheet("color: palette(window-text);")
+            label.setStyleSheet("color: #f8fafc;")
         else:
             label.setText("")
             label.setStyleSheet("")
@@ -9011,90 +8552,37 @@ class MountletWindow:
             return None
         try:
             icon = self.qt.QIcon(path)
-            size = self._scaled_icon_metric(22)
-            pixmap = icon.pixmap(size, size)
+            pixmap = icon.pixmap(22, 22)
             if hasattr(pixmap, "isNull") and pixmap.isNull():
                 return None
             return pixmap
         except Exception:
             return None
 
-    def _scaled_icon_metric(self, base: int) -> int:
-        steps = getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0)
-        return max(1, round(base * zoom_factor(steps)))
-
-    def _refresh_scaled_row_icons(self) -> None:
-        mounted = getattr(self, "_mount_state_cache", {})
-        for widgets in getattr(self, "_row_widgets", {}).values():
-            remote = widgets.remote
-            self._update_provider_label(widgets.provider_label, remote)
-            self._apply_remote_status_icon(
-                widgets.status_icon,
-                remote,
-                bool(mounted.get(remote.name, False)),
-                checking=remote.name not in self._usage_cache,
-            )
-
     def _usage_indicator(self, usage: core.StorageUsage, *, checking_usage: bool) -> Any:
         indicator = self.qt.QProgressBar()
-        indicator.setFixedSize(92, 5)
+        indicator.setFixedSize(116, 8)
         indicator.setRange(0, 100)
         indicator.setTextVisible(False)
         self._apply_usage_indicator(indicator, usage, checking_usage=checking_usage)
         return indicator
 
-    def _usage_note_label(
-        self,
-        remote: core.RemoteInfo,
-        usage: core.StorageUsage,
-        *,
-        checking_usage: bool,
-    ) -> Any:
-        label = self.qt.QLabel()
+    def _drive_usage_note_label(self, remote: core.RemoteInfo) -> Any:
+        label = self.qt.QLabel("ⓘ" if _is_google_drive_remote(remote) else "")
         label.setFixedWidth(16)
         label.setAlignment(self.qt.Qt.AlignmentFlag.AlignCenter)
-        self._update_usage_note(label, remote, usage, checking_usage=checking_usage)
-        return label
-
-    def _update_usage_note(
-        self,
-        label: Any,
-        remote: core.RemoteInfo,
-        usage: core.StorageUsage,
-        *,
-        checking_usage: bool,
-    ) -> None:
-        unavailable = usage.percent is None and usage.text.strip() == "?"
-        if unavailable:
-            tooltip = (
-                f"Storage usage is unavailable for {remote.display_name}. "
-                "The provider may not report quota information, or the account could not be queried."
-            )
-            label.setText("ⓘ")
-            label.setToolTip(tooltip)
-            label.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
-            label.setStyleSheet("color: palette(text); font-weight: 700;")
-            label.enterEvent = lambda event, widget=label, text=tooltip: self._show_immediate_tooltip(widget, text)
-            label.mousePressEvent = lambda event, widget=label, text=tooltip: self.qt.QToolTip.showText(
-                self.qt.QCursor.pos(), text, widget
-            )
-        elif _is_google_drive_remote(remote) and not checking_usage:
-            label.setText("ⓘ")
+        if _is_google_drive_remote(remote):
             label.setToolTip(DRIVE_USAGE_NOTE)
             label.setCursor(self.qt.QCursor(self.qt.Qt.CursorShape.PointingHandCursor))
             label.setStyleSheet(f"color: {_provider_color(remote)}; font-weight: 700;")
             label.enterEvent = lambda event, widget=label: self._show_immediate_tooltip(widget, DRIVE_USAGE_NOTE)
             label.mousePressEvent = lambda event, widget=label: self._show_usage_note(widget)
-        else:
-            label.setText("")
-            label.setToolTip("")
-            label.setStyleSheet("color: palette(text);")
+        return label
 
     def _show_usage_note(self, widget: Any) -> None:
         self.qt.QToolTip.showText(self.qt.QCursor.pos(), DRIVE_USAGE_NOTE, widget)
 
     def _apply_usage_indicator(self, indicator: Any, usage: core.StorageUsage, *, checking_usage: bool) -> None:
-        indicator.setVisible(usage.percent is not None)
         pct = max(0, min(usage.percent or 0, 100))
         fill = self._usage_color(usage, checking_usage=checking_usage)
         indicator.setValue(pct)
@@ -9102,7 +8590,7 @@ class MountletWindow:
             "QProgressBar {"
             "border: 0;"
             "border-radius: 4px;"
-            "background: palette(midlight);"
+            "background: #d1d5db;"
             "}"
             "QProgressBar::chunk {"
             f"background: {fill};"
@@ -9110,32 +8598,26 @@ class MountletWindow:
             "}"
         )
 
-    def _usage_color(
-        self,
-        usage: core.StorageUsage,
-        *,
-        checking_usage: bool = False,
-    ) -> str:
+    def _usage_color(self, usage: core.StorageUsage, *, checking_usage: bool = False) -> str:
         if usage.percent is None:
-            return MUTED_CHECKING if checking_usage else MUTED
+            return "#9ca3af" if checking_usage else "#6b7280"
         remaining = None
         if usage.total is not None and usage.used is not None:
             remaining = max(usage.total - usage.used, 0)
-        return DANGER if remaining is not None and remaining < LOW_SPACE_BYTES else SUCCESS
+        return "#dc2626" if remaining is not None and remaining < LOW_SPACE_BYTES else "#16a34a"
 
     def _usage_status_html(self, usage: core.StorageUsage, *, checking_usage: bool) -> str:
         if usage.used is not None and usage.total is not None:
             used_gb = usage.used / (1024**3)
             total_gb = usage.total / (1024**3)
             color = self._usage_color(usage, checking_usage=checking_usage)
+            text_color = _palette_text_color(self.window)
             return (
                 f'<span style="color:{color};">{used_gb:.1f}</span>'
-                f'/{total_gb:.1f} GB'
+                f'<span style="color:{text_color};">/{total_gb:.1f} GB</span>'
             )
-        if usage.text.strip() == "?":
-            return ""
         if usage.text:
-            return html.escape(usage.text)
+            return f'<span style="{_muted_text_style(self.window).removesuffix(";")}">{usage.text}</span>'
         return ""
 
     def _set_status_text(
@@ -9148,7 +8630,7 @@ class MountletWindow:
     ) -> None:
         if action_pending:
             label.setText("Working...")
-            label.setStyleSheet("color: palette(text);")
+            label.setStyleSheet(_muted_text_style(label))
             return
         if remote is not None and _is_google_photos_remote(remote):
             faq_url = f"{license_control.license_site_url()}/?faq=google-photos#faq"
@@ -9160,7 +8642,7 @@ class MountletWindow:
             )
             return
         label.setToolTip("")
-        label.setStyleSheet("color: palette(text);")
+        label.setStyleSheet("")
         label.setText(self._usage_status_html(usage, checking_usage=usage.percent is None))
 
     def _show_immediate_tooltip(self, widget: Any, tooltip: str) -> None:
@@ -9171,177 +8653,13 @@ class MountletWindow:
         if event.button() != self.qt.Qt.MouseButton.LeftButton:
             event.ignore()
             return
-        if getattr(self, "_suppress_remote_click_once", "") == remote.name:
-            self._suppress_remote_click_once = ""
-            event.accept()
-            return
         child = row.childAt(event.position().toPoint()) if hasattr(event, "position") else None
         while child is not None and child is not row:
             if child.property("rowControl"):
                 return
             child = child.parentWidget()
         self._release_remote_hover_suppression()
-        self._show_mount_config_editor(remote)
-
-    @staticmethod
-    def _remote_card_tooltip(remote: core.RemoteInfo) -> str:
-        return f"Click to configure {remote.display_name}. Drag to move this remote."
-
-    def _install_remote_row_drag_filter(self, row: Any, remote_name: str) -> None:
-        outer = self
-        qt = self.qt
-
-        class RemoteRowDragFilter(qt.QObject):
-            def eventFilter(self, watched: Any, event: Any) -> bool:
-                try:
-                    event_type = event.type()
-                    press_events = {
-                        qt.QEvent.Type.MouseButtonPress,
-                        qt.QEvent.Type.MouseButtonDblClick,
-                    }
-                    if event_type not in press_events | {qt.QEvent.Type.MouseMove}:
-                        return False
-                    if outer._remote_drag_event_targets_control(event, watched, row):
-                        return False
-                    widgets = outer._row_widgets.get(remote_name)
-                    if widgets is None:
-                        return False
-                    if event_type in press_events:
-                        outer._remote_row_mouse_press(event, row, widgets.remote)
-                    else:
-                        outer._remote_row_mouse_move(event, row, widgets.remote)
-                except Exception:
-                    pass
-                return False
-
-        event_filter = RemoteRowDragFilter(row)
-        row._mountlet_remote_drag_filter = event_filter
-        candidates = [row]
-        with suppress(Exception):
-            candidates.extend(row.findChildren(self.qt.QWidget))
-        for widget in candidates:
-            if not self._remote_drag_widget_is_control(widget, row):
-                widget.installEventFilter(event_filter)
-
-    @staticmethod
-    def _remote_drag_widget_is_control(widget: Any, row: Any) -> bool:
-        current = widget
-        while current is not None and current is not row:
-            try:
-                if current.property("rowControl"):
-                    return True
-                current = current.parentWidget()
-            except Exception:
-                return True
-        return False
-
-    def _remote_drag_event_targets_control(self, event: Any, watched: Any, row: Any) -> bool:
-        try:
-            local = row.mapFromGlobal(self._remote_drag_event_point(event))
-            target = row.childAt(local)
-            if target is not None:
-                return self._remote_drag_widget_is_control(target, row)
-        except Exception:
-            pass
-        return self._remote_drag_widget_is_control(watched, row)
-
-    @staticmethod
-    def _remote_drag_event_point(event: Any) -> Any:
-        if hasattr(event, "globalPosition"):
-            point = event.globalPosition()
-            return point.toPoint() if hasattr(point, "toPoint") else point
-        if hasattr(event, "globalPos"):
-            return event.globalPos()
-        point = event.position() if hasattr(event, "position") else event.pos()
-        return point.toPoint() if hasattr(point, "toPoint") else point
-
-    def _remote_row_mouse_press(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
-        self._suppress_remote_click_once = ""
-        if event.button() == self.qt.Qt.MouseButton.LeftButton and not self._license_locked():
-            self._remote_drag_start = (remote.name, self._remote_drag_event_point(event))
-        else:
-            self._remote_drag_start = None
-
-    def _remote_row_mouse_move(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
-        drag_start = getattr(self, "_remote_drag_start", None)
-        if drag_start is None or drag_start[0] != remote.name:
-            return
-        if not (event.buttons() & self.qt.Qt.MouseButton.LeftButton):
-            self._remote_drag_start = None
-            return
-        position = self._remote_drag_event_point(event)
-        if (position - drag_start[1]).manhattanLength() < self.qt.QApplication.startDragDistance():
-            return
-        self._remote_drag_start = None
-        mime = self.qt.QMimeData()
-        mime.setData(REMOTE_ORDER_MIME_TYPE, remote.name.encode("utf-8"))
-        drag = self.qt.QDrag(row)
-        drag.setMimeData(mime)
-        self._suppress_remote_click_once = remote.name
-        drag.exec(self.qt.Qt.DropAction.MoveAction, self.qt.Qt.DropAction.MoveAction)
-        self._clear_remote_drop_markers()
-
-    def _remote_reorder_source(self, event: Any) -> str:
-        try:
-            mime = event.mimeData()
-            if not mime.hasFormat(REMOTE_ORDER_MIME_TYPE):
-                return ""
-            return bytes(mime.data(REMOTE_ORDER_MIME_TYPE)).decode("utf-8")
-        except Exception:
-            return ""
-
-    def _remote_drop_edge(self, event: Any, row: Any) -> str:
-        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        return "before" if position.y() < row.height() // 2 else "after"
-
-    def _clear_remote_drop_markers(self, *, except_row: Any | None = None) -> None:
-        for widgets in getattr(self, "_row_widgets", {}).values():
-            row = widgets.frame
-            if row is except_row:
-                continue
-            if row.property("remoteDropEdge"):
-                row.setProperty("remoteDropEdge", "")
-                row.setToolTip(self._remote_card_tooltip(widgets.remote))
-                row.setStyleSheet(self._remote_row_style(row, highlighted=False))
-
-    def _preview_remote_reorder(self, event: Any, row: Any, remote: core.RemoteInfo) -> bool:
-        source_name = self._remote_reorder_source(event)
-        if not source_name or source_name not in getattr(self, "_current_remote_names", []):
-            return False
-        edge = self._remote_drop_edge(event, row)
-        self._clear_remote_drop_markers(except_row=row)
-        if row.property("remoteDropEdge") != edge:
-            source = self._row_widgets.get(source_name)
-            source_label = source.remote.display_name if source is not None else source_name
-            row.setProperty("remoteDropEdge", edge)
-            row.setToolTip(f"Move {source_label} here")
-            row.setStyleSheet(self._remote_row_style(row, highlighted=False))
-            self._show_immediate_tooltip(row, row.toolTip())
-        event.acceptProposedAction()
-        return True
-
-    def _drop_remote_reorder(self, event: Any, remote: core.RemoteInfo) -> bool:
-        source_name = self._remote_reorder_source(event)
-        names = list(getattr(self, "_current_remote_names", []))
-        if not source_name or source_name not in names or remote.name not in names:
-            return False
-        if source_name == remote.name:
-            self._clear_remote_drop_markers()
-            event.acceptProposedAction()
-            return True
-        target_row = self._row_widgets[remote.name].frame
-        edge = self._remote_drop_edge(event, target_row)
-        names.remove(source_name)
-        target = names.index(remote.name) if remote.name in names else len(names)
-        if edge == "after" and remote.name in names:
-            target += 1
-        names.insert(target, source_name)
-        self._clear_remote_drop_markers()
-        self._apply_remote_order_to_rows(names)
-        self._save_remote_order(names)
-        self.tray_app.rebuild_menus()
-        event.acceptProposedAction()
-        return True
+        self._browse_remote(remote, row)
 
     def _show_remote_context_menu(self, event: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
@@ -9430,28 +8748,27 @@ class MountletWindow:
         selected = bool(row.property("browserSelected"))
         keyboard_focus = bool(row.property("keyboardFocus"))
         hovered = highlighted or bool(row.property("hovered"))
-        drop_edge = str(row.property("remoteDropEdge") or "")
-        border = "palette(mid)"
-        background = "palette(alternate-base)" if not mounted else "transparent"
+        border = "rgba(107, 114, 128, 90)"
+        background = "rgba(107, 114, 128, 24)" if not mounted else "transparent"
         if not mounted:
             if selected:
-                border = "palette(highlight)"
-                background = "palette(alternate-base)"
+                border = "#3b82f6"
+                background = "rgba(59, 130, 246, 30)"
             if keyboard_focus:
-                border = "palette(highlight)"
-                background = "palette(alternate-base)"
+                border = "#2563eb"
+                background = "rgba(37, 99, 235, 45)"
         elif hovered or selected or keyboard_focus:
-            border = "palette(highlight)" if keyboard_focus or selected else "palette(link)"
-            background = "palette(alternate-base)"
-        drop_border = ""
-        if drop_edge == "before":
-            drop_border = "border-top: 2px solid palette(highlight);"
-        elif drop_edge == "after":
-            drop_border = "border-bottom: 2px solid palette(highlight);"
+            border = "#2563eb" if keyboard_focus else "#3b82f6" if selected else "rgba(22, 163, 74, 190)"
+            background = (
+                "rgba(37, 99, 235, 45)"
+                if keyboard_focus
+                else "rgba(59, 130, 246, 30)"
+                if selected
+                else "rgba(22, 163, 74, 36)"
+            )
         return (
             "QFrame#remoteRow {"
             f"border: 2px solid {border};"
-            f"{drop_border}"
             "border-radius: 4px;"
             f"background: {background};"
             "}"
@@ -9499,14 +8816,19 @@ class MountletWindow:
         if self._license_locked():
             return
         self._set_browser_selected(remote.name)
-        self._defer_usage_refresh()
         self._pending_browser_remote_name = remote.name
-        # Reflect every mouse and keyboard move immediately.  File-list
-        # painting is batched separately and must not debounce navigation.
-        self._flush_remote_preview()
+        timer = getattr(self, "_remote_preview_timer", None)
+        if timer is None:
+            self._flush_remote_preview()
+            return
+        timer.start()
 
     def _cancel_remote_preview(self) -> None:
         self._pending_browser_remote_name = ""
+        timer = getattr(self, "_remote_preview_timer", None)
+        if timer is not None:
+            with suppress(Exception):
+                timer.stop()
 
     def _flush_remote_preview(self) -> None:
         remote_name = getattr(self, "_pending_browser_remote_name", "")
@@ -9555,191 +8877,13 @@ class MountletWindow:
             widgets.frame.setProperty("browserSelected", selected)
             widgets.frame.setStyleSheet(self._remote_row_style(widgets.frame, highlighted=False))
 
-    def _position_file_browser(
-        self,
-        *,
-        row: Any | None = None,
-        main_rect: tuple[int, int, int, int] | None = None,
-        trigger: str = "layout",
-    ) -> None:
+    def _reposition_file_browser(self) -> None:
         file_browser = getattr(self, "file_browser", None)
-        if file_browser is None or file_browser.remote is None:
+        if file_browser is None or not file_browser.is_visible() or file_browser.remote is None:
             return
-        if getattr(self, "_position_after_fit", False):
-            return
-        if row is None and not file_browser.is_visible():
-            return
-        if row is None:
-            widgets = self._row_widgets.get(file_browser.remote.name)
-            row = widgets.frame if widgets is not None else None
-        if row is None:
-            return
-        try:
-            self._ensure_initial_panel_boundary()
-            frame = self.window.frameGeometry()
-            if main_rect is None:
-                cached = getattr(self.window, "_mountlet_calculated_frame", None)
-                if isinstance(cached, tuple) and len(cached) == 4:
-                    main_rect = cached
-                else:
-                    main_rect = (frame.x(), frame.y(), frame.width(), frame.height())
-                    self.window._mountlet_calculated_frame = main_rect
-            resolved = main_rect
-            row_offset = row.mapTo(self.window, self.qt.QPoint(0, 0))
-            relative = (
-                row_offset.x(),
-                row_offset.y(),
-                row.width(),
-                row.height(),
-            )
-            attachment_rect = (
-                resolved[0] + relative[0],
-                resolved[1] + relative[1],
-                relative[2],
-                relative[3],
-            )
-            row_top = attachment_rect[1]
-            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
-            available = self._usable_screen_geometry(screen)
-            browser_frame = file_browser.window.frameGeometry()
-            browser_client_width = file_browser.window.width()
-            browser_client_height = file_browser.window.height()
-            browser_frame_width = round(
-                FILE_BROWSER_REFERENCE_WIDTH
-                * zoom_factor(getattr(getattr(getattr(self, "tray_app", None), "ui_zoom", None), "steps", 0))
-            ) + max(browser_frame.width() - browser_client_width, 0)
-            browser_frame_height = browser_client_height + max(
-                browser_frame.height() - browser_client_height,
-                0,
-            )
-            position = cascade_position(
-                resolved,
-                row_top,
-                (available.x(), available.y(), available.width(), available.height()),
-                (browser_frame_width, browser_frame_height),
-                gap=0,
-            )
-            self._log_ui_geometry(
-                trigger,
-                resolved,
-                relative,
-                attachment_rect,
-                (browser_frame_width, browser_frame_height),
-                position,
-                (available.x(), available.y(), available.width(), available.height()),
-            )
-            file_browser.move_to(position, main_x=resolved[0])
-        except Exception:
-            return
-
-    def _cache_browser_attachment_geometry(self) -> None:
-        window = getattr(self, "window", None)
-        if window is None:
-            return
-        geometry: dict[str, tuple[int, int, int, int]] = {}
-        for remote_name, widgets in getattr(self, "_row_widgets", {}).items():
-            try:
-                offset = widgets.frame.mapTo(self.window, self.qt.QPoint(0, 0))
-                geometry[remote_name] = (
-                    offset.x(),
-                    offset.y(),
-                    widgets.frame.width(),
-                    widgets.frame.height(),
-                )
-            except Exception:
-                continue
-        self._browser_attachment_geometry = geometry
-
-    def _log_ui_geometry(
-        self,
-        trigger: str,
-        main_rect: tuple[int, int, int, int],
-        relative: tuple[int, int, int, int],
-        attachment_rect: tuple[int, int, int, int],
-        browser_size: tuple[int, int],
-        position: tuple[int, int],
-        available: tuple[int, int, int, int],
-    ) -> None:
-        try:
-            zoom = getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0)
-            remote_scroll = getattr(self, "_remote_scroll", None)
-            panes_scroll = getattr(self, "_embedded_panes_scroll", None)
-            file_tree = getattr(getattr(self, "file_browser", None), "tree", None)
-            data: dict[str, Any] = {
-                "time": round(time.time(), 3),
-                "trigger": trigger,
-                "zoom": zoom,
-                "mainFrame": main_rect,
-                "cardRelative": relative,
-                "cardFrame": attachment_rect,
-                "browserFrameSize": browser_size,
-                "target": position,
-                "available": available,
-                "remotePanelBaseWidth": getattr(self, "_remote_panel_base_width", None),
-                "panelFrameBoundary": getattr(self, "_panel_frame_boundary", None),
-            }
-            with suppress(Exception):
-                handle = self.window.windowHandle()
-                margins = handle.frameMargins()
-                data["nativeFrameMargins"] = (
-                    margins.left(), margins.top(), margins.right(), margins.bottom()
-                )
-            actual_main_frame = self.window.frameGeometry()
-            actual_main_client = self.window.geometry()
-            data["mainActualFrame"] = (
-                actual_main_frame.x(),
-                actual_main_frame.y(),
-                actual_main_frame.width(),
-                actual_main_frame.height(),
-            )
-            data["mainClientGeometry"] = (
-                actual_main_client.x(),
-                actual_main_client.y(),
-                actual_main_client.width(),
-                actual_main_client.height(),
-            )
-            browser_window = getattr(getattr(self, "file_browser", None), "window", None)
-            if browser_window is not None:
-                browser_frame = browser_window.frameGeometry()
-                data["browserActualFrame"] = (
-                    browser_frame.x(),
-                    browser_frame.y(),
-                    browser_frame.width(),
-                    browser_frame.height(),
-                )
-            if remote_scroll is not None:
-                data["remoteScroll"] = {
-                    "size": (remote_scroll.width(), remote_scroll.height()),
-                    "viewport": (remote_scroll.viewport().width(), remote_scroll.viewport().height()),
-                    "content": (remote_scroll.widget().width(), remote_scroll.widget().height()),
-                    "horizontal": remote_scroll.horizontalScrollBar().isVisible(),
-                    "vertical": remote_scroll.verticalScrollBar().isVisible(),
-                }
-            if panes_scroll is not None:
-                data["embeddedScroll"] = {
-                    "size": (panes_scroll.width(), panes_scroll.height()),
-                    "viewport": (panes_scroll.viewport().width(), panes_scroll.viewport().height()),
-                    "content": (panes_scroll.widget().width(), panes_scroll.widget().height()),
-                    "minimum": (
-                        panes_scroll.widget().minimumWidth(),
-                        panes_scroll.widget().minimumHeight(),
-                    ),
-                    "horizontal": panes_scroll.horizontalScrollBar().isVisible(),
-                    "vertical": panes_scroll.verticalScrollBar().isVisible(),
-                    "horizontalRange": panes_scroll.horizontalScrollBar().maximum(),
-                    "verticalRange": panes_scroll.verticalScrollBar().maximum(),
-                }
-            if file_tree is not None:
-                data["fileTree"] = {
-                    "size": (file_tree.width(), file_tree.height()),
-                    "viewport": (file_tree.viewport().width(), file_tree.viewport().height()),
-                    "columns": tuple(file_tree.columnWidth(index) for index in range(3)),
-                    "horizontal": file_tree.horizontalScrollBar().isVisible(),
-                    "vertical": file_tree.verticalScrollBar().isVisible(),
-                }
-            report_control.append_ui_geometry_log(json.dumps(data, sort_keys=True))
-        except Exception:
-            return
+        row = self._row_widgets.get(file_browser.remote.name)
+        if row is not None:
+            file_browser.reposition(row.frame)
 
     def _remote_row_focus(self, event: Any, row: Any, remote: core.RemoteInfo, *, focused: bool) -> None:
         if focused:
@@ -9950,13 +9094,9 @@ class MountletWindow:
         self._run_remote_action(remote, action)
 
     def _remote_drag_enter(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
-        if self._preview_remote_reorder(event, row, remote):
-            return
         self._preview_remote_drop(event, row, remote)
 
     def _remote_drag_move(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
-        if self._preview_remote_reorder(event, row, remote):
-            return
         self._preview_remote_drop(event, row, remote)
 
     def _preview_remote_drop(self, event: Any, row: Any, remote: core.RemoteInfo) -> None:
@@ -9981,10 +9121,6 @@ class MountletWindow:
             self._show_file_browser_for_remote(remote, row, focus_browser=False)
 
     def _remote_drag_leave(self, row: Any) -> None:
-        if row.property("remoteDropEdge"):
-            row.setProperty("remoteDropEdge", "")
-            row.setStyleSheet(self._remote_row_style(row, highlighted=False))
-            return
         row.setProperty("hovered", False)
         row.setStyleSheet(self._remote_row_style(row, highlighted=False))
         self.file_browser.leave_drop()
@@ -9992,8 +9128,6 @@ class MountletWindow:
     def _remote_drop(self, event: Any, remote: core.RemoteInfo) -> None:
         if self._license_locked():
             event.ignore()
-            return
-        if self._drop_remote_reorder(event, remote):
             return
         destination_path = self.file_browser.backend.current_path(remote.name)
         self.file_browser.perform_drop(
@@ -10017,12 +9151,7 @@ class MountletWindow:
         displayed = [self._plain_remote_name(remote) for remote in remotes]
         longest = max(displayed, key=len, default="Remote")
         metrics = self.window.fontMetrics()
-        factor = zoom_factor(getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0))
-        measured = min(
-            max(metrics.horizontalAdvance(longest) + round(10 * factor), round(88 * factor)),
-            metrics.horizontalAdvance("W" * 28) + round(10 * factor),
-        )
-        return max(1, round(measured / factor))
+        return min(max(metrics.horizontalAdvance(longest) + 10, 88), metrics.horizontalAdvance("W" * 28) + 10)
 
     def _fit_to_content(self, root: Any, scroll: Any, container: Any, *, preserve_position: bool = False) -> None:
         self._invalidate_widget_tree(root)
@@ -10041,24 +9170,9 @@ class MountletWindow:
         fixed_height = sum(size.height() for size in fixed_sizes)
         fixed_count = len(fixed_sizes)
         content_width = max(fixed_width, container_size.width())
-        measured_remote_panel_width = (
+        remote_panel_width = (
             horizontal_padding + content_width + scroll_frame + scroll.verticalScrollBar().sizeHint().width() + 2
         )
-        zoom_steps = getattr(getattr(self.tray_app, "ui_zoom", None), "steps", 0)
-        remote_signature = tuple(getattr(self, "_current_remote_names", ()))
-        if remote_signature != getattr(self, "_remote_panel_width_signature", None):
-            self._remote_panel_width_signature = remote_signature
-            self._remote_panel_base_width = max(
-                1,
-                round(measured_remote_panel_width / zoom_factor(zoom_steps)),
-            )
-        remote_panel_base_width = getattr(self, "_remote_panel_base_width", None)
-        if not isinstance(remote_panel_base_width, int) or remote_panel_base_width <= 0:
-            remote_panel_base_width = max(1, round(measured_remote_panel_width / zoom_factor(zoom_steps)))
-            self._remote_panel_base_width = remote_panel_base_width
-        remote_panel_width = round(remote_panel_base_width * zoom_factor(zoom_steps))
-        root._mountlet_zoom_base_fixed_size = (remote_panel_base_width, 0)
-        root.setFixedWidth(remote_panel_width)
         width = remote_panel_width
         remote_list_height = max(container_size.height(), 1)
         if fixed_count:
@@ -10072,224 +9186,54 @@ class MountletWindow:
             + 2
         )
         file_browser = getattr(self, "file_browser", None)
+        if bool(getattr(file_browser, "_embedded", False)):
+            try:
+                root.setMinimumWidth(remote_panel_width)
+                root.setMaximumWidth(remote_panel_width)
+            except Exception:
+                pass
+        if (
+            bool(getattr(file_browser, "_embedded", False))
+            and file_browser is not None
+            and file_browser.is_visible()
+        ):
+            browser_size = file_browser.root.sizeHint()
+            browser_width = max(browser_size.width(), EMBEDDED_BROWSER_MIN_WIDTH)
+            browser_height = max(browser_size.height(), EMBEDDED_BROWSER_MIN_HEIGHT)
+            width += browser_width + 6
+            height = max(height, menu_height + browser_height + 16)
+
         screen = self.window.screen() or self.qt.QApplication.primaryScreen()
         if screen:
-            available = self._usable_screen_geometry(screen)
-            frame_width, frame_height = self._window_frame_overhead()
-            max_width = max(1, available.width() - frame_width)
-            max_height = max(1, available.height() - frame_height)
+            available = screen.availableGeometry()
+            max_width = max(360, available.width() - 16)
+            max_height = max(220, available.height() - 16)
         else:
             max_width = 960
             max_height = 720
 
-        embedded_external_height = 0
-        if bool(getattr(file_browser, "_embedded", False)):
-            footer_controls = getattr(self, "_main_footer_controls", None)
-            central_layout = getattr(self, "_embedded_central_layout", None)
-            if footer_controls is not None and central_layout is not None:
-                central_margins = central_layout.contentsMargins()
-                embedded_external_height = footer_controls.sizeHint().height()
-                embedded_external_height += max(central_layout.spacing(), 0)
-                embedded_external_height += central_margins.top() + central_margins.bottom()
+        if height > max_height:
+            width += scroll.verticalScrollBar().sizeHint().width()
+            height = max_height
+
         max_scroll_content_height = max(
             1,
             max_height
             - menu_height
-            - embedded_external_height
             - vertical_padding
             - fixed_height
             - scroll_frame
             - 2,
         )
-        remote_list_capped = remote_list_height > max_scroll_content_height
-        scroll.setVerticalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        required_scroll_width = (
-            container_size.width() + scroll_frame + scroll.verticalScrollBar().sizeHint().width()
-        )
-        scroll.setMinimumWidth(required_scroll_width)
         scroll_height = max(1, min(remote_list_height + scroll_frame, max_scroll_content_height + scroll_frame))
         with suppress(Exception):
             scroll.setMinimumHeight(scroll_height)
             scroll.setMaximumHeight(scroll_height)
 
-        self._invalidate_widget_tree(root)
-        if bool(getattr(file_browser, "_embedded", False)):
-            footer_controls = getattr(self, "_main_footer_controls", None)
-            panes = getattr(self, "_embedded_panes", None)
-            shell_layout = getattr(self, "_embedded_shell_layout", None)
-            central_layout = getattr(self, "_embedded_central_layout", None)
-            if (
-                footer_controls is not None
-                and panes is not None
-                and shell_layout is not None
-                and central_layout is not None
-            ):
-                root_size = root.sizeHint()
-                browser_size = file_browser.root.sizeHint()
-                shell_margins = shell_layout.contentsMargins()
-                browser_width = round(FILE_BROWSER_REFERENCE_WIDTH * zoom_factor(zoom_steps))
-                # Width is a property of the two panes, not of the selected
-                # folder.  A browser sizeHint includes its current columns and
-                # made remote selection resize the whole window.
-                panes_width = remote_panel_width + browser_width + max(shell_layout.spacing(), 0)
-                panes_width += shell_margins.left() + shell_margins.right()
-                panes_height = max(root_size.height(), browser_size.height())
-                panes_height += shell_margins.top() + shell_margins.bottom()
-                panes.setMinimumSize(panes_width, panes_height)
-                footer_size = footer_controls.sizeHint()
-                central_margins = central_layout.contentsMargins()
-                width = max(panes_width, footer_size.width())
-                width += central_margins.left() + central_margins.right()
-                central_chrome_height = menu_height + footer_size.height()
-                central_chrome_height += max(central_layout.spacing(), 0)
-                central_chrome_height += central_margins.top() + central_margins.bottom()
-                central_chrome_height += self._embedded_horizontal_scroll_height(
-                    panes_width,
-                    max_width,
-                    central_margins.left() + central_margins.right(),
-                )
-                available_panes_height = max(1, max_height - central_chrome_height)
-                panes_height = min(panes_height, available_panes_height)
-                remote_chrome_height = max(root_size.height() - scroll_height, 0)
-                fitted_scroll_height = max(1, panes_height - remote_chrome_height)
-                if fitted_scroll_height < scroll_height:
-                    scroll.setVerticalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-                with suppress(Exception):
-                    scroll.setMinimumHeight(fitted_scroll_height)
-                    scroll.setMaximumHeight(fitted_scroll_height)
-                    root.setFixedHeight(panes_height)
-                    file_browser.root.setFixedHeight(panes_height)
-                    panes.setFixedSize(panes_width, panes_height)
-                height = central_chrome_height + panes_height
-        else:
-            root_size = root.sizeHint()
-            width = remote_panel_width
-            height = menu_height + root_size.height()
-
-        target_width = min(max(width, min(360, max_width)), max_width)
-        target_height = min(max(height, min(120, max_height)), max_height)
-        panes_scroll = getattr(self, "_embedded_panes_scroll", None)
-        if panes_scroll is not None:
-            panes_scroll.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            panes_scroll.setVerticalScrollBarPolicy(
-                self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-            )
-        self._apply_fitted_window_geometry(
-            target_width,
-            target_height,
-            screen,
-            preserve_position=preserve_position,
-        )
-
-    def _embedded_horizontal_scroll_height(
-        self,
-        panes_width: int,
-        maximum_window_width: int,
-        outer_horizontal_margins: int,
-    ) -> int:
-        """Return the deterministic height consumed by pane overflow."""
-        viewport_width = max(int(maximum_window_width) - int(outer_horizontal_margins), 1)
-        if int(panes_width) <= viewport_width:
-            return 0
-        panes_scroll = getattr(self, "_embedded_panes_scroll", None)
-        if panes_scroll is None:
-            return 0
-        try:
-            return max(int(panes_scroll.horizontalScrollBar().sizeHint().height()), 0)
-        except Exception:
-            return 0
-
-    def _window_frame_overhead(self) -> tuple[int, int]:
-        """Return stable native-frame width and height outside the client."""
-        observed_width = observed_height = 0
-        left, top, right, bottom = self._window_frame_margins()
-        with suppress(Exception):
-            frame = self.window.frameGeometry()
-            client = self.window.size()
-            observed_width = max(int(frame.width()) - int(client.width()), 0)
-            observed_height = max(int(frame.height()) - int(client.height()), 0)
-        margin_width = left + right
-        margin_height = top + bottom
-        return max(observed_width, margin_width), max(observed_height, margin_height)
-
-    def _window_frame_margins(self) -> tuple[int, int, int, int]:
-        """Return stable normal-window client-to-frame offsets."""
-        measured: tuple[int, int, int, int] | None = None
-        with suppress(Exception):
-            client = self.window.geometry()
-            frame = self.window.frameGeometry()
-            measured = (
-                max(int(client.left()) - int(frame.left()), 0),
-                max(int(client.top()) - int(frame.top()), 0),
-                max(int(frame.right()) - int(client.right()), 0),
-                max(int(frame.bottom()) - int(client.bottom()), 0),
-            )
-        with suppress(Exception):
-            handle = self.window.windowHandle()
-            margins = handle.frameMargins() if handle is not None else None
-            if margins is not None:
-                native = tuple(
-                    max(int(value), 0)
-                    for value in (
-                        margins.left(),
-                        margins.top(),
-                        margins.right(),
-                        margins.bottom(),
-                    )
-                )
-                if any(native):
-                    measured = native
-        if measured is not None and any(measured):
-            self._normal_frame_margins = measured
-            return measured
-        cached = getattr(self, "_normal_frame_margins", None)
-        if cached is not None:
-            return cached
-        return self._estimated_window_frame_margins()
-
-    def _estimated_window_frame_margins(self) -> tuple[int, int, int, int]:
-        """Reserve decorations before the compositor maps the first frame."""
-        style = getattr(self.window, "style", lambda: None)()
-        pixel_metric = getattr(style, "pixelMetric", None)
-        qstyle = getattr(getattr(self, "qt", None), "QStyle", None)
-        enum = getattr(qstyle, "PixelMetric", None)
-        if not callable(pixel_metric) or enum is None:
-            return 0, 0, 0, 0
-        with suppress(Exception):
-            border = max(int(pixel_metric(enum.PM_DefaultFrameWidth)), 0)
-            title = max(int(pixel_metric(enum.PM_TitleBarHeight)), 0)
-            return border, title + border, border, border
-        return 0, 0, 0, 0
-
-    def _apply_fitted_window_geometry(
-        self,
-        target_width: int,
-        target_height: int,
-        screen: Any | None,
-        *,
-        preserve_position: bool,
-    ) -> None:
-        # Reapply the hard desktop cap at the final mutation boundary.  The
-        # first pre-show fit may not have native frame margins yet, while this
-        # deferred/zoom fit does.  Never allow a stale earlier measurement to
-        # reach QWidget as an oversized client rectangle.
-        if screen is not None:
-            with suppress(Exception):
-                available = self._usable_screen_geometry(screen)
-                frame_width, frame_height = self._window_frame_overhead()
-                target_width = min(
-                    int(target_width), max(int(available.width()) - frame_width, 1)
-                )
-                target_height = min(
-                    int(target_height), max(int(available.height()) - frame_height, 1)
-                )
-        try:
-            current_size = self.window.size()
-            if current_size.width() == target_width and current_size.height() == target_height:
-                self._clamp_to_screen(screen)
-                return
-        except Exception:
-            pass
+        target_width = min(max(width, 360), max_width)
+        target_height = min(max(height, 120), max_height)
+        if self._single_window_size_managed(screen):
+            return
         if preserve_position:
             self._resize_in_place(target_width, target_height, screen)
         else:
@@ -10312,7 +9256,26 @@ class MountletWindow:
                 return True
         except Exception:
             pass
-        return False
+        try:
+            target_screen = screen or self.window.screen() or self.qt.QApplication.primaryScreen()
+            if target_screen is None:
+                return False
+            available = target_screen.availableGeometry()
+            frame = self.window.frameGeometry()
+            full_tolerance = 6
+            half_tolerance = 10
+            frame_height = frame.height()
+            frame_width = frame.width()
+            available_height = available.height()
+            available_width = available.width()
+            return (
+                frame_height >= available_height - full_tolerance
+                or frame_width >= available_width - full_tolerance
+                or abs(frame_height - (available_height / 2)) <= half_tolerance
+                or abs(frame_width - (available_width / 2)) <= half_tolerance
+            )
+        except Exception:
+            return False
 
     def _invalidate_widget_tree(self, widget: Any | None) -> None:
         if widget is None:
@@ -10347,66 +9310,50 @@ class MountletWindow:
         return sizes
 
     def _resize_anchored(self, width: int, height: int, screen: Any | None) -> None:
-        """Calculate geometry directly from the cached tray anchor and edge."""
+        """Resize while preserving the tray-side screen-edge offsets."""
         if not self.is_visible() or screen is None:
-            self._set_main_window_geometry(self.window.x(), self.window.y(), width, height)
+            self.window.resize(width, height)
             self._clamp_to_screen(screen)
             return
         try:
-            self._ensure_initial_panel_boundary()
-            available = self._usable_screen_geometry(screen)
-            frame_width, frame_height = self._window_frame_overhead()
+            available = screen.availableGeometry()
+            frame = self.window.frameGeometry()
+            left_gap = max(frame.left() - available.left(), 0)
+            right_gap = max(available.right() - frame.right(), 0)
+            top_gap = max(frame.top() - available.top(), 0)
+            bottom_gap = max(available.bottom() - frame.bottom(), 0)
             edge = getattr(self, "_last_tray_edge", None)
-            anchor = getattr(self, "_last_tray_anchor", None)
-            if edge not in {"left", "right", "top", "bottom"} or anchor is None:
+            if edge == "right":
+                preserve_right = True
+                preserve_bottom = False
+            elif edge == "left":
+                preserve_right = False
+                preserve_bottom = False
+            elif edge == "bottom":
+                preserve_right = False
+                preserve_bottom = True
+            elif edge == "top":
+                preserve_right = False
+                preserve_bottom = False
+            else:
                 self._resize_in_place(width, height, screen)
                 return
-            target_frame_width = width + frame_width
-            target_frame_height = height + frame_height
-            x, y = self._anchored_popup_position(
-                anchor.x(),
-                anchor.y(),
-                (available.left(), available.top(), available.width(), available.height()),
-                (target_frame_width, target_frame_height),
-                edge=edge,
-            )
-            self._pending_zoom_main_frame = (x, y, target_frame_width, target_frame_height)
-            self.window._mountlet_calculated_frame = self._pending_zoom_main_frame
-            self._set_main_window_geometry(x, y, width, height)
-        except Exception:
-            self._set_main_window_geometry(self.window.x(), self.window.y(), width, height)
-
-    def _set_main_window_geometry(self, x: int, y: int, width: int, height: int) -> None:
-        """Apply a requested outer-frame origin and client size atomically."""
-        set_fixed_size = getattr(self.window, "setFixedSize", None)
-        if callable(set_fixed_size):
-            set_fixed_size(width, height)
-        else:
             self.window.resize(width, height)
-        left, top, _right, _bottom = self._window_frame_margins()
-        set_geometry = getattr(self.window, "setGeometry", None)
-        if callable(set_geometry):
-            set_geometry(x + left, y + top, width, height)
-        else:
-            self.window.move(x + left, y + top)
-
-    def _move_main_frame(self, x: int, y: int) -> None:
-        """Move the top-level widget to the requested native frame origin."""
-        left, top, _right, _bottom = self._window_frame_margins()
-        self.window.move(x + left, y + top)
-
-    def _remember_calculated_main_frame(self, x: int, y: int, width: int, height: int) -> None:
-        frame_width, frame_height = self._window_frame_overhead()
-        self.window._mountlet_calculated_frame = (x, y, width + frame_width, height + frame_height)
+            x = available.right() - right_gap - width + 1 if preserve_right else available.left() + left_gap
+            y = available.bottom() - bottom_gap - height + 1 if preserve_bottom else available.top() + top_gap
+            self.window.move(x, y)
+        except Exception:
+            self.window.resize(width, height)
+        self._clamp_to_screen(screen)
 
     def _resize_in_place(self, width: int, height: int, screen: Any | None) -> None:
         """Resize routine content changes without recalculating the tray popup anchor."""
         try:
             position = self.window.frameGeometry().topLeft()
-            self._set_main_window_geometry(position.x(), position.y(), width, height)
-            self._remember_calculated_main_frame(position.x(), position.y(), width, height)
+            self.window.resize(width, height)
+            self.window.move(position)
         except Exception:
-            self._set_main_window_geometry(self.window.x(), self.window.y(), width, height)
+            self.window.resize(width, height)
         self._clamp_to_screen(screen)
 
     def _layout_item_size(self, layout: Any, index: int) -> Any:
@@ -10420,7 +9367,6 @@ class MountletWindow:
 
     def _button(self, label: str, callback: Any, *, enabled: bool = True) -> Any:
         button = self.qt.QPushButton(label)
-        button.setFocusPolicy(self.qt.Qt.FocusPolicy.NoFocus)
         button.setEnabled(enabled)
         button.clicked.connect(lambda checked=False: callback())
         return button
@@ -10492,8 +9438,9 @@ class MountletWindow:
         was_reauthentication = remote_name in getattr(self, "_reauth_in_progress", set())
         getattr(self, "_reauth_in_progress", set()).discard(remote_name)
         self._action_pending.discard(remote_name)
-        if was_reauthentication:
-            self.file_browser.invalidate(remote_name)
+        self._usage_cache.pop(remote_name, None)
+        getattr(self, "_connection_cache", {}).pop(remote_name, None)
+        self.file_browser.invalidate(remote_name)
         self.file_browser.refresh_mount_state(remote_name)
         self.tray_app._notify("Mountlet", _clean_message(message), success=success)
         if not success:
@@ -10750,7 +9697,10 @@ class MountletWindow:
             return
         pending_names = set(self._action_pending)
         self._action_pending.clear()
+        self._usage_cache.clear()
+        getattr(self, "_connection_cache", {}).clear()
         for remote_name in pending_names:
+            self.file_browser.invalidate(remote_name)
             self.file_browser.refresh_mount_state(remote_name)
             self._reconcile_offline_changes_after_mount(remote_name)
         if isinstance(completed, list) and isinstance(failures, list):
@@ -11134,7 +10084,7 @@ class MountletWindow:
         if status is not None:
             with suppress(Exception):
                 status.setText(message)
-                status.setStyleSheet("color: palette(window-text);")
+                status.setStyleSheet("color: #16a34a;" if success else "color: #dc2626;")
         if send_button is not None:
             with suppress(Exception):
                 send_button.setEnabled(not success)
@@ -11463,7 +10413,8 @@ class MountletWindow:
                 or new_settings.remote_sync_interval_seconds != old_settings.remote_sync_interval_seconds
             )
             if rclone_relevant_change:
-                self._usage_stale.update(self._usage_cache)
+                self._usage_cache.clear()
+                getattr(self, "_connection_cache", {}).clear()
                 self._setup_remote_change_polling()
             if (
                 new_settings.notice_info_display != old_settings.notice_info_display
@@ -11541,49 +10492,18 @@ class MountletWindow:
             return
         self._apply_main_window_frame_for_current_mode()
         old_browser = self.file_browser
-        global_search_field = getattr(self, "_global_search_field", None)
-        if global_search_field is not None:
-            with suppress(Exception):
-                candidate = global_search_field.text()
-                self._pending_global_search_query = candidate if isinstance(candidate, str) else ""
         old_remote = old_browser.remote
         old_path = old_browser.path
-        search_query = ""
-        with suppress(Exception):
-            candidate = old_browser.search_field.text()
-            search_query = candidate if isinstance(candidate, str) else ""
         was_visible = old_browser.is_visible()
         focus_snapshot = old_browser.focus_snapshot()
         backend = old_browser.backend
-        old_browser._remember_folder_selection()
-        old_browser._stash_rendered_folder()
-        folder_cache = old_browser._folder_cache
-        rendered_folder_cache = old_browser._rendered_folder_cache
-        rendered_item_maps = old_browser._rendered_item_maps
-        folder_selection_cache = old_browser._folder_selection_cache
-        entry_state_cache = old_browser._entry_state_cache
-        remote_managed_cache = old_browser._remote_managed_cache
-        base_entry_icon_cache = getattr(old_browser, "_base_entry_icon_cache", {})
-        composite_entry_icon_cache = getattr(old_browser, "_composite_entry_icon_cache", {})
         with suppress(Exception):
             old_browser.dispose()
         self.file_browser = self._create_file_browser(backend=backend)
-        # A mode change replaces only the presentation.  Preserve stale-safe
-        # metadata and icon state; normal background listings refresh it.
-        self.file_browser._folder_cache = folder_cache
-        self.file_browser._rendered_folder_cache = rendered_folder_cache
-        self.file_browser._rendered_item_maps = rendered_item_maps
-        self.file_browser._folder_selection_cache = folder_selection_cache
-        self.file_browser._entry_state_cache = entry_state_cache
-        self.file_browser._remote_managed_cache = remote_managed_cache
-        self.file_browser._base_entry_icon_cache = base_entry_icon_cache
-        self.file_browser._composite_entry_icon_cache = composite_entry_icon_cache
         if old_remote is not None:
             self.file_browser.remote = old_remote
             self.file_browser.path = old_path
             self.file_browser.backend.remember_path(old_remote.name, old_path)
-        if search_query:
-            self.file_browser.search_field.setText(search_query)
         self._current_remote_names = []
         self._content_fit_widgets = None
         if old_remote is not None and was_visible:
@@ -11678,7 +10598,8 @@ class MountletWindow:
                 self.file_browser.invalidate(dialog.renamed_from)
             core.ensure_base_mount_dir()
             changes = self._remount_changes(old_remotes, mounted_before)
-            self._usage_stale.add(dialog.renamed_to or remote.name)
+            self._usage_cache.clear()
+            getattr(self, "_connection_cache", {}).clear()
             self.tray_app.rebuild_menus()
             self.refresh()
             self._configuration_changed()
@@ -11700,6 +10621,8 @@ class MountletWindow:
         dialog = NewRemoteWizard(self.qt, self.window)
 
         def on_accepted() -> None:
+            self._usage_cache.clear()
+            getattr(self, "_connection_cache", {}).clear()
             self._current_remote_names = []
             self.tray_app.rebuild_menus()
             self.refresh()
@@ -12205,7 +11128,8 @@ class MountletWindow:
         old_embedded = bool(getattr(self.file_browser, "_embedded", False))
         _apply_theme(self.qt, self.tray_app.app, load_app_settings().theme)
         self._rebuild_file_browser_if_layout_changed(old_embedded)
-        self._usage_stale.update(self._usage_cache)
+        self._usage_cache.clear()
+        getattr(self, "_connection_cache", {}).clear()
         self._usage_pending.clear()
         self._action_pending.clear()
         self._current_remote_names = []
@@ -12255,50 +11179,10 @@ class MountletWindow:
                 bool(getattr(self, "_mount_state_cache", {}).get(remote.name, False)),
             )
             return
-        if remote.name in self._usage_cache and remote.name not in getattr(self, "_usage_stale", set()):
+        if remote.name in self._usage_cache and remote.name in self._connection_cache:
             return
         if remote.name in self._usage_pending:
             return
-        queue = getattr(self, "_usage_refresh_queue", None)
-        if queue is None:
-            queue = self._usage_refresh_queue = OrderedDict()
-        queue[remote.name] = remote
-        self._usage_refresh_generation = getattr(self, "_usage_refresh_generation", 0) + 1
-        generation = self._usage_refresh_generation
-
-        def start_when_idle() -> None:
-            if generation != self._usage_refresh_generation or self._tray_is_quitting():
-                return
-            self._start_next_usage_refresh()
-
-        timer = getattr(getattr(self, "qt", None), "QTimer", None)
-        if timer is None:
-            start_when_idle()
-        else:
-            timer.singleShot(USAGE_REFRESH_IDLE_MS, start_when_idle)
-
-    def _defer_usage_refresh(self) -> None:
-        """Keep network probes behind direct navigation and other foreground work."""
-        if not getattr(self, "_usage_refresh_queue", None):
-            return
-        self._usage_refresh_generation = getattr(self, "_usage_refresh_generation", 0) + 1
-        generation = self._usage_refresh_generation
-        timer = getattr(getattr(self, "qt", None), "QTimer", None)
-        if timer is not None:
-            timer.singleShot(
-                USAGE_REFRESH_IDLE_MS,
-                lambda: self._start_next_usage_refresh()
-                if generation == self._usage_refresh_generation else None,
-            )
-
-    def _start_next_usage_refresh(self) -> None:
-        queue = getattr(self, "_usage_refresh_queue", None)
-        if not queue:
-            return
-        if self._usage_pending or self._action_pending:
-            self._defer_usage_refresh()
-            return
-        _name, remote = queue.popitem(last=False)
         self._usage_pending.add(remote.name)
 
         def worker() -> None:
@@ -12374,13 +11258,6 @@ class MountletWindow:
         if not hasattr(self, "_connection_cache"):
             self._connection_cache = {}
         self._connection_cache[remote_name] = connected
-        getattr(self, "_usage_stale", set()).discard(remote_name)
-        usages = dict(self._usage_cache)
-        connections = dict(self._connection_cache)
-        threading.Thread(
-            target=lambda: _save_usage_cache(usages, connections),
-            daemon=True,
-        ).start()
         if self.is_visible():
             row = self._row_widgets.get(remote_name)
             if row is not None:
@@ -12390,19 +11267,10 @@ class MountletWindow:
                 )
             elif self._current_remote_names:
                 self._request_refresh()
-        if getattr(self, "_usage_refresh_queue", None):
-            self._usage_refresh_generation += 1
-            generation = self._usage_refresh_generation
-            self.qt.QTimer.singleShot(
-                USAGE_REFRESH_BETWEEN_REMOTES_MS,
-                lambda: self._start_next_usage_refresh()
-                if generation == self._usage_refresh_generation else None,
-            )
 
     def prepare_quit(self) -> None:
         self._refresh_pending = False
         self._usage_pending.clear()
-        getattr(self, "_usage_refresh_queue", {}).clear()
         getattr(self, "_connection_cache", {}).clear()
         self._action_pending.clear()
         getattr(self, "_deferred_reauth_requests", {}).clear()
@@ -12433,9 +11301,7 @@ class MountletTray:
         self.app = qt.QApplication.instance() or qt.QApplication(sys.argv[:1])
         self.app.setApplicationName("Mountlet")
         self.app.setApplicationDisplayName("Mountlet")
-        app_settings = load_app_settings()
-        _apply_theme(self.qt, self.app, app_settings.theme)
-        self.ui_zoom = ApplicationZoom(self.qt, self.app, app_settings.ui_zoom_steps)
+        _apply_theme(self.qt, self.app, load_app_settings().theme)
         try:
             self.app.setDesktopFileName("com.ericholt.mountlet")
         except AttributeError:
@@ -12467,8 +11333,6 @@ class MountletTray:
         except Exception:
             pass
         self.main_window = MountletWindow(self)
-        self.ui_zoom.set_changed_callback(self._ui_zoom_changed)
-        self.ui_zoom.apply_all_windows()
         self.tray.activated.connect(self._handle_activation)
         self.timer = qt.QTimer()
         self.timer.timeout.connect(self._poll_status)
@@ -12479,17 +11343,6 @@ class MountletTray:
             self.app.aboutToQuit.connect(self._prepare_quit)
         except Exception:
             pass
-
-    def set_ui_zoom(self, steps: int) -> None:
-        self.ui_zoom.set_steps(steps)
-
-    def _ui_zoom_changed(self, steps: int) -> None:
-        current = load_app_settings()
-        if current.ui_zoom_steps != steps:
-            save_app_settings(replace(current, ui_zoom_steps=steps))
-        main_window = getattr(self, "main_window", None)
-        if main_window is not None:
-            main_window.application_zoom_changed(steps)
 
     def _icon(self) -> Any:
         icon_path = _packaged_icon_path()
@@ -12943,7 +11796,11 @@ class MountletTray:
         if getattr(self, "_quitting", False):
             return
         print(f"{title}: {message}")
-        icon = self.icon
+        icon = (
+            self.qt.QSystemTrayIcon.MessageIcon.Information
+            if success
+            else self.qt.QSystemTrayIcon.MessageIcon.Warning
+        )
         self.tray.showMessage(title, message, icon, 5000)
 
     def request_quit(self) -> None:

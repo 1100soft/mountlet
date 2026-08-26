@@ -62,8 +62,7 @@
             Mountlet brings cloud storage accounts from different providers into one simple desktop app. Browse, open, sync, cache, and organize files without jumping between provider apps and web interfaces.
           </p>
           <div class="hero-actions">
-            <button class="button primary" id="home-download-button" type="button">Download Mountlet</button>
-            <button class="button secondary tab-action" type="button" data-tab="download">Other download options</button>
+            <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
             <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
           </div>
         </div>
@@ -295,7 +294,7 @@
             </article>
             <article>
               <strong>Flexible, instant search</strong>
-              <p>Search the local index across every remote or one account, with multi-word and quoted-phrase matching ranked by filename relevance.</p>
+              <p>Find files instantly from every remote at once, or from a specific remote.</p>
             </article>
             <article>
               <strong>Portable config</strong>
@@ -315,7 +314,7 @@
             <div>
               <span class="mode-label">Mountlet file browser</span>
               <h3>Mountlet file management</h3>
-              <p>Browse, open, upload, copy, move, rename inline, and delete through one interface across every remote.</p>
+              <p>Browse, open, upload, copy, move, rename, and delete through one interface across every remote.</p>
               <ul>
                 <li>Files open through a managed local cache in their normal desktop apps.</li>
                 <li>Selected files and folders can remain available offline.</li>
@@ -420,15 +419,6 @@
               </div>
             </article>
           </div>
-          <div class="resource-guidance" aria-labelledby="resource-guidance-title">
-            <div>
-              <p class="eyebrow">System resources</p>
-              <h4 id="resource-guidance-title">Lightweight by default, with room for large folders.</h4>
-            </div>
-            <p><strong>Minimum:</strong> a 64-bit desktop, 2 CPU cores, and 2 GB of available memory.</p>
-            <p><strong>Recommended:</strong> 4 CPU cores and 4 GB of available memory when using many remotes, folders with thousands of items, concurrent transfers, or mounted drives.</p>
-            <p>Cached and offline files require additional disk space equal to the content retained locally.</p>
-          </div>
         </section>
       </section>
 
@@ -494,11 +484,11 @@
             </article>
             <article>
               <h4>Metadata and search</h4>
-              <p>Mountlet builds a local SQLite metadata index from recursive rclone listings. SQLite filters, ranks, and limits each search without contacting cloud services; selecting a result opens its cached folder immediately and queues the normal background refresh.</p>
+              <p>Mountlet builds a local SQLite metadata index from recursive rclone listings. Search and initial navigation use the index; current folders are refreshed against the remote in the background.</p>
             </article>
             <article>
               <h4>Cache and offline files</h4>
-              <p>Files opened through Mountlet are copied into its managed local store, with cache and offline badges updating as soon as each operation completes. Temporary cache can be cleared, while protected offline files remain available and participate in change detection.</p>
+              <p>Files opened through Mountlet are copied into its managed local store. Temporary cache can be cleared, while protected offline files remain available and participate in change detection.</p>
             </article>
             <article>
               <h4>Processes and failures</h4>

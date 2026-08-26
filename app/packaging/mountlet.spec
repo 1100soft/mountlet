@@ -26,7 +26,7 @@ hidden_imports = ["AppKit", "Foundation", "objc"] if sys.platform == "darwin" el
 rclone_name = "rclone.exe" if sys.platform == "win32" else "rclone"
 rclone_path = os.environ.get("MOUNTLET_BUNDLED_RCLONE_PATH")
 bundled_rclone = Path(rclone_path) if rclone_path else root / "vendor" / "rclone" / rclone_name
-binaries = [(str(bundled_rclone), f"vendor/rclone/{version}")] if bundled_rclone.is_file() else []
+binaries = [(str(bundled_rclone), "vendor/rclone")] if bundled_rclone.is_file() else []
 
 
 build_info_path = build_dir / "mountlet-build-info.json"

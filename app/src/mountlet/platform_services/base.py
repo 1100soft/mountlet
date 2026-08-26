@@ -49,8 +49,6 @@ class PlatformServices:
         return ()
 
     def bundled_rclone_candidates(self) -> tuple[Path, ...]:
-        from mountlet import __version__
-
         names = self.rclone_executable_names()
         roots: list[Path] = []
         if getattr(sys, "frozen", False):
@@ -69,10 +67,6 @@ class PlatformServices:
             roots.append(project_root)
 
         candidates: list[Path] = []
-        for root in roots:
-            candidates.extend(root / "vendor" / "rclone" / __version__ / name for name in names)
-        # Retain the legacy unversioned lookup for source builds and upgrades
-        # from Mountlet versions that predate side-by-side rclone packaging.
         for root in roots:
             candidates.extend(root / "vendor" / "rclone" / name for name in names)
             candidates.extend(root / name for name in names)

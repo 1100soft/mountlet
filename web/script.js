@@ -827,16 +827,6 @@ const downloadTargetLabels = {
   "linux-x64": "Linux x64",
 };
 
-let detectedHomeDownloadKey = "";
-
-function updateHomeDownload(target) {
-  const button = document.querySelector("#home-download-button");
-  if (!button || !target) return;
-  detectedHomeDownloadKey = target.dataset.downloadStandard || "";
-  const label = downloadTargetLabels[target.value] || "your platform";
-  button.textContent = `Download Mountlet for ${label}`;
-}
-
 function selectedDownloadInput() {
   return document.querySelector('input[name="download-target"]:checked');
 }
@@ -930,7 +920,6 @@ async function initializeDownloadSelection() {
     : null;
   if (target) {
     target.checked = true;
-    updateHomeDownload(target);
     const status = document.querySelector("#download-selection-status");
     if (status) {
       status.textContent = architectureDetected
@@ -998,18 +987,6 @@ document.addEventListener("click", (event) => {
     }
     openConfiguredLink("downloads", key)
       .catch((error) => window.alert(error.message || "Could not load the release file list."));
-    return;
-  }
-
-  const homeDownloadButton = event.target.closest("#home-download-button");
-  if (homeDownloadButton) {
-    if (!detectedHomeDownloadKey) {
-      setActiveTab("download");
-      return;
-    }
-    openConfiguredLink("downloads", detectedHomeDownloadKey)
-      .catch((error) => window.alert(error.message || "Could not load the release file list."));
-    return;
   }
 
   const copyLicenseButton = event.target.closest("#copy-license-key");

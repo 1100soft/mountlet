@@ -63,7 +63,6 @@ class AppSettings:
     focus_file_manager: bool = True
     window_mode: str = WINDOW_MODE_MULTIPLE
     theme: str = THEME_SYSTEM
-    ui_zoom_steps: int = 0
     integrated_file_edits: bool = False
     file_list_max_items: int = 0
     remote_sync_interval_seconds: float = 30.0
@@ -112,8 +111,6 @@ focus_file_manager = true
 # Wayland always uses single because separate tray-style windows are restricted.
 window_mode = "multiple"
 theme = "system"
-# Application zoom from -4 to 6. 0 uses the system-derived size.
-zoom_steps = 0
 # Maximum file-list rows visible at once. 0 means use all available space.
 file_list_max_items = 0
 
@@ -369,7 +366,6 @@ def load_app_settings(path: Path | None = None) -> AppSettings:
         focus_file_manager=_bool_value(tray.get("focus_file_manager"), True),
         window_mode=_choice_value(ui.get("window_mode"), WINDOW_MODE_MULTIPLE, WINDOW_MODES),
         theme=_choice_value(ui.get("theme"), THEME_SYSTEM, THEMES),
-        ui_zoom_steps=min(max(int(_float_value(ui.get("zoom_steps"), 0.0)), -4), 6),
         file_list_max_items=max(int(_float_value(ui.get("file_list_max_items"), 0.0)), 0),
         remote_sync_interval_seconds=max(_float_value(sync.get("remote_check_interval"), 30.0), 0.0),
         notice_info_display=_choice_value(
@@ -504,8 +500,6 @@ def save_app_settings(settings: AppSettings, path: Path | None = None) -> None:
             "# Wayland always uses single because separate tray-style windows are restricted.",
             f"window_mode = {_toml_string(settings.window_mode if settings.window_mode in WINDOW_MODES else WINDOW_MODE_MULTIPLE)}",
             f"theme = {_toml_string(settings.theme if settings.theme in THEMES else THEME_SYSTEM)}",
-            "# Application zoom from -4 to 6. 0 uses the system-derived size.",
-            f"zoom_steps = {min(max(int(settings.ui_zoom_steps), -4), 6)}",
             "# Maximum file-list rows visible at once. 0 means use all available space.",
             f"file_list_max_items = {max(int(settings.file_list_max_items), 0)}",
             "",

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .ui_colors import ALERT_BADGE, ON_ACCENT, SUCCESS
-
 
 def create_badged_button(qt: Any, text: str = "") -> Any:
     """Return a QPushButton that can paint a small notification dot."""
@@ -12,10 +10,10 @@ def create_badged_button(qt: Any, text: str = "") -> Any:
         def __init__(self, label: str = "") -> None:
             super().__init__(label)
             self._mountlet_badge_visible = False
-            self._mountlet_badge_color = ALERT_BADGE
+            self._mountlet_badge_color = "#ef4444"
             self._mountlet_badge_size = 8
             self._mountlet_check_visible = False
-            self._mountlet_check_color = SUCCESS
+            self._mountlet_check_color = "#22c55e"
             self._mountlet_disabled_opacity_effect = None
             self._mountlet_context_options: list[tuple[str, Any, Any, Any]] = []
             self._mountlet_context_menu = None
@@ -148,7 +146,7 @@ def create_badged_button(qt: Any, text: str = "") -> Any:
                 painter.setPen(qt.Qt.PenStyle.NoPen)
                 painter.setBrush(qt.QColor(self._mountlet_check_color))
                 painter.drawEllipse(left, top, size, size)
-                pen = qt.QPen(qt.QColor(ON_ACCENT))
+                pen = qt.QPen(qt.QColor("#ffffff"))
                 pen.setWidth(max(2, size // 6))
                 pen.setCapStyle(qt.Qt.PenCapStyle.RoundCap)
                 pen.setJoinStyle(qt.Qt.PenJoinStyle.RoundJoin)
@@ -163,7 +161,7 @@ def create_badged_button(qt: Any, text: str = "") -> Any:
     return BadgedButton(text)
 
 
-def set_badge(button: Any, visible: bool, color: str = ALERT_BADGE) -> None:
+def set_badge(button: Any, visible: bool, color: str = "#ef4444") -> None:
     """Set a notification badge when the button supports it."""
     setter = getattr(button, "setBadgeColor", None)
     if callable(setter):
@@ -173,7 +171,7 @@ def set_badge(button: Any, visible: bool, color: str = ALERT_BADGE) -> None:
         visibility(bool(visible))
 
 
-def set_checkmark(button: Any, visible: bool, color: str = SUCCESS) -> None:
+def set_checkmark(button: Any, visible: bool, color: str = "#22c55e") -> None:
     """Set a small checkmark badge when the button supports it."""
     setter = getattr(button, "setCheckColor", None)
     if callable(setter):

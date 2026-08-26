@@ -5,8 +5,6 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 
-from .ui_colors import ON_ACCENT, PROVIDER_FALLBACK
-
 
 PROVIDER_ASSETS = {
     "drive": "google-drive.png",
@@ -38,7 +36,7 @@ def provider_icon(
     *,
     provider_name: str = "",
     extra_info: Mapping[str, str] | None = None,
-    color: str = PROVIDER_FALLBACK,
+    color: str = "#64748b",
     size: int = 22,
 ) -> Any:
     key = _provider_key(backend_type, provider_name=provider_name, extra_info=extra_info)
@@ -100,7 +98,7 @@ def _initial_icon(qt: Any, label: str, *, color: str, size: int) -> Any:
         font.setBold(True)
         font.setPixelSize(max(10, int(size * 0.58)))
         painter.setFont(font)
-        painter.setPen(qt.QColor(ON_ACCENT))
+        painter.setPen(qt.QColor("#ffffff"))
         painter.drawText(0, 0, size, size, int(qt.Qt.AlignmentFlag.AlignCenter), label[:1])
     finally:
         painter.end()

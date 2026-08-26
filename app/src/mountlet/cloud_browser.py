@@ -192,9 +192,7 @@ class CloudBrowserBackend:
         if cache_root is None:
             self._migrate_legacy_offline_cache()
         self.manifest_path = manifest_path or self.state_path.with_name(OFFLINE_MANIFEST_FILE)
-        self._state_lock = threading.RLock()
         self._paths = self._load_paths()
-        self._selections = self._load_selections()
         self._offline_lock = threading.RLock()
         self._offline_records = self._load_offline_manifest()
         self.index = MetadataIndex(self.state_path.with_name("metadata-index.sqlite3"))
@@ -206,46 +204,14 @@ class CloudBrowserBackend:
         return normalize_browser_path(self._paths.get(remote_name, ""))
 
     def remember_path(self, remote_name: str, path: str) -> None:
-        with self._state_lock:
-            self._paths[remote_name] = normalize_browser_path(path)
-        self._save_paths()
-
-    def remembered_selection(
-        self, remote_name: str, folder_path: str
-    ) -> tuple[str, int] | None:
-        folder = normalize_browser_path(folder_path)
-        with self._state_lock:
-            value = self._selections.get(remote_name, {}).get(folder)
-            return tuple(value) if value is not None else None
-
-    def cache_selection(
-        self,
-        remote_name: str,
-        folder_path: str,
-        item_path: str,
-        index: int,
-    ) -> None:
-        """Update selection state in memory; callers decide when to persist it."""
-        folder = normalize_browser_path(folder_path)
-        selection = (normalize_browser_path(item_path), max(int(index), 0))
-        with self._state_lock:
-            self._selections.setdefault(remote_name, {})[folder] = selection
-
-    def save_selection_cache(self) -> None:
+        self._paths[remote_name] = normalize_browser_path(path)
         self._save_paths()
 
     def rename_remote(self, old_name: str, new_name: str) -> None:
         if old_name == new_name:
             return
-        state_changed = False
-        with self._state_lock:
-            if old_name in self._paths:
-                self._paths[new_name] = self._paths.pop(old_name)
-                state_changed = True
-            if old_name in self._selections:
-                self._selections[new_name] = self._selections.pop(old_name)
-                state_changed = True
-        if state_changed:
+        if old_name in self._paths:
+            self._paths[new_name] = self._paths.pop(old_name)
             self._save_paths()
         with self._offline_lock:
             if old_name in self._offline_records:
@@ -264,21 +230,10 @@ class CloudBrowserBackend:
         self.index.remove_remote(remote_name)
 
     def _save_paths(self) -> None:
-        with self._state_lock:
-            payload = {
-                "paths": dict(self._paths),
-                "selections": {
-                    remote: {
-                        folder: {"path": value[0], "index": value[1]}
-                        for folder, value in folders.items()
-                    }
-                    for remote, folders in self._selections.items()
-                },
-            }
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.state_path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-            temporary.replace(self.state_path)
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"paths": self._paths}, indent=2, sort_keys=True), encoding="utf-8")
+        temporary.replace(self.state_path)
 
     def list_entries(
         self,
@@ -1458,34 +1413,6 @@ class CloudBrowserBackend:
         if not isinstance(paths, dict):
             return {}
         return {str(name): normalize_browser_path(str(path)) for name, path in paths.items()}
-
-    def _load_selections(self) -> dict[str, dict[str, tuple[str, int]]]:
-        try:
-            data = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        raw_remotes = data.get("selections", {}) if isinstance(data, dict) else {}
-        if not isinstance(raw_remotes, dict):
-            return {}
-        selections: dict[str, dict[str, tuple[str, int]]] = {}
-        for remote_name, raw_folders in raw_remotes.items():
-            if not isinstance(raw_folders, dict):
-                continue
-            folders: dict[str, tuple[str, int]] = {}
-            for folder_path, raw_value in raw_folders.items():
-                if not isinstance(raw_value, dict):
-                    continue
-                try:
-                    index = max(int(raw_value.get("index", 0)), 0)
-                except (TypeError, ValueError):
-                    continue
-                folders[normalize_browser_path(str(folder_path))] = (
-                    normalize_browser_path(str(raw_value.get("path", ""))),
-                    index,
-                )
-            if folders:
-                selections[str(remote_name)] = folders
-        return selections
 
     def _load_offline_manifest(self) -> dict[str, dict[str, dict[str, object]]]:
         try:

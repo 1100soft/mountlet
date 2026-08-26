@@ -36,12 +36,11 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "rclone v1.70.0\n")
 
     def test_packaging_rclone_smoke_test_fails_when_rclone_is_missing(self):
-        missing_message = "rclone binary not found. Install rclone or set RCLONE_PATH."
-        with mock.patch("mountlet.config_tools.shared.run_rclone_version", return_value=missing_message):
+        with mock.patch("mountlet.config_tools.shared.run_rclone_version", return_value="rclone binary not found"):
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(desktop.main(["--packaging-rclone-smoke-test"]), 1)
 
-        self.assertEqual(output.getvalue(), f"{missing_message}\n")
+        self.assertEqual(output.getvalue(), "rclone binary not found\n")
 
     def test_desktop_entrypoint_starts_tray_without_terminal_readiness_gate(self):
         with mock.patch("mountlet.tray.main", return_value=0) as tray_main:

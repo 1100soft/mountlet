@@ -45,20 +45,6 @@ Mounted folder access uses a platform filesystem driver:
 Mountlet file management runs through the integrated browser. The two workflows
 operate independently and can be used together, per remote.
 
-### System resources
-
-Mountlet is intended for a 64-bit desktop with at least 2 CPU cores and 2 GB of
-available memory. Four CPU cores and 4 GB of available memory are recommended
-for many remotes, folders containing thousands of items, concurrent transfers,
-or mounted-drive use. Cloud cache and offline files require additional disk
-space equal to the content retained locally.
-
-These are operating headroom guidelines rather than fixed allocations:
-Mountlet loads cached folder metadata immediately and performs provider I/O in
-the background. Maintainers can record the test workload's CPU time and peak
-resident memory with `python packaging/run_tests.py --resource-report
-build/test-resources.json`; see the development notes for interpretation.
-
 ### Unsigned Builds
 
 Current builds are not code-signed or Apple-notarized. Use only installers from
@@ -99,36 +85,18 @@ may change for future renewals with advance notice.
 ## Daily Use
 
 - Select a remote to show its file browser.
-- Use Ctrl++ or Ctrl+- to scale the complete interface, or Ctrl+0 to return to
-  the system-derived size. The same controls are available in the lower-right
-  corner of the main window, and the selected zoom persists across restarts.
-- Mountlet shows cached folder contents, selection, and usage immediately while
-  it refreshes live metadata in the background. Briefly stale information is
-  intentional: moving through remotes should never wait on the cloud service.
 - For Google Drive and Google Photos, the optional **Google account** setting
   helps **Open in web** choose the matching account. The account must already
   be signed in within the default browser; the hint does not start a new Google
   sign-in session. Leave the setting blank to use the browser's current
   account.
-- Type in the main search box to search all indexed remotes, or use the
-  file-browser search box to limit results to the current remote. Space-separated
-  words are an unordered AND search across the filename and parent path; quote a
-  phrase to keep it contiguous. At least one term must match the filename, so a
-  matching folder does not return every descendant. Exact and filename matches
-  rank above mixed filename/path matches. Search reads only the local SQLite
-  index; choosing a result opens its folder immediately and queues the normal
-  background refresh. Result counts show `80+` globally or `50+` per remote when
-  capped.
+- Type in the main search box to search all indexed remotes.
+- Type in the file-browser search box to search the current remote.
 - Open files directly. Mountlet opens a managed local cache copy whether or
   not the remote is mounted. This also lets rclone export native Google
   documents for local editing.
 - Use **Make available offline** to protect selected files or folders from cache
   cleanup.
-- Rename a selected file or folder inline by clicking its name again or
-  pressing F2. File renaming initially selects only the basename so its
-  extension is preserved unless you deliberately change it.
-- Cache and offline badges update as soon as the local operation completes;
-  restarting Mountlet is not required.
 - Use **Sync now** to check cached/offline files immediately.
 - Drag local files and folders into the browser to upload them. Drag browser
   items into a system file manager to copy them out. Mountlet prepares

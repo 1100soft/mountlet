@@ -6,9 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .ui_colors import NEUTRAL_ICON_SOURCE
-
-NEUTRAL_ICON_RE = re.compile(rf"{re.escape(NEUTRAL_ICON_SOURCE)}\b", re.IGNORECASE)
+NEUTRAL_ICON_RE = re.compile(r"#334155\b", re.IGNORECASE)
 
 
 def icon_path(name: str) -> str | None:
@@ -81,12 +79,7 @@ def apply_button_icon(
     explicit_color = color
     if color is None:
         color = _button_text_color(button)
-    try:
-        scale = float(button.property("mountletIconScale") or 1.0)
-    except Exception:
-        scale = 1.0
-    rendered_size = max(1, round(size * scale))
-    icon = mountlet_icon(qt, name, size=rendered_size, color=color)
+    icon = mountlet_icon(qt, name, size=size, color=color)
     if icon is None:
         with suppress(Exception):
             button.setText(fallback_text)
@@ -94,7 +87,7 @@ def apply_button_icon(
     try:
         button.setIcon(icon)
         if hasattr(button, "setIconSize") and hasattr(qt, "QSize"):
-            button.setIconSize(qt.QSize(rendered_size, rendered_size))
+            button.setIconSize(qt.QSize(size, size))
         button.setText("")
         with suppress(Exception):
             button.setProperty("mountletIconName", name)
@@ -160,36 +153,14 @@ def _refresh_one_widget_icon(qt: Any, widget: Any) -> None:
         return
     fallback = property_getter("mountletIconFallback") or ""
     size = property_getter("mountletIconSize") or 22
-    scale = property_getter("mountletIconScale") or 1.0
     stored_color = property_getter("mountletIconColor") or None
     color = stored_color or _button_text_color(widget)
     with suppress(Exception):
         size = int(size)
-        scale = float(scale)
-    rendered_size = max(1, round(size * scale))
-    icon = mountlet_icon(qt, str(icon_name), size=rendered_size, color=color)
-    if icon is None:
-        with suppress(Exception):
-            widget.setText(str(fallback))
-        return
-    with suppress(Exception):
-        widget.setIcon(icon)
-        widget.setIconSize(qt.QSize(rendered_size, rendered_size))
-        widget.setText("")
+    apply_button_icon(qt, widget, str(icon_name), fallback_text=str(fallback), size=size, color=color)
     if not stored_color:
         with suppress(Exception):
             widget.setProperty("mountletIconColor", "")
-
-
-def scale_widget_icon(qt: Any, widget: Any, factor: float) -> bool:
-    property_getter = getattr(widget, "property", None)
-    if not callable(property_getter) or not property_getter("mountletIconName"):
-        return False
-    with suppress(Exception):
-        widget.setProperty("mountletIconScale", float(factor))
-        _refresh_one_widget_icon(qt, widget)
-        return True
-    return False
 
 
 def _button_text_color(button: Any) -> str | None:
@@ -260,5 +231,4 @@ __all__ = [
     "mountlet_icon",
     "refresh_widget_icons",
     "refresh_widget_palette",
-    "scale_widget_icon",
 ]

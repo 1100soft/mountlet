@@ -3,7 +3,6 @@ import {readFileSync} from "node:fs";
 const releaseFiles = JSON.parse(readFileSync("web/release-files.json", "utf8"));
 const packageWorkflow = readFileSync(".github/workflows/package.yml", "utf8");
 const website = readFileSync("web/index.html", "utf8");
-const websiteScript = readFileSync("web/script.js", "utf8");
 const artifacts = releaseFiles.artifacts || {};
 const expectedFiles = Object.values(artifacts)
   .map((artifact) => String(artifact?.source || "").trim())
@@ -33,14 +32,6 @@ for (const key of selectorKeys) {
   if (!artifacts[key]) {
     fail(`Download selector references missing release key: ${key}`);
   }
-}
-
-if (!website.includes('id="home-download-button"') || !websiteScript.includes("detectedHomeDownloadKey")) {
-  fail("The home page must retain its direct detected-platform download action.");
-}
-
-if (!website.includes('class="resource-guidance"')) {
-  fail("The website must retain minimum and recommended resource guidance.");
 }
 
 
