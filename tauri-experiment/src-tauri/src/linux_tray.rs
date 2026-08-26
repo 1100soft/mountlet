@@ -50,35 +50,94 @@ fn cascade_label(label: &str) -> String {
     }
 }
 
+static TRAY_PIXMAP: OnceLock<Vec<Icon>> = OnceLock::new();
+
 fn tray_icon() -> Vec<Icon> {
+    TRAY_PIXMAP
+        .get_or_init(|| {
+            let Some((width, height, rgba)) = load_source_rgba() else {
+                return Vec::new();
+            };
+            [22_u32, 24, 32, 48]
+                .into_iter()
+                .map(|size| Icon {
+                    width: size as i32,
+                    height: size as i32,
+                    data: rgba_to_argb(&box_downscale_rgba(width, height, &rgba, size)),
+                })
+                .collect()
+        })
+        .clone()
+}
+
+fn load_source_rgba() -> Option<(u32, u32, Vec<u8>)> {
     let bytes = include_bytes!("../icons/icon.png");
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes.as_slice()));
-    let Ok(mut reader) = decoder.read_info() else {
-        return Vec::new();
-    };
+    let mut reader = decoder.read_info().ok()?;
     let mut buffer = vec![0; reader.output_buffer_size()];
-    let Ok(info) = reader.next_frame(&mut buffer) else {
-        return Vec::new();
-    };
-    let mut data = Vec::with_capacity((info.width * info.height * 4) as usize);
+    let info = reader.next_frame(&mut buffer).ok()?;
+    let mut rgba = Vec::with_capacity((info.width * info.height * 4) as usize);
     match info.color_type {
-        png::ColorType::Rgba => {
-            for pixel in buffer.chunks_exact(4) {
-                data.extend_from_slice(&[pixel[3], pixel[0], pixel[1], pixel[2]]);
-            }
-        }
+        png::ColorType::Rgba => rgba.extend_from_slice(&buffer[..info.buffer_size()]),
         png::ColorType::Rgb => {
             for pixel in buffer.chunks_exact(3) {
-                data.extend_from_slice(&[255, pixel[0], pixel[1], pixel[2]]);
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
             }
         }
-        _ => return Vec::new(),
+        _ => return None,
     }
-    vec![Icon {
-        width: info.width as i32,
-        height: info.height as i32,
-        data,
-    }]
+    Some((info.width, info.height, rgba))
+}
+
+fn box_downscale_rgba(width: u32, height: u32, rgba: &[u8], target: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (target * target * 4) as usize];
+    if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
+        return out;
+    }
+    for y in 0..target {
+        let y0 = y * height / target;
+        let y1 = ((y + 1) * height / target).max(y0 + 1).min(height);
+        for x in 0..target {
+            let x0 = x * width / target;
+            let x1 = ((x + 1) * width / target).max(x0 + 1).min(width);
+            let mut r = 0u64;
+            let mut g = 0u64;
+            let mut b = 0u64;
+            let mut a = 0u64;
+            let mut count = 0u64;
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let index = ((sy * width + sx) * 4) as usize;
+                    r += u64::from(rgba[index]);
+                    g += u64::from(rgba[index + 1]);
+                    b += u64::from(rgba[index + 2]);
+                    a += u64::from(rgba[index + 3]);
+                    count += 1;
+                }
+            }
+            let dest = ((y * target + x) * 4) as usize;
+            if let (Some(r), Some(g), Some(b), Some(a)) = (
+                r.checked_div(count),
+                g.checked_div(count),
+                b.checked_div(count),
+                a.checked_div(count),
+            ) {
+                out[dest] = r as u8;
+                out[dest + 1] = g as u8;
+                out[dest + 2] = b as u8;
+                out[dest + 3] = a as u8;
+            }
+        }
+    }
+    out
+}
+
+fn rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
+    let mut argb = Vec::with_capacity(rgba.len());
+    for pixel in rgba.chunks_exact(4) {
+        argb.extend_from_slice(&[pixel[3], pixel[0], pixel[1], pixel[2]]);
+    }
+    argb
 }
 
 fn emit_command(app: &AppHandle, command: &str) {
@@ -132,15 +191,11 @@ impl Clone for LinuxTray {
 
 impl Tray for LinuxTray {
     fn id(&self) -> String {
-        env!("CARGO_PKG_NAME").into()
+        "mountlet".into()
     }
 
     fn title(&self) -> String {
         "Mountlet".into()
-    }
-
-    fn icon_name(&self) -> String {
-        "folder-remote".into()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -151,7 +206,7 @@ impl Tray for LinuxTray {
         ToolTip {
             title: self.tooltip.clone(),
             description: String::new(),
-            icon_name: "folder-remote".into(),
+            icon_name: String::new(),
             icon_pixmap: tray_icon(),
         }
     }
@@ -305,5 +360,22 @@ impl Tray for LinuxTray {
                 tray.app.exit(0);
             }),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_icon_uses_panel_sized_pixmaps() {
+        let icons = tray_icon();
+        assert!(!icons.is_empty());
+        for icon in icons {
+            assert!(icon.width >= 22 && icon.width <= 48);
+            assert_eq!(icon.width, icon.height);
+            assert_eq!(icon.data.len(), (icon.width * icon.height * 4) as usize);
+            assert!(icon.data.iter().any(|value| *value > 0));
+        }
     }
 }

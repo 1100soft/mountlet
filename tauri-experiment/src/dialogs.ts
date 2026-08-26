@@ -7,6 +7,85 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", tex
 
 const FOCUSABLE = "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
+export function bindScaledSelect(select: HTMLSelectElement): HTMLSelectElement {
+  if (select.dataset.scaledSelect === "true") return select;
+  select.dataset.scaledSelect = "true";
+  const open = () => {
+    if (select.disabled) return;
+    document.querySelector(".select-menu")?.remove();
+    const menu = node("div", "select-menu context-menu");
+    const rect = select.getBoundingClientRect();
+    menu.style.left = `${rect.left}px`;
+    menu.style.top = `${rect.bottom}px`;
+    menu.style.minWidth = `${Math.max(rect.width, 120)}px`;
+    let active = select.selectedIndex;
+    const items: HTMLButtonElement[] = [];
+    const close = () => {
+      menu.remove();
+      window.removeEventListener("mousedown", onPointer, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+    const choose = (index: number) => {
+      select.selectedIndex = index;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      close();
+      select.focus();
+    };
+    const paint = () => {
+      items.forEach((item, index) => item.classList.toggle("active", index === active));
+      items[active]?.scrollIntoView({ block: "nearest" });
+    };
+    const onPointer = (event: MouseEvent) => {
+      if (event.target instanceof Node && menu.contains(event.target)) return;
+      close();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        select.focus();
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        active = Math.min(items.length - 1, active + 1);
+        paint();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        active = Math.max(0, active - 1);
+        paint();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        choose(active);
+      }
+    };
+    for (const [index, option] of [...select.options].entries()) {
+      const item = node("button", `context-action${index === select.selectedIndex ? " active" : ""}`, option.text);
+      item.type = "button";
+      item.addEventListener("click", () => choose(index));
+      menu.append(item);
+      items.push(item);
+    }
+    document.body.append(menu);
+    window.setTimeout(() => {
+      window.addEventListener("mousedown", onPointer, true);
+      window.addEventListener("keydown", onKey, true);
+    }, 0);
+    paint();
+  };
+  select.addEventListener("mousedown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    open();
+  });
+  select.addEventListener("keydown", event => {
+    if (event.key === " " || event.key === "Enter" || event.key === "ArrowDown") {
+      event.preventDefault();
+      open();
+    }
+  });
+  return select;
+}
+
 export function trapModalFocus(layer: HTMLElement, dialog: HTMLElement, defaultFocus?: HTMLElement | null): void {
   const app = document.querySelector<HTMLElement>("#app");
   app?.setAttribute("inert", "");
@@ -58,8 +137,8 @@ export function ownedDialog(options: DialogOptions): Promise<string | boolean> {
     let input: HTMLInputElement | HTMLSelectElement | null = null;
     const inputOptions = options.input;
     if (inputOptions) {
-      if (inputOptions.choices?.length) {
-        input = document.createElement("select");
+        if (inputOptions.choices?.length) {
+        input = bindScaledSelect(document.createElement("select"));
         for (const choice of inputOptions.choices) input.add(new Option(choice.label, choice.value));
         if (inputOptions.value && !inputOptions.choices.some(choice => choice.value === inputOptions.value)) input.add(new Option(inputOptions.value, inputOptions.value));
       } else {

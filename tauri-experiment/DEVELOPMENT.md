@@ -67,6 +67,12 @@ CLI/TUI and Qt tests:
 - File-manager settings are executed (Dolphin tab / `xdg-mime` / FileManager1
   on Linux, Explorer/Finder elsewhere). Wayland forces single-window mode;
   GNOME on Wayland disables pin.
+- The window starts hidden. Linux StatusNotifierItem does not expose tray
+  geometry until a click, so the first tray activation supplies the anchor
+  (matching Python when `QSystemTrayIcon.geometry()` is empty). Windows and
+  macOS use `TrayIcon::rect()` when the OS reports it. After that the popup
+  stays beside the tray unless the user drags the window. Zoom resizes in
+  place for a user-moved window and re-anchors to the tray otherwise.
 - The window is placed beside the tray icon, inset from the panel by the
   Python `exclude_tray_panel` rule, or at the work-area corner used by Python
   when tray geometry is missing (GNOME Wayland: top-right). It no longer

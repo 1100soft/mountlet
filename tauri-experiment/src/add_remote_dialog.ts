@@ -8,7 +8,7 @@ import {
   type DriveOauthSource,
   type OauthPortStatus,
 } from "./backend.ts";
-import { showError, trapModalFocus } from "./dialogs.ts";
+import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
 
 const OAUTH_TYPES = new Set(["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]);
 const S3_OPTIONS = [
@@ -78,7 +78,7 @@ function input(placeholder: string, type = "text", title = ""): HTMLInputElement
 }
 
 function select(options: ReadonlyArray<readonly [string, string]>): HTMLSelectElement {
-  const field = node("select", "settings-input");
+  const field = bindScaledSelect(node("select", "settings-input"));
   for (const [value, label] of options) field.append(new Option(label, value));
   return field;
 }

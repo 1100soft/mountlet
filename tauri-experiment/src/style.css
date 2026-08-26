@@ -59,7 +59,16 @@
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input, select, textarea { color: inherit; font: inherit; color-scheme: inherit; }
-select, option { color: var(--text); background: var(--base); font-size: inherit; }
+select, option, optgroup { color: var(--text); background: var(--base); font-size: calc(14px * var(--zoom)); }
+input[type="checkbox"], input[type="radio"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  accent-color: var(--highlight);
+  zoom: var(--zoom);
+}
 button { border: calc(1px * var(--zoom)) solid var(--border); background: var(--button); }
 button:hover:not(:disabled) { border-color: var(--highlight); }
 button:disabled { color: var(--muted); opacity: 0.55; }
@@ -130,7 +139,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .context-menu { position: fixed; z-index: 1200; min-width: calc(190px * var(--zoom)); display: grid; padding: calc(3px * var(--zoom)); color: var(--text); background: var(--window); border: 1px solid var(--text); box-shadow: 0 calc(5px * var(--zoom)) calc(18px * var(--zoom)) var(--overlay-shadow); }
 .context-menu hr { width: 100%; margin: calc(3px * var(--zoom)) 0; border: 0; border-top: 1px solid var(--border); }
 .context-action { min-height: var(--chrome-row); padding: 0 calc(9px * var(--zoom)); text-align: left; border: 0; background: transparent; }
-.context-action:hover, .context-action:focus-visible { background: var(--highlight-soft); }
+.context-action:hover, .context-action:focus-visible, .context-action.active { background: var(--highlight-soft); }
+.select-menu { z-index: 1300; max-height: min(50vh, calc(280px * var(--zoom))); overflow: auto; }
 .add-remote-form { display: grid; gap: calc(8px * var(--zoom)); }
 .add-remote-help, .add-remote-status { margin: 0; color: var(--muted); }
 .add-remote-port { display: grid; gap: calc(6px * var(--zoom)); }
@@ -155,15 +165,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .sort-popup button:hover, .sort-popup button.active { background: var(--highlight-soft); }
 .icon-button { flex: 0 0 auto; width: calc(34px * var(--zoom)); height: var(--toolbar-row); padding: 0; border-radius: calc(3px * var(--zoom)); font-size: calc(18px * var(--zoom)); line-height: 1; color: var(--text); }
 .icon-button:disabled { color: var(--muted); }
+.icon-button:disabled .action-icon { opacity: .55; }
 .icon-button[hidden] { display: none; }
 .icon-button.active { border-color: var(--highlight); background: var(--highlight-soft); }
-.action-icon { width: calc(20px * var(--zoom)); height: calc(20px * var(--zoom)); display: block; margin: auto; background-color: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
+.action-icon { width: calc(20px * var(--zoom)); height: calc(20px * var(--zoom)); display: block; margin: auto; object-fit: contain; }
 .search-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; flex-shrink: 0; border: 1px solid var(--border); border-radius: calc(14px * var(--zoom)); background: var(--base); height: calc(28px * var(--zoom)); padding: 0 calc(8px * var(--zoom)); }
 .remote-pane > .search-row { grid-template-columns: auto minmax(0, 1fr) calc(86px * var(--zoom)); }
 .browser-search { grid-template-columns: auto minmax(0, 1fr) calc(110px * var(--zoom)); }
 .global-search-status { overflow: hidden; white-space: nowrap; color: var(--text); }
 .remote-search-status { overflow: hidden; white-space: nowrap; color: var(--text); }
-.search-symbol { width: calc(18px * var(--zoom)); height: calc(18px * var(--zoom)); color: var(--text); background-color: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
+.search-symbol { width: calc(18px * var(--zoom)); height: calc(18px * var(--zoom)); object-fit: contain; }
 .search-input { width: 100%; height: calc(26px * var(--zoom)); border: 0; outline: 0; padding: 0 calc(8px * var(--zoom)); background: transparent; }
 .global-results { display: none; flex-shrink: 0; height: calc(var(--search-header) + 6 * var(--search-row)); overflow-y: scroll; overflow-x: hidden; scrollbar-gutter: stable; background: var(--base); }
 .global-results.active { display: block; }
@@ -200,9 +211,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .remote-title-group { min-width: 0; display: flex; align-items: center; gap: calc(7px * var(--zoom)); }
 .provider-drive { color: var(--provider-drive); }.provider-gphotos { color: var(--provider-gphotos); }.provider-dropbox { color: var(--provider-dropbox); }.provider-onedrive, .provider-iclouddrive { color: var(--provider-cloud); }.provider-mega { color: var(--provider-mega); }.provider-protondrive { color: var(--provider-proton); }.provider-pcloud { color: var(--provider-pcloud); }
 .remote-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.usage { min-width: 0; display: grid; grid-template-rows: calc(5px * var(--zoom)) auto; align-content: center; gap: calc(1px * var(--zoom)); }
+.usage { min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: calc(1px * var(--zoom)); }
 .usage-meter { width: calc(92px * var(--zoom)); height: calc(5px * var(--zoom)); background: var(--usage-track); border-radius: 99px; overflow: hidden; }
 .usage-fill { display: block; height: 100%; background: var(--success); }.usage-text { white-space: nowrap; color: var(--success); font-size: .9em; }.usage-info { color: var(--muted); }
+.usage-line { display: flex; align-items: center; gap: calc(2px * var(--zoom)); min-width: 0; }
+.usage-note { flex: 0 0 calc(16px * var(--zoom)); width: calc(16px * var(--zoom)); color: var(--provider-drive); font-weight: 700; text-align: center; cursor: pointer; line-height: 1; }
 .mount-toggle { width: calc(34px * var(--zoom)); height: calc(18px * var(--zoom)); padding: calc(2px * var(--zoom)); border-radius: 99px; background: var(--muted); display: flex; align-items: center; }
 .mount-toggle.on { background: var(--mount-active); justify-content: flex-end; }.mount-toggle-knob { width: calc(14px * var(--zoom)); height: calc(14px * var(--zoom)); background: var(--on-highlight); border-radius: 50%; }
 

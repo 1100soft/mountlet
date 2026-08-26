@@ -1,6 +1,6 @@
 import type { AppSettings, Remote } from "./model.ts";
 import type { FileManagerOption } from "./backend.ts";
-import { trapModalFocus } from "./dialogs.ts";
+import { trapModalFocus, bindScaledSelect } from "./dialogs.ts";
 
 type SaveHandler = (settings: AppSettings) => Promise<void>;
 
@@ -41,7 +41,7 @@ function checkField(label: string, checked: boolean, tooltip: string): HTMLLabel
 }
 
 function selectField(value: string, values: Array<[string, string]>): HTMLSelectElement {
-  const select = node("select", "settings-input") as HTMLSelectElement;
+  const select = bindScaledSelect(node("select", "settings-input") as HTMLSelectElement);
   for (const [candidate, label] of values) select.append(option(candidate, label));
   select.value = value;
   return select;

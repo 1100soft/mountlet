@@ -60,11 +60,11 @@ export function actionIcon(symbol: string, label: string): HTMLButtonElement {
   button.type = "button";
   const asset = actionAssets[label];
   if (asset) {
-    const icon = document.createElement("span");
+    const icon = document.createElement("img");
     icon.className = "action-icon";
-    const url = `url("/assets/${asset}")`;
-    icon.style.webkitMaskImage = url;
-    icon.style.maskImage = url;
+    icon.alt = "";
+    icon.draggable = false;
+    paintNeutralIcon(icon, asset);
     button.append(icon);
   } else {
     button.textContent = symbol;
@@ -75,13 +75,49 @@ export function actionIcon(symbol: string, label: string): HTMLButtonElement {
 }
 
 export function chromeIcon(asset: string, className: string): HTMLElement {
-  const icon = document.createElement("span");
+  const icon = document.createElement("img");
   icon.className = className;
-  const url = `url("/assets/${asset}")`;
-  icon.style.webkitMaskImage = url;
-  icon.style.maskImage = url;
+  icon.alt = "";
+  icon.draggable = false;
   icon.setAttribute("aria-hidden", "true");
+  paintNeutralIcon(icon, asset);
   return icon;
+}
+
+const NEUTRAL_ICON = /#334155\b/gi;
+const svgCache = new Map<string, string>();
+
+function themeIconColor(): string {
+  return getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || "#232629";
+}
+
+function tintedSvgUrl(svg: string, color: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.replace(NEUTRAL_ICON, color))}`;
+}
+
+function paintNeutralIcon(image: HTMLImageElement, asset: string): void {
+  image.dataset.neutralAsset = asset;
+  const color = themeIconColor();
+  const svg = svgCache.get(asset);
+  if (svg) {
+    image.src = tintedSvgUrl(svg, color);
+    return;
+  }
+  image.src = `/assets/${asset}`;
+  void fetch(`/assets/${asset}`).then(response => response.text()).then(text => {
+    svgCache.set(asset, text);
+    if (image.isConnected) image.src = tintedSvgUrl(text, color);
+  }).catch(() => undefined);
+}
+
+export function refreshTintedIcons(): void {
+  const color = themeIconColor();
+  document.querySelectorAll<HTMLImageElement>("[data-neutral-asset]").forEach(image => {
+    const asset = image.dataset.neutralAsset;
+    const svg = asset ? svgCache.get(asset) : undefined;
+    if (asset && svg) image.src = tintedSvgUrl(svg, color);
+    else if (asset) paintNeutralIcon(image, asset);
+  });
 }
 
 const nativeIconCache = new Map<string, string | null>();
@@ -114,9 +150,9 @@ export function fileIcon(entry: FileEntry): HTMLElement {
   if (entry.cache.offline || entry.cache.cached) {
     const badge = document.createElement("img");
     badge.className = `cache-badge ${entry.cache.offline ? "offline" : "cached"}`;
-    badge.src = `/assets/${entry.cache.offline ? "ui-save-offline.svg" : "ui-entry-download.svg"}`;
     badge.alt = entry.cache.offline ? "Available offline" : "Cached local copy";
     badge.title = badge.alt;
+    paintNeutralIcon(badge, entry.cache.offline ? "ui-save-offline.svg" : "ui-entry-download.svg");
     wrapper.append(badge);
   }
   return wrapper;

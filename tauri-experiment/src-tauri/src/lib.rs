@@ -338,6 +338,8 @@ struct WindowAnchor {
     physical_height: f64,
     scale_factor: f64,
     valid: bool,
+    user_placed: bool,
+    last_set_physical: Option<(i32, i32)>,
     edge: String,
     area_signature: (i64, i64, i64, i64),
 }
@@ -4479,6 +4481,7 @@ fn logical_outer_rect(window: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f
     ))
 }
 
+#[allow(dead_code)]
 fn anchored_axis(old_start: f64, old_size: f64, new_size: f64, start: f64, span: f64) -> f64 {
     let end = start + span;
     let old_end = old_start + old_size;
@@ -4488,6 +4491,50 @@ fn anchored_axis(old_start: f64, old_size: f64, new_size: f64, start: f64, span:
         old_end - new_size
     };
     candidate.max(start).min((end - new_size).max(start))
+}
+
+fn clamped_origin(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    area: WorkArea,
+) -> (f64, f64) {
+    let max_x = area.x.max(area.x + area.width - width);
+    let max_y = area.y.max(area.y + area.height - height);
+    (x.max(area.x).min(max_x), y.max(area.y).min(max_y))
+}
+
+fn remember_set_position(window: &tauri::WebviewWindow, state: &AppState) {
+    if let Ok(position) = window.outer_position() {
+        if let Ok(mut anchor) = state.window_anchor.lock() {
+            anchor.last_set_physical = Some((position.x, position.y));
+        }
+    }
+}
+
+fn seed_tray_anchor_from_os(app: &tauri::AppHandle) {
+    let valid = app
+        .state::<AppState>()
+        .window_anchor
+        .lock()
+        .ok()
+        .is_some_and(|anchor| anchor.valid);
+    if valid {
+        return;
+    }
+    if let Some(tray) = app.tray_by_id("mountlet") {
+        if let Ok(Some(rect)) = tray.rect() {
+            let (x, y) = tray_rect_center(&rect);
+            cache_tray_anchor(app, x, y);
+            return;
+        }
+    }
+    if let Ok(position) = app.cursor_position() {
+        if position.x.abs() > 1.0 || position.y.abs() > 1.0 {
+            cache_tray_anchor(app, position.x, position.y);
+        }
+    }
 }
 
 fn tray_rect_box(rect: &tauri::Rect) -> (f64, f64, f64, f64) {
@@ -4656,19 +4703,7 @@ fn apply_window_layout(
     let main = app
         .get_webview_window("main")
         .ok_or("main window is unavailable")?;
-    if state
-        .window_anchor
-        .lock()
-        .ok()
-        .is_some_and(|anchor| !anchor.valid)
-    {
-        if let Some(tray) = app.tray_by_id("mountlet") {
-            if let Ok(Some(rect)) = tray.rect() {
-                let (x, y) = tray_rect_center(&rect);
-                cache_tray_anchor(&app, x, y);
-            }
-        }
-    }
+    seed_tray_anchor_from_os(&app);
     let requested_area = WorkArea {
         x: request.available_x,
         y: request.available_y,
@@ -4801,62 +4836,53 @@ fn apply_window_layout(
     };
     let target_main_outer_width = (main_content_width + main_frame_w).min(available_width);
     let target_main_outer_height = (main_content_height + main_frame_h).min(available_height);
-    let (main_x, main_y) = if let Some((point, _, edge)) = anchored {
+    let visible = main.is_visible().unwrap_or(false);
+    let user_placed = visible
+        && state
+            .window_anchor
+            .lock()
+            .ok()
+            .is_some_and(|anchor| anchor.user_placed);
+    let (main_x, main_y) = if user_placed {
+        let current = logical_outer_rect(&main).unwrap_or((
+            available.x,
+            available.y,
+            target_main_outer_width,
+            target_main_outer_height,
+        ));
+        clamped_origin(
+            current.0,
+            current.1,
+            target_main_outer_width,
+            target_main_outer_height,
+            work_area::resolve(requested_area),
+        )
+    } else if let Some((point, _, edge)) = anchored {
         anchored_popup_position(
             point,
             &edge,
             (available.x, available.y, available_width, available_height),
             (target_main_outer_width, target_main_outer_height),
         )
-    } else if let Some((x, y)) = fallback_tray_popup_position(
-        available.x,
-        available.y,
-        available_width,
-        available_height,
-        target_main_outer_width,
-        target_main_outer_height,
-    ) {
-        (x, y)
-    } else {
-        let current_main = logical_outer_rect(&main).unwrap_or((
+    } else if visible {
+        fallback_tray_popup_position(
             available.x,
             available.y,
+            available_width,
+            available_height,
             target_main_outer_width,
             target_main_outer_height,
-        ));
-        let at_origin = current_main.0.abs() <= 1.0 && current_main.1.abs() <= 1.0;
-        if at_origin {
-            fallback_tray_popup_position(
-                available.x,
-                available.y,
-                available_width,
-                available_height,
-                target_main_outer_width,
-                target_main_outer_height,
-            )
-            .unwrap_or((
-                available.x + available_width - target_main_outer_width - 8.0,
-                available.y + available_height - target_main_outer_height - 8.0,
-            ))
-        } else {
-            (
-                anchored_axis(
-                    current_main.0,
-                    current_main.2,
-                    target_main_outer_width,
-                    available.x,
-                    available_width,
-                ),
-                anchored_axis(
-                    current_main.1,
-                    current_main.3,
-                    target_main_outer_height,
-                    available.y,
-                    available_height,
-                ),
-            )
-        }
+        )
+        .unwrap_or((
+            available.x + available_width - target_main_outer_width - 8.0,
+            available.y + 8.0,
+        ))
+    } else {
+        logical_outer_rect(&main)
+            .map(|rect| (rect.0, rect.1))
+            .unwrap_or((available.x, available.y))
     };
+    let _ = main.set_min_size(Some(LogicalSize::new(360.0, 120.0)));
     main.set_size(LogicalSize::new(
         (target_main_outer_width - main_frame_w).max(1.0),
         (target_main_outer_height - main_frame_h).max(1.0),
@@ -4864,6 +4890,7 @@ fn apply_window_layout(
     .map_err(|error| error.to_string())?;
     main.set_position(LogicalPosition::new(main_x, main_y))
         .map_err(|error| error.to_string())?;
+    remember_set_position(&main, &state);
 
     let main_inner_height = (target_main_outer_height - main_frame_h).max(1.0);
     if request.mode != "multiple" {
@@ -6131,6 +6158,13 @@ pub(crate) fn show_window_stack(app: &tauri::AppHandle) {
     let Some(main) = app.get_webview_window("main") else {
         return;
     };
+    let was_visible = main.is_visible().unwrap_or(false);
+    if !was_visible {
+        if let Ok(mut anchor) = app.state::<AppState>().window_anchor.lock() {
+            anchor.user_placed = false;
+        }
+        seed_tray_anchor_from_os(app);
+    }
     let _ = main.show();
     let _ = main.unminimize();
     if app_settings().window_mode == "multiple" {
@@ -6142,6 +6176,9 @@ pub(crate) fn show_window_stack(app: &tauri::AppHandle) {
     // Showing the detached child first prevents its native creation/show cycle
     // from stealing focus after the main window has already requested it.
     let _ = main.set_focus();
+    if !was_visible {
+        let _ = app.emit("tray-anchor-changed", ());
+    }
 }
 
 pub(crate) fn toggle_window_stack(app: &tauri::AppHandle) {
@@ -6603,13 +6640,26 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                if window.label() == "main" {
-                    hide_window_stack(window.app_handle());
-                } else {
-                    let _ = window.hide();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    if window.label() == "main" {
+                        hide_window_stack(window.app_handle());
+                    } else {
+                        let _ = window.hide();
+                    }
                 }
+                tauri::WindowEvent::Moved(position) if window.label() == "main" => {
+                    let state = window.state::<AppState>();
+                    if let Ok(mut anchor) = state.window_anchor.lock() {
+                        if let Some((x, y)) = anchor.last_set_physical {
+                            if (position.x - x).abs() > 24 || (position.y - y).abs() > 24 {
+                                anchor.user_placed = true;
+                            }
+                        }
+                    };
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -6884,6 +6934,36 @@ mod tests {
         assert_eq!(
             fallback_tray_popup_position(0.0, 0.0, 1000.0, 800.0, 400.0, 300.0),
             Some(expected)
+        );
+        assert_eq!(
+            clamped_origin(
+                50.0,
+                40.0,
+                400.0,
+                300.0,
+                WorkArea {
+                    x: 0.0,
+                    y: 30.0,
+                    width: 1000.0,
+                    height: 700.0
+                }
+            ),
+            (50.0, 40.0)
+        );
+        assert_eq!(
+            clamped_origin(
+                900.0,
+                600.0,
+                400.0,
+                300.0,
+                WorkArea {
+                    x: 0.0,
+                    y: 30.0,
+                    width: 1000.0,
+                    height: 700.0
+                }
+            ),
+            (600.0, 430.0)
         );
     }
 }

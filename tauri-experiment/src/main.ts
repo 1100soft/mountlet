@@ -10,12 +10,12 @@ import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { activateLicense, deactivateLicenseDevice, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
 import { appDiagnostics, applyWindowLayout, autoMountRemoteIds, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
-import { actionIcon, chromeIcon, fileIcon, providerIcon } from "./icons.ts";
+import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
 import { applyMetricVariables, metricsAt, scaledMetric } from "./geometry.ts";
 import { MAX_ZOOM_STEP, MIN_ZOOM_STEP, formatBytes, parentPath, zoomFactor, type AppSettings, type FileEntry, type FolderSnapshot, type Preferences, type Remote } from "./model.ts";
 import { openAppSettingsDialog } from "./settings_dialog.ts";
 import { openShortcutDialog } from "./shortcuts_dialog.ts";
-import { confirmOwned, promptOwned, promptWizardOption, showError, trapModalFocus } from "./dialogs.ts";
+import { confirmOwned, promptOwned, promptWizardOption, showError, trapModalFocus, bindScaledSelect } from "./dialogs.ts";
 
 const isBrowserWindow = new URLSearchParams(location.search).has("browser");
 const preferences: Preferences = {
@@ -188,6 +188,7 @@ function applyPreferences(): void {
   document.documentElement.style.colorScheme = preferences.theme === "system" ? "light dark" : preferences.theme;
   document.documentElement.style.setProperty("--zoom", String(zoomFactor(preferences.zoomStep)));
   applyMetricVariables(preferences.zoomStep);
+  refreshTintedIcons();
   localStorage.setItem("mountlet-mode", preferences.mode);
   localStorage.setItem("mountlet-theme", preferences.theme);
   localStorage.setItem("mountlet-zoom", String(preferences.zoomStep));
@@ -736,12 +737,26 @@ async function showAppSettings(): Promise<void> {
   }, { fileManagers: managers, wayland: Boolean(currentHints?.wayland) });
 }
 
+function driveUsageNote(remote: Remote): HTMLElement | null {
+  if (remote.provider !== "drive") return null;
+  const note = element("span", "usage-note", "ⓘ");
+  note.title = "Google Drive usage excludes Photos and other Google account data.";
+  note.setAttribute("aria-label", note.title);
+  note.classList.add("row-control");
+  note.addEventListener("click", event => event.stopPropagation());
+  return note;
+}
+
 function usage(remote: Remote): HTMLElement {
   const box = element("div", "usage");
+  const note = driveUsageNote(remote);
   if (remote.usedBytes == null || remote.totalBytes == null) {
     const info = element("span", "usage-info", "ⓘ");
     info.title = "This provider does not expose storage usage information.";
-    box.append(info);
+    const line = element("span", "usage-line");
+    line.append(info);
+    if (note) line.append(note);
+    box.append(line);
     return box;
   }
   const ratio = Math.min(1, remote.usedBytes / remote.totalBytes);
@@ -749,7 +764,10 @@ function usage(remote: Remote): HTMLElement {
   const fill = element("span", "usage-fill");
   fill.style.width = `${ratio * 100}%`;
   meter.append(fill);
-  box.append(meter, element("span", "usage-text", `${formatBytes(remote.usedBytes)}/${formatBytes(remote.totalBytes)}`));
+  const line = element("span", "usage-line");
+  line.append(element("span", "usage-text", `${formatBytes(remote.usedBytes)}/${formatBytes(remote.totalBytes)}`));
+  if (note) line.append(note);
+  box.append(meter, line);
   return box;
 }
 
@@ -919,7 +937,7 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
     controls.set(key, input); form.append(element("label", "", label), input);
   };
   const addSelect = (key: string, label: string, value: string, options: readonly (readonly [string, string])[]) => {
-    const select = document.createElement("select");
+    const select = bindScaledSelect(document.createElement("select"));
     for (const [candidate, text] of options) select.add(new Option(text, candidate));
     if (value && !options.some(([candidate]) => candidate === value)) select.add(new Option(value, value));
     select.value = value; controls.set(key, select); form.append(element("label", "", label), select);
@@ -927,7 +945,7 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
   addText("alias", "Remote name", config.alias);
   addText("mountPath", "Local folder name", config.mountPath, false, "Folder under Mountlet's mounted folder. An absolute path is also accepted.");
   addText("remotePath", "Remote path", config.remotePath, false, "Optional folder within this remote to expose as its root.");
-  const auto = document.createElement("select");
+  const auto = bindScaledSelect(document.createElement("select"));
   [["", "Use app default"], ["true", "Enabled"], ["false", "Disabled"]].forEach(([value, label]) => auto.add(new Option(label, value)));
   auto.value = config.autoMount === null ? "" : String(config.autoMount); controls.set("autoMount", auto);
   form.append(element("label", "", "Auto-mount"), auto);
