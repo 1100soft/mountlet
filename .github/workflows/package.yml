@@ -111,6 +111,9 @@ jobs:
             found=$(find "$mountpoint" -type f -name rclone -print -quit)
             hdiutil detach "$mountpoint"
             rmdir "$mountpoint"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            installer=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' -print -quit)
+            found=$(7z l "$installer" | grep -i 'rclone.exe' || true)
           else
             found=$(find src-tauri/target/release/bundle -type f \( -name rclone -o -name rclone.exe \) -print -quit)
           fi
