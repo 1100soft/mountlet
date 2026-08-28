@@ -1,5 +1,5 @@
 import "./style.css";
-import { exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, submitBugReport, unreportedCrash } from "./backend.ts";
+import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
 import { detectRemoteCacheChanges } from "./backend.ts";
@@ -2469,6 +2469,7 @@ async function ensurePrerequisites(): Promise<boolean> {
 }
 
 async function start(): Promise<void> {
+  if (await completeStartupSmoke()) return;
   await listenRestoreKeyboardFocus(firstShow => scheduleFocusRestore(firstShow));
   const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder, savedLicense] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder(), licenseStatus().catch(() => null)]);
   registrationOrder = savedRegistrationOrder;

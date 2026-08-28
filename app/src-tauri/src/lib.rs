@@ -3367,6 +3367,44 @@ fn app_version() -> String {
 }
 
 #[tauri::command]
+fn complete_startup_smoke(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    let Some(marker) = env::var_os("MOUNTLET_STARTUP_SMOKE") else {
+        return Ok(false);
+    };
+    let main_window_ready = app.get_webview_window("main").is_some();
+    let remote_count = state
+        .remotes
+        .read()
+        .map_err(|_| "Remote state is unavailable")?
+        .len();
+    let result = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "frontendReady": true,
+        "mainWindowReady": main_window_ready,
+        "remoteStateReady": true,
+        "remoteCount": remote_count,
+    });
+    let marker = PathBuf::from(marker);
+    if let Some(parent) = marker.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(
+        marker,
+        serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        handle.exit(0);
+    });
+    Ok(true)
+}
+
+#[tauri::command]
 fn clipboard_text() -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
@@ -7164,6 +7202,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            complete_startup_smoke,
             list_remotes,
             refresh_remote_usage,
             remote_registration_order,

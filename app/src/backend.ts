@@ -48,6 +48,11 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
   return tauriInvoke<T>(command, args);
 }
 
+export async function completeStartupSmoke(): Promise<boolean> {
+  if (!inTauri) return false;
+  return invoke<boolean>("complete_startup_smoke");
+}
+
 export async function listRemotes(): Promise<Remote[]> {
   return inTauri ? invoke<Remote[]>("list_remotes") : mockRemotes();
 }

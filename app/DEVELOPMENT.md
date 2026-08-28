@@ -41,6 +41,18 @@ Refactoring is not a reason to weaken a behavior reproduced by the current app.
   still reported, retain the last genuine `Focused(true)` event otherwise, and
   restore that label only after both windows have been shown.
 
+## Packaged startup smoke test
+
+- Release builds on Windows must retain the GUI subsystem declaration in
+  `src-tauri/src/main.rs`; removing it makes the installed tray application
+  open an empty command window.
+- The package workflow installs every generated DEB and NSIS package and
+  launches every generated DMG. Its internal `MOUNTLET_STARTUP_SMOKE` marker
+  requires the production WebView to call back into Rust, proving that the
+  process, frontend, IPC bridge, main window, and application state initialized.
+- Keep the probe ahead of interactive prerequisite dialogs so lean installers
+  remain testable on clean CI runners.
+
 ## State and compatibility
 
 - Read and write the same rclone, Mountlet, offline-manifest, metadata-index,

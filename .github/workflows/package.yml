@@ -61,7 +61,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install --yes dbus-x11 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
       - name: Install frontend dependencies
         working-directory: app
         run: npm ci
@@ -93,6 +93,7 @@ jobs:
         working-directory: app
         run: npm run tauri:build
       - name: Probe packaged executable
+        if: runner.os != 'Windows'
         shell: bash
         working-directory: app
         run: |
@@ -130,6 +131,83 @@ jobs:
           test -n "$source"
           mkdir -p artifacts
           cp "$source" "artifacts/${{ matrix.installer }}"
+      - name: Smoke-test installed Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: app
+        run: |
+          sudo dpkg --install "artifacts/${{ matrix.installer }}"
+          marker="$RUNNER_TEMP/mountlet-startup.json"
+          expected=$(node -p "require('./package.json').version")
+          rm -f "$marker"
+          dbus-run-session -- env MOUNTLET_STARTUP_SMOKE="$marker" xvfb-run -a /usr/bin/mountlet &
+          process=$!
+          for _ in $(seq 1 60); do
+            test -f "$marker" && break
+            kill -0 "$process" 2>/dev/null || break
+            sleep 1
+          done
+          test -f "$marker"
+          wait "$process"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady) process.exit(1)" "$marker" "$expected"
+      - name: Smoke-test installed Windows package
+        if: runner.os == 'Windows'
+        shell: powershell
+        working-directory: app
+        run: |
+          $installer = (Resolve-Path "artifacts/${{ matrix.installer }}").Path
+          $install = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+          $executable = Join-Path $env:LOCALAPPDATA "Mountlet\mountlet.exe"
+          if (-not (Test-Path $executable)) { throw "Installed executable not found at $executable" }
+          $marker = Join-Path $env:RUNNER_TEMP "mountlet-startup.json"
+          $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          Remove-Item $marker -Force -ErrorAction SilentlyContinue
+          $env:MOUNTLET_STARTUP_SMOKE = $marker
+          $process = Start-Process -FilePath $executable -PassThru
+          try {
+            for ($attempt = 0; $attempt -lt 60 -and -not (Test-Path $marker); $attempt++) {
+              if ($process.HasExited) { break }
+              Start-Sleep -Seconds 1
+              $process.Refresh()
+            }
+            if (-not (Test-Path $marker)) { throw "Installed app did not report startup readiness" }
+            if (-not $process.WaitForExit(10000)) { throw "Installed app did not exit after its startup probe" }
+            if ($process.ExitCode -ne 0) { throw "Installed app exited with $($process.ExitCode)" }
+            $result = Get-Content $marker -Raw | ConvertFrom-Json
+            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady) {
+              throw "Installed app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
+            }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+      - name: Smoke-test installed macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: app
+        run: |
+          dmg="artifacts/${{ matrix.installer }}"
+          mountpoint=$(mktemp -d)
+          trap 'hdiutil detach "$mountpoint" >/dev/null 2>&1 || true; rmdir "$mountpoint" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
+          marker="$RUNNER_TEMP/mountlet-startup.json"
+          expected=$(node -p "require('./package.json').version")
+          rm -f "$marker"
+          executable=$(find "$mountpoint" -type f -path '*/Contents/MacOS/mountlet' -print -quit)
+          test -n "$executable"
+          MOUNTLET_STARTUP_SMOKE="$marker" "$executable" &
+          process=$!
+          for _ in $(seq 1 60); do
+            test -f "$marker" && break
+            kill -0 "$process" 2>/dev/null || break
+            sleep 1
+          done
+          test -f "$marker"
+          wait "$process"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady) process.exit(1)" "$marker" "$expected"
+          hdiutil detach "$mountpoint"
+          rmdir "$mountpoint"
+          trap - EXIT
       - uses: actions/upload-artifact@v4
         with:
           name: mountlet-${{ matrix.platform }}-${{ matrix.variant }}
