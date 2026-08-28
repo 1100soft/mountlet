@@ -3388,7 +3388,8 @@ fn complete_startup_smoke(
         .read()
         .map_err(|_| "Remote state is unavailable")?
         .len();
-    let mut expected_checks = vec![
+    #[cfg(target_os = "macos")]
+    let expected_checks = [
         "app-version",
         "remote-state",
         "preferences",
@@ -3398,7 +3399,17 @@ fn complete_startup_smoke(
         "frontend-render",
     ];
     #[cfg(not(target_os = "macos"))]
-    expected_checks.extend(["desktop-hints", "prerequisites"]);
+    let expected_checks = [
+        "app-version",
+        "remote-state",
+        "preferences",
+        "settings",
+        "shortcuts",
+        "tray-menu",
+        "frontend-render",
+        "desktop-hints",
+        "prerequisites",
+    ];
     if !expected_checks
         .iter()
         .all(|expected| checks.iter().any(|check| check == expected))
