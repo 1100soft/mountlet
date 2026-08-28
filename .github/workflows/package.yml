@@ -47,8 +47,8 @@ jobs:
           - { label: macOS x64, runner: macos-15-intel, platform: macos-x64, resource: macos-x86_64, rclone_os: osx, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-macos-x64-system-rclone.dmg }
           - { label: macOS x64, runner: macos-15-intel, platform: macos-x64, resource: macos-x86_64, rclone_os: osx, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-macos-x64-bundled-rclone.dmg }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -76,7 +76,10 @@ jobs:
           extracted="$RUNNER_TEMP/rclone"
           mkdir -p "$destination" "$extracted"
           curl --fail --location --retry 3 "https://downloads.rclone.org/rclone-current-${{ matrix.rclone_os }}-${{ matrix.rclone_arch }}.zip" --output "$archive"
-          tar -xf "$archive" -C "$extracted"
+          case "${{ runner.os }}" in
+            Windows) powershell.exe -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$extracted' -Force" ;;
+            *) unzip -q "$archive" -d "$extracted" ;;
+          esac
           binary=$(find "$extracted" -type f -name 'rclone*' ! -name '*.1' -print -quit)
           test -n "$binary"
           case "${{ runner.os }}" in
@@ -134,11 +137,11 @@ jobs:
       CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
       MOUNTLET_R2_BUCKET: ${{ github.ref_name == 'wip' && vars.MOUNTLET_PREVIEW_R2_BUCKET || vars.MOUNTLET_PRODUCTION_R2_BUCKET }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: release-artifacts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
