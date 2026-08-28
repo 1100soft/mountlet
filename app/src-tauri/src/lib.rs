@@ -2657,6 +2657,7 @@ fn cleanup_stale_mounts(_state: &AppState) {
     }
 }
 
+#[cfg(any(not(target_os = "windows"), test))]
 fn cleanup_directories(root: &Path, is_mounted: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let mut directories = Vec::new();
     let mut pending = vec![root.to_path_buf()];
