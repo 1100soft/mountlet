@@ -27,6 +27,8 @@ vendor/rclone/*
 !vendor/rclone/.gitkeep
 app/vendor/rclone/*
 !app/vendor/rclone/.gitkeep
+legacy/python-0.6.8/vendor/rclone/*
+!legacy/python-0.6.8/vendor/rclone/.gitkeep
 web/.wrangler/
 web/.local/
 .wrangler/
@@ -39,4 +41,5 @@ web/node_modules/
 !web/package.json
 !web/package-lock.json
 !web/release-files.json
+!app/src-tauri/tauri.conf.json
 .rclone.config*

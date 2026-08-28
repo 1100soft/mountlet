@@ -1,26 +1,50 @@
 # Mountlet
 
-Mountlet is a desktop app for managing many cloud storage accounts from
-different providers in one place.
+Mountlet is a Tauri desktop application for managing, browsing, mounting, and
+synchronizing cloud storage accounts through rclone.
 
-This repository is organized as a small monorepo:
+## Repository layout
 
-- `app/`: the Python desktop app, packaging scripts, tests, and app
-  documentation.
-- `web/`: the public website for commercial downloads, hosted on Cloudflare
-  Pages.
+- `app/` — the current Rust/Tauri desktop application. Version 0.7.0 is the
+  first release from this implementation.
+- `legacy/python-0.6.8/` — the frozen Python/Qt implementation and its original
+  packaging tools. Version 0.6.8 is the final Python release.
+- `web/` — the public website, licensing API, notices, and release-download
+  tooling hosted on Cloudflare.
 
-<!-- mountlet-vars:start -->
-- Production website: https://mountlet.app
-<!-- mountlet-vars:end -->
+The Tauri application reads the existing Mountlet settings, rclone
+configuration, offline manifest, metadata index, shortcut definitions, and
+encrypted config bundles. Upgrading does not require migrating user data.
 
-Start with:
+## Desktop development
 
-- [App README](app/README.md) for installation, use, provider support, and file
-  locations.
-- [Release notes](app/CHANGELOG.md) for version history.
+Install Node.js 22, the stable Rust toolchain, and the
+[Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/), then:
 
-The source is available for non-commercial use under `LICENSE`. Installer builds
-are covered by `app/docs/EULA.md`.
+```bash
+cd app
+npm ci
+npm run tauri:dev
+```
 
-Maintainer-only notes live under `app/docs/` and `web/`.
+Mountlet starts hidden; open it from the system tray. Use `npm run build` for
+the frontend regression gate and `npm run tauri:build` to create the native
+installer for the current platform.
+
+See [the desktop README](app/README.md), [development invariants](app/DEVELOPMENT.md),
+and [release notes](app/CHANGELOG.md).
+
+## Validation
+
+```bash
+cd app
+npm run build
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+```
+
+Website checks remain available from the repository root with
+`npm run web:release:test` and `npm run web:notices:test`.
+
+The source is available for non-commercial use under [LICENSE](LICENSE).
+Installer builds are covered by [the installer EULA](app/docs/EULA.md).

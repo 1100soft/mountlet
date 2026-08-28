@@ -2,6 +2,7 @@ import {strict as assert} from "node:assert";
 import {
   compareVersions,
   normalizeVersion,
+  readProjectVersion,
   releaseFileName,
   releaseObjectKey,
   removedObjectKeys,
@@ -10,6 +11,7 @@ import {
 } from "./release-layout.mjs";
 
 const artifact = {platform: "windows", architecture: "x64", variant: "standard", suffix: "-setup.exe"};
+assert.equal(readProjectVersion(), "0.7.0");
 assert.equal(normalizeVersion("v0.6.3"), "0.6.3");
 assert.ok(compareVersions("0.7.0", "0.6.9") > 0);
 assert.ok(compareVersions("0.7.0", "0.7.0-beta.2") > 0);

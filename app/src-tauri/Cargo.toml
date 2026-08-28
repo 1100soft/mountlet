@@ -1,0 +1,43 @@
+[package]
+name = "mountlet-desktop"
+version = "0.7.0"
+description = "Mountlet desktop tray application"
+authors = ["Mountlet contributors"]
+edition = "2021"
+
+[lib]
+name = "mountlet"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "mountlet"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tauri = { version = "2", features = ["tray-icon"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+hex = "0.4"
+hmac = "0.12"
+pbkdf2 = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls", "query"] }
+sha2 = "0.10"
+time = { version = "0.3", features = ["parsing"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tauri-plugin-drag = "2.1.1"
+png = "0.17"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.2"
+gdk = "0.18"
+gtk = "0.18"

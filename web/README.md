@@ -127,9 +127,9 @@ The upload tool reads artifact definitions from `web/release-files.json`, finds
 the installers recursively, and publishes them under versioned keys such as:
 
 ```text
-releases/v0.6.4/windows/x64/standard/mountlet-v0.6.4-windows-x64-standard-setup.exe
-releases/v0.6.4/macos/arm64/lean/mountlet-v0.6.4-macos-arm64-lean.dmg
-releases/v0.6.4/linux/x64/standard/mountlet-v0.6.4-linux-x64-standard.deb
+releases/v0.7.0/windows/x64/standard/mountlet-v0.7.0-windows-x64-standard-setup.exe
+releases/v0.7.0/macos/arm64/lean/mountlet-v0.7.0-macos-arm64-lean.dmg
+releases/v0.7.0/linux/x64/standard/mountlet-v0.7.0-linux-x64-standard.deb
 ```
 
 It publishes `releases/index.json` only after every installer succeeds. The

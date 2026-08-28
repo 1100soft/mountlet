@@ -11,13 +11,13 @@ export function readReleaseConfig(path = resolve("web", "release-files.json")) {
   return config;
 }
 
-export function readProjectVersion(path = resolve("app", "pyproject.toml")) {
+export function readProjectVersion(path = resolve("app", "src-tauri", "Cargo.toml")) {
   const text = readFileSync(path, "utf8");
-  const project = text.match(/\[project\][\s\S]*?\nversion\s*=\s*["']([^"']+)["']/);
-  if (!project) {
+  const packageVersion = text.match(/\[package\][\s\S]*?\nversion\s*=\s*["']([^"']+)["']/);
+  if (!packageVersion) {
     throw new Error(`Could not read the project version from ${path}.`);
   }
-  return normalizeVersion(project[1]);
+  return normalizeVersion(packageVersion[1]);
 }
 
 export function normalizeVersion(value) {
