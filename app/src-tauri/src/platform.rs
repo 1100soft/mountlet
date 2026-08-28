@@ -339,7 +339,7 @@ pub fn open_rclone_config_terminal(rclone: &str, config: &Path) -> Result<String
             .args(["-e", &script])
             .spawn()
             .map_err(|error| error.to_string())?;
-        return Ok(config.display().to_string());
+        Ok(config.display().to_string())
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {

@@ -2587,12 +2587,12 @@ fn mounted_remote_names() -> Vec<String> {
         .collect()
 }
 
-fn cleanup_stale_mounts(state: &AppState) {
+fn cleanup_stale_mounts(_state: &AppState) {
     let Some(root) = mountlet_root().map(|root| root.join("mounted")) else {
         return;
     };
     #[cfg(target_os = "linux")]
-    let expected = state
+    let expected = _state
         .remotes
         .read()
         .map(|remotes| {
@@ -2629,7 +2629,7 @@ fn cleanup_stale_mounts(state: &AppState) {
                         .unwrap_or(false)
                 });
                 append_rclone_log(
-                    state,
+                    _state,
                     if released {
                         format!("Released stale mount {target}")
                     } else {
