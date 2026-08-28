@@ -2485,7 +2485,9 @@ async function start(): Promise<void> {
     }
     await refreshNativeTrayMenu(); checks.push("tray-menu");
     app.replaceChildren(element("main", "startup-smoke", "Mountlet startup ready"));
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (app.querySelector<HTMLElement>(".startup-smoke")?.textContent !== "Mountlet startup ready") {
+      throw new Error("The production frontend did not render its startup probe");
+    }
     checks.push("frontend-render");
     await completeStartupSmoke(checks);
     return;
