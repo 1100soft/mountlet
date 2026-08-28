@@ -2589,6 +2589,14 @@ fn mounted_remote_names() -> Vec<String> {
         .collect()
 }
 
+#[cfg(target_os = "windows")]
+fn cleanup_stale_mounts(_state: &AppState) {
+    // WinFsp mount points can remain as blocking reparse points after an
+    // interrupted rclone process. They are not safe to enumerate or remove as
+    // ordinary directories; a later successful mount can reuse the path.
+}
+
+#[cfg(not(target_os = "windows"))]
 fn cleanup_stale_mounts(_state: &AppState) {
     let Some(root) = mountlet_root().map(|root| root.join("mounted")) else {
         return;
@@ -4420,8 +4428,7 @@ fn open_external(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
-    cleanup_stale_mounts(&state);
+fn quit_app(app: tauri::AppHandle) {
     mark_clean_shutdown();
     app.exit(0);
 }
@@ -7122,7 +7129,6 @@ fn install_native_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::E
                     let _ = app.emit("tray-command", event.id().as_ref());
                 }
                 "quit" => {
-                    cleanup_stale_mounts(&app.state::<AppState>());
                     mark_clean_shutdown();
                     app.exit(0)
                 }
@@ -7184,7 +7190,13 @@ pub fn run() {
         .plugin(tauri_plugin_drag::init())
         .manage(state)
         .setup(move |app| {
-            cleanup_stale_mounts(&app.state::<AppState>());
+            // Disconnected FUSE/WinFsp mounts can block directory enumeration.
+            // Keep housekeeping away from Tauri's command registration and event
+            // loop so a stale mount cannot leave a visible but inert webview.
+            let cleanup_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                cleanup_stale_mounts(&cleanup_handle.state::<AppState>());
+            });
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             install_native_tray(app)?;

@@ -166,6 +166,12 @@ jobs:
           $marker = Join-Path $env:RUNNER_TEMP "mountlet-startup.json"
           $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
           Remove-Item $marker -Force -ErrorAction SilentlyContinue
+          # Exercise startup with the kind of leftover mount tree found after
+          # an interrupted Windows session. Native command registration must
+          # not wait for mount-point housekeeping.
+          $staleMount = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Mountlet\mounted\ci-stale\nested"
+          New-Item -ItemType Directory -Path $staleMount -Force | Out-Null
+          Set-Content -Path (Join-Path $staleMount "leftover.txt") -Value "startup must remain responsive"
           $env:MOUNTLET_STARTUP_SMOKE = $marker
           Add-Type @"
           using System;
