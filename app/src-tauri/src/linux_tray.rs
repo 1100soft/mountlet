@@ -87,7 +87,7 @@ fn load_source_rgba() -> Option<(u32, u32, Vec<u8>)> {
     match info.color_type {
         png::ColorType::Rgba => rgba.extend_from_slice(&buffer[..info.buffer_size()]),
         png::ColorType::Rgb => {
-            for pixel in buffer.chunks_exact(3) {
+            for pixel in buffer.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
             }
         }
@@ -141,7 +141,7 @@ fn box_downscale_rgba(width: u32, height: u32, rgba: &[u8], target: u32) -> Vec<
 
 fn rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
     let mut argb = Vec::with_capacity(rgba.len());
-    for pixel in rgba.chunks_exact(4) {
+    for pixel in rgba.as_chunks::<4>().0 {
         argb.extend_from_slice(&[pixel[3], pixel[0], pixel[1], pixel[2]]);
     }
     argb
