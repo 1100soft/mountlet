@@ -3396,6 +3396,7 @@ fn complete_startup_smoke(
         "settings",
         "shortcuts",
         "tray-menu",
+        "add-remote-fields",
         "frontend-render",
     ];
     #[cfg(not(target_os = "macos"))]
@@ -3406,6 +3407,7 @@ fn complete_startup_smoke(
         "settings",
         "shortcuts",
         "tray-menu",
+        "add-remote-fields",
         "frontend-render",
         "desktop-hints",
         "prerequisites",

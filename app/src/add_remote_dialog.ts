@@ -242,10 +242,13 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
   };
   const applyCredentials = () => {
     const custom = credentialSource.value === "custom";
+    const drive = provider.value === "drive";
     const gphotos = provider.value === "gphotos";
-    clientId.disabled = !(custom || gphotos);
-    clientSecret.disabled = !(custom || gphotos);
-    if (credentialSource.value === "builtin") {
+    const showClient = gphotos || (drive && custom);
+    setVisible([rows.clientId, rows.clientSecret], showClient);
+    clientId.disabled = !showClient;
+    clientSecret.disabled = !showClient;
+    if (drive && !custom) {
       clientId.value = "";
       clientSecret.value = "";
     }
@@ -260,7 +263,7 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
     const isExternal = type === "__external__";
     setVisible([rows.name, rows.mount], !isExternal);
     setVisible([rows.credentials], isDrive);
-    setVisible([rows.clientId, rows.clientSecret, rows.account], isDrive || isGphotos);
+    setVisible([rows.account], isDrive || isGphotos);
     setVisible([rows.gphotosReadOnly, rows.gphotosHelp], isGphotos);
     setVisible([rows.driveKind, rows.sharedDriveId], isDrive);
     setVisible([rows.auth, rows.port], OAUTH_TYPES.has(type));

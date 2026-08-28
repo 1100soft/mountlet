@@ -529,7 +529,7 @@ pub fn status() -> Result<Status, String> {
         Ok(Status {
             state: "trial".into(),
             summary: format!(
-                "Trial: {} remaining; ends {expires_at}",
+                "{} left in trial",
                 if days == 0 {
                     "less than 1 day".into()
                 } else {
@@ -548,7 +548,7 @@ pub fn status() -> Result<Status, String> {
     } else {
         Ok(Status {
             state: "expired".into(),
-            summary: format!("Trial expired {expires_at}"),
+            summary: "Trial expired".into(),
             trial_days_remaining: 0,
             license_key: String::new(),
             licensed_email: String::new(),

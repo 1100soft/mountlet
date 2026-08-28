@@ -514,7 +514,7 @@ async function showLicense(): Promise<void> {
     content.append(element("p", `license-summary${status.state === "expired" ? " error" : ""}`, status.summary));
     const expiry = status.licenseKind === "beta" && status.state === "licensed"
       ? "Public beta access renews daily and can end when the beta closes."
-      : status.expiresAt ? `${status.state === "trial" ? "Trial ends" : status.state === "expired" ? "Expired" : "Renews"}: ${formatLocalDate(status.expiresAt)}` : "";
+      : status.expiresAt ? `${status.state === "trial" ? "Ends" : status.state === "expired" ? "Expired" : "Renews"}: ${formatLocalDate(status.expiresAt)}` : "";
     if (expiry) content.append(element("p", "license-expiry", expiry));
     const form = element("div", "license-form");
     const keyRow = element("label", "dialog-field"); keyRow.append(element("span", "", "License key"));
@@ -547,7 +547,7 @@ async function showLicense(): Promise<void> {
     const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing"));
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
-    if (status.state !== "licensed") { content.append(element("p", "license-devices-empty", status.state === "trial" ? "Activate Mountlet to manage devices." : "Enter a license key to activate this device.")); return; }
+    if (status.state !== "licensed") return;
     const deviceSection = element("section", "license-device-section"); const heading = element("div", "license-device-heading"); const headingText = element("strong", "", "Activated devices");
     const addDevices = element("button", "", "+ Add devices"); addDevices.hidden = status.licenseKind === "beta"; addDevices.addEventListener("click", () => void openExternal(`https://mountlet.app/?license_action=add_devices&license_key=${encodeURIComponent(status.licenseKey)}#pricing`)); heading.append(headingText, addDevices); deviceSection.append(heading);
     try {
@@ -2484,6 +2484,34 @@ async function start(): Promise<void> {
       checks.push("prerequisites");
     }
     await refreshNativeTrayMenu(); checks.push("tray-menu");
+    const addRemoteResult = openAddRemoteDialog();
+    let addRemoteDialog: HTMLElement | null = null;
+    for (let attempt = 0; attempt < 400 && !addRemoteDialog; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 25));
+      addRemoteDialog = document.querySelector<HTMLElement>(".remote-config-dialog");
+    }
+    if (!addRemoteDialog) throw new Error("Add Remote did not open");
+    const row = (label: string): HTMLLabelElement => {
+      const match = Array.from(addRemoteDialog!.querySelectorAll<HTMLLabelElement>("label.settings-row"))
+        .find(candidate => candidate.querySelector(".settings-label")?.textContent === label);
+      if (!match) throw new Error(`Add Remote is missing ${label}`);
+      return match;
+    };
+    const providerField = row("Provider").querySelector("select") as HTMLSelectElement;
+    const credentialField = row("Google client").querySelector("select") as HTMLSelectElement;
+    const clientIdRow = row("Client ID");
+    const clientSecretRow = row("Client secret");
+    const s3ProviderRow = row("S3 provider");
+    if (getComputedStyle(s3ProviderRow).display !== "none") throw new Error("Drive showed S3 fields");
+    credentialField.value = "custom"; credentialField.dispatchEvent(new Event("change"));
+    if (getComputedStyle(clientIdRow).display === "none" || getComputedStyle(clientSecretRow).display === "none") throw new Error("Custom Drive client fields stayed hidden");
+    credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
+    if (getComputedStyle(clientIdRow).display !== "none" || getComputedStyle(clientSecretRow).display !== "none") throw new Error("Existing Drive client showed custom credential fields");
+    providerField.value = "s3"; providerField.dispatchEvent(new Event("change"));
+    if (getComputedStyle(s3ProviderRow).display === "none" || getComputedStyle(row("Google client")).display !== "none") throw new Error("S3 provider fields were not isolated");
+    (addRemoteDialog.querySelector(".dialog-actions button") as HTMLButtonElement).click();
+    await addRemoteResult;
+    checks.push("add-remote-fields");
     app.replaceChildren(element("main", "startup-smoke", "Mountlet startup ready"));
     if (app.querySelector<HTMLElement>(".startup-smoke")?.textContent !== "Mountlet startup ready") {
       throw new Error("The production frontend did not render its startup probe");
