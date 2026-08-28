@@ -149,33 +149,68 @@ jobs:
           done
           test -f "$marker"
           wait "$process"
-          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady) process.exit(1)" "$marker" "$expected"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady||value.behaviorChecks?.length<9) process.exit(1)" "$marker" "$expected"
       - name: Smoke-test installed Windows package
         if: runner.os == 'Windows'
         shell: powershell
         working-directory: app
         run: |
           $installer = (Resolve-Path "artifacts/${{ matrix.installer }}").Path
-          $install = Start-Process -FilePath $installer -ArgumentList "/S" -Wait -PassThru
+          $desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Mountlet.lnk"
+          Remove-Item $desktopShortcut -Force -ErrorAction SilentlyContinue
+          $install = Start-Process -FilePath $installer -ArgumentList "/S /NS" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+          if (Test-Path $desktopShortcut) { throw "Installer created a desktop shortcut despite /NS" }
           $executable = Join-Path $env:LOCALAPPDATA "Mountlet\mountlet.exe"
           if (-not (Test-Path $executable)) { throw "Installed executable not found at $executable" }
           $marker = Join-Path $env:RUNNER_TEMP "mountlet-startup.json"
           $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
           Remove-Item $marker -Force -ErrorAction SilentlyContinue
           $env:MOUNTLET_STARTUP_SMOKE = $marker
+          Add-Type @"
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class MountletWindowProbe {
+            private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+            [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+            [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int count);
+            [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+            public static uint[] VisibleConsoleProcessIds() {
+              var ids = new List<uint>();
+              EnumWindows((window, parameter) => {
+                var name = new StringBuilder(256);
+                if (IsWindowVisible(window) && GetClassName(window, name, name.Capacity) > 0 && name.ToString() == "ConsoleWindowClass") {
+                  uint processId;
+                  GetWindowThreadProcessId(window, out processId);
+                  ids.Add(processId);
+                }
+                return true;
+              }, IntPtr.Zero);
+              return ids.ToArray();
+            }
+          }
+          "@
+          $existingConsoles = [MountletWindowProbe]::VisibleConsoleProcessIds()
+          $unexpectedConsoles = [System.Collections.Generic.HashSet[uint32]]::new()
           $process = Start-Process -FilePath $executable -PassThru
           try {
-            for ($attempt = 0; $attempt -lt 60 -and -not (Test-Path $marker); $attempt++) {
+            for ($attempt = 0; $attempt -lt 600 -and -not (Test-Path $marker); $attempt++) {
               if ($process.HasExited) { break }
-              Start-Sleep -Seconds 1
+              foreach ($consoleProcess in [MountletWindowProbe]::VisibleConsoleProcessIds()) {
+                if ($consoleProcess -notin $existingConsoles) { $null = $unexpectedConsoles.Add($consoleProcess) }
+              }
+              Start-Sleep -Milliseconds 100
               $process.Refresh()
             }
             if (-not (Test-Path $marker)) { throw "Installed app did not report startup readiness" }
+            if ($unexpectedConsoles.Count -ne 0) { throw "Installed app spawned visible console windows owned by: $($unexpectedConsoles -join ', ')" }
             if (-not $process.WaitForExit(10000)) { throw "Installed app did not exit after its startup probe" }
             if ($process.ExitCode -ne 0) { throw "Installed app exited with $($process.ExitCode)" }
             $result = Get-Content $marker -Raw | ConvertFrom-Json
-            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady) {
+            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady -or $result.behaviorChecks.Count -lt 9) {
               throw "Installed app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
             }
           } finally {
@@ -204,7 +239,7 @@ jobs:
           done
           test -f "$marker"
           wait "$process"
-          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady) process.exit(1)" "$marker" "$expected"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady||value.behaviorChecks?.length<9) process.exit(1)" "$marker" "$expected"
           hdiutil detach "$mountpoint"
           rmdir "$mountpoint"
           trap - EXIT

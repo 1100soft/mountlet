@@ -1,5 +1,5 @@
 #[cfg(not(target_os = "windows"))]
-use std::process::Command;
+use crate::child_process::Command;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorkArea {

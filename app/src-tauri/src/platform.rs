@@ -1,7 +1,9 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use crate::child_process::Command;
+#[cfg(target_os = "windows")]
+use std::process::Command as VisibleCommand;
 #[cfg(not(target_os = "macos"))]
 use std::process::Stdio;
 
@@ -315,7 +317,7 @@ pub fn open_rclone_config_terminal(rclone: &str, config: &Path) -> Result<String
     let title = "Mountlet rclone config";
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
+        VisibleCommand::new("cmd")
             .args([
                 "/c",
                 "start",

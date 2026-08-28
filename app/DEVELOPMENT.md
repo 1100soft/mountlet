@@ -52,6 +52,14 @@ Refactoring is not a reason to weaken a behavior reproduced by the current app.
   process, frontend, IPC bridge, main window, and application state initialized.
 - Keep the probe ahead of interactive prerequisite dialogs so lean installers
   remain testable on clean CI runners.
+- All background child processes must be created through
+  `src-tauri/src/child_process.rs`. It applies `CREATE_NO_WINDOW` on Windows;
+  use `std::process::Command` directly only for an explicitly requested visible
+  terminal. The Windows package smoke test repeatedly runs prerequisite and
+  desktop probes while watching for newly visible console windows.
+- The NSIS finish-page desktop-shortcut option is unchecked by default through
+  `windows/hooks.nsh`. Silent installation tests also pass `/NS` and assert that
+  no desktop shortcut was created.
 
 ## State and compatibility
 

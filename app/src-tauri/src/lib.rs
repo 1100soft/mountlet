@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock as StdRwLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -19,6 +19,7 @@ use tauri::{LogicalPosition, LogicalSize};
 use tokio::sync::RwLock;
 
 mod config_bundle;
+mod child_process;
 mod file_managers;
 mod license;
 #[cfg(target_os = "linux")]
@@ -26,6 +27,7 @@ mod linux_tray;
 mod platform;
 mod work_area;
 use work_area::WorkArea;
+use child_process::Command;
 
 const SECRET_FIELD_MASK: &str = "••••••";
 const RUNTIME_SESSION_MARKER: &str = "Mountlet Rust runtime started";
@@ -3367,9 +3369,15 @@ fn app_version() -> String {
 }
 
 #[tauri::command]
+fn startup_smoke_enabled() -> bool {
+    env::var_os("MOUNTLET_STARTUP_SMOKE").is_some()
+}
+
+#[tauri::command]
 fn complete_startup_smoke(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    checks: Vec<String>,
 ) -> Result<bool, String> {
     let Some(marker) = env::var_os("MOUNTLET_STARTUP_SMOKE") else {
         return Ok(false);
@@ -3380,12 +3388,30 @@ fn complete_startup_smoke(
         .read()
         .map_err(|_| "Remote state is unavailable")?
         .len();
+    let expected_checks = [
+        "app-version",
+        "remote-state",
+        "preferences",
+        "settings",
+        "shortcuts",
+        "desktop-hints",
+        "prerequisites",
+        "tray-menu",
+        "frontend-render",
+    ];
+    if !expected_checks
+        .iter()
+        .all(|expected| checks.iter().any(|check| check == expected))
+    {
+        return Err(format!("Startup smoke checks are incomplete: {checks:?}"));
+    }
     let result = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "frontendReady": true,
         "mainWindowReady": main_window_ready,
         "remoteStateReady": true,
         "remoteCount": remote_count,
+        "behaviorChecks": checks,
     });
     let marker = PathBuf::from(marker);
     if let Some(parent) = marker.parent() {
@@ -7202,6 +7228,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            startup_smoke_enabled,
             complete_startup_smoke,
             list_remotes,
             refresh_remote_usage,

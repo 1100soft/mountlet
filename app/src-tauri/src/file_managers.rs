@@ -1,7 +1,8 @@
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use crate::child_process::Command;
+use std::process::Stdio;
 
 use serde::Serialize;
 

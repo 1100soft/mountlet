@@ -72,7 +72,7 @@ fn stable_machine_identifier() -> String {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("reg")
+        if let Ok(output) = crate::child_process::Command::new("reg")
             .args([
                 "query",
                 r"HKLM\SOFTWARE\Microsoft\Cryptography",
@@ -89,7 +89,7 @@ fn stable_machine_identifier() -> String {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = std::process::Command::new("ioreg")
+        if let Ok(output) = crate::child_process::Command::new("ioreg")
             .args(["-rd1", "-c", "IOPlatformExpertDevice"])
             .output()
         {

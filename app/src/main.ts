@@ -1,5 +1,5 @@
 import "./style.css";
-import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, submitBugReport, unreportedCrash } from "./backend.ts";
+import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, startupSmokeEnabled, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
 import { detectRemoteCacheChanges } from "./backend.ts";
@@ -2469,7 +2469,23 @@ async function ensurePrerequisites(): Promise<boolean> {
 }
 
 async function start(): Promise<void> {
-  if (await completeStartupSmoke()) return;
+  if (await startupSmokeEnabled()) {
+    const checks: string[] = [];
+    await appVersion(); checks.push("app-version");
+    await listRemotes(); checks.push("remote-state");
+    await loadPreferences(); checks.push("preferences");
+    await loadAppSettings(); checks.push("settings");
+    await loadShortcuts(); checks.push("shortcuts");
+    await desktopHints(); checks.push("desktop-hints");
+    for (let attempt = 0; attempt < 3; attempt += 1) await checkPrerequisites();
+    checks.push("prerequisites");
+    await refreshNativeTrayMenu(); checks.push("tray-menu");
+    app.replaceChildren(element("main", "startup-smoke", "Mountlet startup ready"));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    checks.push("frontend-render");
+    await completeStartupSmoke(checks);
+    return;
+  }
   await listenRestoreKeyboardFocus(firstShow => scheduleFocusRestore(firstShow));
   const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder, savedLicense] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder(), licenseStatus().catch(() => null)]);
   registrationOrder = savedRegistrationOrder;
