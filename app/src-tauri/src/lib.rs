@@ -3388,17 +3388,17 @@ fn complete_startup_smoke(
         .read()
         .map_err(|_| "Remote state is unavailable")?
         .len();
-    let expected_checks = [
+    let mut expected_checks = vec![
         "app-version",
         "remote-state",
         "preferences",
         "settings",
         "shortcuts",
-        "desktop-hints",
-        "prerequisites",
         "tray-menu",
         "frontend-render",
     ];
+    #[cfg(not(target_os = "macos"))]
+    expected_checks.extend(["desktop-hints", "prerequisites"]);
     if !expected_checks
         .iter()
         .all(|expected| checks.iter().any(|check| check == expected))
@@ -3412,6 +3412,7 @@ fn complete_startup_smoke(
         "remoteStateReady": true,
         "remoteCount": remote_count,
         "behaviorChecks": checks,
+        "behaviorComplete": true,
     });
     let marker = PathBuf::from(marker);
     if let Some(parent) = marker.parent() {

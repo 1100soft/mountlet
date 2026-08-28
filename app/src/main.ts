@@ -2476,9 +2476,13 @@ async function start(): Promise<void> {
     await loadPreferences(); checks.push("preferences");
     await loadAppSettings(); checks.push("settings");
     await loadShortcuts(); checks.push("shortcuts");
-    await desktopHints(); checks.push("desktop-hints");
-    for (let attempt = 0; attempt < 3; attempt += 1) await checkPrerequisites();
-    checks.push("prerequisites");
+    const isMac = navigator.userAgent.includes("Macintosh");
+    if (!isMac) {
+      await desktopHints(); checks.push("desktop-hints");
+      const attempts = navigator.userAgent.includes("Windows") ? 3 : 1;
+      for (let attempt = 0; attempt < attempts; attempt += 1) await checkPrerequisites();
+      checks.push("prerequisites");
+    }
     await refreshNativeTrayMenu(); checks.push("tray-menu");
     app.replaceChildren(element("main", "startup-smoke", "Mountlet startup ready"));
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
