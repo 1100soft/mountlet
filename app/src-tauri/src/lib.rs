@@ -661,9 +661,9 @@ fn home_relative(parts: &[&str]) -> Option<PathBuf> {
 fn mountlet_config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        return env::var_os("APPDATA")
+        env::var_os("APPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("Mountlet"));
+            .map(|path| path.join("Mountlet"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -687,9 +687,9 @@ fn app_config_path() -> Option<PathBuf> {
 fn mountlet_state_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        return env::var_os("LOCALAPPDATA")
+        env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("Mountlet"));
+            .map(|path| path.join("Mountlet"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -921,9 +921,9 @@ fn default_rclone_config_path() -> Option<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        return env::var_os("APPDATA")
+        env::var_os("APPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("rclone/rclone.conf"));
+            .map(|path| path.join("rclone/rclone.conf"))
     }
     #[cfg(target_os = "macos")]
     {

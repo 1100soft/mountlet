@@ -504,6 +504,7 @@ fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
+#[cfg(not(target_os = "windows"))]
 fn dirs_home() -> PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))

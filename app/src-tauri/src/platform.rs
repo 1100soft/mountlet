@@ -442,14 +442,14 @@ pub fn pick_bundle_path(save: bool, suggested: &str) -> Option<String> {
         let script = format!(
             "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.{kind}; $d.Filter = 'Mountlet bundle (*.mountlet)|*.mountlet|All files (*.*)|*.*'; $d.FileName = '{filename}'; if ($d.ShowDialog() -eq 'OK') {{ $d.FileName }}"
         );
-        return Command::new("powershell")
+        Command::new("powershell")
             .args(["-NoProfile", "-Command", &script])
             .output()
             .ok()
             .filter(|output| output.status.success())
             .and_then(|output| String::from_utf8(output.stdout).ok())
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {

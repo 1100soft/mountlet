@@ -104,7 +104,16 @@ jobs:
         shell: bash
         working-directory: app
         run: |
-          found=$(find src-tauri/target/release/bundle -type f \( -name rclone -o -name rclone.exe \) -print -quit)
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            dmg=$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)
+            mountpoint=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
+            found=$(find "$mountpoint" -type f -name rclone -print -quit)
+            hdiutil detach "$mountpoint"
+            rmdir "$mountpoint"
+          else
+            found=$(find src-tauri/target/release/bundle -type f \( -name rclone -o -name rclone.exe \) -print -quit)
+          fi
           if [ "${{ matrix.bundled }}" = "true" ]; then test -n "$found"; else test -z "$found"; fi
       - name: Collect installer with stable release name
         shell: bash
