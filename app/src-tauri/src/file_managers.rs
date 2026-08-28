@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -446,6 +447,7 @@ fn parse_linux_file_manager(path: &Path, default_id: &str) -> Option<FileManager
     })
 }
 
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn split_desktop_exec(value: &str) -> Vec<String> {
     let mut command = Vec::new();
     let mut word = String::new();
@@ -479,6 +481,7 @@ fn split_desktop_exec(value: &str) -> Vec<String> {
     command
 }
 
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn desktop_id_label(identifier: &str) -> String {
     identifier
         .trim_end_matches(".desktop")
@@ -488,6 +491,7 @@ fn desktop_id_label(identifier: &str) -> String {
         .replace(['-', '_'], " ")
 }
 
+#[cfg(not(target_os = "macos"))]
 fn which(name: &str) -> Option<PathBuf> {
     if name.contains('/') || name.contains('\\') {
         let path = PathBuf::from(name);

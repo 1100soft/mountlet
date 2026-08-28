@@ -48,11 +48,6 @@ fn x11_work_area() -> Option<WorkArea> {
     parse_x11_work_area(&String::from_utf8_lossy(&output.stdout))
 }
 
-#[cfg(not(all(target_os = "linux", not(target_os = "android"))))]
-fn x11_work_area() -> Option<WorkArea> {
-    None
-}
-
 pub fn resolve(fallback: WorkArea) -> WorkArea {
     platform_work_area(fallback)
         .map(|area| fallback.intersect(area))
@@ -160,6 +155,7 @@ fn platform_work_area(_fallback: WorkArea) -> Option<WorkArea> {
     None
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn numbers_after(text: &str, marker: &str) -> Option<Vec<i64>> {
     let line = text.lines().find(|line| line.contains(marker))?;
     let values = line.split_once('=')?.1;
@@ -172,6 +168,7 @@ fn numbers_after(text: &str, marker: &str) -> Option<Vec<i64>> {
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_x11_work_area(text: &str) -> Option<WorkArea> {
     let desktop = *numbers_after(text, "_NET_CURRENT_DESKTOP")?.first()? as usize;
     let values = numbers_after(text, "_NET_WORKAREA")?;

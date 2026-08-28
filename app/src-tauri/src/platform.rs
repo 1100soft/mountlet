@@ -1,7 +1,9 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "macos"))]
+use std::process::Stdio;
 
 use serde::Serialize;
 
@@ -309,6 +311,7 @@ pub fn open_rclone_config_terminal(rclone: &str, config: &Path) -> Result<String
     if !config.exists() {
         fs::write(config, "").map_err(|error| error.to_string())?;
     }
+    #[cfg(not(target_os = "macos"))]
     let title = "Mountlet rclone config";
     #[cfg(target_os = "windows")]
     {
@@ -323,7 +326,7 @@ pub fn open_rclone_config_terminal(rclone: &str, config: &Path) -> Result<String
             ])
             .spawn()
             .map_err(|error| error.to_string())?;
-        return Ok(config.display().to_string());
+        Ok(config.display().to_string())
     }
     #[cfg(target_os = "macos")]
     {
@@ -424,14 +427,14 @@ pub fn pick_bundle_path(save: bool, suggested: &str) -> Option<String> {
         } else {
             "POSIX path of (choose file with prompt \"Mountlet config bundle\")".into()
         };
-        return Command::new("osascript")
+        Command::new("osascript")
             .args(["-e", &script])
             .output()
             .ok()
             .filter(|output| output.status.success())
             .and_then(|output| String::from_utf8(output.stdout).ok())
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+            .filter(|value| !value.is_empty())
     }
     #[cfg(target_os = "windows")]
     {
@@ -662,6 +665,7 @@ fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn shell_quote(value: &str) -> String {
     if value
         .chars()

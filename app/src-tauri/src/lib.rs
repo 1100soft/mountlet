@@ -667,9 +667,9 @@ fn mountlet_config_dir() -> Option<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        return env::var_os("HOME")
+        env::var_os("HOME")
             .map(PathBuf::from)
-            .map(|path| path.join("Library/Application Support/Mountlet"));
+            .map(|path| path.join("Library/Application Support/Mountlet"))
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -693,7 +693,7 @@ fn mountlet_state_dir() -> Option<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        return home_relative(&["Library", "Application Support", "Mountlet"]);
+        home_relative(&["Library", "Application Support", "Mountlet"])
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -927,7 +927,7 @@ fn default_rclone_config_path() -> Option<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        return home_relative(&[".config", "rclone", "rclone.conf"]);
+        home_relative(&[".config", "rclone", "rclone.conf"])
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -2591,6 +2591,7 @@ fn cleanup_stale_mounts(state: &AppState) {
     let Some(root) = mountlet_root().map(|root| root.join("mounted")) else {
         return;
     };
+    #[cfg(target_os = "linux")]
     let expected = state
         .remotes
         .read()
