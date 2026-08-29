@@ -9,7 +9,7 @@ import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { activateLicense, clipboardText, deactivateLicenseDevice, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
-import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
+import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
 import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
 import { applyMetricVariables, metricsAt, scaledMetric } from "./geometry.ts";
 import { MAX_ZOOM_STEP, MIN_ZOOM_STEP, formatBytes, parentPath, zoomFactor, type AppSettings, type FileEntry, type FolderSnapshot, type Notice, type Preferences, type Remote } from "./model.ts";
@@ -2534,10 +2534,15 @@ async function start(): Promise<void> {
       throw new Error("The production frontend did not render its startup probe");
     }
     checks.push("frontend-render");
+    await showStartupWindows(); checks.push("startup-window-visible");
     await completeStartupSmoke(checks);
     return;
   }
   await listenRestoreKeyboardFocus(firstShow => scheduleFocusRestore(firstShow));
+  // Do not make native license, rclone, or network initialization a prerequisite
+  // for seeing the application. The final layout pass below will resize and
+  // reposition the already-visible window once settings have loaded.
+  if (!isBrowserWindow) await showStartupWindows();
   const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder()]);
   const savedLicense = await bounded(licenseStatus(), 15000, "License status timed out.").catch(error => ({
     state: "expired" as const,
@@ -2687,6 +2692,7 @@ async function start(): Promise<void> {
   } else if (!isBrowserWindow && licenseLocked()) {
     await setDetachedBrowser(false);
     await layoutNativeWindows();
+    await showStartupWindows();
     window.setTimeout(() => void showLicense(), 0);
     queueMicrotask(restoreFocusOwner);
     return;
@@ -2697,7 +2703,10 @@ async function start(): Promise<void> {
     else await emitBrowserState(selectedRemote, currentPath);
   }
   scheduleFolderPoll();
-  if (!isBrowserWindow) await layoutNativeWindows();
+  if (!isBrowserWindow) {
+    await layoutNativeWindows();
+    await showStartupWindows();
+  }
   if ((isBrowserWindow || preferences.mode === "single") && fileFilter.trim()) {
     remoteSearchLoading = true;
     scheduleSearch("remote");

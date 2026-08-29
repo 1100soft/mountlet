@@ -36,6 +36,16 @@ const BUILD_CHANNEL: &str = match option_env!("MOUNTLET_BUILD_CHANNEL") {
     None => "production",
 };
 
+fn build_revision() -> &'static str {
+    option_env!("GITHUB_SHA")
+        .and_then(|revision| revision.get(..7))
+        .unwrap_or("local")
+}
+
+fn build_id() -> String {
+    format!("{}-{BUILD_CHANNEL}-{}", env!("CARGO_PKG_VERSION"), build_revision())
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Remote {
@@ -786,7 +796,7 @@ fn fetch_and_remember_notices() -> Result<Vec<NoticeView>, String> {
         .query(&[
             ("appVersion", env!("CARGO_PKG_VERSION")),
             ("buildChannel", BUILD_CHANNEL),
-            ("buildId", env!("CARGO_PKG_VERSION")),
+            ("buildId", &build_id()),
         ])
         .header("Accept", "application/json")
         .header(
@@ -3336,7 +3346,20 @@ fn app_diagnostics(window: tauri::WebviewWindow, state: tauri::State<'_, AppStat
 
 #[tauri::command]
 fn app_version() -> String {
-    env!("CARGO_PKG_VERSION").into()
+    if BUILD_CHANNEL == "production" && build_revision() == "local" {
+        env!("CARGO_PKG_VERSION").into()
+    } else {
+        format!("{} ({BUILD_CHANNEL} {})", env!("CARGO_PKG_VERSION"), build_revision())
+    }
+}
+
+#[tauri::command]
+fn show_startup_windows(app: tauri::AppHandle) -> Result<(), String> {
+    if app.get_webview_window("main").is_none() {
+        return Err("main window is unavailable".into());
+    }
+    show_window_stack(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3354,6 +3377,10 @@ fn complete_startup_smoke(
         return Ok(false);
     };
     let main_window_ready = app.get_webview_window("main").is_some();
+    let main_window_visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
     let remote_count = state
         .remotes
         .read()
@@ -3372,6 +3399,7 @@ fn complete_startup_smoke(
         "tray-menu",
         "add-remote-fields",
         "frontend-render",
+        "startup-window-visible",
     ];
     #[cfg(not(target_os = "macos"))]
     let expected_checks = [
@@ -3386,6 +3414,7 @@ fn complete_startup_smoke(
         "tray-menu",
         "add-remote-fields",
         "frontend-render",
+        "startup-window-visible",
         "desktop-hints",
         "prerequisites",
     ];
@@ -3398,8 +3427,10 @@ fn complete_startup_smoke(
     let settings = app_settings();
     let result = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "buildId": build_id(),
         "frontendReady": true,
         "mainWindowReady": main_window_ready,
+        "mainWindowVisible": main_window_visible,
         "remoteStateReady": true,
         "remoteCount": remote_count,
         "windowMode": settings.window_mode,
@@ -3703,7 +3734,7 @@ fn bug_report_payload(
         "kind": if kind == "crash" { "crash" } else { "bug" },
         "message": redact_sensitive_text(message.trim()).chars().take(8000).collect::<String>(),
         "contact": contact.trim().chars().take(240).collect::<String>(),
-        "metadata": {"appVersion":env!("CARGO_PKG_VERSION"),"buildChannel":BUILD_CHANNEL,"buildId":env!("CARGO_PKG_VERSION"),"platform":format!("{} {}",env::consts::OS,env::consts::ARCH),"rust":true,"node":env::var("HOSTNAME").unwrap_or_default(),"frozen":true},
+        "metadata": {"appVersion":env!("CARGO_PKG_VERSION"),"buildChannel":BUILD_CHANNEL,"buildId":build_id(),"platform":format!("{} {}",env::consts::OS,env::consts::ARCH),"rust":true,"node":env::var("HOSTNAME").unwrap_or_default(),"frozen":true},
         "logs": if include_logs { serde_json::json!({"runtime":redact_sensitive_text(&runtime.chars().rev().take(18_000).collect::<String>().chars().rev().collect::<String>()),"rclone":redact_sensitive_text(&rclone.chars().rev().take(18_000).collect::<String>().chars().rev().collect::<String>())}) } else { serde_json::json!({}) }
     })
 }
@@ -7241,6 +7272,7 @@ pub fn run() {
             rclone_output,
             cache_sync_diagnostics,
             app_version,
+            show_startup_windows,
             clipboard_text,
             license_default_device_label,
             bug_report_preview,

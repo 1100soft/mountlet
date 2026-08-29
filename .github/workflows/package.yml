@@ -149,7 +149,7 @@ jobs:
           done
           test -f "$marker"
           wait "$process"
-          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.buildId||!value.frontendReady||!value.mainWindowReady||!value.mainWindowVisible||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
       - name: Smoke-test installed Windows package
         if: runner.os == 'Windows'
         shell: powershell
@@ -220,7 +220,7 @@ jobs:
             if (-not $process.WaitForExit(10000)) { throw "Installed app did not exit after its startup probe" }
             if ($process.ExitCode -ne 0) { throw "Installed app exited with $($process.ExitCode)" }
             $result = Get-Content $marker -Raw | ConvertFrom-Json
-            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady -or -not $result.behaviorComplete -or -not $result.offlineRootReady -or $result.windowMode -ne "multiple" -or $result.theme -ne "dark") {
+            if ($result.version -ne $expected -or -not $result.buildId -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.mainWindowVisible -or -not $result.remoteStateReady -or -not $result.behaviorComplete -or -not $result.offlineRootReady -or $result.windowMode -ne "multiple" -or $result.theme -ne "dark") {
               throw "Installed app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
             }
           } finally {
@@ -249,7 +249,7 @@ jobs:
           done
           test -f "$marker"
           wait "$process"
-          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.buildId||!value.frontendReady||!value.mainWindowReady||!value.mainWindowVisible||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
           hdiutil detach "$mountpoint"
           rmdir "$mountpoint"
           trap - EXIT

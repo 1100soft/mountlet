@@ -323,6 +323,10 @@ export async function appVersion(): Promise<string> {
   return inTauri ? invoke<string>("app_version") : "Browser preview";
 }
 
+export async function showStartupWindows(): Promise<void> {
+  if (inTauri) await invoke("show_startup_windows");
+}
+
 export async function clipboardText(): Promise<string> {
   return inTauri ? invoke<string>("clipboard_text") : navigator.clipboard.readText();
 }
