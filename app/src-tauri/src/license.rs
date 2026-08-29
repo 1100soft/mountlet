@@ -106,6 +106,11 @@ fn stable_machine_identifier() -> String {
     env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into())
 }
 fn machine_hint() -> String {
+    #[cfg(target_os = "windows")]
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
     let home = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .unwrap_or_default();
@@ -133,9 +138,11 @@ fn paths(name: &str) -> Vec<PathBuf> {
         .collect()
 }
 fn home() -> Option<PathBuf> {
-    env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+    #[cfg(target_os = "windows")]
+    let value = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let value = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    value.map(PathBuf::from)
 }
 fn trial_paths() -> Vec<PathBuf> {
     let mut result = Vec::new();
@@ -148,6 +155,12 @@ fn trial_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     if let Some(path) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
         result.push(path.join("Mountlet/.license-trial"));
+        result.push(path.join("Mountlet/State/license/trial.dat"));
+        result.push(path.join("Mountlet/Cache/.license-trial"));
+        result.push(path.join("Microsoft/MountletTrial.dat"));
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(path) = env::var_os("APPDATA").map(PathBuf::from) {
         result.push(path.join("Microsoft/MountletTrial.dat"));
     }
     #[cfg(target_os = "macos")]
@@ -202,10 +215,18 @@ fn trial_signature(payload: &str, hint: &str) -> String {
 }
 fn trial() -> Result<Value, String> {
     let hint = machine_hint();
-    for path in trial_paths() {
+    let paths = trial_paths();
+    let mut valid = Vec::new();
+    let mut encoded_records = std::collections::HashMap::<String, usize>::new();
+    for path in &paths {
         let Ok(encoded) = fs::read_to_string(path) else {
             continue;
         };
+        let encoded = encoded.trim().to_string();
+        if encoded.is_empty() {
+            continue;
+        }
+        *encoded_records.entry(encoded.clone()).or_default() += 1;
         let Ok(envelope_bytes) = URL_SAFE_NO_PAD.decode(encoded.trim()) else {
             continue;
         };
@@ -219,13 +240,26 @@ fn trial() -> Result<Value, String> {
         let Ok(bytes) = URL_SAFE_NO_PAD.decode(payload) else {
             continue;
         };
-        let Ok(mut record) = serde_json::from_slice::<Value>(&bytes) else {
+        let Ok(record) = serde_json::from_slice::<Value>(&bytes) else {
             continue;
         };
         if record["version"].as_i64() != Some(2) || record["machine_hint"].as_str() != Some(&hint) {
             continue;
         }
-        record["last_seen_at"] = json!(record["last_seen_at"].as_f64().unwrap_or(0.0).max(now()));
+        valid.push(record);
+    }
+    let current = now();
+    let mut selected = oldest_trial(valid, current);
+    if selected.is_none() {
+        selected = recover_legacy_trial(&encoded_records, current, &hint);
+    }
+    if let Some(mut record) = selected {
+        record["version"] = json!(2);
+        record["machine_hint"] = json!(hint);
+        record["last_seen_at"] = json!(record["last_seen_at"]
+            .as_f64()
+            .unwrap_or(current)
+            .max(current));
         write_trial(&record, &hint)?;
         return Ok(record);
     }
@@ -234,6 +268,68 @@ fn trial() -> Result<Value, String> {
     let record = json!({"version":2,"install_id":URL_SAFE_NO_PAD.encode(random),"machine_hint":hint,"started_at":now(),"last_seen_at":now()});
     write_trial(&record, &hint)?;
     Ok(record)
+}
+
+fn oldest_trial(valid: Vec<Value>, current: f64) -> Option<Value> {
+    valid.into_iter().min_by(|left, right| {
+        left["started_at"]
+            .as_f64()
+            .unwrap_or(current)
+            .total_cmp(&right["started_at"].as_f64().unwrap_or(current))
+    })
+}
+
+fn recover_legacy_trial(
+    encoded_records: &std::collections::HashMap<String, usize>,
+    current: f64,
+    current_hint: &str,
+) -> Option<Value> {
+    let mut candidates = encoded_records.iter().collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+    for (encoded, count) in candidates {
+        if *count < 2 {
+            continue;
+        }
+        let Some(envelope) = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        let Some(payload) = envelope["payload"].as_str() else {
+            continue;
+        };
+        let Some(record) = URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        let (Some(legacy_hint), Some(started), Some(last_seen)) = (
+            record["machine_hint"].as_str(),
+            record["started_at"].as_f64(),
+            record["last_seen_at"].as_f64(),
+        ) else {
+            continue;
+        };
+        let hint_valid = legacy_hint.len() == 64
+            && legacy_hint.bytes().all(|value| value.is_ascii_hexdigit());
+        if record["version"].as_i64() == Some(1)
+            && hint_valid
+            && envelope["signature"].as_str() == Some(&trial_signature(payload, legacy_hint))
+            && started <= current + 86_400.0
+            && last_seen >= started
+        {
+            let mut migrated = record;
+            migrated["version"] = json!(2);
+            migrated["machine_hint"] = json!(current_hint);
+            migrated["last_seen_at"] = json!(last_seen.max(current));
+            return Some(migrated);
+        }
+    }
+    None
 }
 fn write_trial(record: &Value, hint: &str) -> Result<(), String> {
     let payload =
@@ -611,4 +707,23 @@ pub fn deactivate(device_id: &str) -> Result<(), String> {
         clear("license-key.txt");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trial_migration_keeps_the_oldest_valid_clock() {
+        let selected = oldest_trial(
+            vec![
+                json!({"install_id":"tauri","started_at":200.0,"last_seen_at":210.0}),
+                json!({"install_id":"python","started_at":100.0,"last_seen_at":190.0}),
+            ],
+            300.0,
+        )
+        .unwrap();
+        assert_eq!(selected["install_id"], "python");
+        assert_eq!(selected["started_at"], 100.0);
+    }
 }

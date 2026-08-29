@@ -653,7 +653,11 @@ fn prepare_bundled_rclone(source: &Path) -> PathBuf {
 }
 
 fn home_relative(parts: &[&str]) -> Option<PathBuf> {
-    let mut path = PathBuf::from(env::var_os("HOME")?);
+    #[cfg(target_os = "windows")]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    let mut path = PathBuf::from(home?);
     for part in parts {
         path.push(part);
     }
@@ -1421,7 +1425,7 @@ fn store_indexed_folder(
 
 fn offline_root() -> Option<PathBuf> {
     let mut root = home_relative(&["Mountlet"])?;
-    if let Some(path) = home_relative(&[".config", "mountlet", "config.toml"]) {
+    if let Some(path) = app_config_path() {
         if let Ok(text) = fs::read_to_string(path) {
             for raw in text.lines() {
                 let line = raw.trim();
@@ -2228,49 +2232,14 @@ fn cache_state(
 }
 
 fn ui_preferences() -> UiPreferences {
-    let mut result = UiPreferences {
-        mode: "single".into(),
-        theme: "system".into(),
-        zoom_step: 0,
-        integrated_file_edits: false,
-        file_list_max_items: 0,
-    };
-    let Some(path) = home_relative(&[".config", "mountlet", "config.toml"]) else {
-        return result;
-    };
-    let Ok(text) = fs::read_to_string(path) else {
-        return result;
-    };
-    let mut section = "";
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.starts_with('[') {
-            section = line;
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let value = value.trim().trim_matches('"');
-            match (section, key.trim()) {
-                ("[ui]", "window_mode") if matches!(value, "single" | "multiple") => {
-                    result.mode = platform::effective_window_mode(value)
-                }
-                ("[ui]", "theme") if matches!(value, "system" | "light" | "dark") => {
-                    result.theme = value.into()
-                }
-                ("[ui]", "zoom_steps") => {
-                    result.zoom_step = value.parse::<i32>().unwrap_or(0).clamp(-4, 6)
-                }
-                ("[ui]", "file_list_max_items") => {
-                    result.file_list_max_items = value.parse().unwrap_or(0)
-                }
-                ("[app]", "integrated_file_edits") => {
-                    result.integrated_file_edits = matches!(value, "true" | "1" | "yes" | "on")
-                }
-                _ => {}
-            }
-        }
+    let settings = app_settings();
+    UiPreferences {
+        mode: settings.window_mode,
+        theme: settings.theme,
+        zoom_step: settings.zoom_steps,
+        integrated_file_edits: settings.integrated_file_edits,
+        file_list_max_items: settings.file_list_max_items,
     }
-    result
 }
 
 fn unquote_toml(value: &str) -> String {
@@ -2541,7 +2510,7 @@ fn apply_start_at_login(enabled: bool) -> Result<(), String> {
 
 fn shortcut_preferences() -> HashMap<String, Vec<String>> {
     let mut values: HashMap<String, Vec<String>> = HashMap::new();
-    let Some(path) = home_relative(&[".config", "mountlet", "config.toml"]) else {
+    let Some(path) = app_config_path() else {
         return values;
     };
     let Ok(text) = fs::read_to_string(path) else {
@@ -3403,6 +3372,7 @@ fn complete_startup_smoke(
         "remote-state",
         "preferences",
         "settings",
+        "settings-compatibility",
         "shortcuts",
         "tray-menu",
         "add-remote-fields",
@@ -3414,6 +3384,7 @@ fn complete_startup_smoke(
         "remote-state",
         "preferences",
         "settings",
+        "settings-compatibility",
         "shortcuts",
         "tray-menu",
         "add-remote-fields",
@@ -3427,12 +3398,16 @@ fn complete_startup_smoke(
     {
         return Err(format!("Startup smoke checks are incomplete: {checks:?}"));
     }
+    let settings = app_settings();
     let result = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "frontendReady": true,
         "mainWindowReady": main_window_ready,
         "remoteStateReady": true,
         "remoteCount": remote_count,
+        "windowMode": settings.window_mode,
+        "theme": settings.theme,
+        "offlineRootReady": offline_root().is_some(),
         "behaviorChecks": checks,
         "behaviorComplete": true,
     });

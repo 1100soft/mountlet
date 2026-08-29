@@ -2473,8 +2473,12 @@ async function start(): Promise<void> {
     const checks: string[] = [];
     await appVersion(); checks.push("app-version");
     await listRemotes(); checks.push("remote-state");
-    await loadPreferences(); checks.push("preferences");
-    await loadAppSettings(); checks.push("settings");
+    const smokePreferences = await loadPreferences(); checks.push("preferences");
+    const smokeSettings = await loadAppSettings(); checks.push("settings");
+    if (!smokePreferences || smokePreferences.mode !== smokeSettings.windowMode || smokePreferences.theme !== smokeSettings.theme) {
+      throw new Error("UI preferences did not use the app settings source");
+    }
+    checks.push("settings-compatibility");
     await loadShortcuts(); checks.push("shortcuts");
     const isMac = navigator.userAgent.includes("Macintosh");
     if (!isMac) {

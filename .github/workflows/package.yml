@@ -172,6 +172,10 @@ jobs:
           $staleMount = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Mountlet\mounted\ci-stale\nested"
           New-Item -ItemType Directory -Path $staleMount -Force | Out-Null
           Set-Content -Path (Join-Path $staleMount "leftover.txt") -Value "startup must remain responsive"
+          $appConfig = Join-Path $env:APPDATA "Mountlet\config.toml"
+          New-Item -ItemType Directory -Path (Split-Path $appConfig) -Force | Out-Null
+          Set-Content -Path $appConfig -Value "[ui]`nwindow_mode = `"multiple`"`ntheme = `"dark`""
+          Remove-Item Env:HOME -ErrorAction SilentlyContinue
           $env:MOUNTLET_STARTUP_SMOKE = $marker
           Add-Type @"
           using System;
@@ -216,7 +220,7 @@ jobs:
             if (-not $process.WaitForExit(10000)) { throw "Installed app did not exit after its startup probe" }
             if ($process.ExitCode -ne 0) { throw "Installed app exited with $($process.ExitCode)" }
             $result = Get-Content $marker -Raw | ConvertFrom-Json
-            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady -or -not $result.behaviorComplete) {
+            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady -or -not $result.behaviorComplete -or -not $result.offlineRootReady -or $result.windowMode -ne "multiple" -or $result.theme -ne "dark") {
               throw "Installed app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
             }
           } finally {
