@@ -185,6 +185,20 @@ a {
   max-width: 760px;
 }
 
+.hero-copy .hero-actions {
+  margin-bottom: 22px;
+}
+
+.tab-panel:not(#panel-home) .panel-heading {
+  margin-bottom: 4px;
+}
+
+.license-result h2 {
+  font-size: 1.45rem;
+  line-height: 1.2;
+  margin-bottom: 10px;
+}
+
 .eyebrow {
   color: var(--accent);
   font-size: 0.78rem;
@@ -303,26 +317,69 @@ h3 {
   width: 100%;
 }
 
-.pricing-grid.license-grid {
-  align-items: stretch;
-  grid-template-columns: minmax(280px, 520px) minmax(280px, 420px) minmax(260px, 360px);
+.pricing-layout {
+  display: grid;
+  gap: 18px;
+  margin-top: 8px;
+  max-width: 1100px;
+  width: 100%;
+}
+
+.pricing-primary {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(148px, 200px);
+}
+
+.pricing-followup:not([hidden]) {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.pricing-primary:has(#plan-card[hidden]) {
+  grid-template-columns: 1fr;
 }
 
 .plan-card {
-  align-items: center;
-  display: grid;
-  gap: 18px;
-  grid-column: 1 / -1;
-  grid-template-columns: minmax(220px, 0.9fr) minmax(320px, 1.6fr);
+  padding: 14px;
 }
 
-.plan-card .price {
-  margin-bottom: 4px;
+.plan-card h3 {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+  text-transform: uppercase;
 }
 
 .plan-choice {
+  border: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.plan-choice label {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  font-size: 0.9rem;
+  font-weight: 680;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+}
+
+.plan-choice label:has(input:checked) {
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
 
 .platform-picker {
@@ -358,8 +415,21 @@ h3 {
 }
 
 .download-selector {
-  margin-top: 22px;
+  margin-top: 4px;
   max-width: 760px;
+}
+
+.download-selector #selected-download-button {
+  margin-bottom: 8px;
+}
+
+.download-platform-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  margin: 8px 0 0;
+  text-transform: uppercase;
 }
 
 .download-matrix-wrap {
@@ -452,6 +522,56 @@ h3 {
   margin: 0;
 }
 
+.lean-build-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.info-popover {
+  position: relative;
+}
+
+.info-popover > summary {
+  align-items: center;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 780;
+  height: 22px;
+  justify-content: center;
+  list-style: none;
+  width: 22px;
+}
+
+.info-popover > summary::-webkit-details-marker {
+  display: none;
+}
+
+.info-popover-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  left: 0;
+  padding: 12px 14px;
+  position: absolute;
+  top: calc(100% + 8px);
+  width: min(320px, 72vw);
+  z-index: 8;
+}
+
+.info-popover-panel p {
+  margin: 0;
+}
+
+.info-popover-panel p + p {
+  margin-top: 8px;
+}
+
 .download-options {
   align-items: center;
   display: flex;
@@ -540,7 +660,48 @@ h3 {
 }
 
 .license-card {
-  max-width: 520px;
+  max-width: none;
+}
+
+.license-card .price {
+  margin-bottom: 6px;
+}
+
+.license-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+
+.existing-license-fields:not([hidden]) {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.license-key-label {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 720;
+}
+
+.existing-license-fields input[type="text"] {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  min-height: 38px;
+  padding: 7px 10px;
+  width: 100%;
+}
+
+.beta-card {
+  max-width: 680px;
+}
+
+.beta-card h3 {
+  margin-bottom: 6px;
 }
 
 .add-device-card.disabled {
@@ -1653,7 +1814,8 @@ h3 {
   .feature-panel,
   .download-grid,
   .pricing-grid,
-  .plan-card,
+  .pricing-primary,
+  .pricing-followup:not([hidden]),
   .download-panels {
     grid-template-columns: 1fr;
   }
@@ -1694,6 +1856,10 @@ h3 {
 
   .plan-choice {
     grid-template-columns: 1fr;
+  }
+
+  .plan-choice label {
+    justify-content: flex-start;
   }
 
   .notifications-heading {

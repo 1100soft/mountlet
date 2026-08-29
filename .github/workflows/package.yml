@@ -6,20 +6,15 @@ on:
     paths:
       - ".github/workflows/package.yml"
       - "app/**"
-      - "package.json"
-      - "package-lock.json"
       - "web/release-files.json"
       - "web/tools/upload-release-r2.mjs"
       - "web/tools/release-layout.mjs"
   push:
     branches: [wip]
-    tags:
-      - "v*.*.*"
+    tags: ["v*.*.*"]
     paths:
       - ".github/workflows/package.yml"
       - "app/**"
-      - "package.json"
-      - "package-lock.json"
       - "web/release-files.json"
       - "web/tools/upload-release-r2.mjs"
       - "web/tools/release-layout.mjs"
@@ -29,6 +24,7 @@ permissions:
 
 env:
   MACOSX_DEPLOYMENT_TARGET: "11.0"
+  MOUNTLET_BUILD_CHANNEL: ${{ github.ref_name == 'wip' && 'preview' || 'production' }}
 
 concurrency:
   group: native-package-${{ github.ref }}
@@ -42,156 +38,221 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: Linux x64
-            variant_label: system rclone
-            runner: ubuntu-24.04
-            artifact: mountlet-linux-x64-system-rclone
-            archive: mountlet-linux-x64-system-rclone.tar.gz
-            installer: mountlet-linux-x64-system-rclone.deb
-            bundle_rclone: false
-          - label: Linux x64
-            variant_label: bundled rclone
-            runner: ubuntu-24.04
-            artifact: mountlet-linux-x64-bundled-rclone
-            archive: mountlet-linux-x64-bundled-rclone.tar.gz
-            installer: mountlet-linux-x64-bundled-rclone.deb
-            bundle_rclone: true
-          - label: Windows x64
-            variant_label: system rclone
-            runner: windows-2025
-            artifact: mountlet-windows-x64-system-rclone
-            archive: mountlet-windows-x64-system-rclone.zip
-            installer: mountlet-windows-x64-system-rclone-setup.exe
-            bundle_rclone: false
-          - label: Windows x64
-            variant_label: bundled rclone
-            runner: windows-2025
-            artifact: mountlet-windows-x64-bundled-rclone
-            archive: mountlet-windows-x64-bundled-rclone.zip
-            installer: mountlet-windows-x64-bundled-rclone-setup.exe
-            bundle_rclone: true
-          - label: macOS arm64
-            variant_label: system rclone
-            runner: macos-15
-            artifact: mountlet-macos-arm64-system-rclone
-            archive: mountlet-macos-arm64-system-rclone.zip
-            installer: mountlet-macos-arm64-system-rclone.dmg
-            bundle_rclone: false
-          - label: macOS arm64
-            variant_label: bundled rclone
-            runner: macos-15
-            artifact: mountlet-macos-arm64-bundled-rclone
-            archive: mountlet-macos-arm64-bundled-rclone.zip
-            installer: mountlet-macos-arm64-bundled-rclone.dmg
-            bundle_rclone: true
-          - label: macOS x64
-            variant_label: system rclone
-            runner: macos-15-intel
-            artifact: mountlet-macos-x64-system-rclone
-            archive: mountlet-macos-x64-system-rclone.zip
-            installer: mountlet-macos-x64-system-rclone.dmg
-            bundle_rclone: false
-          - label: macOS x64
-            variant_label: bundled rclone
-            runner: macos-15-intel
-            artifact: mountlet-macos-x64-bundled-rclone
-            archive: mountlet-macos-x64-bundled-rclone.zip
-            installer: mountlet-macos-x64-bundled-rclone.dmg
-            bundle_rclone: true
-
+          - { label: Linux x64, runner: ubuntu-24.04, platform: linux-x64, resource: linux-x86_64, rclone_os: linux, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-linux-x64-system-rclone.deb }
+          - { label: Linux x64, runner: ubuntu-24.04, platform: linux-x64, resource: linux-x86_64, rclone_os: linux, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-linux-x64-bundled-rclone.deb }
+          - { label: Windows x64, runner: windows-2025, platform: windows-x64, resource: windows-x86_64, rclone_os: windows, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-windows-x64-system-rclone-setup.exe }
+          - { label: Windows x64, runner: windows-2025, platform: windows-x64, resource: windows-x86_64, rclone_os: windows, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-windows-x64-bundled-rclone-setup.exe }
+          - { label: macOS arm64, runner: macos-15, platform: macos-arm64, resource: macos-aarch64, rclone_os: osx, rclone_arch: arm64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-macos-arm64-system-rclone.dmg }
+          - { label: macOS arm64, runner: macos-15, platform: macos-arm64, resource: macos-aarch64, rclone_os: osx, rclone_arch: arm64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-macos-arm64-bundled-rclone.dmg }
+          - { label: macOS x64, runner: macos-15-intel, platform: macos-x64, resource: macos-x86_64, rclone_os: osx, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-macos-x64-system-rclone.dmg }
+          - { label: macOS x64, runner: macos-15-intel, platform: macos-x64, resource: macos-x86_64, rclone_os: osx, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-macos-x64-bundled-rclone.dmg }
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install package and build tools
-        working-directory: app
-        run: python -m pip install --upgrade --editable ".[desktop,packaging]"
-
-      - name: Install Windows mount prerequisites
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install rclone winfsp --no-progress --yes
-
-      - name: Install Linux rclone for tests
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes rclone
-
-      - name: Install macOS rclone for tests
-        if: runner.os == 'macOS'
-        run: brew install rclone
-
-      - name: Run unit tests
+          sudo apt-get install --yes dbus-x11 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
+      - name: Install frontend dependencies
         working-directory: app
-        run: python packaging/run_tests.py
-
-      - name: Verify Windows directory mounting
-        if: runner.os == 'Windows'
+        run: npm ci
+      - name: Stage official versioned rclone
+        if: matrix.bundled
+        shell: bash
         working-directory: app
-        run: python packaging/windows_mount_smoke.py
-
-      - name: Stage bundled rclone
-        if: matrix.bundle_rclone
-        working-directory: app
-        run: python packaging/stage_rclone.py
-
-      - name: Build Linux venv bundle
-        if: runner.os == 'Linux'
-        working-directory: app
-        run: python packaging/build_linux_bundle.py
-
-      - name: Build frozen native bundle
-        if: runner.os != 'Linux'
-        working-directory: app
-        run: python -m PyInstaller --clean --noconfirm packaging/mountlet.spec
-
-      - name: Ad-hoc sign macOS test bundle
-        if: runner.os == 'macOS'
-        run: codesign --force --deep --sign - --timestamp=none app/dist/Mountlet.app
-
-      - name: Verify native bundle
-        working-directory: app
-        env:
-          MOUNTLET_EXPECT_BUNDLED_RCLONE: ${{ matrix.bundle_rclone }}
-        run: python packaging/verify_bundle.py
-
-      - name: Install Inno Setup
-        if: runner.os == 'Windows'
-        shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) {
-            choco install innosetup --no-progress --yes
-          }
-
-      - name: Archive native bundle
+          version=$(node -p "require('./package.json').version")
+          destination="src-tauri/vendor/rclone/${version}/${{ matrix.resource }}"
+          archive="$RUNNER_TEMP/rclone.zip"
+          extracted="$RUNNER_TEMP/rclone"
+          mkdir -p "$destination" "$extracted"
+          curl --fail --location --retry 3 "https://downloads.rclone.org/rclone-current-${{ matrix.rclone_os }}-${{ matrix.rclone_arch }}.zip" --output "$archive"
+          case "${{ runner.os }}" in
+            Windows) powershell.exe -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$extracted' -Force" ;;
+            *) unzip -q "$archive" -d "$extracted" ;;
+          esac
+          binary=$(find "$extracted" -type f -name 'rclone*' ! -name '*.1' -print -quit)
+          test -n "$binary"
+          case "${{ runner.os }}" in
+            Windows) cp "$binary" "$destination/rclone.exe" ;;
+            *) cp "$binary" "$destination/rclone"; chmod 755 "$destination/rclone" ;;
+          esac
+      - name: Check frontend and Rust
         working-directory: app
-        run: python packaging/archive_bundle.py --name ${{ matrix.artifact }}
-
+        run: npm run build && cargo test --locked -j 2 --manifest-path src-tauri/Cargo.toml && cargo clippy --locked -j 2 --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Build native installer
         working-directory: app
-        run: python packaging/build_installer.py --name ${{ matrix.installer }}
-
-      - name: Verify native installer
+        run: npm run tauri:build
+      - name: Probe packaged executable
+        if: runner.os != 'Windows'
+        shell: bash
         working-directory: app
-        env:
-          MOUNTLET_EXPECT_BUNDLED_RCLONE: ${{ matrix.bundle_rclone }}
-        run: python packaging/verify_installer.py artifacts/${{ matrix.installer }}
-
-      - name: Upload native bundle
-        uses: actions/upload-artifact@v4
+        run: |
+          version=$(node -p "require('./package.json').version")
+          executable="src-tauri/target/release/mountlet"
+          if [ "${{ runner.os }}" = "Windows" ]; then executable="${executable}.exe"; fi
+          test "$("$executable" --version)" = "Mountlet ${version}"
+      - name: Verify bundled-rclone variant
+        shell: bash
+        working-directory: app
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            dmg=$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)
+            mountpoint=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
+            found=$(find "$mountpoint" -type f -name rclone -print -quit)
+            hdiutil detach "$mountpoint"
+            rmdir "$mountpoint"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            installer=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' -print -quit)
+            found=$(7z l "$installer" | grep -i 'rclone.exe' || true)
+          else
+            found=$(find src-tauri/target/release/bundle -type f \( -name rclone -o -name rclone.exe \) -print -quit)
+          fi
+          if [ "${{ matrix.bundled }}" = "true" ]; then test -n "$found"; else test -z "$found"; fi
+      - name: Collect installer with stable release name
+        shell: bash
+        working-directory: app
+        run: |
+          case "${{ runner.os }}" in
+            Linux) source=$(find src-tauri/target/release/bundle/deb -type f -name '*.deb' -print -quit) ;;
+            Windows) source=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' -print -quit) ;;
+            macOS) source=$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit) ;;
+          esac
+          test -n "$source"
+          mkdir -p artifacts
+          cp "$source" "artifacts/${{ matrix.installer }}"
+      - name: Smoke-test installed Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: app
+        run: |
+          sudo dpkg --install "artifacts/${{ matrix.installer }}"
+          marker="$RUNNER_TEMP/mountlet-startup.json"
+          expected=$(node -p "require('./package.json').version")
+          rm -f "$marker"
+          dbus-run-session -- env MOUNTLET_STARTUP_SMOKE="$marker" xvfb-run -a /usr/bin/mountlet &
+          process=$!
+          for _ in $(seq 1 60); do
+            test -f "$marker" && break
+            kill -0 "$process" 2>/dev/null || break
+            sleep 1
+          done
+          test -f "$marker"
+          wait "$process"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
+      - name: Smoke-test installed Windows package
+        if: runner.os == 'Windows'
+        shell: powershell
+        working-directory: app
+        run: |
+          $installer = (Resolve-Path "artifacts/${{ matrix.installer }}").Path
+          $desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Mountlet.lnk"
+          Remove-Item $desktopShortcut -Force -ErrorAction SilentlyContinue
+          $install = Start-Process -FilePath $installer -ArgumentList "/S /NS" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+          if (Test-Path $desktopShortcut) { throw "Installer created a desktop shortcut despite /NS" }
+          $executable = Join-Path $env:LOCALAPPDATA "Mountlet\mountlet.exe"
+          if (-not (Test-Path $executable)) { throw "Installed executable not found at $executable" }
+          $marker = Join-Path $env:RUNNER_TEMP "mountlet-startup.json"
+          $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          Remove-Item $marker -Force -ErrorAction SilentlyContinue
+          # Exercise startup with the kind of leftover mount tree found after
+          # an interrupted Windows session. Native command registration must
+          # not wait for mount-point housekeeping.
+          $staleMount = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Mountlet\mounted\ci-stale\nested"
+          New-Item -ItemType Directory -Path $staleMount -Force | Out-Null
+          Set-Content -Path (Join-Path $staleMount "leftover.txt") -Value "startup must remain responsive"
+          $env:MOUNTLET_STARTUP_SMOKE = $marker
+          Add-Type @"
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class MountletWindowProbe {
+            private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+            [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+            [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int count);
+            [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+            public static uint[] VisibleConsoleProcessIds() {
+              var ids = new List<uint>();
+              EnumWindows((window, parameter) => {
+                var name = new StringBuilder(256);
+                if (IsWindowVisible(window) && GetClassName(window, name, name.Capacity) > 0 && name.ToString() == "ConsoleWindowClass") {
+                  uint processId;
+                  GetWindowThreadProcessId(window, out processId);
+                  ids.Add(processId);
+                }
+                return true;
+              }, IntPtr.Zero);
+              return ids.ToArray();
+            }
+          }
+          "@
+          $existingConsoles = [MountletWindowProbe]::VisibleConsoleProcessIds()
+          $unexpectedConsoles = [System.Collections.Generic.HashSet[uint32]]::new()
+          $process = Start-Process -FilePath $executable -PassThru
+          try {
+            for ($attempt = 0; $attempt -lt 600 -and -not (Test-Path $marker); $attempt++) {
+              if ($process.HasExited) { break }
+              foreach ($consoleProcess in [MountletWindowProbe]::VisibleConsoleProcessIds()) {
+                if ($consoleProcess -notin $existingConsoles) { $null = $unexpectedConsoles.Add($consoleProcess) }
+              }
+              Start-Sleep -Milliseconds 100
+              $process.Refresh()
+            }
+            if (-not (Test-Path $marker)) { throw "Installed app did not report startup readiness" }
+            if ($unexpectedConsoles.Count -ne 0) { throw "Installed app spawned visible console windows owned by: $($unexpectedConsoles -join ', ')" }
+            if (-not $process.WaitForExit(10000)) { throw "Installed app did not exit after its startup probe" }
+            if ($process.ExitCode -ne 0) { throw "Installed app exited with $($process.ExitCode)" }
+            $result = Get-Content $marker -Raw | ConvertFrom-Json
+            if ($result.version -ne $expected -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.remoteStateReady -or -not $result.behaviorComplete) {
+              throw "Installed app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
+            }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+      - name: Smoke-test installed macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: app
+        run: |
+          dmg="artifacts/${{ matrix.installer }}"
+          mountpoint=$(mktemp -d)
+          trap 'hdiutil detach "$mountpoint" >/dev/null 2>&1 || true; rmdir "$mountpoint" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
+          marker="$RUNNER_TEMP/mountlet-startup.json"
+          expected=$(node -p "require('./package.json').version")
+          rm -f "$marker"
+          executable=$(find "$mountpoint" -type f -path '*/Contents/MacOS/mountlet' -print -quit)
+          test -n "$executable"
+          MOUNTLET_STARTUP_SMOKE="$marker" "$executable" &
+          process=$!
+          for _ in $(seq 1 60); do
+            test -f "$marker" && break
+            kill -0 "$process" 2>/dev/null || break
+            sleep 1
+          done
+          test -f "$marker"
+          wait "$process"
+          node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.frontendReady||!value.mainWindowReady||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
+          hdiutil detach "$mountpoint"
+          rmdir "$mountpoint"
+          trap - EXIT
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: |
-            app/artifacts/${{ matrix.archive }}
-            app/artifacts/${{ matrix.installer }}
+          name: mountlet-${{ matrix.platform }}-${{ matrix.variant }}
+          path: app/artifacts/${{ matrix.installer }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -207,23 +268,15 @@ jobs:
       CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
       MOUNTLET_R2_BUCKET: ${{ github.ref_name == 'wip' && vars.MOUNTLET_PREVIEW_R2_BUCKET || vars.MOUNTLET_PRODUCTION_R2_BUCKET }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Download package artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
         with:
           path: release-artifacts
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
-
-      - name: Install website tools
-        run: npm ci
-
+      - run: npm ci
       - name: Check upload configuration
         shell: bash
         run: |
@@ -231,11 +284,8 @@ jobs:
           test -n "$CLOUDFLARE_R2_ACCESS_KEY_ID"
           test -n "$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
           test -n "$MOUNTLET_R2_BUCKET"
-
-      - name: Validate release system
+      - name: Validate and upload installers
         run: |
           npm run web:release:check
           npm run web:release:test
-
-      - name: Upload installers
-        run: npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --remote
+          npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --remote

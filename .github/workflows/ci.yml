@@ -3,65 +3,66 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, wip]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
-
+  desktop:
+    name: Tauri desktop
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install package
-        working-directory: app
-        run: python -m pip install -e .
-
-      - name: Syntax check
-        working-directory: app
-        run: python -m compileall -q src tests
-
-      - name: Unit tests
-        working-directory: app
-        run: python -m unittest discover -s tests
-
-  package:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build wheel
-        working-directory: app
-        run: |
-          python -m pip install build
-          python -m build
-
-  web:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
-
-      - name: Install website tools
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        working-directory: app
         run: npm ci
+      - name: Check and build frontend
+        working-directory: app
+        run: npm run build
+      - name: Run Rust tests
+        working-directory: app
+        run: cargo test --locked -j 2 --manifest-path src-tauri/Cargo.toml
+      - name: Lint Rust targets
+        working-directory: app
+        run: cargo clippy --locked -j 2 --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Build and probe desktop executable
+        working-directory: app
+        run: |
+          cargo build --locked --manifest-path src-tauri/Cargo.toml
+          version=$(node -p "require('./package.json').version")
+          test "$(src-tauri/target/debug/mountlet --version)" = "Mountlet ${version}"
 
-      - name: Validate website release system
+  web:
+    name: Website and release tooling
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Validate website and release system
         run: |
           node --check web/script.js
           npm run web:release:check
