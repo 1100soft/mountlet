@@ -56,15 +56,15 @@
     <main class="page-frame">
       <section class="tab-panel active" id="panel-home" role="tabpanel" aria-labelledby="tab-home" data-panel="home">
         <div class="hero-copy">
+          <div class="hero-actions">
+            <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
+            <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
+          </div>
           <p class="eyebrow">Home</p>
           <h2>Many accounts, one app.</h2>
           <p class="lede">
             Mountlet brings cloud storage accounts from different providers into one simple desktop app. Browse, open, sync, cache, and organize files without jumping between provider apps and web interfaces.
           </p>
-          <div class="hero-actions">
-            <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
-            <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
-          </div>
         </div>
         <div class="hero-workflows" aria-label="Mountlet file access workflows">
           <article>
@@ -81,20 +81,26 @@
       <section class="tab-panel" id="panel-download" role="tabpanel" aria-labelledby="tab-download" data-panel="download" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Download</p>
-          <h2>Download Mountlet for your desktop.</h2>
         </div>
 
-        <section class="build-explanation" aria-labelledby="build-title">
-          <div>
-            <p class="eyebrow">Builds</p>
-            <h3 id="build-title">Choose the standard or lean build.</h3>
-          </div>
-          <p><strong>Standard build:</strong> includes a current, app-local rclone. It is the recommended choice and does not replace a system installation.</p>
-          <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
-        </section>
-
         <section class="download-card emphasized download-selector" aria-labelledby="download-selector-title">
-          <h3 id="download-selector-title">Choose platform and architecture</h3>
+          <h3 id="download-selector-title" class="sr-only">Download Mountlet</h3>
+          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
+          <p class="download-selection-status" id="download-selection-status" role="status"></p>
+          <div class="download-options">
+            <label class="release-version-choice" for="release-version">Version <select id="release-version" aria-label="Mountlet version"><option value="">Latest</option></select></label>
+            <div class="lean-build-row">
+              <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build</label>
+              <details class="info-popover">
+                <summary aria-label="About standard and lean builds">i</summary>
+                <div class="info-popover-panel">
+                  <p><strong>Standard build:</strong> includes a current, app-local rclone. It is the recommended choice and does not replace a system installation.</p>
+                  <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+          <p class="download-platform-label" id="download-platform-label">Platform</p>
           <div class="download-matrix-wrap">
             <table class="download-matrix">
               <colgroup><col class="platform-column" /><col class="architecture-column" /><col class="architecture-column" /></colgroup>
@@ -118,19 +124,13 @@
               </tbody>
             </table>
           </div>
-          <div class="download-options">
-            <label class="release-version-choice" for="release-version">Version <select id="release-version" aria-label="Mountlet version"><option value="">Latest</option></select></label>
-            <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build (requires a compatible system rclone)</label>
-          </div>
-          <p class="download-selection-status" id="download-selection-status" role="status"></p>
-          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
           <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
         </section>
 
         <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
           <div class="mount-dependencies-heading">
             <p class="eyebrow">Mounted folders</p>
-            <h3 id="mount-dependencies-title">Install the filesystem driver for your platform.</h3>
+            <h3 id="mount-dependencies-title">Filesystem driver</h3>
             <p>Mountlet detects the driver and enables mounted folder access after installation.</p>
           </div>
           <div class="dependency-grid">
@@ -176,72 +176,68 @@
       <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Pricing</p>
-          <h2>Buy a license or add devices.</h2>
         </div>
-        <div class="pricing-grid license-grid">
+        <div class="pricing-layout">
+          <div class="pricing-primary">
+            <article class="price-card featured license-card">
+              <p class="price" id="license-plan-price">$5/mo</p>
+              <h3>License</h3>
+              <p>One device included. Extra devices are optional.</p>
+              <input type="hidden" id="license-action" name="license-action" value="" />
+              <div class="license-action-buttons" role="group" aria-label="License action">
+                <button class="button secondary" type="button" data-license-action="new_license" aria-pressed="false">Buy a license</button>
+                <button class="button secondary" type="button" data-license-action="add_devices" aria-pressed="false">Add devices to my license</button>
+              </div>
+              <div class="existing-license-fields" id="existing-license-fields" hidden>
+                <label class="license-key-label" for="existing-license-key">License key</label>
+                <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" maxlength="27" placeholder="MNT-..." disabled />
+                <div class="button-row">
+                  <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
+                  <span id="license-key-status" class="inline-status" hidden></span>
+                </div>
+              </div>
+            </article>
+            <article class="price-card plan-card" id="plan-card">
+              <h3>Plan</h3>
+              <fieldset class="plan-choice" id="license-plan-choice">
+                <legend class="sr-only">Plan</legend>
+                <label>
+                  <input type="radio" name="license-plan" value="monthly" checked />
+                  Monthly
+                </label>
+                <label>
+                  <input type="radio" name="license-plan" value="annual" />
+                  Annual
+                </label>
+                <label>
+                  <input type="radio" name="license-plan" value="lifetime" />
+                  Lifetime
+                </label>
+              </fieldset>
+            </article>
+          </div>
+          <div class="pricing-followup" id="pricing-followup" hidden>
+            <article class="price-card add-device-card disabled" id="add-device-card">
+              <h3>Devices</h3>
+              <p class="price" id="add-device-price">$1/device</p>
+              <p>Add extra device slots if you need more than one.</p>
+              <label class="device-field">
+                Extra devices
+                <input id="add-device-count" type="number" min="0" max="50" value="0" disabled />
+              </label>
+            </article>
+            <article class="price-card cart-card" id="cart-card">
+              <h3>Cart</h3>
+              <dl class="cart-lines" id="cart-lines"></dl>
+              <p class="cart-devices" id="cart-devices">1 device total</p>
+              <p class="cart-total" id="cart-total">$5</p>
+              <button class="button primary checkout-button" id="checkout-button">Checkout</button>
+            </article>
+          </div>
           <article class="price-card beta-card">
             <h3>Public beta</h3>
-            <p class="price">Free during beta</p>
-            <p>Use the public beta key for temporary access. It renews daily while the beta is open and can be disabled when the beta ends.</p>
+            <p>Free during beta. Use the public beta key for temporary access. It renews daily while the beta is open and can be disabled when the beta ends.</p>
             <button class="button secondary" type="button" id="use-beta-key">Use beta key</button>
-          </article>
-          <article class="price-card plan-card" id="plan-card">
-            <div>
-              <h3>Choose a plan</h3>
-              <p class="price" id="license-plan-price">$5/mo</p>
-              <p>Start with one device. Add more devices in the next box.</p>
-            </div>
-            <fieldset class="license-choice plan-choice" id="license-plan-choice">
-              <legend>Plan</legend>
-              <label>
-                <input type="radio" name="license-plan" value="monthly" checked />
-                Monthly
-              </label>
-              <label>
-                <input type="radio" name="license-plan" value="annual" />
-                Annual
-              </label>
-              <label>
-                <input type="radio" name="license-plan" value="lifetime" />
-                Lifetime
-              </label>
-            </fieldset>
-          </article>
-          <article class="price-card featured license-card">
-            <h3>License</h3>
-            <p>Start with a new one-device license, or add devices to a license you already have.</p>
-            <fieldset class="license-choice">
-              <legend>License action</legend>
-              <label>
-                <input type="radio" name="license-action" value="new_license" checked />
-                Buy new license
-              </label>
-              <label>
-                <input type="radio" name="license-action" value="add_devices" />
-                I have a license
-              </label>
-              <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" maxlength="27" placeholder="MNT-..." disabled />
-            </fieldset>
-            <div class="button-row">
-              <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
-              <span id="license-key-status" class="inline-status" hidden></span>
-            </div>
-          </article>
-          <article class="price-card add-device-card disabled" id="add-device-card">
-            <h3>Add devices</h3>
-            <p class="price" id="add-device-price">$1/device</p>
-            <p>Add optional extra device slots.</p>
-            <label class="device-field">
-              Extra devices
-              <input id="add-device-count" type="number" min="0" max="50" value="0" disabled />
-            </label>
-          </article>
-          <article class="price-card cart-card" id="cart-card">
-            <h3>Cart</h3>
-            <dl class="cart-lines" id="cart-lines"></dl>
-            <p class="cart-devices" id="cart-devices">1 device total</p>
-            <p class="cart-total" id="cart-total">$5</p>
-            <button class="button primary checkout-button" id="checkout-button">Checkout</button>
           </article>
         </div>
         <p class="note">
@@ -272,7 +268,6 @@
       <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>
         <div class="panel-heading feature-heading">
           <p class="eyebrow">Features</p>
-          <h2>Every cloud account, one responsive workspace.</h2>
           <p class="lede">
             Mountlet keeps accounts from different providers together, with two
             complementary ways to work: a fully managed file browser and native mounting.
@@ -425,7 +420,6 @@
       <section class="tab-panel how-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
         <div class="panel-heading">
           <p class="eyebrow">How it works</p>
-          <h2>One cloud engine, two access routes.</h2>
           <p class="lede">
             Mountlet coordinates rclone rather than reimplementing each provider protocol.
             The same configured cloud account can be managed through Mountlet’s file browser
@@ -506,7 +500,6 @@
         <div class="notifications-heading">
           <div class="panel-heading">
             <p class="eyebrow">Notifications</p>
-            <h2>Mountlet notices.</h2>
           </div>
           <button class="button secondary compact" type="button" id="refresh-notifications">Refresh</button>
         </div>
@@ -521,7 +514,6 @@
       <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>
         <div class="panel-heading">
           <p class="eyebrow">FAQ</p>
-          <h2>Short answers before you install.</h2>
         </div>
         <label class="site-search" for="faq-search">
           <span class="sr-only">Search frequently asked questions</span>
@@ -595,8 +587,7 @@
       <section class="tab-panel support-panel" id="panel-support" role="tabpanel" aria-labelledby="tab-support" data-panel="support" hidden>
         <div class="panel-heading">
           <p class="eyebrow">Support</p>
-          <h2>Start with the FAQ.</h2>
-          <p class="lede">Most common questions are answered there. Mountlet is independently maintained, so individual replies may take time.</p>
+          <p class="lede">Most common questions are answered in the FAQ. Mountlet is independently maintained, so individual replies may take time.</p>
         </div>
         <div class="button-row">
           <button class="button secondary tab-action" type="button" data-tab="faq">Search FAQ</button>
