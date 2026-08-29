@@ -1484,8 +1484,8 @@ pub(crate) fn open_local_path(path: &Path) -> Result<(), String> {
 fn open_external_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
-        let mut value = Command::new("explorer.exe");
-        value.arg(target);
+        let mut value = Command::new("cmd");
+        value.args(["/C", "start", "", target]);
         value
     };
     #[cfg(target_os = "macos")]
@@ -3364,8 +3364,23 @@ fn app_diagnostics(window: tauri::WebviewWindow, state: tauri::State<'_, AppStat
     )
 }
 
+async fn run_on_main_async<T, F>(app: tauri::AppHandle, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(work());
+    })
+    .map_err(|error| error.to_string())?;
+    receiver
+        .await
+        .map_err(|_| "The UI thread did not run the request.".into())
+}
+
 #[tauri::command]
-fn app_version() -> String {
+async fn app_version() -> String {
     if BUILD_CHANNEL == "production" && build_revision() == "local" {
         env!("CARGO_PKG_VERSION").into()
     } else {
@@ -3378,13 +3393,17 @@ fn app_version() -> String {
 }
 
 #[tauri::command]
-fn show_startup_windows(app: tauri::AppHandle) -> Result<(), String> {
-    if app.get_webview_window("main").is_none() {
-        return Err("main window is unavailable".into());
-    }
-    show_window_stack(&app);
-    schedule_startup_tray_layout(&app);
-    Ok(())
+async fn show_startup_windows(app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        if ui.get_webview_window("main").is_none() {
+            return Err("main window is unavailable".into());
+        }
+        show_window_stack(&ui);
+        schedule_startup_tray_layout(&ui);
+        Ok(())
+    })
+    .await?
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -3503,15 +3522,29 @@ fn complete_startup_smoke(
 }
 
 #[tauri::command]
-fn clipboard_text() -> Result<String, String> {
+async fn clipboard_text(app: tauri::AppHandle) -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
-        Ok(gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD)
-            .wait_for_text()
-            .map(|text| text.to_string())
-            .unwrap_or_default())
+        run_on_main_async(app, || {
+            Ok(gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD)
+                .wait_for_text()
+                .map(|text| text.to_string())
+                .unwrap_or_default())
+        })
+        .await?
     }
 
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(read_clipboard)
+            .await
+            .map_err(|error| error.to_string())?
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_clipboard() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("pbpaste")
@@ -3546,7 +3579,7 @@ fn clipboard_text() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn license_default_device_label() -> String {
+async fn license_default_device_label() -> String {
     license::default_device_label()
 }
 
@@ -4485,11 +4518,13 @@ fn pull_config_sync(password: String, state: tauri::State<'_, AppState>) -> Resu
 }
 
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
+async fn open_external(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only web links can be opened".into());
     }
-    open_external_target(&url)
+    tauri::async_runtime::spawn_blocking(move || open_external_target(&url))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -5136,13 +5171,13 @@ fn fallback_tray_popup_position(
 }
 
 #[tauri::command]
-fn apply_window_layout(
+async fn apply_window_layout(
     request: WindowLayoutRequest,
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    if window.label() == "browser" {
+    let stored = if window.label() == "browser" {
         let Some(mut stored) = state
             .last_layout
             .lock()
@@ -5156,12 +5191,19 @@ fn apply_window_layout(
         if let Ok(mut last) = state.last_layout.lock() {
             *last = Some(stored.clone());
         }
-        return layout_windows(&app, state.inner(), &stored);
-    }
-    if let Ok(mut last) = state.last_layout.lock() {
-        *last = Some(request.clone());
-    }
-    layout_windows(&app, state.inner(), &request)
+        stored
+    } else {
+        if let Ok(mut last) = state.last_layout.lock() {
+            *last = Some(request.clone());
+        }
+        request
+    };
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        let state = ui.state::<AppState>();
+        layout_windows(&ui, state.inner(), &stored)
+    })
+    .await?
 }
 
 fn layout_windows(
@@ -6568,7 +6610,12 @@ async fn reauthenticate_remote(
 }
 
 #[tauri::command]
-fn set_browser_window(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+async fn set_browser_window(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || set_browser_window_on_main(&ui, enabled)).await?
+}
+
+fn set_browser_window_on_main(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("browser") {
         if enabled {
             let main_visible = app
@@ -6588,7 +6635,7 @@ fn set_browser_window(enabled: bool, app: tauri::AppHandle) -> Result<(), String
             .get_webview_window("main")
             .ok_or("main window is unavailable")?;
         tauri::WebviewWindowBuilder::new(
-            &app,
+            app,
             "browser",
             tauri::WebviewUrl::App("index.html?browser=1".into()),
         )
@@ -6638,16 +6685,20 @@ async fn get_browser_state(state: tauri::State<'_, AppState>) -> Result<(String,
 }
 
 #[tauri::command]
-fn focus_window(label: String, app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("{label} window is unavailable"))?;
-    if let Ok(mut focused) = app.state::<AppState>().last_focused_window.lock() {
-        *focused = label;
-    }
-    window.show().map_err(|error| error.to_string())?;
-    activate_window_keyboard(&window);
-    Ok(())
+async fn focus_window(label: String, app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        let window = ui
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("{label} window is unavailable"))?;
+        if let Ok(mut focused) = ui.state::<AppState>().last_focused_window.lock() {
+            *focused = label.clone();
+        }
+        window.show().map_err(|error| error.to_string())?;
+        activate_window_keyboard(&window);
+        Ok(())
+    })
+    .await?
 }
 
 fn activate_window_keyboard(window: &tauri::WebviewWindow) {
@@ -6697,18 +6748,22 @@ fn grab_webkit_focus(widget: &gtk::Widget) {
 }
 
 #[tauri::command]
-fn set_window_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
+async fn set_window_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
     if pinned && !platform::desktop_hints().pin_supported {
         return Err("GNOME on Wayland does not allow apps to pin their own windows.".into());
     }
-    for label in ["main", "browser"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .set_always_on_top(pinned)
-                .map_err(|error| error.to_string())?;
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        for label in ["main", "browser"] {
+            if let Some(window) = ui.get_webview_window(label) {
+                window
+                    .set_always_on_top(pinned)
+                    .map_err(|error| error.to_string())?;
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -6882,8 +6937,13 @@ struct DriveOauthSource {
 }
 
 #[tauri::command]
-fn check_prerequisites(state: tauri::State<'_, AppState>) -> Vec<platform::Prerequisite> {
-    platform::check_prerequisites(state.rclone.as_deref())
+async fn check_prerequisites(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<platform::Prerequisite>, String> {
+    let rclone = state.rclone.clone();
+    tauri::async_runtime::spawn_blocking(move || platform::check_prerequisites(rclone.as_deref()))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -7164,19 +7224,24 @@ fn build_tray_menu<M: Manager<tauri::Wry>>(app: &M) -> tauri::Result<Menu<tauri:
 }
 
 #[tauri::command]
-fn refresh_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
+async fn refresh_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || refresh_tray_menu_on_main(&ui)).await?
+}
+
+fn refresh_tray_menu_on_main(app: &tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        linux_tray::refresh(&app);
+        linux_tray::refresh(app);
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let menu = build_tray_menu(&app).map_err(|error| error.to_string())?;
+        let menu = build_tray_menu(app).map_err(|error| error.to_string())?;
         if let Some(tray) = app.tray_by_id("mountlet") {
             tray.set_menu(Some(menu))
                 .map_err(|error| error.to_string())?;
-            tray.set_tooltip(Some(tray_status_tooltip(&app)))
+            tray.set_tooltip(Some(tray_status_tooltip(app)))
                 .map_err(|error| error.to_string())?;
         }
         Ok(())

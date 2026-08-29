@@ -93,6 +93,12 @@ function requireIntegratedEdits(): boolean {
 }
 function licenseLocked(): boolean { return currentLicense?.state === "expired"; }
 
+function applyLicense(status: LicenseStatus | null): void {
+  currentLicense = status;
+  render();
+  scheduleNativeLayout(0);
+}
+
 function bounded<T>(operation: Promise<T>, milliseconds: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(message)), milliseconds);
@@ -519,7 +525,7 @@ async function showLicense(): Promise<void> {
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   const defaultDeviceLabelPromise = bounded(licenseDefaultDeviceLabel(), 5000, "Could not identify this device.").catch(() => "This device");
   const renderLicense = async (status: LicenseStatus, defaultDeviceLabel: string) => {
-    currentLicense = status; content.replaceChildren();
+    currentLicense = status; render(); scheduleNativeLayout(0); content.replaceChildren();
     content.append(element("p", `license-summary${status.state === "expired" ? " error" : ""}`, status.summary));
     const expiry = status.licenseKind === "beta" && status.state === "licensed"
       ? "Public beta access renews daily and can end when the beta closes."
@@ -2557,11 +2563,8 @@ async function start(): Promise<void> {
   // reposition the already-visible window once settings have loaded.
   if (!isBrowserWindow) await showStartupWindows();
   const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder()]);
-  const savedLicense = await bounded(licenseStatus(), 15000, "License status timed out.").catch(error => ({
-    state: "expired" as const,
-    summary: `License status could not be verified: ${String(error)}`,
-    trialDaysRemaining: 0, licenseKey: "", licensedEmail: "", plan: "", licenseKind: "", maxDevices: 0, deviceLabel: "", expiresAt: "",
-  }));
+  const licenseRequest = licenseStatus();
+  const savedLicense = await bounded(licenseRequest, 15000, "License status timed out.").catch(() => null);
   registrationOrder = savedRegistrationOrder;
   completeSettings = savedSettings;
   browserMemory = savedBrowserMemory;
@@ -2569,6 +2572,7 @@ async function start(): Promise<void> {
   currentLicense = savedLicense;
   if (saved) Object.assign(preferences, saved);
   applyPreferences();
+  void licenseRequest.then(status => applyLicense(status)).catch(() => undefined);
   await listenNativeLayout(event => {
     cachedBrowserSide = event.browserSide === "left" ? "left" : "right";
     nativeBrowserInnerHeight = event.browserInnerHeight;
