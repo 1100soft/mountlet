@@ -4867,24 +4867,32 @@ fn seed_tray_anchor_from_os(app: &tauri::AppHandle) {
     if valid {
         return;
     }
-    if let Some(tray) = app.tray_by_id("mountlet") {
-        if let Ok(Some(rect)) = tray.rect() {
-            let (x, y) = tray_rect_center(&rect);
-            cache_tray_anchor(app, x, y);
-            return;
-        }
+    let native_anchor = app
+        .tray_by_id("mountlet")
+        .and_then(|tray| tray.rect().ok().flatten());
+    if let Some(rect) = native_anchor {
+        let (x, y) = tray_rect_center(&rect);
+        cache_tray_anchor(app, x, y);
+    } else {
+        fallback_tray_anchor(app);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn fallback_tray_anchor(app: &tauri::AppHandle) {
     // Windows and macOS expose the actual notification/status item rectangle.
     // During process startup the shell can need another event-loop turn before
     // it returns that rectangle. Do not permanently replace it with the cursor:
     // leaving the anchor invalid lets the final layout pass retry the native API.
-    #[cfg(target_os = "linux")]
     if let Ok(position) = app.cursor_position() {
         if position.x.abs() > 1.0 || position.y.abs() > 1.0 {
             cache_tray_anchor(app, position.x, position.y);
         }
     }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn fallback_tray_anchor(_app: &tauri::AppHandle) {}
 
 fn tray_rect_box(rect: &tauri::Rect) -> (f64, f64, f64, f64) {
     let position = match rect.position {
