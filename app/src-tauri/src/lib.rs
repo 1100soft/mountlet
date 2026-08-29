@@ -18,16 +18,16 @@ use tauri::{Emitter, Manager};
 use tauri::{LogicalPosition, LogicalSize};
 use tokio::sync::RwLock;
 
-mod config_bundle;
 mod child_process;
+mod config_bundle;
 mod file_managers;
 mod license;
 #[cfg(target_os = "linux")]
 mod linux_tray;
 mod platform;
 mod work_area;
-use work_area::WorkArea;
 use child_process::Command;
+use work_area::WorkArea;
 
 const SECRET_FIELD_MASK: &str = "••••••";
 const RUNTIME_SESSION_MARKER: &str = "Mountlet Rust runtime started";
@@ -43,7 +43,11 @@ fn build_revision() -> &'static str {
 }
 
 fn build_id() -> String {
-    format!("{}-{BUILD_CHANNEL}-{}", env!("CARGO_PKG_VERSION"), build_revision())
+    format!(
+        "{}-{BUILD_CHANNEL}-{}",
+        env!("CARGO_PKG_VERSION"),
+        build_revision()
+    )
 }
 
 #[derive(Clone, Serialize)]
@@ -2722,10 +2726,19 @@ fn path_is_mounted(path: &Path) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        path.symlink_metadata()
-            .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        let path = path.to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            let mounted = path
+                .symlink_metadata()
+                .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+                .unwrap_or(false);
+            let _ = sender.send(mounted);
+        });
+        receiver
+            .recv_timeout(Duration::from_millis(200))
             .unwrap_or(false)
     }
     #[cfg(target_os = "macos")]
@@ -2931,20 +2944,27 @@ pub(crate) fn remote_is_configured(remote_id: &str, provider: &str) -> bool {
 
 #[tauri::command]
 async fn list_remotes(state: tauri::State<'_, AppState>) -> Result<Vec<Remote>, String> {
-    Ok(state
+    let remotes = state
         .remotes
         .read()
         .map_err(|_| "Remote state is unavailable")?
         .iter()
-        .filter(|remote| remote_is_configured(&remote.id, &remote.provider))
         .cloned()
-        .map(|mut remote| {
-            remote.mounted = remote_mount_path(&remote.id)
-                .map(|path| path_is_mounted(&path))
-                .unwrap_or(false);
-            remote
-        })
-        .collect())
+        .collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || {
+        remotes
+            .into_iter()
+            .filter(|remote| remote_is_configured(&remote.id, &remote.provider))
+            .map(|mut remote| {
+                remote.mounted = remote_mount_path(&remote.id)
+                    .map(|path| path_is_mounted(&path))
+                    .unwrap_or(false);
+                remote
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3349,7 +3369,11 @@ fn app_version() -> String {
     if BUILD_CHANNEL == "production" && build_revision() == "local" {
         env!("CARGO_PKG_VERSION").into()
     } else {
-        format!("{} ({BUILD_CHANNEL} {})", env!("CARGO_PKG_VERSION"), build_revision())
+        format!(
+            "{} ({BUILD_CHANNEL} {})",
+            env!("CARGO_PKG_VERSION"),
+            build_revision()
+        )
     }
 }
 
@@ -3504,7 +3528,12 @@ fn clipboard_text() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         let output = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-Clipboard -Raw",
+            ])
             .output()
             .map_err(|error| format!("Could not read the clipboard: {error}"))?;
         if !output.status.success() {
@@ -3784,10 +3813,13 @@ fn bug_report_preview(
 }
 
 #[tauri::command]
-fn license_status() -> Result<license::Status, String> {
-    // Match Python's direct current_status() path instead of routing ordinary
-    // local state evaluation through the asynchronous worker pool.
-    license::status()
+async fn license_status() -> Result<license::Status, String> {
+    // Local status evaluation can touch replicated trial files. Keep it off the
+    // WebView IPC thread so a slow disk or leftover mount cannot freeze About,
+    // Buy license, or other commands.
+    tauri::async_runtime::spawn_blocking(license::status)
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4361,7 +4393,10 @@ fn import_config_bundle(
 }
 
 #[tauri::command]
-async fn push_config_sync(password: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn push_config_sync(
+    password: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let settings = app_settings();
     if settings.config_sync_remote.is_empty() || settings.config_sync_path.is_empty() {
         return Err("Set a config sync remote and path in App configuration first.".into());
@@ -4371,7 +4406,11 @@ async fn push_config_sync(password: String, state: tauri::State<'_, AppState>) -
         .as_ref()
         .ok_or("rclone configuration is unavailable")?
         .clone();
-    let rclone = state.rclone.as_ref().ok_or("rclone is unavailable")?.clone();
+    let rclone = state
+        .rclone
+        .as_ref()
+        .ok_or("rclone is unavailable")?
+        .clone();
     tauri::async_runtime::spawn_blocking(move || {
         let temporary = env::temp_dir().join(format!(
             "mountlet-config-sync-{}.mountlet",
@@ -5133,7 +5172,9 @@ fn layout_windows(
     let main = app
         .get_webview_window("main")
         .ok_or("main window is unavailable")?;
-    seed_tray_anchor_from_os(app);
+    // TrayIcon::rect() talks to the shell. Querying it from a command handler
+    // can stall WebView IPC on Windows. Startup retries seed the cache from
+    // the native event loop instead.
     let requested_area = WorkArea {
         x: request.available_x,
         y: request.available_y,
@@ -7199,6 +7240,10 @@ fn install_native_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::E
             .build(app)?;
         Ok(())
     }
+}
+
+pub fn write_license_diagnostics(path: &Path) -> Result<(), String> {
+    license::write_diagnostics(path)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

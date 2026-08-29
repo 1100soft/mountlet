@@ -1,7 +1,7 @@
+use crate::child_process::Command;
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::child_process::Command;
 use std::process::Stdio;
 
 use serde::Serialize;
@@ -61,10 +61,13 @@ pub fn resolve(identifier: &str) -> FileManager {
         })
 }
 
-pub fn open_folder(path: &Path, manager_id: &str, behavior: &str, focus: bool) -> Result<(), String> {
-    let path = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
+pub fn open_folder(
+    path: &Path,
+    manager_id: &str,
+    behavior: &str,
+    focus: bool,
+) -> Result<(), String> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if !path.is_dir() {
         return Err("This remote folder is not currently mounted.".into());
     }
@@ -168,7 +171,11 @@ fn open_with_known_file_manager(
             return true;
         }
         if behavior == "current_desktop" {
-            return spawn_detached(&["dolphin".into(), "--new-window".into(), path.display().to_string()]);
+            return spawn_detached(&[
+                "dolphin".into(),
+                "--new-window".into(),
+                path.display().to_string(),
+            ]);
         }
     }
     false
@@ -213,7 +220,11 @@ fn open_dolphin_tab(path: &Path, current_desktop: bool, _focus: bool) -> bool {
     };
     for service in text.lines().filter(|line| line.contains("org.kde.dolphin")) {
         let windows = Command::new("qdbus")
-            .args([service.trim(), "/dolphin", "org.freedesktop.DBus.Introspectable.Introspect"])
+            .args([
+                service.trim(),
+                "/dolphin",
+                "org.freedesktop.DBus.Introspectable.Introspect",
+            ])
             .output()
             .ok()
             .and_then(|value| String::from_utf8(value.stdout).ok())
@@ -293,13 +304,19 @@ fn macos_file_managers() -> Vec<FileManager> {
         is_system_default: true,
         supports_new_window: true,
     }];
-    let roots = [PathBuf::from("/Applications"), dirs_home().join("Applications")];
+    let roots = [
+        PathBuf::from("/Applications"),
+        dirs_home().join("Applications"),
+    ];
     for (identifier, label, app_name) in [
         ("path-finder", "Path Finder", "Path Finder"),
         ("forklift", "ForkLift", "ForkLift"),
         ("commander-one", "Commander One", "Commander One"),
     ] {
-        if roots.iter().any(|root| root.join(format!("{app_name}.app")).exists()) {
+        if roots
+            .iter()
+            .any(|root| root.join(format!("{app_name}.app")).exists())
+        {
             managers.push(FileManager {
                 identifier: identifier.into(),
                 label: label.into(),
@@ -338,7 +355,10 @@ fn linux_file_managers() -> Vec<FileManager> {
             left.identifier != default_id,
             left.label.to_ascii_lowercase(),
         )
-            .cmp(&(right.identifier != default_id, right.label.to_ascii_lowercase()))
+            .cmp(&(
+                right.identifier != default_id,
+                right.label.to_ascii_lowercase(),
+            ))
     });
     let default_label = discovered
         .iter()
@@ -366,7 +386,8 @@ fn linux_desktop_files() -> Vec<PathBuf> {
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".local/share"));
-    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    let data_dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
     let mut files = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for root in std::iter::once(data_home).chain(data_dirs.split(':').map(PathBuf::from)) {
@@ -379,7 +400,10 @@ fn linux_desktop_files() -> Vec<PathBuf> {
             if path.extension().and_then(|value| value.to_str()) != Some("desktop") {
                 continue;
             }
-            let identifier = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+            let identifier = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
             if seen.insert(identifier.to_string()) {
                 files.push(path);
             }
@@ -519,10 +543,7 @@ mod tests {
 
     #[test]
     fn expands_desktop_exec_placeholders() {
-        let command = expand_command(
-            &["dolphin".into(), "%f".into()],
-            Path::new("/tmp/cloud"),
-        );
+        let command = expand_command(&["dolphin".into(), "%f".into()], Path::new("/tmp/cloud"));
         assert_eq!(command, vec!["dolphin", "/tmp/cloud"]);
     }
 

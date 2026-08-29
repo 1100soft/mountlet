@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -26,8 +26,7 @@ const TRIAL_SALT: &[u8] = b"mountlet trial state v1";
 // license checks independent of DNS, TLS and the availability of the website.
 // The endpoint is still used as a rotation fallback when a signature does not
 // match this key or a previously cached replacement.
-const BUNDLED_PUBLIC_KEY: &str =
-    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENrcIcgvV+4hGhJI9dmZO3vEMA4Rz\
+const BUNDLED_PUBLIC_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENrcIcgvV+4hGhJI9dmZO3vEMA4Rz\
      e8kfNS97OhxF7xXuCeKjnV+ERmtJF+3Dhqw9NysrFiXEUgws/nd5e7Y3Cg==";
 
 #[derive(Clone, Debug, Serialize)]
@@ -195,14 +194,26 @@ fn read_first(name: &str) -> String {
         })
         .unwrap_or_default()
 }
-fn store(name: &str, value: &str) -> Result<(), String> {
-    for path in paths(name) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+fn write_replicated(path: &Path, contents: &str) -> bool {
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return false;
         }
-        fs::write(path, format!("{}\n", value.trim())).map_err(|error| error.to_string())?;
     }
-    Ok(())
+    fs::write(path, contents).is_ok()
+}
+
+fn store(name: &str, value: &str) -> Result<(), String> {
+    let contents = format!("{}\n", value.trim());
+    let mut wrote = false;
+    for path in paths(name) {
+        wrote |= write_replicated(&path, &contents);
+    }
+    if wrote {
+        Ok(())
+    } else {
+        Err("Could not store license state.".into())
+    }
 }
 fn clear(name: &str) {
     for path in paths(name) {
@@ -316,8 +327,8 @@ fn recover_legacy_trial(
         ) else {
             continue;
         };
-        let hint_valid = legacy_hint.len() == 64
-            && legacy_hint.bytes().all(|value| value.is_ascii_hexdigit());
+        let hint_valid =
+            legacy_hint.len() == 64 && legacy_hint.bytes().all(|value| value.is_ascii_hexdigit());
         if record["version"].as_i64() == Some(1)
             && hint_valid
             && envelope["signature"].as_str() == Some(&trial_signature(payload, legacy_hint))
@@ -339,11 +350,11 @@ fn write_trial(record: &Value, hint: &str) -> Result<(), String> {
     let envelope = json!({"payload":payload,"signature":trial_signature(&payload,hint)});
     let encoded =
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope).map_err(|error| error.to_string())?);
+    let contents = format!("{encoded}\n");
     for path in trial_paths() {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::write(path, format!("{encoded}\n")).map_err(|error| error.to_string())?;
+        // Match Python: a permission, OneDrive, or antivirus failure on one
+        // replica must not abort status evaluation or block startup.
+        let _ = write_replicated(&path, &contents);
     }
     Ok(())
 }
@@ -424,6 +435,24 @@ mod get_reqwest {
     pub type Response = reqwest::blocking::Response;
 }
 fn verify_token(token: &str) -> Result<Value, String> {
+    verify_token_with(token, true)
+}
+
+fn verify_token_local(token: &str) -> Result<Value, String> {
+    verify_token_with(token, false)
+}
+
+fn verify_token_with(token: &str, allow_network: bool) -> Result<Value, String> {
+    let payload = verify_token_payload(token)?;
+    let parts = token.split('.').collect::<Vec<_>>();
+    let bytes = decode_part(parts[2])?;
+    let signature = signature_from_bytes(&bytes)?;
+    let signed = format!("{}.{}", parts[0], parts[1]);
+    verify_signature(signed.as_bytes(), &signature, allow_network)?;
+    Ok(payload)
+}
+
+fn verify_token_payload(token: &str) -> Result<Value, String> {
     let parts = token.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err("Invalid license token format.".into());
@@ -435,13 +464,6 @@ fn verify_token(token: &str) -> Result<Value, String> {
     }
     let payload: Value = serde_json::from_slice(&decode_part(parts[1])?)
         .map_err(|_| "Invalid license token data.")?;
-    let bytes = decode_part(parts[2])?;
-    let signature = if bytes.len() == 64 {
-        Signature::from_slice(&bytes)
-    } else {
-        Signature::from_der(&bytes)
-    }
-    .map_err(|_| "License token signature is not valid.")?;
     if let Some(expires) = payload["expiresAt"]
         .as_str()
         .filter(|value| !value.is_empty())
@@ -452,17 +474,34 @@ fn verify_token(token: &str) -> Result<Value, String> {
             }
         }
     }
-    let signed = format!("{}.{}", parts[0], parts[1]);
+    Ok(payload)
+}
+
+fn signature_from_bytes(bytes: &[u8]) -> Result<Signature, String> {
+    if bytes.len() == 64 {
+        Signature::from_slice(bytes)
+    } else {
+        Signature::from_der(bytes)
+    }
+    .map_err(|_| "License token signature is not valid.".into())
+}
+
+fn verify_signature(
+    signed: &[u8],
+    signature: &Signature,
+    allow_network: bool,
+) -> Result<(), String> {
+    if public_key()?.verify(signed, signature).is_ok() {
+        return Ok(());
+    }
     let configured = !env::var("MOUNTLET_LICENSE_PUBLIC_KEY")
         .unwrap_or_default()
         .trim()
         .is_empty();
-    if public_key()?.verify(signed.as_bytes(), &signature).is_err()
-        && (configured || !verify_with_rotated_key(signed.as_bytes(), &signature)?)
-    {
-        return Err("License token signature is not valid.".into());
+    if allow_network && !configured && verify_with_rotated_key(signed, signature)? {
+        return Ok(());
     }
-    Ok(payload)
+    Err("License token signature is not valid.".into())
 }
 fn api() -> String {
     env::var("MOUNTLET_LICENSE_API_URL")
@@ -509,11 +548,7 @@ fn host_name() -> String {
         .unwrap_or_else(|| "This device".into())
 }
 pub fn default_device_label() -> String {
-    format!(
-        "{} ({})",
-        host_name(),
-        system_name()
-    )
+    format!("{} ({})", host_name(), system_name())
 }
 fn fingerprint() -> Result<String, String> {
     let record = trial()?;
@@ -558,7 +593,7 @@ fn from_payload(payload: &Value, key: String) -> Status {
 pub fn status() -> Result<Status, String> {
     let token = read_first("license-token.jwt");
     if !token.is_empty() {
-        match verify_token(&token) {
+        match verify_token_local(&token) {
             Ok(payload) => return Ok(from_payload(&payload, read_first("license-key.txt"))),
             Err(error) => {
                 if error.to_ascii_lowercase().contains("expired") {
@@ -716,6 +751,70 @@ pub fn deactivate(device_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn write_diagnostics(path: &Path) -> Result<(), String> {
+    let mut lines = vec![
+        format!("Mountlet {}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "config: {}",
+            mountlet_config_dir()
+                .map(|value| value.display().to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        ),
+        format!(
+            "state: {}",
+            mountlet_state_dir()
+                .map(|value| value.display().to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        ),
+    ];
+    let started = Instant::now();
+    let hint_at = Instant::now();
+    let _ = machine_hint();
+    lines.push(format!("machine_hint: {}ms", hint_at.elapsed().as_millis()));
+    let token_at = Instant::now();
+    let token = read_first("license-token.jwt");
+    lines.push(format!(
+        "token_present: {} ({}ms)",
+        !token.is_empty(),
+        token_at.elapsed().as_millis()
+    ));
+    if !token.is_empty() {
+        let verify_at = Instant::now();
+        let verified = verify_token_local(&token);
+        lines.push(format!(
+            "local_verify: {} ({}ms)",
+            verified
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| "ok".into()),
+            verify_at.elapsed().as_millis()
+        ));
+    }
+    lines.push("trial_paths:".into());
+    for trial_path in trial_paths() {
+        lines.push(format!("  {}", trial_path.display()));
+    }
+    let status_at = Instant::now();
+    match status() {
+        Ok(value) => lines.push(format!(
+            "status: {} ({}) ({}ms)",
+            value.state,
+            value.summary,
+            status_at.elapsed().as_millis()
+        )),
+        Err(error) => lines.push(format!(
+            "status_error: {error} ({}ms)",
+            status_at.elapsed().as_millis()
+        )),
+    }
+    lines.push(format!("total: {}ms", started.elapsed().as_millis()));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, lines.join("\n") + "\n").map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,5 +836,26 @@ mod tests {
     #[test]
     fn bundled_license_public_key_is_valid() {
         parse_public_key(BUNDLED_PUBLIC_KEY).unwrap();
+    }
+
+    fn unsigned_token() -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(br#"{"email":"user@example.com","expiresAt":"2099-01-01T00:00:00Z"}"#);
+        let signature = URL_SAFE_NO_PAD.encode([0u8; 64]);
+        format!("{header}.{payload}.{signature}")
+    }
+
+    #[test]
+    fn local_status_rejects_unknown_signatures_without_waiting_on_the_network() {
+        let token = unsigned_token();
+        let started = Instant::now();
+        let error = verify_token_local(&token).expect_err("zero signatures must not verify");
+        assert!(error.to_ascii_lowercase().contains("signature"));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "local verification waited on the network: {:?}",
+            started.elapsed()
+        );
     }
 }

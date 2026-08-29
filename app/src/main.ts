@@ -515,9 +515,11 @@ async function showLicense(): Promise<void> {
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
   const title = element("h2", "", "License"); const content = element("div", "license-content"); content.append(element("p", "dialog-status", "Checking license…")); const actions = element("div", "dialog-actions");
   const close = element("button", "primary", "Close"); close.addEventListener("click", () => layer.remove()); actions.append(close); dialog.append(title, content, actions); layer.append(dialog); document.body.append(layer);
-  const defaultDeviceLabel = await bounded(licenseDefaultDeviceLabel(), 5000, "Could not identify this device.").catch(() => "This device");
-  const renderLicense = async () => {
-    const status = await bounded(licenseStatus(), 15000, "License status timed out. Please try again."); currentLicense = status; content.replaceChildren();
+  trapModalFocus(layer, dialog, close);
+  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
+  const defaultDeviceLabelPromise = bounded(licenseDefaultDeviceLabel(), 5000, "Could not identify this device.").catch(() => "This device");
+  const renderLicense = async (status: LicenseStatus, defaultDeviceLabel: string) => {
+    currentLicense = status; content.replaceChildren();
     content.append(element("p", `license-summary${status.state === "expired" ? " error" : ""}`, status.summary));
     const expiry = status.licenseKind === "beta" && status.state === "licensed"
       ? "Public beta access renews daily and can end when the beta closes."
@@ -550,7 +552,7 @@ async function showLicense(): Promise<void> {
     activate.dataset.dialogConfirm = "true";
     key.addEventListener("input", () => { copy.disabled = !key.value; activate.disabled = !key.value || status.state === "licensed"; void updateCopyState(); });
     void updateCopyState();
-    activate.addEventListener("click", async () => { activate.disabled = true; try { currentLicense = await activateLicense(key.value, device.value); render(); if (preferences.mode === "multiple") { await setDetachedBrowser(true); await emitBrowserState(selectedRemote, currentPath); } scheduleNativeLayout(0); await renderLicense(); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
+    activate.addEventListener("click", async () => { activate.disabled = true; try { const next = await activateLicense(key.value, device.value); currentLicense = next; render(); if (preferences.mode === "multiple") { await setDetachedBrowser(true); await emitBrowserState(selectedRemote, currentPath); } scheduleNativeLayout(0); await renderLicense(next, device.value || defaultDeviceLabel); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
     const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing"));
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
@@ -565,20 +567,28 @@ async function showLicense(): Promise<void> {
       for (const item of devices) {
         const row = element("div", "license-device"); const label = String(item.deviceLabel ?? item.device_label ?? item.label ?? "Unnamed device"); const meta = [item.platform, formatLocalDate(String(item.activatedAt ?? item.activated_at ?? "")), item.current ? "current" : ""].filter(Boolean).join(" · ");
         const text = element("span"); text.append(element("strong", "", label)); if (meta) text.append(element("small", "", meta));
-        const remove = element("button", "", item.current ? "Deactivate this device" : "Deactivate"); remove.addEventListener("click", async () => { const id = String(item.deviceId ?? item.device_id ?? item.id ?? ""); if (!await confirmOwned("Deactivate device?", `Deactivate ${label} and free one device slot?`, "Deactivate")) return; await deactivateLicenseDevice(id); if (item.current) { currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); } await renderLicense(); }); row.append(text, remove); list.append(row);
+        const remove = element("button", "", item.current ? "Deactivate this device" : "Deactivate"); remove.addEventListener("click", async () => { const id = String(item.deviceId ?? item.device_id ?? item.id ?? ""); if (!await confirmOwned("Deactivate device?", `Deactivate ${label} and free one device slot?`, "Deactivate")) return; await deactivateLicenseDevice(id); if (item.current) { currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); } await renderLicense(currentLicense ?? await licenseStatus(), defaultDeviceLabel); }); row.append(text, remove); list.append(row);
       }
       deviceSection.append(list);
     } catch (error) { deviceSection.append(element("p", "dialog-status error", String(error))); }
-    const deactivate = element("button", "", "Deactivate this device"); deactivate.addEventListener("click", async () => { if (!await confirmOwned("Deactivate this device?", "Deactivate this Mountlet installation and free one device slot?", "Deactivate")) return; await deactivateLicenseDevice(); currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); await renderLicense(); });
+    const deactivate = element("button", "", "Deactivate this device"); deactivate.addEventListener("click", async () => { if (!await confirmOwned("Deactivate this device?", "Deactivate this Mountlet installation and free one device slot?", "Deactivate")) return; await deactivateLicenseDevice(); const next = await licenseStatus(); currentLicense = next; await setDetachedBrowser(false); render(); scheduleNativeLayout(0); await renderLicense(next, defaultDeviceLabel); });
     deviceSection.append(deactivate); content.append(deviceSection);
   };
-  try { await renderLicense(); }
-  catch (error) {
-    content.replaceChildren(element("p", "dialog-status error", String(error)));
-    const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing")); content.append(buy);
+  const cached = currentLicense;
+  if (cached) await renderLicense(cached, cached.deviceLabel || "This device");
+  try {
+    const [status, defaultDeviceLabel] = await Promise.all([
+      bounded(licenseStatus(), 15000, "License status timed out. Please try again."),
+      defaultDeviceLabelPromise,
+    ]);
+    await renderLicense(status, defaultDeviceLabel);
   }
-  trapModalFocus(layer, dialog, close);
-  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
+  catch (error) {
+    if (!content.querySelector(".license-summary")) {
+      content.replaceChildren(element("p", "dialog-status error", String(error)));
+      const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing")); content.append(buy);
+    }
+  }
 }
 
 function renderToolbar(): HTMLElement {
@@ -843,13 +853,16 @@ async function showAbout(): Promise<void> {
   document.querySelector(".modal-layer")?.remove();
   const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog about-dialog");
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.append(element("h2", "", "About Mountlet"));
-  const version = await appVersion(); dialog.append(element("p", "about-product", "Mountlet"), element("p", "about-version", `Version ${version}`), element("p", "", "Cloud storage access from your desktop."));
+  const version = element("p", "about-version", "Version …");
+  dialog.append(element("p", "about-product", "Mountlet"), version, element("p", "", "Cloud storage access from your desktop."));
   const actions = element("div", "dialog-actions");
   const website = element("button", "", "Website"); website.addEventListener("click", () => void openExternal("https://mountlet.app"));
   const close = element("button", "primary", "Close"); close.addEventListener("click", () => layer.remove());
   actions.append(website, close); dialog.append(actions); layer.append(dialog); document.body.append(layer);
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   trapModalFocus(layer, dialog, close);
+  try { version.textContent = `Version ${await bounded(appVersion(), 5000, "Version is unavailable.")}`; }
+  catch (error) { version.textContent = String(error); }
 }
 
 async function reportBug(crash = ""): Promise<void> {
@@ -2690,10 +2703,9 @@ async function start(): Promise<void> {
     await setDetachedBrowser(true);
     await emitBrowserState(selectedRemote, currentPath);
   } else if (!isBrowserWindow && licenseLocked()) {
-    await setDetachedBrowser(false);
-    await layoutNativeWindows();
-    await showStartupWindows();
-    await showLicense();
+    void setDetachedBrowser(false);
+    void showLicense();
+    void layoutNativeWindows().then(() => showStartupWindows());
     return;
   }
   if (selectedRemote) {

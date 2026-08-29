@@ -1,7 +1,7 @@
+use crate::child_process::Command;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use crate::child_process::Command;
 #[cfg(target_os = "windows")]
 use std::process::Command as VisibleCommand;
 #[cfg(not(target_os = "macos"))]
@@ -87,14 +87,8 @@ pub fn check_prerequisites(rclone: Option<&str>) -> Vec<Prerequisite> {
     let driver = mount_driver_name();
     let driver_ready = mount_driver_available();
     let (rclone_help, driver_help) = match std::env::consts::OS {
-        "windows" => (
-            "https://rclone.org/install/",
-            "https://winfsp.dev/rel/",
-        ),
-        "macos" => (
-            "https://rclone.org/install/",
-            "https://macfuse.github.io/",
-        ),
+        "windows" => ("https://rclone.org/install/", "https://winfsp.dev/rel/"),
+        "macos" => ("https://rclone.org/install/", "https://macfuse.github.io/"),
         _ => (
             "https://rclone.org/install/",
             "https://rclone.org/install/#installing-on-linux",
@@ -199,12 +193,7 @@ fn mount_driver_guidance() -> String {
 
 fn windows_winfsp_version() -> Option<String> {
     Command::new("reg")
-        .args([
-            "query",
-            r"HKLM\SOFTWARE\WinFsp",
-            "/v",
-            "Version",
-        ])
+        .args(["query", r"HKLM\SOFTWARE\WinFsp", "/v", "Version"])
         .output()
         .ok()
         .filter(|output| output.status.success())
@@ -253,11 +242,7 @@ pub fn terminate_process_id(pid: u32) -> bool {
 
 fn port_owner_hint(port: u16) -> String {
     for command in [
-        vec![
-            "ss".into(),
-            "-ltnp".into(),
-            format!("sport = :{port}"),
-        ],
+        vec!["ss".into(), "-ltnp".into(), format!("sport = :{port}")],
         vec![
             "lsof".into(),
             "-nP".into(),
@@ -440,7 +425,11 @@ pub fn pick_bundle_path(save: bool, suggested: &str) -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let kind = if save { "SaveFileDialog" } else { "OpenFileDialog" };
+        let kind = if save {
+            "SaveFileDialog"
+        } else {
+            "OpenFileDialog"
+        };
         let script = format!(
             "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.{kind}; $d.Filter = 'Mountlet bundle (*.mountlet)|*.mountlet|All files (*.*)|*.*'; $d.FileName = '{filename}'; if ($d.ShowDialog() -eq 'OK') {{ $d.FileName }}"
         );
@@ -457,7 +446,11 @@ pub fn pick_bundle_path(save: bool, suggested: &str) -> Option<String> {
     {
         let mut command = if which("zenity").is_some() {
             let mut value = Command::new("zenity");
-            value.args(["--file-selection", "--title=Mountlet config bundle", "--file-filter=*.mountlet"]);
+            value.args([
+                "--file-selection",
+                "--title=Mountlet config bundle",
+                "--file-filter=*.mountlet",
+            ]);
             if save {
                 value.args(["--save", "--confirm-overwrite"]);
             }
@@ -519,9 +512,17 @@ pub fn show_desktop_notification(title: &str, message: &str) {
     }
 }
 
-pub fn remote_section_is_configured(backend: &str, values: &std::collections::HashMap<String, String>) -> bool {
+pub fn remote_section_is_configured(
+    backend: &str,
+    values: &std::collections::HashMap<String, String>,
+) -> bool {
     let backend = backend.to_ascii_lowercase();
-    let get = |key: &str| values.get(key).map(|value| value.trim().to_string()).unwrap_or_default();
+    let get = |key: &str| {
+        values
+            .get(key)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default()
+    };
     match backend.as_str() {
         "drive" | "gphotos" | "dropbox" | "box" | "pcloud" => {
             !get("token").is_empty() || !get("service_account_file").is_empty()
@@ -531,7 +532,10 @@ pub fn remote_section_is_configured(backend: &str, values: &std::collections::Ha
         }
         "s3" => {
             let provider = get("provider");
-            let env_auth = matches!(get("env_auth").to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on");
+            let env_auth = matches!(
+                get("env_auth").to_ascii_lowercase().as_str(),
+                "true" | "1" | "yes" | "on"
+            );
             let has_keys = !get("access_key_id").is_empty() && !get("secret_access_key").is_empty();
             if provider.is_empty() || !(env_auth || has_keys) {
                 return false;
@@ -542,10 +546,20 @@ pub fn remote_section_is_configured(backend: &str, values: &std::collections::Ha
             let url = get("url");
             url.starts_with("http://") || url.starts_with("https://")
         }
-        "koofr" => !get("provider").is_empty() && !get("user").is_empty() && !get("password").is_empty(),
+        "koofr" => {
+            !get("provider").is_empty() && !get("user").is_empty() && !get("password").is_empty()
+        }
         "protondrive" => {
-            let user = if get("username").is_empty() { get("user") } else { get("username") };
-            let password = if get("password").is_empty() { get("pass") } else { get("password") };
+            let user = if get("username").is_empty() {
+                get("user")
+            } else {
+                get("username")
+            };
+            let password = if get("password").is_empty() {
+                get("pass")
+            } else {
+                get("password")
+            };
             !user.is_empty() && !password.is_empty()
         }
         "iclouddrive" => !get("apple_id").is_empty() && !get("password").is_empty(),
@@ -560,12 +574,19 @@ pub fn gphotos_album_writable(path: &str) -> bool {
         .split('/')
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
-    parts.first().is_some_and(|part| part.eq_ignore_ascii_case("album")) && parts.len() >= 2
+    parts
+        .first()
+        .is_some_and(|part| part.eq_ignore_ascii_case("album"))
+        && parts.len() >= 2
 }
 
 pub fn file_icon_data_url(name: &str, is_dir: bool) -> Option<String> {
     if is_dir {
-        return load_theme_icon(&["places/folder", "mimetypes/inode-directory", "mimetypes/inode_directory"]);
+        return load_theme_icon(&[
+            "places/folder",
+            "mimetypes/inode-directory",
+            "mimetypes/inode_directory",
+        ]);
     }
     let extension = Path::new(name)
         .extension()
@@ -669,10 +690,9 @@ fn which(name: &str) -> Option<PathBuf> {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn shell_quote(value: &str) -> String {
-    if value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':'))
-    {
+    if value.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':')
+    }) {
         value.into()
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
