@@ -3784,10 +3784,10 @@ fn bug_report_preview(
 }
 
 #[tauri::command]
-async fn license_status() -> Result<license::Status, String> {
-    tauri::async_runtime::spawn_blocking(license::status)
-        .await
-        .map_err(|error| error.to_string())?
+fn license_status() -> Result<license::Status, String> {
+    // Match Python's direct current_status() path instead of routing ordinary
+    // local state evaluation through the asynchronous worker pool.
+    license::status()
 }
 
 #[tauri::command]

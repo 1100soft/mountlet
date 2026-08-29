@@ -402,15 +402,22 @@ fn fetch_public_key() -> Result<VerifyingKey, String> {
 }
 fn public_key() -> Result<VerifyingKey, String> {
     let configured = env::var("MOUNTLET_LICENSE_PUBLIC_KEY").unwrap_or_default();
-    let cached = read_first("license-public.pem");
     let pem = if !configured.trim().is_empty() {
         configured
-    } else if !cached.is_empty() {
-        cached
     } else {
         BUNDLED_PUBLIC_KEY.into()
     };
     parse_public_key(&pem)
+}
+
+fn verify_with_rotated_key(signed: &[u8], signature: &Signature) -> Result<bool, String> {
+    let cached = read_first("license-public.pem");
+    if !cached.is_empty()
+        && parse_public_key(&cached).is_ok_and(|key| key.verify(signed, signature).is_ok())
+    {
+        return Ok(true);
+    }
+    Ok(fetch_public_key()?.verify(signed, signature).is_ok())
 }
 // Alias keeps the long reqwest response type out of diagnostics and generated command metadata.
 mod get_reqwest {
@@ -451,10 +458,7 @@ fn verify_token(token: &str) -> Result<Value, String> {
         .trim()
         .is_empty();
     if public_key()?.verify(signed.as_bytes(), &signature).is_err()
-        && (configured
-            || fetch_public_key()?
-                .verify(signed.as_bytes(), &signature)
-                .is_err())
+        && (configured || !verify_with_rotated_key(signed.as_bytes(), &signature)?)
     {
         return Err("License token signature is not valid.".into());
     }
