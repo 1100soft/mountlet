@@ -22,6 +22,13 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 const API: &str = "https://mountlet.app/api/license";
 const TRIAL_SECONDS: f64 = 7.0 * 24.0 * 60.0 * 60.0;
 const TRIAL_SALT: &[u8] = b"mountlet trial state v1";
+// Public verification material is safe to distribute. Bundling it keeps local
+// license checks independent of DNS, TLS and the availability of the website.
+// The endpoint is still used as a rotation fallback when a signature does not
+// match this key or a previously cached replacement.
+const BUNDLED_PUBLIC_KEY: &str =
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENrcIcgvV+4hGhJI9dmZO3vEMA4Rz\
+     e8kfNS97OhxF7xXuCeKjnV+ERmtJF+3Dhqw9NysrFiXEUgws/nd5e7Y3Cg==";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -401,7 +408,7 @@ fn public_key() -> Result<VerifyingKey, String> {
     } else if !cached.is_empty() {
         cached
     } else {
-        return fetch_public_key();
+        BUNDLED_PUBLIC_KEY.into()
     };
     parse_public_key(&pem)
 }
@@ -556,11 +563,9 @@ pub fn status() -> Result<Status, String> {
                     if payload["licenseKind"].as_str() == Some("beta")
                         || key.to_ascii_uppercase().starts_with("MTB-")
                     {
-                        if !key.is_empty() {
-                            if let Ok(status) = activate(&key, "") {
-                                return Ok(status);
-                            }
-                        }
+                        // Status is a local query and must never make startup
+                        // wait for the network. A user can explicitly activate
+                        // the stored key again from the License dialog.
                         clear("license-token.jwt");
                         clear("license-key.txt");
                         return Ok(Status {
@@ -723,5 +728,10 @@ mod tests {
         .unwrap();
         assert_eq!(selected["install_id"], "python");
         assert_eq!(selected["started_at"], 100.0);
+    }
+
+    #[test]
+    fn bundled_license_public_key_is_valid() {
+        parse_public_key(BUNDLED_PUBLIC_KEY).unwrap();
     }
 }

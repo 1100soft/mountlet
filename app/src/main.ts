@@ -2693,8 +2693,7 @@ async function start(): Promise<void> {
     await setDetachedBrowser(false);
     await layoutNativeWindows();
     await showStartupWindows();
-    window.setTimeout(() => void showLicense(), 0);
-    queueMicrotask(restoreFocusOwner);
+    await showLicense();
     return;
   }
   if (selectedRemote) {

@@ -3359,8 +3359,30 @@ fn show_startup_windows(app: tauri::AppHandle) -> Result<(), String> {
         return Err("main window is unavailable".into());
     }
     show_window_stack(&app);
+    schedule_startup_tray_layout(&app);
     Ok(())
 }
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn schedule_startup_tray_layout(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        // Shell_NotifyIcon and NSStatusItem registration become observable
+        // asynchronously. Retry from the native event loop and reapply the
+        // cached frontend layout as soon as the real tray rectangle is present.
+        for delay in [50, 150, 300, 600] {
+            std::thread::sleep(Duration::from_millis(delay));
+            let dispatch = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                seed_tray_anchor_from_os(&dispatch);
+                relayout_from_cache(&dispatch);
+            });
+        }
+    });
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn schedule_startup_tray_layout(_app: &tauri::AppHandle) {}
 
 #[tauri::command]
 fn startup_smoke_enabled() -> bool {
@@ -4852,6 +4874,11 @@ fn seed_tray_anchor_from_os(app: &tauri::AppHandle) {
             return;
         }
     }
+    // Windows and macOS expose the actual notification/status item rectangle.
+    // During process startup the shell can need another event-loop turn before
+    // it returns that rectangle. Do not permanently replace it with the cursor:
+    // leaving the anchor invalid lets the final layout pass retry the native API.
+    #[cfg(target_os = "linux")]
     if let Ok(position) = app.cursor_position() {
         if position.x.abs() > 1.0 || position.y.abs() > 1.0 {
             cache_tray_anchor(app, position.x, position.y);
