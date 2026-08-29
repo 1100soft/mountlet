@@ -1470,8 +1470,8 @@ pub(crate) fn open_local_path(path: &Path) -> Result<(), String> {
 fn open_external_target(target: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
-        let mut value = Command::new("cmd");
-        value.args(["/C", "start", "", target]);
+        let mut value = Command::new("explorer.exe");
+        value.arg(target);
         value
     };
     #[cfg(target_os = "macos")]

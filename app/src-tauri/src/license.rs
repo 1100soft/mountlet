@@ -72,18 +72,13 @@ fn stable_machine_identifier() -> String {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = crate::child_process::Command::new("reg")
-            .args([
-                "query",
-                r"HKLM\SOFTWARE\Microsoft\Cryptography",
-                "/v",
-                "MachineGuid",
-            ])
-            .output()
+        use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+        if let Ok(value) = RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\Microsoft\Cryptography")
+            .and_then(|key| key.get_value::<String, _>("MachineGuid"))
         {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(value) = text.split_whitespace().last() {
-                return format!("machine-guid:{value}");
+            if !value.trim().is_empty() {
+                return format!("machine-guid:{}", value.trim());
             }
         }
     }
@@ -433,6 +428,16 @@ fn verify_token(token: &str) -> Result<Value, String> {
         Signature::from_der(&bytes)
     }
     .map_err(|_| "License token signature is not valid.")?;
+    if let Some(expires) = payload["expiresAt"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+    {
+        if let Ok(expiry) = OffsetDateTime::parse(expires, &Rfc3339) {
+            if expiry < OffsetDateTime::now_utc() {
+                return Err("License token has expired.".into());
+            }
+        }
+    }
     let signed = format!("{}.{}", parts[0], parts[1]);
     let configured = !env::var("MOUNTLET_LICENSE_PUBLIC_KEY")
         .unwrap_or_default()
@@ -445,16 +450,6 @@ fn verify_token(token: &str) -> Result<Value, String> {
                 .is_err())
     {
         return Err("License token signature is not valid.".into());
-    }
-    if let Some(expires) = payload["expiresAt"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-    {
-        if let Ok(expiry) = OffsetDateTime::parse(expires, &Rfc3339) {
-            if expiry < OffsetDateTime::now_utc() {
-                return Err("License token has expired.".into());
-            }
-        }
     }
     Ok(payload)
 }

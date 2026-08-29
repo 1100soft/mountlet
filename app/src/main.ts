@@ -2538,7 +2538,12 @@ async function start(): Promise<void> {
     return;
   }
   await listenRestoreKeyboardFocus(firstShow => scheduleFocusRestore(firstShow));
-  const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder, savedLicense] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder(), licenseStatus().catch(() => null)]);
+  const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder()]);
+  const savedLicense = await bounded(licenseStatus(), 15000, "License status timed out.").catch(error => ({
+    state: "expired" as const,
+    summary: `License status could not be verified: ${String(error)}`,
+    trialDaysRemaining: 0, licenseKey: "", licensedEmail: "", plan: "", licenseKind: "", maxDevices: 0, deviceLabel: "", expiresAt: "",
+  }));
   registrationOrder = savedRegistrationOrder;
   completeSettings = savedSettings;
   browserMemory = savedBrowserMemory;
