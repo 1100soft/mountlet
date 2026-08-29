@@ -93,6 +93,13 @@ function requireIntegratedEdits(): boolean {
 }
 function licenseLocked(): boolean { return currentLicense?.state === "expired"; }
 
+function bounded<T>(operation: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), milliseconds);
+    operation.then(value => { window.clearTimeout(timer); resolve(value); }, error => { window.clearTimeout(timer); reject(error); });
+  });
+}
+
 function formatLocalDate(value: string): string {
   if (!value) return "";
   const date = new Date(value);
@@ -306,7 +313,7 @@ async function layoutNativeWindows(): Promise<void> {
   const globalSearchHeight = remoteFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(4, preferences.zoomStep) : 0;
   const browserSearchHeight = fileFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(5, preferences.zoomStep) : 0;
   await applyWindowLayout({
-    mode: preferences.mode,
+    mode: licenseLocked() ? "single" : preferences.mode,
     selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
     remoteCount: remotes.length,
     browserItems: preferences.fileListMaxItems > 0
@@ -504,13 +511,13 @@ async function syncConfiguration(direction: "push" | "pull"): Promise<void> {
 
 async function showLicense(): Promise<void> {
   document.querySelector(".modal-layer")?.remove();
-  const defaultDeviceLabel = await licenseDefaultDeviceLabel().catch(() => "This device");
   const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog license-dialog");
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
-  const title = element("h2", "", "License"); const content = element("div", "license-content"); const actions = element("div", "dialog-actions");
+  const title = element("h2", "", "License"); const content = element("div", "license-content"); content.append(element("p", "dialog-status", "Checking license…")); const actions = element("div", "dialog-actions");
   const close = element("button", "primary", "Close"); close.addEventListener("click", () => layer.remove()); actions.append(close); dialog.append(title, content, actions); layer.append(dialog); document.body.append(layer);
+  const defaultDeviceLabel = await bounded(licenseDefaultDeviceLabel(), 5000, "Could not identify this device.").catch(() => "This device");
   const renderLicense = async () => {
-    const status = await licenseStatus(); currentLicense = status; content.replaceChildren();
+    const status = await bounded(licenseStatus(), 15000, "License status timed out. Please try again."); currentLicense = status; content.replaceChildren();
     content.append(element("p", `license-summary${status.state === "expired" ? " error" : ""}`, status.summary));
     const expiry = status.licenseKind === "beta" && status.state === "licensed"
       ? "Public beta access renews daily and can end when the beta closes."
@@ -565,7 +572,11 @@ async function showLicense(): Promise<void> {
     const deactivate = element("button", "", "Deactivate this device"); deactivate.addEventListener("click", async () => { if (!await confirmOwned("Deactivate this device?", "Deactivate this Mountlet installation and free one device slot?", "Deactivate")) return; await deactivateLicenseDevice(); currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); await renderLicense(); });
     deviceSection.append(deactivate); content.append(deviceSection);
   };
-  await renderLicense();
+  try { await renderLicense(); }
+  catch (error) {
+    content.replaceChildren(element("p", "dialog-status error", String(error)));
+    const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing")); content.append(buy);
+  }
   trapModalFocus(layer, dialog, close);
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
 }
@@ -855,11 +866,11 @@ async function reportBug(crash = ""): Promise<void> {
   fields.append(contactLabel, messageLabel, logsLabel);
   const previewLabel = element("label", "dialog-field report-preview-field"); previewLabel.append(element("span", "", "Report preview")); const preview = element("pre", "rclone-output", "Preparing report…"); preview.tabIndex = 0; previewLabel.append(preview);
   const status = element("p", "dialog-status"); const actions = element("div", "dialog-actions");
-  const send = element("button", "primary", "Send"); send.addEventListener("click", async () => { send.disabled = true; status.textContent = "Sending report…"; try { const url = await submitBugReport(kind, message.value, contact.value, logs.checked, crash); status.textContent = url ? `Report sent: ${url}` : "Report sent. Thank you."; if (url) { const open = element("button", "", "Open report"); open.addEventListener("click", () => void openExternal(url)); actions.prepend(open); } } catch (error) { status.textContent = String(error); send.disabled = false; } });
+  const send = element("button", "primary", "Send"); send.addEventListener("click", async () => { send.disabled = true; status.textContent = "Sending report…"; try { const url = await bounded(submitBugReport(kind, message.value, contact.value, logs.checked, crash), 20000, "Sending the report timed out. Please try again."); status.textContent = url ? `Report sent: ${url}` : "Report sent. Thank you."; if (url) { const open = element("button", "", "Open report"); open.addEventListener("click", () => void openExternal(url)); actions.prepend(open); } } catch (error) { status.textContent = String(error); send.disabled = false; } });
   const close = element("button", "", "Close"); close.addEventListener("click", () => layer.remove());
   actions.append(send, close); dialog.append(fields, previewLabel, status, actions); layer.append(dialog); document.body.append(layer);
   let previewGeneration = 0; let previewTimer = 0;
-  const updatePreview = () => { const generation = ++previewGeneration; window.clearTimeout(previewTimer); previewTimer = window.setTimeout(async () => { try { const text = await bugReportPreview(kind, message.value, contact.value, logs.checked, crash); if (generation === previewGeneration) preview.textContent = text; } catch (error) { if (generation === previewGeneration) preview.textContent = `Could not prepare report preview: ${String(error)}`; } }, 100); };
+  const updatePreview = () => { const generation = ++previewGeneration; window.clearTimeout(previewTimer); previewTimer = window.setTimeout(async () => { try { const text = await bounded(bugReportPreview(kind, message.value, contact.value, logs.checked, crash), 8000, "Report preview timed out."); if (generation === previewGeneration) preview.textContent = text; } catch (error) { if (generation === previewGeneration) preview.textContent = `Could not prepare report preview: ${String(error)}`; } }, 100); };
   message.addEventListener("input", updatePreview); contact.addEventListener("input", updatePreview); logs.addEventListener("change", updatePreview); updatePreview();
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   trapModalFocus(layer, dialog, close);
@@ -2480,6 +2491,8 @@ async function start(): Promise<void> {
     }
     checks.push("settings-compatibility");
     await loadShortcuts(); checks.push("shortcuts");
+    await bounded(licenseStatus(), 15000, "License status did not respond"); checks.push("license");
+    await bounded(bugReportPreview("bug", "Startup behavior probe", "", true), 8000, "Report preview did not respond"); checks.push("report-preview");
     const isMac = navigator.userAgent.includes("Macintosh");
     if (!isMac) {
       await desktopHints(); checks.push("desktop-hints");
@@ -2666,7 +2679,13 @@ async function start(): Promise<void> {
   if (!isBrowserWindow && preferences.mode === "multiple" && !licenseLocked()) {
     await setDetachedBrowser(true);
     await emitBrowserState(selectedRemote, currentPath);
-  } else if (!isBrowserWindow && licenseLocked()) await setDetachedBrowser(false);
+  } else if (!isBrowserWindow && licenseLocked()) {
+    await setDetachedBrowser(false);
+    await layoutNativeWindows();
+    window.setTimeout(() => void showLicense(), 0);
+    queueMicrotask(restoreFocusOwner);
+    return;
+  }
   if (selectedRemote) {
     await loadSnapshot();
     if (preferences.mode === "single" || isBrowserWindow) renderBrowserOnly();

@@ -379,7 +379,10 @@ fn parse_public_key(pem: &str) -> Result<VerifyingKey, String> {
     }
 }
 fn fetch_public_key() -> Result<VerifyingKey, String> {
-    let response: get_reqwest::Response = reqwest::blocking::Client::new()
+    let response: get_reqwest::Response = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|error| error.to_string())?
         .get(format!("{}/public-key", api()))
         .send()
         .map_err(|error| error.to_string())?;

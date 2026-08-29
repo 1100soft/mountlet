@@ -3302,14 +3302,7 @@ fn app_diagnostics(window: tauri::WebviewWindow, state: tauri::State<'_, AppStat
     let rclone_version = state
         .rclone
         .as_ref()
-        .and_then(|binary| Command::new(binary).arg("version").output().ok())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or("unknown")
-                .to_string()
-        })
+        .map(|binary| format!("configured ({binary})"))
         .unwrap_or_else(|| "unavailable".into());
     let remote_count = state
         .remotes
@@ -3374,6 +3367,8 @@ fn complete_startup_smoke(
         "settings",
         "settings-compatibility",
         "shortcuts",
+        "license",
+        "report-preview",
         "tray-menu",
         "add-remote-fields",
         "frontend-render",
@@ -3386,6 +3381,8 @@ fn complete_startup_smoke(
         "settings",
         "settings-compatibility",
         "shortcuts",
+        "license",
+        "report-preview",
         "tray-menu",
         "add-remote-fields",
         "frontend-render",
