@@ -1,258 +1,144 @@
-# Handoff: Windows installed app remains partially initialized and license-locked
+# Handoff: Windows installed app IPC starvation after Python-profile upgrade
 
-Date: 2026-08-29  
+Date: 2026-08-30
 Branch: `wip`  
-Latest attempted fix: `9e71924` (`Match Python license key precedence`)
+HEAD: `47aa568` (`Move window, tray, and shell commands off the WebView IPC thread`)
+Previous attempted preview: `43a1a70` (installed; did not restore backend communication)
 
-## Current user-visible behavior
+Work in this thread was done on Linux. The user cannot run local Windows changes; preview installers from `wip` are the only validation path. Identify builds by the short commit in the filename, not `0.7.0`.
 
-This reproduces on the user's existing Windows installation/profile. The X11
-`.deb` has worked normally, and clean installed-package CI probes pass.
+Release index: `https://wip.mountlet.pages.dev/api/releases`
 
-- The main window now opens immediately at process launch.
-- It is still not reliably positioned against the tray icon.
-- Mountlet detects an expired/unverified license state and correctly blocks
-  remote and file functionality.
-- The License dialog does not open automatically.
-- Opening License manually shows `Checking license...` and eventually reports a
-  frontend timeout.
-- About does not open. The main Buy license button does not respond.
-- In earlier builds, Bug report, settings persistence, mounting, downloads and
-  file actions were also inert. This looked like the webview could render cached
-  state but calls into the native backend did not complete.
-- Installing uniquely named build `9e71924` produced no observable improvement,
-  so stale installer/CDN reuse is no longer a plausible explanation.
+## Problem (do not treat this as separate UI bugs)
 
-Treat the common failure as more important than individual dialog symptoms.
-About waits for `app_version`, License waits for `license_status`, Buy waits for
-`open_external`, and file operations wait for other Tauri commands. The likely
-problem is partial startup, IPC/runtime starvation, an invisible modal/state
-race, or user-profile-specific blocking native I/O—not four separate UI bugs.
+On the user's existing Windows profile (upgraded from Python `0.6.8`), the webview paints but many native Tauri commands do not complete. About, Buy, License, layout, and file actions all wait on IPC. Fixing dialog chrome without unblocking the command path is a dead end.
 
-## Important reproduction distinction
+The X11 `.deb` works. Clean GitHub Windows installed-package smoke (`MOUNTLET_STARTUP_SMOKE` in `.github/workflows/package.yml`) also works. That smoke uses a fresh runner profile and the special smoke frontend branch. It does **not** cover a legacy Python trial/token cache, the normal `start()` path, or command interactivity after first paint.
 
-The GitHub Windows installed-package smoke test uses a clean runner profile. It
-successfully invokes all of the following before exiting:
+## User-visible timeline
 
-- app version
-- remotes and preferences/settings compatibility
-- shortcuts
-- license status
-- report preview
-- prerequisites and desktop hints
-- tray-menu refresh
-- Add Remote behavioral checks
-- frontend rendering and native main-window visibility
+### Through `9e71924` (before this thread)
 
-It does **not** reproduce an upgraded Python `0.6.8` user profile with an old,
-expired or invalid token/trial/public-key cache. It also does not exercise the
-normal expired-license startup branch or verify that dialogs and arbitrary
-commands remain interactive after that branch.
+- Main window opens at launch (`1488c03`).
+- Not reliably snapped to the tray.
+- UI behaved as license-locked.
+- License did not auto-open; manual License stuck on `Checking license…` then frontend timeout.
+- About did not appear. Buy did not respond.
+- Unique preview names (`abfcf23`) ruled out stale installer reuse.
 
-The Windows smoke test is in `.github/workflows/package.yml`, approximately the
-`Smoke-test installed Windows package` step. It sets `MOUNTLET_STARTUP_SMOKE`,
-removes `HOME`, writes multiple-window/dark settings, starts the installed EXE,
-and validates a JSON marker.
+### After `43a1a70` (first commit from this thread)
 
-## Relevant frontend flow
+Installed uniquely named preview. Partial change only:
 
-`app/src/main.ts`, `start()`:
+- License dialog **does** open.
+- Dialog reported **5 days of trial remaining**.
+- Main UI stayed **locked** anyway.
+- Buy remained **unresponsive**.
+- About opened but showed **Version is unavailable** (frontend 5s `appVersion()` timeout).
 
-1. Installs the restore-focus listener.
-2. Calls `showStartupWindows()` immediately so the process is visible.
-3. Loads preferences/settings/browser memory/shortcuts/order.
-4. Awaits bounded `licenseStatus()` (15 seconds); on timeout it fabricates an
-   expired status.
-5. Installs most remaining native listeners and loads remotes.
-6. Renders.
-7. If `licenseLocked()`, disables the detached browser, lays out windows, shows
-   startup windows and directly awaits `showLicense()`.
+Interpretation: `license_status` (already async/`spawn_blocking` in `43a1a70`) can eventually return. Sync commands on the WebView IPC thread (`app_version`, `open_external`, layout, tray, clipboard) still do not. Startup also **fabricated `expired`** after a 15s license timeout and never re-rendered the shell when real trial status arrived, so lock state and License text disagreed.
 
-`showLicense()` immediately appends its modal with `Checking license...`, then
-awaits another bounded `licenseStatus()` call. If the modal truly never appears,
-determine whether execution reaches this branch and whether another modal or
-render removes it. If it appears and times out, instrument the Rust command by
-stage rather than adding another frontend timeout.
+The user was explicit: opening dialogs is not a fix. Backend communication has to work.
 
-`showAbout()` awaits `appVersion()` before constructing its dialog. That makes
-About a useful minimal IPC probe but a poor diagnostic UI when IPC is broken.
+### After `47aa568` (pushed; not yet user-tested)
 
-## Relevant native flow
+Intended probes for the next uniquely named installer:
 
-`app/src-tauri/src/lib.rs`:
+- Main UI not locked solely because license IPC was slow; when trial status arrives, shell should unlock.
+- About should show a version.
+- Buy should open the pricing page.
 
-- `license_status` is currently a synchronous Tauri command calling
-  `license::status()` directly. It previously used `spawn_blocking`; both forms
-  reportedly showed the same installed behavior.
-- `show_startup_windows` calls `show_window_stack` and schedules several native
-  tray-rectangle/layout retries on Windows/macOS.
-- `seed_tray_anchor_from_os` uses `TrayIcon::rect()`. Windows/macOS deliberately
-  do not cache the cursor as a fake anchor anymore. Linux retains cursor fallback.
-- Startup creates a TCP single-instance listener on `127.0.0.1:47653` and a
-  thread that dispatches show requests with `run_on_main_thread`.
-- Windows `cleanup_stale_mounts` is a no-op. Prior attempts removed stale mount
-  enumeration from Windows startup because WinFsp reparse points can block.
-- Native commands are registered in the large `generate_handler!` list near the
-  end of `lib.rs`.
+If those three fail, IPC is still blocked. Do not add more dialog fallbacks.
 
-`app/src-tauri/src/license.rs`:
+## Commits from this thread
 
-- Windows machine identity now reads `MachineGuid` via `winreg`; it no longer
-  starts `reg.exe`.
-- A public P-256 verification key is bundled.
-- Primary-key order now matches Python: explicitly configured key, otherwise
-  bundled key. Cached keys are only tried as rotation fallbacks.
-- Expired beta status no longer performs automatic online reactivation during
-  status evaluation.
-- Trial migration scans Tauri and Python legacy paths and chooses the oldest
-  valid clock.
-- Unlike Python, several Rust write helpers return on the first filesystem
-  error. Audit this, but a permission error should return quickly rather than
-  explain a 15-second timeout.
+### `43a1a70` — Keep Windows startup IPC responsive during license and tray layout
 
-## Python reference
+Pushed to `origin/wip`. User tested. **Insufficient.**
 
-The last Python implementation is under `legacy/python-0.6.8/`.
+Native:
 
-Key references:
+- `license::status()` is local-only (no public-key HTTP during ordinary status). Rotation fetch remains for activate/devices.
+- Trial/license replica writes are best-effort (Python-style); one bad path must not fail the whole status call.
+- `license_status` is async + `spawn_blocking` again (undoes `9e71924`'s sync command).
+- `layout_windows` no longer calls `TrayIcon::rect()` from a command handler. Tray seeding stays on the native retry loop (`run_on_main_thread`).
+- Windows `path_is_mounted` (`symlink_metadata` / reparse) times out after 200ms on a helper thread.
+- `list_remotes` mount checks run in `spawn_blocking`.
+- CLI: `mountlet --license-diagnostics <path>` writes path/stage timings **before** `mountlet::run()`, usable if the GUI is dead.
 
-- `src/mountlet/license_control.py::current_status`
-- `src/mountlet/license_control.py::_load_public_key`
-- `src/mountlet/license_control.py::_trial_paths`
-- `src/mountlet/tray.py::LicenseDialog`
-- `src/mountlet/tray.py::_open_external_url`
+Frontend:
 
-Python constructs the License dialog synchronously and calls
-`license_control.current_status()` directly. Its public-key precedence is
-explicit configuration, packaged build key, cached key, then network fetch.
-Most replicated-path writes ignore individual `OSError`s instead of failing the
-whole operation.
+- License modal and About chrome no longer wait on IPC before appearing.
+- Automatic License is not gated on finishing layout first.
 
-## Attempts already made (none fixed the user's current behavior)
+That is why License could show a real trial while About/Buy still failed: async license vs still-sync version/open/layout.
 
-### `e25d8a3`, `b8f086d` — Windows stale mounts
+### `47aa568` — Move window, tray, and shell commands off the WebView IPC thread
 
-- Prevented startup cleanup from enumerating/removing Windows WinFsp reparse
-  points.
-- Scoped stale mount walking by platform.
+Pushed to `origin/wip`. **Not yet confirmed on the user's machine.**
 
-### `2de5117` — Python settings/trial compatibility
+Tauri 2 runs **sync** `#[tauri::command]` handlers inline on the IPC thread. One hung handler (`apply_window_layout`, `refresh_tray_menu` / `tray.set_menu`, Windows `powershell` clipboard, window show/hide) prevents later sync invokes. Async commands are queued onto Tokio and can still complete — matching `43a1a70` symptoms.
 
-- Corrected Windows configuration paths and `USERPROFILE`/`HOME` fallback.
-- Read legacy Python trial locations and preserved the oldest clock.
-- Intended to prevent a Tauri install from resetting the Python trial.
+Changes:
 
-### `8805d73` — reports and expired startup
+- Helper `run_on_main_async` (`tokio::sync::oneshot` + `AppHandle::run_on_main_thread`).
+- These commands are now `async` and either run on Tokio or hop to the UI thread: `app_version`, `show_startup_windows`, `apply_window_layout`, `set_browser_window`, `focus_window`, `set_window_pinned`, `refresh_tray_menu`, `open_external`, `clipboard_text`, `license_default_device_label`, `check_prerequisites`.
+- Windows Buy/open-external uses `cmd /C start "" <url>` via `spawn_blocking` (not `explorer.exe` on the IPC thread). `Command` still sets `CREATE_NO_WINDOW`.
+- Linux clipboard still uses GTK `wait_for_text`, but only on the UI thread.
+- Frontend no longer maps license timeout to fabricated `expired`. `licenseStatus()` keeps running; when it resolves, `applyLicense()` re-renders so lock state matches the backend.
+- License dialog paint updates `currentLicense` and re-renders the shell so a trial result can clear a previous lock.
 
-- Removed live `rclone version` diagnostics from report preparation.
-- Added bounded report/license UI behavior.
-- Suppressed remote work when expired and attempted automatic License display.
+## Code map
 
-### `8a78507` — nonblocking Windows license detection
+Frontend: `app/src/main.ts` (`start()`, `applyLicense()`, `licenseLocked()`, `showLicense()`, `showAbout()`, `layoutNativeWindows()`).
 
-- Replaced `reg.exe` with direct `winreg` MachineGuid access.
-- Checked token expiry before public-key retrieval.
-- Replaced `cmd /C start` with `explorer.exe` for Buy/open-external.
-- Converted startup license timeout into explicit expired state.
+Native: `app/src-tauri/src/lib.rs` (`run_on_main_async`, command list near `generate_handler!`), `app/src-tauri/src/license.rs`, `app/src-tauri/src/main.rs` (`--version`, `--license-diagnostics`).
 
-### `1488c03` — visible startup
+Python reference: `legacy/python-0.6.8/src/mountlet/license_control.py`, `tray.py`.
 
-- Main window now opens at startup instead of remaining hidden until a tray click.
-- Added a native `show_startup_windows` command.
-- Made the installed-app smoke marker require a visible main window.
-- Added preview build revision to About/report/smoke metadata.
+## Diagnostics if `47aa568` is still inert
 
-The user confirmed only the immediate opening changed.
+From PowerShell on the installed EXE (no IPC required):
 
-### `3a3a46d`, `5d7b96c` — local license key and tray retry
+```text
+mountlet --license-diagnostics %TEMP%\mountlet-license.txt
+```
 
-- Bundled the current public verification key.
-- Removed network beta reactivation from ordinary status evaluation.
-- Directly awaited creation of the automatic expired License dialog.
-- Stopped using the cursor as Windows/macOS tray anchor.
-- Retried native tray geometry/layout during the first second.
-- Follow-up fixed a platform-only strict-Clippy failure.
+That path is independent of the webview. If it is fast and reports `trial`, the hang is in Tauri/WebView2 command dispatch or window/tray APIs, not `license::status()` itself.
 
-The user observed no license/dialog improvement and no correct tray snapping.
+Do not rely on About, Bug report, or License to collect logs.
 
-### `abfcf23` — identifiable preview installers
+## What is still unverified
 
-- Preview artifacts now include the commit in the attachment filename, for
-  example `mountlet-v0.7.0-preview-abfcf23-windows-x64-standard-setup.exe`.
-- Public release metadata includes `buildId`; download URLs use it for cache
-  busting. Tagged production names remain stable.
+- Tray snapping to `TrayIcon::rect()` on this user's shell.
+- Whether `47aa568` actually unblocks `app_version` / `open_external` on the upgraded profile.
+- CI still does not seed a Python `0.6.8` profile or assert post-startup IPC on the **normal** frontend (only `MOUNTLET_STARTUP_SMOKE`).
 
-This ruled out repeatedly installing an old same-named preview.
+## Suggested next steps if `47aa568` fails
 
-### `9e71924` — exact Python public-key precedence
+1. Log command **entry and return** to `runtime.log` (under `%LOCALAPPDATA%\Mountlet`) with timestamps. Include a dedicated async `ipc_probe`. Do not use the Bug report UI to retrieve this.
+2. Add an installed Windows job that seeds legacy trial/token files, launches **without** `MOUNTLET_STARTUP_SMOKE`, and asserts `app_version`, `license_status`, and `open_external` after first paint (UI automation or a marker).
+3. If sync leftovers still run on the IPC thread (`load_preferences`, `desktop_hints`, `complete_startup_smoke`, `pick_config_bundle_path`, …), convert or hop those too. One remaining blocking handler can starve the rest.
+4. If `run_on_main_async` deadlocks (Tokio task waiting on the UI thread that is waiting on the task), switch window ops to fire-and-forget `run_on_main_thread` without awaiting, or a dedicated UI channel with a timeout.
 
-- Corrected the Tauri port's erroneous cached-key-before-packaged-key order.
-- Changed `license_status` from async `spawn_blocking` to a direct synchronous
-  command, matching Python's local status call.
-
-The user installed this uniquely named build and reported exactly the same
-symptoms.
-
-## Strong next steps
-
-1. **Instrument command ingress and egress in the runtime log.** Add a tiny
-   synchronous `ipc_probe` command and log timestamps at command entry/return.
-   Add stage logging inside `license::status()` around token read, trial path
-   scanning, machine hint, key verification and trial replication. Do not depend
-   on the Bug report or About UI to retrieve this; the runtime log path must be
-   documented or exposed through a standalone diagnostic file/CLI argument.
-2. **Add an installed Windows expired-upgrade test.** Seed a realistic legacy
-   Python profile before launch (trial replicas, license key/token/public-key
-   cache), run the normal frontend rather than the special smoke branch, and use
-   UI automation or a dedicated marker to assert:
-   - startup reaches the expired branch;
-   - License modal exists and is visible;
-   - `license_status`, `app_version`, and `open_external` still return;
-   - About can render while expired;
-   - the main event loop stays responsive.
-3. **Make diagnostics independent of Tauri IPC.** Add a safe command-line mode
-   such as `--license-diagnostics <path>` that runs before `mountlet::run()` and
-   records resolved config/state paths plus per-stage timings. The user can run
-   the installed EXE from PowerShell even if WebView IPC is dead.
-4. **Inspect modal/startup races.** Log every creation/removal of `.modal-layer`
-   and every `start()` milestone. Verify the automatic License modal is not
-   created and then removed by a second webview/start invocation.
-5. **Audit user-profile path I/O.** In particular, avoid querying metadata or
-   following reparse points during startup, and make replicated trial writes
-   best-effort like Python. Record exact path timing to identify OneDrive,
-   antivirus, stale junction or permission behavior.
-6. **Test IPC after startup, not only during the special smoke branch.** Current
-   CI proves clean startup commands work but does not prove the normal expired
-   state remains interactive.
-
-## Tray positioning note
-
-`TrayIcon::rect()` is implemented natively on both Windows and macOS, but can
-return `None` while the shell item is being registered. The current retry loop
-should eventually call `relayout_from_cache`. If it still does not snap, log
-each returned rect, scale factor, computed edge, `user_placed`, cached layout,
-and final native position. Avoid guessing based on the cursor.
-
-## Validation commands
+## Validation (Linux / CI)
 
 ```bash
 cd app
-npm run build
 cargo test --locked -j 2 --manifest-path src-tauri/Cargo.toml
 cargo clippy --locked -j 2 --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Release tooling checks from the repository root:
+## Older attempts (still relevant background)
 
-```bash
-npm run web:release:check
-npm run web:release:test
-```
-
-## Latest published-build identification
-
-Preview installer names contain the short commit. Do not use only `0.7.0` or a
-stable filename to identify a tested build. The release index is available at:
-
-`https://wip.mountlet.pages.dev/api/releases`
-
+| Commit | Intent | User result |
+| --- | --- | --- |
+| `e25d8a3`, `b8f086d` | Stop Windows stale-mount walk | Not the remaining IPC stall |
+| `2de5117` | Python paths / oldest trial clock | Compatibility only |
+| `8805d73` | Bounded reports; expired UI | Incomplete |
+| `8a78507` | `winreg`; timeout → expired; `explorer` for URLs | Timeout-as-expired later caused false lock |
+| `1488c03` | Show window at startup | Only visibility improved |
+| `3a3a46d`, `5d7b96c` | Bundled key; no net on status; tray retry | No dialog/IPC improvement |
+| `abfcf23` | Unique preview filenames | Ruled out CDN reuse |
+| `9e71924` | Python key order; **sync** `license_status` | Same symptoms |
+| `13591c8` | This handoff file (pre-thread) | Documentation only |
