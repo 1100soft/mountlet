@@ -10,8 +10,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "wrangler.toml"
-    paths-ignore:
-      - "web/**/*.md"
+      - "!web/**/*.md"
   push:
     branches: [main, master, wip]
     paths:
@@ -22,8 +21,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "wrangler.toml"
-    paths-ignore:
-      - "web/**/*.md"
+      - "!web/**/*.md"
 
 permissions:
   contents: read

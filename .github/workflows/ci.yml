@@ -5,17 +5,15 @@ on:
     paths:
       - ".github/workflows/ci.yml"
       - "app/**"
-    paths-ignore:
-      - "app/**/*.md"
-      - "app/docs/**"
+      - "!app/**/*.md"
+      - "!app/docs/**"
   push:
     branches: [main, master, wip]
     paths:
       - ".github/workflows/ci.yml"
       - "app/**"
-    paths-ignore:
-      - "app/**/*.md"
-      - "app/docs/**"
+      - "!app/**/*.md"
+      - "!app/docs/**"
 
 permissions:
   contents: read
