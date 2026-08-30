@@ -288,6 +288,7 @@ jobs:
           }
       - name: Smoke-test installed Windows MSIX
         if: runner.os == 'Windows' && matrix.bundled
+        timeout-minutes: 5
         shell: pwsh
         working-directory: app
         run: |

@@ -52,7 +52,11 @@ $password = ConvertTo-SecureString "mountlet-ci" -AsPlainText -Force
 Export-PfxCertificate -Cert $certificate -FilePath $pfx -Password $password | Out-Null
 Export-Certificate -Cert $certificate -FilePath $cer | Out-Null
 Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPeople" | Out-Null
-Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+Write-Host "Trusting the temporary MSIX certificate"
+& certutil.exe -user -addstore -f Root $cer | Out-Host
+if ($LASTEXITCODE -ne 0) {
+  throw "certutil failed to trust the temporary MSIX certificate with exit code $LASTEXITCODE"
+}
 
 Copy-Item $packagePath $signed -Force
 $signTool = Find-WindowsKitTool "signtool.exe"
@@ -62,6 +66,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Get-AppxPackage -Name $identityName | Remove-AppxPackage -ErrorAction SilentlyContinue
+Write-Host "Installing the CI-signed MSIX package"
 Add-AppxPackage -Path $signed
 $installed = Get-AppxPackage -Name $identityName | Select-Object -First 1
 if (-not $installed) {
@@ -122,6 +127,7 @@ Remove-Item $Marker -Force -ErrorAction SilentlyContinue
 $existingConsoles = [MountletMsixWindowProbe]::VisibleConsoleProcessIds()
 $unexpectedConsoles = [System.Collections.Generic.HashSet[uint32]]::new()
 $appUserModelId = "$($installed.PackageFamilyName)!$applicationId"
+Write-Host "Activating $appUserModelId through its package identity"
 $activatedProcessId = [MountletMsixActivator]::Activate($appUserModelId, "--startup-smoke `"$Marker`"")
 $process = Get-Process -Id $activatedProcessId
 try {
@@ -141,6 +147,7 @@ try {
   if ($result.version -ne $ExpectedVersion -or -not $result.buildId -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.mainWindowVisible -or -not $result.remoteStateReady -or -not $result.behaviorComplete) {
     throw "Installed MSIX app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
   }
+  Write-Host "MSIX package activation and startup probe passed"
 } finally {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
   Get-AppxPackage -Name $identityName | Remove-AppxPackage -ErrorAction SilentlyContinue
