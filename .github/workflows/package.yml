@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       publish_apt_preview:
-        description: Publish the bundled Linux build as mountlet-preview
+        description: Publish Linux builds as mountlet-preview and mountlet-lean-preview
         required: true
         type: boolean
         default: false
   pull_request:
     paths:
       - ".github/workflows/package.yml"
+      - ".github/scripts/prepare-apt-packages.sh"
       - "app/**"
       - "!app/**/*.md"
       - "!app/docs/**"
@@ -19,6 +20,7 @@ on:
     tags: ["v*.*.*"]
     paths:
       - ".github/workflows/package.yml"
+      - ".github/scripts/prepare-apt-packages.sh"
       - "app/**"
       - "!app/**/*.md"
       - "!app/docs/**"
@@ -304,60 +306,33 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/wip' && inputs.publish_apt_preview)
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v5
       - name: Download standard Linux package
         uses: actions/download-artifact@v5
         with:
           name: mountlet-linux-x64-standard
-          path: apt-packages
-      - name: Prepare Debian package
+          path: apt-input/standard
+      - name: Download lean Linux package
+        uses: actions/download-artifact@v5
+        with:
+          name: mountlet-linux-x64-lean
+          path: apt-input/lean
+      - name: Prepare Debian packages
         shell: bash
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           PUBLISH_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_apt_preview }}
         run: |
           set -euo pipefail
-          mapfile -d '' packages < <(find apt-packages -maxdepth 1 -type f -name '*.deb' -print0)
-          test "${#packages[@]}" -eq 1
-          package="${packages[0]}"
-          dpkg-deb --info "$package" >/dev/null
-          test "$(dpkg-deb --field "$package" Package)" = "mountlet"
-          test "$(dpkg-deb --field "$package" Architecture)" = "amd64"
-          app_version="$(dpkg-deb --field "$package" Version)"
-
           if [ "$PUBLISH_PREVIEW" = "true" ]; then
-            version="${app_version}~preview.${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}"
-            package_root="$(mktemp -d)"
-            dpkg-deb --raw-extract "$package" "$package_root"
-            sed -i \
-              -e 's/^Package: .*/Package: mountlet-preview/' \
-              -e "s/^Version: .*/Version: ${version}/" \
-              -e '/^Conflicts: /d' \
-              -e '/^Replaces: /d' \
-              -e '/^Provides: /d' \
-              "$package_root/DEBIAN/control"
-            printf 'Conflicts: mountlet\nReplaces: mountlet\nProvides: mountlet\n' >> "$package_root/DEBIAN/control"
-            rm "$package"
-            package="apt-packages/mountlet-preview_${version}_amd64.deb"
-            dpkg-deb --build --root-owner-group "$package_root" "$package" >/dev/null
+            channel=preview
+            release_id="${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}"
           else
-            version="$app_version"
-            test "$version" = "${RELEASE_TAG#v}"
-            destination="apt-packages/mountlet_${version}_amd64.deb"
-            mv "$package" "$destination"
-            package="$destination"
+            channel=stable
+            release_id="$RELEASE_TAG"
           fi
-
-          dpkg-deb --info "$package" >/dev/null
-          test "$(dpkg-deb --field "$package" Version)" = "$version"
-          test "$(dpkg-deb --field "$package" Architecture)" = "amd64"
-          if [ "$PUBLISH_PREVIEW" = "true" ]; then
-            test "$(dpkg-deb --field "$package" Package)" = "mountlet-preview"
-            test "$(dpkg-deb --field "$package" Conflicts)" = "mountlet"
-            test "$(dpkg-deb --field "$package" Replaces)" = "mountlet"
-            test "$(dpkg-deb --field "$package" Provides)" = "mountlet"
-          else
-            test "$(dpkg-deb --field "$package" Package)" = "mountlet"
-          fi
+          bash .github/scripts/prepare-apt-packages.sh \
+            apt-input/standard/*.deb apt-input/lean/*.deb apt-packages "$channel" "$release_id"
       - name: Upload packages for APT publication
         uses: actions/upload-artifact@v4
         with:

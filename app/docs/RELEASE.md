@@ -115,8 +115,10 @@ from preview:
 
 6. Wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
-   The source workflow validates and uploads exactly one `apt-packages`
-   artifact, while the central workflow signs and publishes it.
+   The source workflow validates and uploads one `apt-packages` artifact
+   containing both `mountlet` and `mountlet-lean`, while the central workflow
+   signs and publishes them. The lean package declares `rclone` as an APT
+   dependency.
 
 ## Preview APT package
 
@@ -126,7 +128,8 @@ passes, the workflow rebuilds the bundled Linux package metadata as
 `mountlet-preview`, gives it a unique version based on the workflow run number
 and commit, and sends it to the central APT publisher.
 
-`mountlet-preview` conflicts with and replaces `mountlet` because both packages
+`mountlet-preview` and `mountlet-lean-preview` are the preview counterparts of
+`mountlet` and `mountlet-lean`. All four identities conflict because they
 install the same application files. Configuration, license, metadata, and
 offline storage remain shared, so switching packages must not reset user data:
 
@@ -134,6 +137,9 @@ offline storage remain shared, so switching packages must not reset user data:
 sudo apt remove mountlet
 sudo apt install mountlet-preview
 ```
+
+APT upgrades an installed identity but never switches identities implicitly.
+Use `mountlet-lean-preview` when testing the system-rclone build.
 
 Do not publish every development commit. The APT pool is immutable and preview
 packages are intentionally retained, so use this option only for builds that

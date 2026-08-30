@@ -56,6 +56,13 @@ APT channel.
 sudo apt install mountlet
 ```
 
+The smaller system-rclone package lets APT install and update `rclone` as a
+dependency:
+
+```bash
+sudo apt install mountlet-lean
+```
+
 For deliberate testing only, `mountlet-preview` tracks manually selected
 development builds. It replaces the official package without resetting
 application data:
@@ -63,6 +70,10 @@ application data:
 ```bash
 sudo apt install mountlet-preview
 ```
+
+Its system-rclone equivalent is `mountlet-lean-preview`. APT upgrades the
+package name that is installed; it does not automatically switch between these
+four package identities.
 
 ## Validation
 

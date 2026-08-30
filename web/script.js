@@ -933,12 +933,17 @@ function updateDownloadSelection() {
   const version = document.querySelector("#release-version")?.value || "";
   const aptInstall = document.querySelector("#apt-install");
   const aptVersionCommand = document.querySelector("#apt-version-install-command code");
+  const aptPreviewCommand = document.querySelector("#apt-preview-install-command code");
   const linuxSelected = input?.value === "linux-x64";
   if (aptInstall) aptInstall.hidden = !linuxSelected;
   if (aptVersionCommand) {
+    const packageName = lean ? "mountlet-lean" : "mountlet";
     aptVersionCommand.textContent = version
-      ? `sudo apt install mountlet=${version}`
-      : "sudo apt install mountlet";
+      ? `sudo apt install ${packageName}=${version}`
+      : `sudo apt install ${packageName}`;
+  }
+  if (aptPreviewCommand) {
+    aptPreviewCommand.textContent = `sudo apt install ${lean ? "mountlet-lean-preview" : "mountlet-preview"}`;
   }
   if (button) {
     button.disabled = !input;
