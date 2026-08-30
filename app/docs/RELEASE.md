@@ -74,6 +74,47 @@ upgrade tests:
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.
 
+### Microsoft Store package
+
+The bundled Windows x64 job also builds an unsigned MSIX with a temporary CI
+identity and validates the archive with the Windows App Certification Kit. It
+then development-registers the unpacked package layout, activates it through
+its package application ID, and runs the same startup/behavior probe used for
+NSIS. It uploads the package as the distinct
+`microsoft-store-mountlet-x64` workflow artifact. Do not publish that artifact
+on the website: ordinary sideload installation requires a trusted signature,
+while Partner Center accepts the unsigned package and signs it after
+certification.
+
+Before the first Store submission, reserve **Mountlet** in Partner Center and
+copy the three exact values from **Product identity** into GitHub repository
+variables (values are case-sensitive):
+
+- `MOUNTLET_STORE_IDENTITY_NAME` = Package/Identity/Name
+- `MOUNTLET_STORE_PUBLISHER` = Package/Identity/Publisher
+- `MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME` = Package/Properties/PublisherDisplayName
+
+A tagged build deliberately fails its bundled Windows job if any identity value
+is absent. Mountlet `0.7.0` maps to Store package version `1.7.0.0`: the major
+component is offset because Store package majors cannot be zero, and the fourth
+component remains zero because Microsoft reserves it. Application-visible
+versions remain normal SemVer.
+
+Download `microsoft-store-mountlet-x64`, review its certification report, and
+upload the `.msix` on the Partner Center submission's **Packages** page.
+Complete pricing/availability, properties, age rating, listing assets, release
+notes, certification notes, and gradual rollout there. After certification,
+record the Store product ID and replace the website's primary Windows action
+with `https://apps.microsoft.com/detail/<product-id>`; retain NSIS as the
+explicit direct-download fallback.
+
+For the first Store migration test, install over a machine with NSIS/Python
+history and confirm the existing trial, license, configuration, offline cache,
+and rclone configuration are reused. The full-trust `packagedClassicApp`
+identity intentionally preserves normal access to those existing user-profile
+locations. Uninstall the old NSIS application only after that verification;
+removing the application must never remove user data.
+
 ## 3. Prepare production services
 
 Before merging, verify the Cloudflare Pages production environment separately

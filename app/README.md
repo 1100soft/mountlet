@@ -14,13 +14,15 @@ browser works without those optional mount drivers.
 Current release targets are:
 
 - Linux x64: `.deb`, standard and lean
-- Windows x64: NSIS setup `.exe`, standard and lean
+- Windows x64: Microsoft Store MSIX (self-contained), plus direct NSIS setup
+  `.exe` standard and lean fallbacks
 - macOS arm64: `.dmg`, standard and lean
 - macOS x64: `.dmg`, standard and lean
 
-Current builds are unsigned. Windows SmartScreen and macOS Gatekeeper can
-therefore require explicit confirmation. Only use installers from Mountlet's
-release site or repository Actions artifacts.
+Direct-download builds are currently unsigned, so Windows SmartScreen and
+macOS Gatekeeper can require explicit confirmation. Microsoft signs certified
+Store packages; unsigned CI MSIX artifacts are submission inputs and are not
+offered as website downloads.
 
 ## First run and daily use
 
@@ -88,7 +90,8 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 ```
 
 `npm run build` includes strict TypeScript unused-code checks. The release CI
-runs these checks and builds all eight platform/variant installers.
+runs these checks and builds all eight direct platform/variant installers plus
+the self-contained Windows x64 Store package.
 
 ## Support and privacy
 

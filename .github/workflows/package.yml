@@ -47,7 +47,7 @@ jobs:
           - { label: Linux x64, runner: ubuntu-24.04, platform: linux-x64, resource: linux-x86_64, rclone_os: linux, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-linux-x64-system-rclone.deb }
           - { label: Linux x64, runner: ubuntu-24.04, platform: linux-x64, resource: linux-x86_64, rclone_os: linux, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-linux-x64-bundled-rclone.deb }
           - { label: Windows x64, runner: windows-2025, platform: windows-x64, resource: windows-x86_64, rclone_os: windows, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-windows-x64-system-rclone-setup.exe }
-          - { label: Windows x64, runner: windows-2025, platform: windows-x64, resource: windows-x86_64, rclone_os: windows, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-windows-x64-bundled-rclone-setup.exe }
+          - { label: Windows x64, runner: windows-2025, platform: windows-x64, resource: windows-x86_64, rclone_os: windows, rclone_arch: amd64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-windows-x64-bundled-rclone-setup.exe, msix: mountlet-windows-x64-bundled-rclone.msix }
           - { label: macOS arm64, runner: macos-15, platform: macos-arm64, resource: macos-aarch64, rclone_os: osx, rclone_arch: arm64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-macos-arm64-system-rclone.dmg }
           - { label: macOS arm64, runner: macos-15, platform: macos-arm64, resource: macos-aarch64, rclone_os: osx, rclone_arch: arm64, variant: standard, variant_label: bundled rclone, bundled: true, installer: mountlet-macos-arm64-bundled-rclone.dmg }
           - { label: macOS x64, runner: macos-15-intel, platform: macos-x64, resource: macos-x86_64, rclone_os: osx, rclone_arch: amd64, variant: lean, variant_label: system rclone, bundled: false, installer: mountlet-macos-x64-system-rclone.dmg }
@@ -137,6 +137,60 @@ jobs:
           test -n "$source"
           mkdir -p artifacts
           cp "$source" "artifacts/${{ matrix.installer }}"
+      - name: Require Partner Center identity for Store releases
+        if: runner.os == 'Windows' && matrix.bundled && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          STORE_IDENTITY_NAME: ${{ vars.MOUNTLET_STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ vars.MOUNTLET_STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          test -n "$STORE_IDENTITY_NAME"
+          test -n "$STORE_PUBLISHER"
+          test -n "$STORE_PUBLISHER_DISPLAY_NAME"
+      - name: Package Windows MSIX for Microsoft Store
+        if: runner.os == 'Windows' && matrix.bundled
+        shell: pwsh
+        working-directory: app
+        env:
+          STORE_IDENTITY_NAME: ${{ vars.MOUNTLET_STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ vars.MOUNTLET_STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $identity = if ($env:STORE_IDENTITY_NAME) { $env:STORE_IDENTITY_NAME } else { "Mountlet.CI" }
+          $publisher = if ($env:STORE_PUBLISHER) { $env:STORE_PUBLISHER } else { "CN=Mountlet CI" }
+          $publisherDisplayName = if ($env:STORE_PUBLISHER_DISPLAY_NAME) { $env:STORE_PUBLISHER_DISPLAY_NAME } else { "Mountlet" }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          & src-tauri/windows/pack-msix.ps1 `
+            -Output "artifacts/${{ matrix.msix }}" `
+            -Version $version `
+            -IdentityName $identity `
+            -Publisher $publisher `
+            -PublisherDisplayName $publisherDisplayName
+      - name: Verify bundled rclone in MSIX
+        if: runner.os == 'Windows' && matrix.bundled
+        shell: bash
+        working-directory: app
+        run: |
+          found=$(7z l "artifacts/${{ matrix.msix }}" | grep -i 'rclone.exe' || true)
+          test -n "$found"
+      - name: Run Windows App Certification Kit
+        if: runner.os == 'Windows' && matrix.bundled
+        shell: pwsh
+        working-directory: app
+        run: |
+          $ErrorActionPreference = "Stop"
+          $appCert = "${env:ProgramFiles(x86)}\Windows Kits\10\App Certification Kit\appcert.exe"
+          if (-not (Test-Path $appCert)) { throw "Windows App Certification Kit was not found" }
+          $package = (Resolve-Path "artifacts/${{ matrix.msix }}").Path
+          $report = Join-Path (Resolve-Path artifacts).Path "msix-wack-report.xml"
+          & $appCert reset
+          if ($LASTEXITCODE -ne 0) { throw "AppCert reset failed with exit code $LASTEXITCODE" }
+          & $appCert test -appxpackagepath $package -reportoutputpath $report
+          if ($LASTEXITCODE -ne 0) { throw "Windows App Certification Kit failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path $report)) { throw "Windows App Certification Kit did not write a report" }
       - name: Smoke-test installed Linux package
         if: runner.os == 'Linux'
         shell: bash
@@ -232,6 +286,16 @@ jobs:
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
+      - name: Smoke-test installed Windows MSIX
+        if: runner.os == 'Windows' && matrix.bundled
+        timeout-minutes: 5
+        shell: pwsh
+        working-directory: app
+        run: |
+          $ErrorActionPreference = "Stop"
+          $marker = Join-Path $env:RUNNER_TEMP "mountlet-msix-startup.json"
+          $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          & src-tauri/windows/smoke-msix.ps1 -Package "artifacts/${{ matrix.msix }}" -ExpectedVersion $expected -Marker $marker
       - name: Smoke-test installed macOS package
         if: runner.os == 'macOS'
         shell: bash
@@ -266,6 +330,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+      - name: Upload Microsoft Store submission package
+        if: runner.os == 'Windows' && matrix.bundled
+        uses: actions/upload-artifact@v4
+        with:
+          name: microsoft-store-mountlet-x64
+          path: |
+            app/artifacts/${{ matrix.msix }}
+            app/artifacts/msix-wack-report.xml
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
 
   upload-installers:
     name: Upload installers to R2
@@ -281,6 +356,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
+          pattern: mountlet-*
           path: release-artifacts
       - uses: actions/setup-node@v5
         with:

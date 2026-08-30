@@ -9,7 +9,8 @@
     "build": "npm run check && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:msix": "powershell -NoProfile -File src-tauri/windows/pack-msix.ps1 -Output artifacts/mountlet-windows.msix"
   },
   "dependencies": {
     "@crabnebula/tauri-plugin-drag": "^2.1.0",
