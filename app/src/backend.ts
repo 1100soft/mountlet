@@ -429,6 +429,7 @@ export interface WindowLayoutRequest {
   browserSearchHeight: number;
   remoteChromeHeight: number;
   remoteRowHeight: number;
+  remoteListMinHeight: number;
   remotePaneWidth: number;
   singleWindowWidth: number;
   browserChromeHeight: number;
