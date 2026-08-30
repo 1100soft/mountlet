@@ -249,10 +249,13 @@ The `wip` branch uploads to the preview bucket. Version tags upload to the
 production bucket. Ordinary `main` pushes deploy the production website but do
 not duplicate the tagged native-package publication.
 
-Preview app builds also embed the preview license and report API defaults:
-`https://wip.mountlet.pages.dev/api/license` and
-`https://wip.mountlet.pages.dev/api/report`. Production builds keep the
-relocatable production defaults under `https://mountlet.app`.
+Packaged preview and production applications currently default to the
+production license and report APIs under `https://mountlet.app`. Build channel
+changes release/notices audience and R2 publication, but does not rewrite API
+URLs. A test process can use `MOUNTLET_LICENSE_API_URL` and
+`MOUNTLET_REPORT_API_URL` to target another deployment. Consequently, reports
+sent from an installed preview build are production reports unless the process
+was launched with an override.
 
 Artifact source names, platform/architecture metadata, build variants, and the
 five-version retention setting live in `web/release-files.json`. Keep the
@@ -307,16 +310,18 @@ Then set these environment variables:
   If unset, reports fall back to the reply-to or sender address.
 - `REPORT_FROM`: optional verified sender for reports and support requests. If
   unset, messages fall back to the license email sender.
-- `REPORT_GITHUB_TOKEN`: optional fine-grained GitHub token for creating private
-  app report and support-request issues.
-- `REPORT_GITHUB_REPO`: optional GitHub repository target in `owner/repo`
-  format.
+- `REPORT_GITHUB_TOKEN`: required fine-grained GitHub token for creating app
+  bug and crash issues; grant Issues read/write only on the report repository.
+- `REPORT_GITHUB_REPO`: required GitHub repository target in `owner/repo`
+  format for app bug and crash reports.
 - `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
   those labels in GitHub first. Mountlet adds `bug`, `crash`, or `support` as
   appropriate and retries without labels if GitHub rejects the labels.
 
-The report endpoint creates GitHub issues directly. Email through Resend is only
-an optional secondary notification path. For GitHub reporting, create a private
+The report endpoint creates GitHub issues directly. A bug or crash submission
+returns an error unless GitHub accepted the issue; successful email delivery
+cannot mask GitHub failure. Email through Resend is only an optional secondary
+notification path. For GitHub reporting, create a private
 support repository, create a fine-grained personal access token limited to that
 repository with Issues read/write permission, then set `REPORT_GITHUB_TOKEN` as
 a Pages secret and `REPORT_GITHUB_REPO` as an environment variable. The Function
