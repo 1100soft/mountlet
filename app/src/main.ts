@@ -3,7 +3,7 @@ import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrash
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
 import { detectRemoteCacheChanges } from "./backend.ts";
-import { configSyncDirty } from "./backend.ts";
+import { configSyncStatus } from "./backend.ts";
 import { cacheSyncDiagnostics } from "./backend.ts";
 import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
@@ -71,6 +71,20 @@ let sortMode = "manual";
 let sortReverse = false;
 let shortcuts: Record<string, string[]> = {};
 let completeSettings: AppSettings | null = null;
+let cachedConfigSyncStatus = { localChanged: false, remoteChanged: false };
+let configSyncStatusCheckedAt = 0;
+let configSyncStatusPending: Promise<typeof cachedConfigSyncStatus> | null = null;
+
+function currentConfigSyncStatus(): Promise<typeof cachedConfigSyncStatus> {
+  const now = Date.now();
+  if (now - configSyncStatusCheckedAt < 30_000) return Promise.resolve(cachedConfigSyncStatus);
+  configSyncStatusPending ??= configSyncStatus().then(status => {
+    cachedConfigSyncStatus = status;
+    configSyncStatusCheckedAt = Date.now();
+    return status;
+  }).finally(() => { configSyncStatusPending = null; });
+  return configSyncStatusPending;
+}
 let currentHints: DesktopHints | null = null;
 let windowPinned = false;
 let registrationOrder: readonly string[] = [];
@@ -511,6 +525,7 @@ async function syncConfiguration(direction: "push" | "pull"): Promise<void> {
   try {
     if (direction === "push") { await pushConfigSync(password); showToast("Configuration pushed to the sync location."); }
     else { const backup = await pullConfigSync(password); await refreshRemoteStatus(); showToast(`Configuration pulled.${backup ? ` Backup: ${backup}` : ""}`); }
+    configSyncStatusCheckedAt = 0;
     document.querySelectorAll(".sync-dirty").forEach(element => element.classList.remove("sync-dirty"));
   } catch (error) { await showError(direction === "push" ? "Push config" : "Pull config", error); }
 }
@@ -619,9 +634,12 @@ function renderToolbar(): HTMLElement {
   pushConfig.addEventListener("click", () => void syncConfiguration("push"));
   const pullConfig = actionIcon("⇩", "Pull configuration");
   pullConfig.addEventListener("click", () => void syncConfiguration("pull"));
-  if (completeSettings?.configSyncRemote) void configSyncDirty().then(dirty => {
-    pushConfig.classList.toggle("sync-dirty", dirty);
-    pushConfig.title = dirty ? "Push configuration (local config changed)" : "Push configuration";
+  if (completeSettings?.configSyncRemote) void currentConfigSyncStatus().then(status => {
+    if (!pushConfig.isConnected || !pullConfig.isConnected) return;
+    pushConfig.classList.toggle("sync-dirty", status.localChanged);
+    pushConfig.title = status.localChanged ? "Push configuration (local config changed)" : "Push configuration";
+    pullConfig.classList.toggle("sync-dirty", status.remoteChanged);
+    pullConfig.title = status.remoteChanged ? "Pull configuration (synced config changed)" : "Pull configuration";
   });
   const syncAll = actionIcon("↻", "Sync all cached files");
   syncAll.addEventListener("click", () => void synchronizeAllOffline());

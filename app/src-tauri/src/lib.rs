@@ -83,6 +83,13 @@ struct CacheState {
     partial: bool,
 }
 
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ConfigSyncStatus {
+    local_changed: bool,
+    remote_changed: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OfflineConflict {
@@ -4362,7 +4369,14 @@ fn offline_record_changed(record: &serde_json::Value, metadata: &fs::Metadata) -
             .is_some_and(|value| value != modified)
 }
 
-fn record_config_sync(config: &Path) -> Result<(), String> {
+fn config_sync_state() -> serde_json::Value {
+    mountlet_state_dir()
+        .and_then(|root| fs::read_to_string(root.join("config-sync-state.json")).ok())
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn save_config_sync_state(state: &serde_json::Value) -> Result<(), String> {
     let path = mountlet_state_dir()
         .ok_or("Mountlet state directory is unavailable")?
         .join("config-sync-state.json");
@@ -4371,27 +4385,88 @@ fn record_config_sync(config: &Path) -> Result<(), String> {
     }
     fs::write(
         path,
-        serde_json::to_vec(&serde_json::json!({"fingerprint":config_fingerprint(config)}))
-            .map_err(|error| error.to_string())?,
+        serde_json::to_vec(state).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
 }
 
+fn record_config_sync(config: &Path, remote_signature: Option<&str>) -> Result<(), String> {
+    let mut state = serde_json::json!({"fingerprint":config_fingerprint(config)});
+    if let Some(signature) = remote_signature {
+        state["remote_signature"] = serde_json::json!(signature);
+    }
+    save_config_sync_state(&state)
+}
+
+fn remote_config_signature(rclone: &str, config: &Path, source: &str) -> Result<String, String> {
+    let output = Command::new(rclone)
+        .args(["--config"])
+        .arg(config)
+        .args(["lsjson", source, "--stat", "--hash"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "The synced configuration metadata is invalid.".to_string())?;
+    Ok(serde_json::json!({
+        "size": value.get("Size"),
+        "modified": value.get("ModTime"),
+        "hashes": value.get("Hashes"),
+    })
+    .to_string())
+}
+
+fn config_fingerprint_changed(recorded: Option<&str>, current: &str) -> bool {
+    recorded.is_none_or(|value| value != current)
+}
+
 #[tauri::command]
-fn config_sync_dirty(state: tauri::State<'_, AppState>) -> bool {
-    let Some(config) = state.rclone_config.as_ref() else {
-        return false;
+async fn config_sync_status(state: tauri::State<'_, AppState>) -> Result<ConfigSyncStatus, String> {
+    let settings = app_settings();
+    if settings.config_sync_remote.is_empty() || settings.config_sync_path.is_empty() {
+        return Ok(ConfigSyncStatus::default());
+    }
+    let config = state
+        .rclone_config
+        .clone()
+        .ok_or("rclone configuration is unavailable")?;
+    let rclone = state.rclone.clone().ok_or("rclone is unavailable")?;
+    let saved = config_sync_state();
+    let local_changed = config_fingerprint_changed(
+        saved.get("fingerprint").and_then(|value| value.as_str()),
+        &config_fingerprint(&config),
+    );
+    let previous_remote = saved
+        .get("remote_signature")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let source = format!(
+        "{}:{}",
+        settings.config_sync_remote,
+        settings.config_sync_path.trim_start_matches('/')
+    );
+    let remote_signature = tauri::async_runtime::spawn_blocking(move || {
+        remote_config_signature(&rclone, &config, &source).ok()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let remote_changed = match (previous_remote.as_deref(), remote_signature.as_deref()) {
+        (Some(previous), Some(current)) => previous != current,
+        _ => false,
     };
-    let recorded = mountlet_state_dir()
-        .and_then(|root| fs::read_to_string(root.join("config-sync-state.json")).ok())
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
-        .and_then(|value| {
-            value
-                .get("fingerprint")
-                .and_then(|item| item.as_str())
-                .map(str::to_string)
-        });
-    recorded.is_some_and(|value| value != config_fingerprint(config))
+    if previous_remote.is_none() {
+        if let Some(signature) = remote_signature {
+            let mut initialized = saved;
+            initialized["remote_signature"] = serde_json::json!(signature);
+            let _ = save_config_sync_state(&initialized);
+        }
+    }
+    Ok(ConfigSyncStatus {
+        local_changed,
+        remote_changed,
+    })
 }
 
 #[tauri::command]
@@ -4455,17 +4530,18 @@ async fn push_config_sync(
             settings.config_sync_remote,
             settings.config_sync_path.trim_start_matches('/')
         );
-        let output = Command::new(rclone)
+        let output = Command::new(&rclone)
             .args(["--config"])
             .arg(&config)
             .args(["copyto"])
             .arg(&temporary)
-            .arg(destination)
+            .arg(&destination)
             .output()
             .map_err(|error| error.to_string())?;
         let _ = fs::remove_file(temporary);
         if output.status.success() {
-            record_config_sync(&config)?;
+            let signature = remote_config_signature(&rclone, &config, &destination).ok();
+            record_config_sync(&config, signature.as_deref())?;
             Ok(())
         } else {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
@@ -4500,7 +4576,7 @@ fn pull_config_sync(password: String, state: tauri::State<'_, AppState>) -> Resu
         .args(["--config"])
         .arg(&config)
         .args(["copyto"])
-        .arg(source)
+        .arg(&source)
         .arg(&temporary)
         .output()
         .map_err(|error| error.to_string())?;
@@ -4511,7 +4587,8 @@ fn pull_config_sync(password: String, state: tauri::State<'_, AppState>) -> Resu
     let _ = fs::remove_file(temporary);
     let backup = backup?;
     refresh_remote_state(&state)?;
-    record_config_sync(&config)?;
+    let signature = remote_config_signature(rclone, &config, &source).ok();
+    record_config_sync(&config, signature.as_deref())?;
     Ok(backup
         .map(|path| path.display().to_string())
         .unwrap_or_default())
@@ -6200,12 +6277,16 @@ async fn open_entry(
 
 #[tauri::command]
 fn open_mounted_folder(request: EntryRequest) -> Result<(), String> {
-    let path = remote_mount_path(&request.remote_id)?.join(request.path);
-    if !path.is_dir() {
+    if request.path.split('/').any(|part| part == "..") {
+        return Err("Invalid mounted folder path.".into());
+    }
+    let root = remote_mount_path(&request.remote_id)?;
+    if !path_is_mounted(&root) {
         return Err("This remote folder is not currently mounted.".into());
     }
+    let path = root.join(request.path);
     let settings = app_settings();
-    file_managers::open_folder(
+    file_managers::open_mounted_folder(
         &path,
         &settings.file_manager,
         &settings.open_folder_behavior,
@@ -7460,7 +7541,7 @@ pub fn run() {
             import_config_bundle,
             push_config_sync,
             pull_config_sync,
-            config_sync_dirty,
+            config_sync_status,
             open_external,
             quit_app,
             load_browser_memory,
@@ -7688,6 +7769,13 @@ mod tests {
         assert!(!is_complete_managed_file(
             &serde_json::json!({"is_dir": false, "protected": false, "complete": false})
         ));
+    }
+
+    #[test]
+    fn config_sync_detects_changes_before_and_after_first_push() {
+        assert!(config_fingerprint_changed(None, "current"));
+        assert!(!config_fingerprint_changed(Some("current"), "current"));
+        assert!(config_fingerprint_changed(Some("previous"), "current"));
     }
 
     #[test]

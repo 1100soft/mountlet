@@ -175,7 +175,10 @@ export async function pushConfigSync(password: string): Promise<void> {
 export async function pullConfigSync(password: string): Promise<string> {
   return invoke<string>("pull_config_sync", { password });
 }
-export async function configSyncDirty(): Promise<boolean> { return inTauri ? invoke<boolean>("config_sync_dirty") : false; }
+export interface ConfigSyncStatus { localChanged: boolean; remoteChanged: boolean; }
+export async function configSyncStatus(): Promise<ConfigSyncStatus> {
+  return inTauri ? invoke<ConfigSyncStatus>("config_sync_status") : { localChanged: false, remoteChanged: false };
+}
 
 export async function openExternal(url: string): Promise<void> {
   if (inTauri) await invoke("open_external", { url });

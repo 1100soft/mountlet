@@ -110,6 +110,21 @@ function paintNeutralIcon(image: HTMLImageElement, asset: string): void {
   }).catch(() => undefined);
 }
 
+function paintCacheIndicator(image: HTMLImageElement, asset: string, color: string): void {
+  image.dataset.cacheAsset = asset;
+  image.dataset.cacheColor = color;
+  const apply = (svg: string) => {
+    image.src = tintedSvgUrl(svg.replace(/#00ff00\b/gi, color), color);
+  };
+  const svg = svgCache.get(asset);
+  if (svg) { apply(svg); return; }
+  image.src = `/assets/${asset}`;
+  void fetch(`/assets/${asset}`).then(response => response.text()).then(text => {
+    svgCache.set(asset, text);
+    if (image.isConnected) apply(text);
+  }).catch(() => undefined);
+}
+
 export function refreshTintedIcons(): void {
   const color = themeIconColor();
   document.querySelectorAll<HTMLImageElement>("[data-neutral-asset]").forEach(image => {
@@ -117,6 +132,11 @@ export function refreshTintedIcons(): void {
     const svg = asset ? svgCache.get(asset) : undefined;
     if (asset && svg) image.src = tintedSvgUrl(svg, color);
     else if (asset) paintNeutralIcon(image, asset);
+  });
+  document.querySelectorAll<HTMLImageElement>("[data-cache-asset]").forEach(image => {
+    const asset = image.dataset.cacheAsset;
+    const color = image.dataset.cacheColor;
+    if (asset && color) paintCacheIndicator(image, asset, color);
   });
 }
 
@@ -152,7 +172,11 @@ export function fileIcon(entry: FileEntry): HTMLElement {
     badge.className = `cache-badge ${entry.cache.offline ? "offline" : "cached"}`;
     badge.alt = entry.cache.offline ? "Available offline" : "Cached local copy";
     badge.title = badge.alt;
-    paintNeutralIcon(badge, entry.cache.offline ? "ui-save-offline.svg" : "ui-entry-download.svg");
+    paintCacheIndicator(
+      badge,
+      entry.cache.offline ? "ui-save-offline.svg" : "ui-entry-download.svg",
+      entry.cache.offline ? "#00ff00" : "#ff0000",
+    );
     wrapper.append(badge);
   }
   return wrapper;

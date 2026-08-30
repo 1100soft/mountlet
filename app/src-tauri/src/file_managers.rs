@@ -61,16 +61,25 @@ pub fn resolve(identifier: &str) -> FileManager {
         })
 }
 
-pub fn open_folder(
+pub fn open_mounted_folder(
+    path: &Path,
+    manager_id: &str,
+    behavior: &str,
+    focus: bool,
+) -> Result<(), String> {
+    // A lazy FUSE/WinFsp mount can resolve a leaf directory only when the file
+    // manager traverses it. Do not reject that target based on an eager host
+    // filesystem probe.
+    open_folder_impl(path, manager_id, behavior, focus)
+}
+
+fn open_folder_impl(
     path: &Path,
     manager_id: &str,
     behavior: &str,
     focus: bool,
 ) -> Result<(), String> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if !path.is_dir() {
-        return Err("This remote folder is not currently mounted.".into());
-    }
     let manager = resolve(manager_id);
     if behavior == "file-manager-service"
         && manager.identifier == SYSTEM_FILE_MANAGER_ID

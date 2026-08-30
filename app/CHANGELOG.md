@@ -17,6 +17,10 @@
   preserving its user data, trial history, and managed cache.
 - Kept all managed cached files in change detection and conflict resolution,
   including temporary copies created by opening a remote file.
+- Recovered overwritten Windows trial clocks from preserved NTFS creation times
+  without allowing a trial to be extended.
+- Restored local and remote configuration-update indicators and lazy mounted
+  leaf-folder opening.
 
 The archived Python changelog is available under
 `legacy/python-0.6.8/CHANGELOG.md`.

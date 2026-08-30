@@ -293,6 +293,13 @@ fn trial() -> Result<Value, String> {
         selected = recover_legacy_trial(&encoded_records, current, &hint);
     }
     if let Some(mut record) = selected {
+        if let Some(created) = oldest_trial_replica_creation(&paths, current) {
+            let started = record["started_at"].as_f64().unwrap_or(current);
+            // Early Tauri builds replaced the Python payload in-place. NTFS
+            // retains file creation time when a file is truncated, which lets
+            // us recover the earlier clock without ever granting more trial.
+            record["started_at"] = json!(earlier_trial_start(started, Some(created)));
+        }
         record["version"] = json!(2);
         record["machine_hint"] = json!(hint);
         record["last_seen_at"] = json!(record["last_seen_at"]
@@ -307,6 +314,31 @@ fn trial() -> Result<Value, String> {
     let record = json!({"version":2,"install_id":URL_SAFE_NO_PAD.encode(random),"machine_hint":hint,"started_at":now(),"last_seen_at":now()});
     write_trial(&record, &hint)?;
     Ok(record)
+}
+
+fn oldest_trial_replica_creation(paths: &[PathBuf], current: f64) -> Option<f64> {
+    #[cfg(target_os = "windows")]
+    {
+        paths
+            .iter()
+            .filter_map(|path| fs::metadata(path).ok()?.created().ok())
+            .filter_map(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|created| created.as_secs_f64())
+            // Mountlet did not exist before 2020; reject filesystem sentinel
+            // dates and future timestamps rather than accidentally expiring a
+            // legitimate trial.
+            .filter(|created| *created >= 1_577_836_800.0 && *created <= current + 86_400.0)
+            .min_by(f64::total_cmp)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (paths, current);
+        None
+    }
+}
+
+fn earlier_trial_start(recorded: f64, replica_created: Option<f64>) -> f64 {
+    replica_created.map_or(recorded, |created| recorded.min(created))
 }
 
 fn oldest_trial(valid: Vec<Value>, current: f64) -> Option<Value> {
@@ -857,6 +889,13 @@ mod tests {
         .unwrap();
         assert_eq!(selected["install_id"], "python");
         assert_eq!(selected["started_at"], 100.0);
+    }
+
+    #[test]
+    fn replica_creation_can_only_shorten_a_trial() {
+        assert_eq!(earlier_trial_start(200.0, Some(100.0)), 100.0);
+        assert_eq!(earlier_trial_start(100.0, Some(200.0)), 100.0);
+        assert_eq!(earlier_trial_start(100.0, None), 100.0);
     }
 
     #[test]
