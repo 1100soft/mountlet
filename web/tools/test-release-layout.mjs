@@ -66,5 +66,10 @@ assert.match(downloadPage, /id="apt-version-install-command"/);
 assert.match(downloadPage, /sudo apt install mountlet-preview/);
 assert.match(websiteScript, /input\?\.value === "linux-x64"/);
 assert.match(websiteScript, /sudo apt install mountlet=\$\{version\}/);
+assert.ok(downloadPage.indexOf('id="release-version"') < downloadPage.indexOf('id="apt-install"'));
+assert.ok(downloadPage.indexOf('id="apt-install"') < downloadPage.indexOf('id="selected-download-button"'));
+assert.ok(downloadPage.indexOf('id="selected-download-button"') < downloadPage.indexOf('id="download-platform-label"'));
+assert.match(downloadPage, /id="public-beta-key-output"/);
+assert.match(websiteScript, /setPurchaseFollowupVisible\(false\);\s*setAddDeviceEnabled\(false\);/);
 
 console.log("Release layout checks passed.");

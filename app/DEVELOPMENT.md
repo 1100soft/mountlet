@@ -105,6 +105,9 @@ CLI/TUI and Qt-only test harness remain in the archived source:
 - File-manager settings are executed (Dolphin tab / `xdg-mime` / FileManager1
   on Linux, Explorer/Finder elsewhere). Wayland forces single-window mode;
   GNOME on Wayland disables pin.
+- The public beta key is shared by all beta users. The License dialog must not
+  request or display its server-side device list; device management is only
+  user-facing for individual paid licenses.
 - The window opens during startup. Linux StatusNotifierItem does not expose
   tray geometry until a click, so startup uses the work-area fallback and the
   first tray activation supplies the anchor (matching Python when

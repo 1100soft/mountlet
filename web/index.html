@@ -90,31 +90,6 @@
         <section class="download-card emphasized download-selector" aria-labelledby="download-selector-title">
           <h3 id="download-selector-title" class="sr-only">Download Mountlet</h3>
           <p class="download-selection-status" id="download-selection-status" role="status"></p>
-          <p class="download-platform-label" id="download-platform-label">Platform</p>
-          <div class="download-matrix-wrap">
-            <table class="download-matrix">
-              <colgroup><col class="platform-column" /><col class="architecture-column" /><col class="architecture-column" /></colgroup>
-              <thead><tr><th scope="col">Platform</th><th scope="col">x64</th><th scope="col">ARM64</th></tr></thead>
-              <tbody>
-                <tr>
-                  <th scope="row"><img src="assets/platforms/windows.svg" alt="" /> <span>Windows</span></th>
-                  <td><label><input type="radio" name="download-target" value="windows-x64" data-download-standard="windows" data-download-lean="windowsLean" aria-label="Windows x64" checked /></label></td>
-                  <td><span class="unavailable">Not available</span></td>
-                </tr>
-                <tr>
-                  <th scope="row"><img src="assets/platforms/macos.svg" alt="" /> <span>macOS</span></th>
-                  <td><label><input type="radio" name="download-target" value="macos-x64" data-download-standard="macosX64" data-download-lean="macosLeanX64" aria-label="macOS x64" /></label></td>
-                  <td><label><input type="radio" name="download-target" value="macos-arm64" data-download-standard="macos" data-download-lean="macosLean" aria-label="macOS ARM64" /></label></td>
-                </tr>
-                <tr>
-                  <th scope="row"><img src="assets/platforms/linux.svg" alt="" /> <span>Linux <small>Debian/Ubuntu</small></span></th>
-                  <td><label><input type="radio" name="download-target" value="linux-x64" data-download-standard="linux" data-download-lean="linuxLean" aria-label="Linux x64" /></label></td>
-                  <td><span class="unavailable">Not available</span></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
           <section class="apt-install" id="apt-install" aria-labelledby="apt-install-title" hidden>
             <p class="eyebrow">Recommended on Debian</p>
             <h3 id="apt-install-title">Install from the 1100 APT repository</h3>
@@ -146,6 +121,32 @@ sudo apt update</code></pre>
             </details>
           </section>
 
+          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
+          <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
+          <p class="download-platform-label" id="download-platform-label">Platform</p>
+          <div class="download-matrix-wrap">
+            <table class="download-matrix">
+              <colgroup><col class="platform-column" /><col class="architecture-column" /><col class="architecture-column" /></colgroup>
+              <thead><tr><th scope="col">Platform</th><th scope="col">x64</th><th scope="col">ARM64</th></tr></thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/windows.svg" alt="" /> <span>Windows</span></th>
+                  <td><label><input type="radio" name="download-target" value="windows-x64" data-download-standard="windows" data-download-lean="windowsLean" aria-label="Windows x64" checked /></label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/macos.svg" alt="" /> <span>macOS</span></th>
+                  <td><label><input type="radio" name="download-target" value="macos-x64" data-download-standard="macosX64" data-download-lean="macosLeanX64" aria-label="macOS x64" /></label></td>
+                  <td><label><input type="radio" name="download-target" value="macos-arm64" data-download-standard="macos" data-download-lean="macosLean" aria-label="macOS ARM64" /></label></td>
+                </tr>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/linux.svg" alt="" /> <span>Linux <small>Debian/Ubuntu</small></span></th>
+                  <td><label><input type="radio" name="download-target" value="linux-x64" data-download-standard="linux" data-download-lean="linuxLean" aria-label="Linux x64" /></label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <div class="download-options">
             <div class="lean-build-row">
               <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build</label>
@@ -158,8 +159,6 @@ sudo apt update</code></pre>
               </details>
             </div>
           </div>
-          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
-          <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
         </section>
 
         <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
@@ -272,7 +271,12 @@ sudo apt update</code></pre>
           <article class="price-card beta-card">
             <h3>Public beta</h3>
             <p>Free during beta. Use the public beta key for temporary access. It renews daily while the beta is open and can be disabled when the beta ends.</p>
-            <button class="button secondary" type="button" id="use-beta-key">Use beta key</button>
+            <div class="beta-key-controls">
+              <code id="public-beta-key-output"></code>
+              <button class="copy-command" type="button" data-copy-target="public-beta-key-output" data-copy-status="beta-key-copy-status" title="Copy public beta key" aria-label="Copy public beta key"><img src="assets/ui-copy.svg" alt="" /></button>
+              <span class="inline-status" id="beta-key-copy-status" role="status" aria-live="polite"></span>
+            </div>
+            <button class="button secondary" type="button" id="use-beta-key">Select beta license</button>
           </article>
         </div>
         <p class="note">

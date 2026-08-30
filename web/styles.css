@@ -817,6 +817,28 @@ h3 {
   margin-bottom: 6px;
 }
 
+.beta-key-controls {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, max-content) 36px;
+  margin: 14px 0;
+}
+
+.beta-key-controls code {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  font-weight: 720;
+  min-height: 36px;
+  padding: 8px 10px;
+  user-select: all;
+}
+
+.beta-key-controls .inline-status {
+  grid-column: 1 / -1;
+  min-height: 1.25em;
+}
+
 .add-device-card.disabled {
   opacity: 0.58;
 }

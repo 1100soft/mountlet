@@ -578,11 +578,14 @@ async function showLicense(): Promise<void> {
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
     if (status.state !== "licensed") return;
+    // The public beta key is shared by every beta user. Its server-side device
+    // records are not meaningful account data and must not be exposed here.
+    if (status.licenseKind === "beta") return;
     const deviceSection = element("section", "license-device-section"); const heading = element("div", "license-device-heading"); const headingText = element("strong", "", "Activated devices");
-    const addDevices = element("button", "", "+ Add devices"); addDevices.hidden = status.licenseKind === "beta"; addDevices.addEventListener("click", () => void openExternal(`https://mountlet.app/?license_action=add_devices&license_key=${encodeURIComponent(status.licenseKey)}#pricing`)); heading.append(headingText, addDevices); deviceSection.append(heading);
+    const addDevices = element("button", "", "+ Add devices"); addDevices.addEventListener("click", () => void openExternal(`https://mountlet.app/?license_action=add_devices&license_key=${encodeURIComponent(status.licenseKey)}#pricing`)); heading.append(headingText, addDevices); deviceSection.append(heading);
     try {
       const result = await licenseDevices(); const devices = Array.isArray(result.devices) ? result.devices as Array<Record<string, unknown>> : []; const used = Number(result.usedDevices ?? devices.length); const maximum = Number(result.maxDevices ?? status.maxDevices);
-      headingText.textContent = status.licenseKind === "beta" ? "Public beta" : `Activated devices (${used}${maximum ? `/${maximum}` : ""})`;
+      headingText.textContent = `Activated devices (${used}${maximum ? `/${maximum}` : ""})`;
       const list = element("div", "license-devices");
       if (!devices.length) list.append(element("p", "license-devices-empty", "No activated devices were returned."));
       for (const item of devices) {

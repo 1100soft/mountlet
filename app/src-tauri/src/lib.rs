@@ -5391,11 +5391,10 @@ fn layout_windows(
             .valid
             .then_some((anchor.physical_x, anchor.physical_y))
     });
-    let monitor_area = tray_point.and_then(|point| {
-        app.available_monitors().ok().and_then(|monitors| {
-            monitors
-                .into_iter()
-                .find(|monitor| {
+    let monitor = tray_point
+        .and_then(|point| {
+            app.available_monitors().ok().and_then(|monitors| {
+                monitors.into_iter().find(|monitor| {
                     let position = monitor.position();
                     let size = monitor.size();
                     point.0 >= f64::from(position.x)
@@ -5403,18 +5402,19 @@ fn layout_windows(
                         && point.0 < f64::from(position.x) + f64::from(size.width)
                         && point.1 < f64::from(position.y) + f64::from(size.height)
                 })
-                .map(|monitor| {
-                    let scale = monitor.scale_factor();
-                    let position = monitor.position();
-                    let size = monitor.size();
-                    WorkArea {
-                        x: f64::from(position.x) / scale,
-                        y: f64::from(position.y) / scale,
-                        width: f64::from(size.width) / scale,
-                        height: f64::from(size.height) / scale,
-                    }
-                })
+            })
         })
+        .or_else(|| main.current_monitor().ok().flatten());
+    let monitor_area = monitor.map(|monitor| {
+        let scale = monitor.scale_factor();
+        let position = monitor.position();
+        let size = monitor.size();
+        WorkArea {
+            x: f64::from(position.x) / scale,
+            y: f64::from(position.y) / scale,
+            width: f64::from(size.width) / scale,
+            height: f64::from(size.height) / scale,
+        }
     });
     let combined = match monitor_area {
         Some(monitor) if monitor.overlaps(requested_area) => monitor.intersect(requested_area),
@@ -5556,7 +5556,16 @@ fn layout_windows(
         ))
     };
     begin_programmatic_layout(state);
-    let _ = main.set_min_size(Some(LogicalSize::new(360.0, 120.0)));
+    let main_max_inner_width = (available_width - main_frame_w).max(1.0);
+    let main_max_inner_height = (available_height - main_frame_h).max(1.0);
+    let _ = main.set_min_size(Some(LogicalSize::new(
+        360.0_f64.min(main_max_inner_width),
+        120.0_f64.min(main_max_inner_height),
+    )));
+    let _ = main.set_max_size(Some(LogicalSize::new(
+        main_max_inner_width,
+        main_max_inner_height,
+    )));
     main.set_size(LogicalSize::new(
         (target_main_outer_width - main_frame_w).max(1.0),
         (target_main_outer_height - main_frame_h).max(1.0),
@@ -5584,7 +5593,16 @@ fn layout_windows(
     let desired_browser_outer_height = (desired_browser_content_height + browser_frame_h)
         .max(f64::from(request.browser_min_height) + browser_frame_h)
         .min(available_height);
-    let _ = browser.set_min_size(Some(LogicalSize::new(200.0, 120.0)));
+    let browser_max_inner_width = (available_width - browser_frame_w).max(1.0);
+    let browser_max_inner_height = (available_height - browser_frame_h).max(1.0);
+    let _ = browser.set_min_size(Some(LogicalSize::new(
+        200.0_f64.min(browser_max_inner_width),
+        120.0_f64.min(browser_max_inner_height),
+    )));
+    let _ = browser.set_max_size(Some(LogicalSize::new(
+        browser_max_inner_width,
+        browser_max_inner_height,
+    )));
     browser
         .set_size(LogicalSize::new(
             (desired_browser_outer_width - browser_frame_w).max(1.0),

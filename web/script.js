@@ -225,10 +225,10 @@ async function validateLicenseKey() {
     validatedLicenseKind = String(data.licenseKind || "paid");
     if (validatedLicenseKind === "beta") {
       setLicenseStatus(
-        "Valid public beta key. It renews daily while the beta is open; add-device checkout is disabled.",
+        "Valid public beta key. It renews daily while the beta is open.",
         "valid"
       );
-      setPurchaseFollowupVisible(true);
+      setPurchaseFollowupVisible(false);
       setAddDeviceEnabled(false);
       updateCart();
       return;
@@ -258,6 +258,8 @@ async function validateLicenseKey() {
 
 function usePublicBetaKey() {
   setLicenseAction("add_devices");
+  setPurchaseFollowupVisible(false);
+  setAddDeviceEnabled(false);
   const input = document.querySelector("#existing-license-key");
   if (input) {
     input.value = PUBLIC_BETA_KEY;
@@ -1243,6 +1245,8 @@ window.addEventListener("popstate", () => {
 });
 
 applyConfiguredLinks();
+const publicBetaKeyOutput = document.querySelector("#public-beta-key-output");
+if (publicBetaKeyOutput) publicBetaKeyOutput.textContent = PUBLIC_BETA_KEY;
 setActiveTab(window.location.hash, {skipHash: true});
 openLinkedFaq();
 const shouldValidatePrefilledLicense = applyPricingUrlParams();
