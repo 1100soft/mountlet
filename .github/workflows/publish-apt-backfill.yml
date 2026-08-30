@@ -1,0 +1,78 @@
+name: Publish tested Linux packages to APT
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful Native package CI run containing the tested Linux artifacts
+        required: true
+        type: string
+      channel:
+        description: APT channel to publish
+        required: true
+        type: choice
+        options: [stable, preview]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate trusted source run
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")
+          test "$(jq -r .conclusion <<<"$run")" = success
+          test "$(jq -r .name <<<"$run")" = "Native package CI"
+          branch=$(jq -r .head_branch <<<"$run")
+          event=$(jq -r .event <<<"$run")
+          run_number=$(jq -r .run_number <<<"$run")
+          sha=$(jq -r .head_sha <<<"$run")
+          if [ "$CHANNEL" = stable ]; then
+            test "$event" = push
+            [[ "$branch" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            release_id="$branch"
+          else
+            test "$event" = workflow_dispatch
+            test "$branch" = wip
+            release_id="${run_number}+g${sha:0:7}"
+          fi
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+      - name: Download tested Linux packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          gh run download "$SOURCE_RUN_ID" --name mountlet-linux-x64-standard --dir apt-input/standard
+          gh run download "$SOURCE_RUN_ID" --name mountlet-linux-x64-lean --dir apt-input/lean
+      - name: Prepare Debian packages
+        run: |
+          bash .github/scripts/prepare-apt-packages.sh \
+            apt-input/standard/*.deb apt-input/lean/*.deb apt-packages \
+            "${{ inputs.channel }}" "${{ steps.source.outputs.release_id }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apt-packages
+          path: apt-packages/*.deb
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Request APT publication
+        env:
+          GH_TOKEN: ${{ secrets.APT_DISPATCH_TOKEN }}
+        run: |
+          gh api --method POST repos/1100soft/1100/dispatches \
+            -f event_type=apt-package \
+            -F client_payload[source_repository]="$GITHUB_REPOSITORY" \
+            -F client_payload[run_id]="$GITHUB_RUN_ID" \
+            -F client_payload[artifact]=apt-packages
