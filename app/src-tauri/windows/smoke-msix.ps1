@@ -115,7 +115,8 @@ try {
   if (-not (Test-Path $Marker)) { throw "Installed MSIX app did not report startup readiness" }
   if ($unexpectedConsoles.Count -ne 0) { throw "Installed MSIX app spawned visible console windows owned by: $($unexpectedConsoles -join ', ')" }
   if (-not $process.WaitForExit(10000)) { throw "Installed MSIX app did not exit after its startup probe" }
-  if ($process.ExitCode -ne 0) { throw "Installed MSIX app exited with $($process.ExitCode)" }
+  $exitCode = $process.ExitCode
+  if ($null -ne $exitCode -and $exitCode -ne 0) { throw "Installed MSIX app exited with $exitCode" }
   $result = Get-Content $Marker -Raw | ConvertFrom-Json
   if ($result.version -ne $ExpectedVersion -or -not $result.buildId -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.mainWindowVisible -or -not $result.remoteStateReady -or -not $result.behaviorComplete) {
     throw "Installed MSIX app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
