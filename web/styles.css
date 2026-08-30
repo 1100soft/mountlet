@@ -643,6 +643,8 @@ h3 {
 .release-version-bar {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
   max-width: 760px;
   width: 100%;
 }

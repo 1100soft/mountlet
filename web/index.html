@@ -85,6 +85,16 @@
 
         <div class="release-version-bar">
           <label class="release-version-choice" for="release-version">Version <select id="release-version" aria-label="Mountlet version"><option value="">Latest</option></select></label>
+          <div class="lean-build-row">
+            <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build</label>
+            <details class="info-popover">
+              <summary aria-label="About standard and lean builds">i</summary>
+              <div class="info-popover-panel">
+                <p><strong>Standard build:</strong> includes a current, app-local rclone. It is the recommended choice and does not replace a system installation.</p>
+                <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
+              </div>
+            </details>
+          </div>
         </div>
 
         <section class="download-card emphasized download-selector" aria-labelledby="download-selector-title">
@@ -146,18 +156,6 @@ sudo apt update</code></pre>
                 </tr>
               </tbody>
             </table>
-          </div>
-          <div class="download-options">
-            <div class="lean-build-row">
-              <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build</label>
-              <details class="info-popover">
-                <summary aria-label="About standard and lean builds">i</summary>
-                <div class="info-popover-panel">
-                  <p><strong>Standard build:</strong> includes a current, app-local rclone. It is the recommended choice and does not replace a system installation.</p>
-                  <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
-                </div>
-              </details>
-            </div>
           </div>
         </section>
 

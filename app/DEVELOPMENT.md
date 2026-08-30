@@ -118,9 +118,11 @@ CLI/TUI and Qt-only test harness remain in the archived source:
   layout grace period) keeps resize-in-place. Linux tray callbacks only cache
   the click and hop to the UI thread; GTK window layout must not run on the
   StatusNotifier thread or left- and right-click both go dead. Layout then
-  runs before `show()` so a double-click cannot spawn the frame at 0,0. Zoom,
-  theme, and window mode are written to `config.toml` as they change so App
-  settings cannot restore a stale startup zoom.
+  runs before `show()` so a double-click cannot spawn the frame at 0,0. X11
+  uses `_NET_WORKAREA`, while Wayland uses GDK's native monitor work area so
+  compositor panels and usable bounds constrain the window. Zoom, theme, and
+  window mode are written to `config.toml` as they change so App settings
+  cannot restore a stale startup zoom.
 - The window is placed beside the tray icon, inset from the panel by the
   Python `exclude_tray_panel` rule, or at the work-area corner used by Python
   when tray geometry is missing (GNOME Wayland: top-right). It no longer
