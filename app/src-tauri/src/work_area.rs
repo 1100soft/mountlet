@@ -38,7 +38,14 @@ impl WorkArea {
 
 #[cfg(all(target_os = "linux", not(target_os = "android")))]
 fn x11_work_area() -> Option<WorkArea> {
-    std::env::var_os("DISPLAY")?;
+    // Wayland sessions normally expose DISPLAY for XWayland clients too. Its
+    // root-window work area is not authoritative for native Wayland windows.
+    if !x11_is_authoritative(
+        crate::platform::is_wayland(),
+        std::env::var_os("DISPLAY").is_some(),
+    ) {
+        return None;
+    }
     let output = Command::new("xprop")
         .args(["-root", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA"])
         .output()
@@ -47,6 +54,11 @@ fn x11_work_area() -> Option<WorkArea> {
         return None;
     }
     parse_x11_work_area(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn x11_is_authoritative(wayland: bool, display_available: bool) -> bool {
+    display_available && !wayland
 }
 
 #[cfg(target_os = "linux")]
@@ -74,7 +86,11 @@ pub fn resolve(fallback: WorkArea) -> WorkArea {
 
 #[cfg(target_os = "linux")]
 fn platform_work_area(fallback: WorkArea) -> Option<WorkArea> {
-    x11_work_area().or_else(|| gdk_work_area(fallback))
+    if crate::platform::is_wayland() {
+        gdk_work_area(fallback)
+    } else {
+        x11_work_area().or_else(|| gdk_work_area(fallback))
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -219,5 +235,12 @@ mod tests {
                 height: 1080.0
             })
         );
+    }
+
+    #[test]
+    fn xwayland_display_never_overrides_native_work_area() {
+        assert!(!x11_is_authoritative(true, true));
+        assert!(x11_is_authoritative(false, true));
+        assert!(!x11_is_authoritative(false, false));
     }
 }

@@ -332,6 +332,28 @@ async function layoutNativeWindows(): Promise<void> {
   const purchaseHeight = currentLicense && currentLicense.state !== "licensed" ? metrics.purchaseRow : 0;
   const globalSearchHeight = remoteFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(4, preferences.zoomStep) : 0;
   const browserSearchHeight = fileFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(5, preferences.zoomStep) : 0;
+  const remotePane = document.querySelector<HTMLElement>(".remote-pane");
+  const remoteList = document.querySelector<HTMLElement>(".remote-list");
+  let layoutGlobalSearchHeight = globalSearchHeight;
+  let remoteChromeHeight = metrics.remoteChrome + purchaseHeight + globalSearchHeight;
+  let remoteCardTop = metrics.remoteCardTop + purchaseHeight + globalSearchHeight;
+  if (remotePane && remoteList) {
+    const paneRect = remotePane.getBoundingClientRect();
+    const listRect = remoteList.getBoundingClientRect();
+    const listStyle = getComputedStyle(remoteList);
+    const borderTop = Number.parseFloat(listStyle.borderTopWidth) || 0;
+    const borderBottom = Number.parseFloat(listStyle.borderBottomWidth) || 0;
+    // Derive fixed chrome from the actual rendered boxes. CSS gaps can be
+    // fractional at non-default zoom and must not be reconstructed by adding
+    // independently rounded reference metrics.
+    remoteCardTop = Math.ceil(listRect.top - paneRect.top + borderTop);
+    remoteChromeHeight = Math.ceil(
+      (listRect.top - paneRect.top + borderTop)
+      + (paneRect.bottom - listRect.bottom + borderBottom),
+    );
+    // The measured chrome already includes the visible global-results box.
+    layoutGlobalSearchHeight = 0;
+  }
   await applyWindowLayout({
     mode: licenseLocked() ? "single" : preferences.mode,
     selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
@@ -339,10 +361,10 @@ async function layoutNativeWindows(): Promise<void> {
     browserItems: preferences.fileListMaxItems > 0
       ? Math.min(snapshot?.entries.length ?? 0, preferences.fileListMaxItems)
       : snapshot?.entries.length ?? 0,
-    remoteCardTop: metrics.remoteCardTop + purchaseHeight + globalSearchHeight,
-    globalSearchHeight,
+    remoteCardTop,
+    globalSearchHeight: layoutGlobalSearchHeight,
     browserSearchHeight,
-    remoteChromeHeight: metrics.remoteChrome + purchaseHeight,
+    remoteChromeHeight,
     remoteRowHeight: metrics.remoteRow,
     remotePaneWidth: metrics.remotePaneWidth,
     singleWindowWidth: metrics.singleWindowWidth,
