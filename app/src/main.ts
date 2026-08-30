@@ -366,6 +366,7 @@ async function layoutNativeWindows(): Promise<void> {
     browserSearchHeight,
     remoteChromeHeight,
     remoteRowHeight: metrics.remoteRow,
+    remoteListMinHeight: scaledMetric(180, preferences.zoomStep),
     remotePaneWidth: metrics.remotePaneWidth,
     singleWindowWidth: metrics.singleWindowWidth,
     browserChromeHeight: metrics.browserChrome,
@@ -649,10 +650,6 @@ function renderToolbar(): HTMLElement {
   header.append(menu);
 
   const toolbar = element("div", "toolbar");
-  const dragHandle = element("span", "window-drag-handle", "✥");
-  dragHandle.setAttribute("data-tauri-drag-region", "");
-  dragHandle.title = "Drag to move Mountlet.";
-  dragHandle.setAttribute("aria-label", dragHandle.title);
   const settingsButton = actionIcon("⚙", "App configuration");
   settingsButton.addEventListener("click", () => void showAppSettings());
   const pushConfig = actionIcon("⇧", "Push configuration");
@@ -673,7 +670,6 @@ function renderToolbar(): HTMLElement {
   const clearCache = actionIcon("⌫", "Clear all cached files");
   clearCache.addEventListener("click", () => void clearAllCache());
   toolbar.append(
-    dragHandle,
     settingsButton,
     pushConfig,
     pullConfig,
