@@ -53,7 +53,7 @@ Export-PfxCertificate -Cert $certificate -FilePath $pfx -Password $password | Ou
 Export-Certificate -Cert $certificate -FilePath $cer | Out-Null
 Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPeople" | Out-Null
 Write-Host "Trusting the temporary MSIX certificate"
-& certutil.exe -user -addstore -f Root $cer | Out-Host
+& certutil.exe -user -silent -addstore -f Root $cer | Out-Host
 if ($LASTEXITCODE -ne 0) {
   throw "certutil failed to trust the temporary MSIX certificate with exit code $LASTEXITCODE"
 }
