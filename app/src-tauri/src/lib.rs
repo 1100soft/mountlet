@@ -709,7 +709,7 @@ fn mountlet_state_dir() -> Option<PathBuf> {
     {
         env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("Mountlet"))
+            .map(|path| path.join("Mountlet/State"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -6178,12 +6178,6 @@ async fn open_entry(
 ) -> Result<(), String> {
     let remote_id = request.remote_id;
     let path = request.path;
-    let mounted = remote_mount_path(&remote_id)
-        .ok()
-        .map(|root| root.join(&path));
-    if let Some(local) = mounted.filter(|candidate| candidate.exists()) {
-        return open_local_path(&local);
-    }
     let offline = offline_root().map(|root| root.join(mount_slug(&remote_id)).join(&path));
     if let Some(local) = offline.filter(|candidate| candidate.exists()) {
         return open_local_path(&local);

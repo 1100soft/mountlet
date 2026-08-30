@@ -132,11 +132,34 @@ fn state_license(name: &str) -> Option<PathBuf> {
 fn config_license(name: &str) -> Option<PathBuf> {
     Some(mountlet_config_dir()?.join(name))
 }
+fn legacy_tauri_state_license(name: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("Mountlet/license").join(name))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = name;
+        None
+    }
+}
 fn paths(name: &str) -> Vec<PathBuf> {
-    [state_license(name), config_license(name)]
-        .into_iter()
-        .flatten()
-        .collect()
+    let mut result = Vec::new();
+    for path in [
+        state_license(name),
+        config_license(name),
+        legacy_tauri_state_license(name),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !result.contains(&path) {
+            result.push(path);
+        }
+    }
+    result
 }
 fn home() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -151,6 +174,9 @@ fn trial_paths() -> Vec<PathBuf> {
         result.push(path);
     }
     if let Some(path) = config_license(".license-trial") {
+        result.push(path);
+    }
+    if let Some(path) = legacy_tauri_state_license("trial.dat") {
         result.push(path);
     }
     #[cfg(target_os = "windows")]
@@ -329,7 +355,7 @@ fn recover_legacy_trial(
         };
         let hint_valid =
             legacy_hint.len() == 64 && legacy_hint.bytes().all(|value| value.is_ascii_hexdigit());
-        if record["version"].as_i64() == Some(1)
+        if matches!(record["version"].as_i64(), Some(1 | 2))
             && hint_valid
             && envelope["signature"].as_str() == Some(&trial_signature(payload, legacy_hint))
             && started <= current + 86_400.0
@@ -831,6 +857,34 @@ mod tests {
         .unwrap();
         assert_eq!(selected["install_id"], "python");
         assert_eq!(selected["started_at"], 100.0);
+    }
+
+    #[test]
+    fn replicated_python_v2_trial_can_migrate_to_the_current_machine_hint() {
+        let old_hint = "a".repeat(64);
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "version": 2,
+                "install_id": "python",
+                "machine_hint": old_hint,
+                "started_at": 100.0,
+                "last_seen_at": 200.0
+            }))
+            .unwrap(),
+        );
+        let envelope = json!({
+            "payload": payload,
+            "signature": trial_signature(&payload, &old_hint)
+        });
+        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope).unwrap());
+        let recovered = recover_legacy_trial(
+            &std::collections::HashMap::from([(encoded, 2)]),
+            300.0,
+            &"b".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(recovered["started_at"], 100.0);
+        assert_eq!(recovered["machine_hint"], "b".repeat(64));
     }
 
     #[test]
