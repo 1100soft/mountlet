@@ -15,6 +15,9 @@ release and remains frozen under `legacy/python-0.6.8/`.
 - Only a `vX.Y.Z` tag publishes to the 1100 Software APT repository. APT carries
   the standard Linux package with bundled rclone; the lean package remains a
   direct download because both variants have the same Debian package identity.
+- A manually dispatched Native package CI run on `wip` may publish the bundled
+  build as `mountlet-preview`. Preview publication is opt-in and must never be
+  enabled for an automatic branch or pull-request run.
 - Packaged applications use `https://mountlet.app` for license and report APIs
   unless `MOUNTLET_LICENSE_API_URL` or `MOUNTLET_REPORT_API_URL` is set in the
   process environment. The build-channel marker does not change these URLs.
@@ -110,10 +113,31 @@ from preview:
    git push origin vX.Y.Z
    ```
 
-6. Wait for **Publish standard Linux package to APT** in the tagged Native
+6. Wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
    The source workflow validates and uploads exactly one `apt-packages`
    artifact, while the central workflow signs and publishes it.
+
+## Preview APT package
+
+For a deliberately selected preview, run **Native package CI** manually on the
+`wip` branch and enable `publish_apt_preview`. After the complete native matrix
+passes, the workflow rebuilds the bundled Linux package metadata as
+`mountlet-preview`, gives it a unique version based on the workflow run number
+and commit, and sends it to the central APT publisher.
+
+`mountlet-preview` conflicts with and replaces `mountlet` because both packages
+install the same application files. Configuration, license, metadata, and
+offline storage remain shared, so switching packages must not reset user data:
+
+```bash
+sudo apt remove mountlet
+sudo apt install mountlet-preview
+```
+
+Do not publish every development commit. The APT pool is immutable and preview
+packages are intentionally retained, so use this option only for builds that
+need installation testing or deliberate public preview access.
 
 Bundled builds stage an official current rclone under an app-versioned resource
 directory. Lean builds intentionally contain no rclone executable. Windows

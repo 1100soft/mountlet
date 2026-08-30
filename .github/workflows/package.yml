@@ -2,6 +2,12 @@ name: Native package CI
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_apt_preview:
+        description: Publish the bundled Linux build as mountlet-preview
+        required: true
+        type: boolean
+        default: false
   pull_request:
     paths:
       - ".github/workflows/package.yml"
@@ -293,9 +299,9 @@ jobs:
           npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --remote
 
   publish-apt:
-    name: Publish standard Linux package to APT
+    name: Publish Linux package to APT
     needs: package
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/wip' && inputs.publish_apt_preview)
     runs-on: ubuntu-24.04
     steps:
       - name: Download standard Linux package
@@ -303,20 +309,55 @@ jobs:
         with:
           name: mountlet-linux-x64-standard
           path: apt-packages
-      - name: Validate and normalize Debian package
+      - name: Prepare Debian package
         shell: bash
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          PUBLISH_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_apt_preview }}
         run: |
+          set -euo pipefail
           mapfile -d '' packages < <(find apt-packages -maxdepth 1 -type f -name '*.deb' -print0)
           test "${#packages[@]}" -eq 1
           package="${packages[0]}"
           dpkg-deb --info "$package" >/dev/null
           test "$(dpkg-deb --field "$package" Package)" = "mountlet"
           test "$(dpkg-deb --field "$package" Architecture)" = "amd64"
-          version="$(dpkg-deb --field "$package" Version)"
-          test "$version" = "${RELEASE_TAG#v}"
-          mv "$package" "apt-packages/mountlet_${version}_amd64.deb"
+          app_version="$(dpkg-deb --field "$package" Version)"
+
+          if [ "$PUBLISH_PREVIEW" = "true" ]; then
+            version="${app_version}~preview.${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}"
+            package_root="$(mktemp -d)"
+            dpkg-deb --raw-extract "$package" "$package_root"
+            sed -i \
+              -e 's/^Package: .*/Package: mountlet-preview/' \
+              -e "s/^Version: .*/Version: ${version}/" \
+              -e '/^Conflicts: /d' \
+              -e '/^Replaces: /d' \
+              -e '/^Provides: /d' \
+              "$package_root/DEBIAN/control"
+            printf 'Conflicts: mountlet\nReplaces: mountlet\nProvides: mountlet\n' >> "$package_root/DEBIAN/control"
+            rm "$package"
+            package="apt-packages/mountlet-preview_${version}_amd64.deb"
+            dpkg-deb --build --root-owner-group "$package_root" "$package" >/dev/null
+          else
+            version="$app_version"
+            test "$version" = "${RELEASE_TAG#v}"
+            destination="apt-packages/mountlet_${version}_amd64.deb"
+            mv "$package" "$destination"
+            package="$destination"
+          fi
+
+          dpkg-deb --info "$package" >/dev/null
+          test "$(dpkg-deb --field "$package" Version)" = "$version"
+          test "$(dpkg-deb --field "$package" Architecture)" = "amd64"
+          if [ "$PUBLISH_PREVIEW" = "true" ]; then
+            test "$(dpkg-deb --field "$package" Package)" = "mountlet-preview"
+            test "$(dpkg-deb --field "$package" Conflicts)" = "mountlet"
+            test "$(dpkg-deb --field "$package" Replaces)" = "mountlet"
+            test "$(dpkg-deb --field "$package" Provides)" = "mountlet"
+          else
+            test "$(dpkg-deb --field "$package" Package)" = "mountlet"
+          fi
       - name: Upload packages for APT publication
         uses: actions/upload-artifact@v4
         with:
