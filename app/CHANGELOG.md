@@ -21,6 +21,9 @@
   without allowing a trial to be extended.
 - Restored local and remote configuration-update indicators and lazy mounted
   leaf-folder opening.
+- Kept cache badges synchronized with files on disk, queued Windows usage data
+  immediately, and added a one-time low-priority recursive metadata crawl.
+- Removed the temporary cache-sync diagnostics from user-facing menus.
 
 The archived Python changelog is available under
 `legacy/python-0.6.8/CHANGELOG.md`.

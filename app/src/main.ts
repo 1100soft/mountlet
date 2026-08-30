@@ -4,12 +4,11 @@ import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
 import { detectRemoteCacheChanges } from "./backend.ts";
 import { configSyncStatus } from "./backend.ts";
-import { cacheSyncDiagnostics } from "./backend.ts";
 import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { activateLicense, clipboardText, deactivateLicenseDevice, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
-import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
+import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, startInitialMetadataIndex, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
 import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
 import { applyMetricVariables, metricsAt, scaledMetric } from "./geometry.ts";
 import { MAX_ZOOM_STEP, MIN_ZOOM_STEP, formatBytes, parentPath, zoomFactor, type AppSettings, type FileEntry, type FolderSnapshot, type Notice, type Preferences, type Remote } from "./model.ts";
@@ -64,6 +63,7 @@ const pendingReauthentication = new Set<string>();
 const remoteErrors = new Map<string, string>();
 const usageRefreshQueue = new Set<string>();
 let usageRefreshTimer = 0;
+let usageRefreshActive = 0;
 let folderPollTimer = 0;
 let browserMemory: BrowserMemory = {};
 let draggedRemote = "";
@@ -725,7 +725,6 @@ function showApplicationMenu(label: string, event: MouseEvent): void {
     { label: "Sync cached files now", run: () => void synchronizeAllOffline() },
     { label: "Remove all offline files", run: () => void removeAllOffline() },
     { label: "Clear all resolved cache", run: () => void clearAllCache() },
-    { label: "Debug cache sync", run: () => void showCacheSyncDiagnostics() },
     { label: "Report bug", run: () => void reportBug() }, separators,
     { label: "License", run: () => void showLicense() }, { label: "About Mountlet", run: () => void showAbout() }, separators,
     { label: "Quit", run: () => void quitApp() },
@@ -792,17 +791,21 @@ function queueUsageRefresh(remoteId: string): void {
   if (usageRefreshTimer) return;
   usageRefreshTimer = window.setTimeout(async function drain() {
     usageRefreshTimer = 0;
-    if (pendingMounts.size || browserLoading) { usageRefreshTimer = window.setTimeout(drain, 500); return; }
-    const next = usageRefreshQueue.values().next().value as string | undefined;
-    if (!next) return;
-    usageRefreshQueue.delete(next);
-    try {
-      const updated = await refreshRemoteUsage(next);
-      remotes = remotes.map(remote => remote.id === next ? updated : remote);
-      renderRemoteList();
-    } catch { /* Usage is optional and stale cached data remains preferable. */ }
-    if (usageRefreshQueue.size) usageRefreshTimer = window.setTimeout(drain, 300);
-  }, 1200);
+    if (pendingMounts.size) { usageRefreshTimer = window.setTimeout(drain, 250); return; }
+    while (usageRefreshActive < 2) {
+      const next = usageRefreshQueue.values().next().value as string | undefined;
+      if (!next) break;
+      usageRefreshQueue.delete(next);
+      usageRefreshActive += 1;
+      void refreshRemoteUsage(next).then(updated => {
+        remotes = remotes.map(remote => remote.id === next ? updated : remote);
+        renderRemoteList();
+      }).catch(() => undefined).finally(() => {
+        usageRefreshActive -= 1;
+        if (usageRefreshQueue.size) queueUsageRefresh(usageRefreshQueue.values().next().value as string);
+      });
+    }
+  }, 150);
 }
 
 function scheduleFolderPoll(): void {
@@ -858,19 +861,6 @@ async function showRcloneOutput(): Promise<void> {
   close.addEventListener("click", () => layer.remove()); actions.append(copy, refresh, close); dialog.append(actions); layer.append(dialog); document.body.append(layer);
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   trapModalFocus(layer, dialog, close);
-}
-
-async function showCacheSyncDiagnostics(): Promise<void> {
-  document.querySelector(".modal-layer")?.remove();
-  const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog output-dialog");
-  dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.append(element("h2", "", "Cache sync diagnostics"));
-  const output = element("pre", "rclone-output", "Collecting diagnostics…"); output.tabIndex = 0; dialog.append(output);
-  const actions = element("div", "dialog-actions"); const copy = element("button", "", "Copy"); const close = element("button", "primary", "Close");
-  copy.addEventListener("click", () => void navigator.clipboard.writeText(output.textContent ?? "")); close.addEventListener("click", () => layer.remove());
-  actions.append(copy, close); dialog.append(actions); layer.append(dialog); document.body.append(layer);
-  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
-  trapModalFocus(layer, dialog, close);
-  try { output.textContent = await cacheSyncDiagnostics(); } catch (error) { output.textContent = String(error); }
 }
 
 async function showAbout(): Promise<void> {
@@ -2657,7 +2647,6 @@ async function start(): Promise<void> {
       else if (command === "sync-all") void synchronizeAllOffline();
       else if (command === "remove-all-offline") void removeAllOffline();
       else if (command === "clear-all-cache") void clearAllCache();
-      else if (command === "cache-debug") void showCacheSyncDiagnostics();
       else if (command === "open-config-backup") void openConfigBackupFolder();
       else if (command.startsWith("select-remote:")) void selectRemote(command.slice("select-remote:".length));
       else if (command.startsWith("remote-action:")) {
@@ -2736,6 +2725,10 @@ async function start(): Promise<void> {
     else await emitBrowserState(selectedRemote, currentPath);
   }
   scheduleFolderPoll();
+  if (!isBrowserWindow) {
+    for (const remote of remotes) queueUsageRefresh(remote.id);
+    window.setTimeout(() => void startInitialMetadataIndex(), 4000);
+  }
   if (!isBrowserWindow) {
     await layoutNativeWindows();
     await showStartupWindows();

@@ -896,6 +896,8 @@ mod tests {
         assert_eq!(earlier_trial_start(200.0, Some(100.0)), 100.0);
         assert_eq!(earlier_trial_start(100.0, Some(200.0)), 100.0);
         assert_eq!(earlier_trial_start(100.0, None), 100.0);
+        let recovered = earlier_trial_start(200.0, Some(100.0));
+        assert!(recovered + TRIAL_SECONDS < 100.0 + TRIAL_SECONDS + 1.0);
     }
 
     #[test]

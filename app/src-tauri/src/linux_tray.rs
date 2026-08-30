@@ -362,9 +362,6 @@ impl Tray for LinuxTray {
                             item("Clear all resolved cache", |tray| {
                                 emit_command(&tray.app, "clear-all-cache")
                             }),
-                            item("Debug cache sync", |tray| {
-                                emit_command(&tray.app, "cache-debug")
-                            }),
                             item("Report bug", |tray| emit_command(&tray.app, "report-bug")),
                             MenuItem::Separator,
                             item("License", |tray| emit_command(&tray.app, "license")),

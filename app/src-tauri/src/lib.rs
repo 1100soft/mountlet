@@ -1444,6 +1444,125 @@ fn store_indexed_folder(
     transaction.commit().map_err(|error| error.to_string())
 }
 
+fn remote_fully_indexed(remote_id: &str) -> bool {
+    let Some(database) = metadata_database().filter(|path| path.is_file()) else {
+        return false;
+    };
+    rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT complete FROM index_state WHERE remote_name = ?1",
+                    rusqlite::params![remote_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        })
+        == Some(1)
+}
+
+fn index_remote_tree(rclone: &str, config: &Path, remote: &Remote) -> Result<usize, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct IndexedRcloneEntry {
+        name: String,
+        path: String,
+        is_dir: bool,
+        #[serde(default)]
+        size: i64,
+        #[serde(default)]
+        mod_time: String,
+    }
+
+    let target = checked_remote_path(&remote.id, "")?;
+    let output = Command::low_priority(rclone)
+        .args(["--config"])
+        .arg(config)
+        .args(["lsjson", &target, "--recursive", "--no-mimetype"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let entries: Vec<IndexedRcloneEntry> =
+        serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
+    let database = metadata_database().ok_or("Metadata index path is unavailable")?;
+    if let Some(parent) = database.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut connection = rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS entries (remote_name TEXT NOT NULL, remote_display TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', backend_type TEXT NOT NULL DEFAULT '', path TEXT NOT NULL, parent_path TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, name_folded TEXT NOT NULL, is_dir INTEGER NOT NULL DEFAULT 0, size INTEGER NOT NULL DEFAULT 0, modified TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL DEFAULT 0, PRIMARY KEY (remote_name, path)); CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(remote_name, parent_path); CREATE INDEX IF NOT EXISTS idx_entries_name ON entries(name_folded); CREATE TABLE IF NOT EXISTS index_state (remote_name TEXT PRIMARY KEY, complete INTEGER NOT NULL DEFAULT 0, completed_at REAL NOT NULL DEFAULT 0);").map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM entries WHERE remote_name = ?1",
+            rusqlite::params![remote.id],
+        )
+        .map_err(|error| error.to_string())?;
+    {
+        let mut insert = transaction.prepare("INSERT OR REPLACE INTO entries (remote_name, remote_display, provider, backend_type, path, parent_path, name, name_folded, is_dir, size, modified, updated_at) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())").map_err(|error| error.to_string())?;
+        for entry in &entries {
+            let path = entry.path.trim_matches('/');
+            let parent = path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or("");
+            insert
+                .execute(rusqlite::params![
+                    remote.id,
+                    remote.name,
+                    remote.provider,
+                    path,
+                    parent,
+                    entry.name,
+                    entry.name.to_lowercase(),
+                    entry.is_dir as i64,
+                    entry.size.max(0),
+                    entry
+                        .mod_time
+                        .get(..16)
+                        .unwrap_or(&entry.mod_time)
+                        .replace('T', " ")
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    transaction.execute("INSERT OR REPLACE INTO index_state (remote_name, complete, completed_at) VALUES (?1, 1, unixepoch())", rusqlite::params![remote.id]).map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(entries.len())
+}
+
+#[tauri::command]
+async fn start_initial_metadata_index(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let rclone = state.rclone.clone().ok_or("rclone is unavailable")?;
+    let config = state
+        .rclone_config
+        .clone()
+        .ok_or("rclone configuration is unavailable")?;
+    let remotes = state
+        .remotes
+        .read()
+        .map_err(|_| "Remote state is unavailable")?
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        for remote in remotes {
+            // Google Photos exposes virtual/date trees that cannot be reliably
+            // represented by one recursive listing. It remains visit-indexed.
+            if remote.provider == "gphotos" || remote_fully_indexed(&remote.id) {
+                continue;
+            }
+            let _ = index_remote_tree(&rclone, &config, &remote);
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn offline_root() -> Option<PathBuf> {
     let mut root = home_relative(&["Mountlet"])?;
     if let Some(path) = app_config_path() {
@@ -2215,7 +2334,10 @@ fn cache_state(
         let complete = record
             .and_then(|value| value.get("complete"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            // The filesystem is authoritative for temporary cache visibility.
+            // Older/interrupted writes may leave a valid local file before its
+            // manifest record reaches disk.
+            .unwrap_or(exists);
         let protected = record
             .and_then(|value| value.get("protected"))
             .and_then(|value| value.as_bool())
@@ -3214,10 +3336,17 @@ fn rename_persistent_remote(old: &str, new: &str, display: &str) -> Result<(), S
     }
     if let Some(database) = metadata_database().filter(|path| path.exists()) {
         let connection = rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS index_state (remote_name TEXT PRIMARY KEY, complete INTEGER NOT NULL DEFAULT 0, completed_at REAL NOT NULL DEFAULT 0);").map_err(|error| error.to_string())?;
         connection
             .execute(
                 "UPDATE entries SET remote_name = ?1, remote_display = ?2 WHERE remote_name = ?3",
                 rusqlite::params![new, display, old],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE index_state SET remote_name = ?1 WHERE remote_name = ?2",
+                rusqlite::params![new, old],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -3227,8 +3356,15 @@ fn rename_persistent_remote(old: &str, new: &str, display: &str) -> Result<(), S
 fn remove_persistent_remote(remote_id: &str) -> Result<(), String> {
     if let Some(database) = metadata_database().filter(|path| path.exists()) {
         let connection = rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS index_state (remote_name TEXT PRIMARY KEY, complete INTEGER NOT NULL DEFAULT 0, completed_at REAL NOT NULL DEFAULT 0);").map_err(|error| error.to_string())?;
         connection
             .execute("DELETE FROM entries WHERE remote_name = ?1", [remote_id])
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM index_state WHERE remote_name = ?1",
+                [remote_id],
+            )
             .map_err(|error| error.to_string())?;
     }
     let browser_path = home_relative(&[".local", "state", "mountlet", "browser.json"]);
@@ -3275,64 +3411,6 @@ fn rclone_output(state: tauri::State<'_, AppState>) -> String {
         .lock()
         .map(|log| log.iter().cloned().collect::<Vec<_>>().join("\n"))
         .unwrap_or_default()
-}
-
-#[tauri::command]
-async fn cache_sync_diagnostics(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let remotes = state
-        .remotes
-        .read()
-        .map_err(|_| "Remote state is unavailable")?
-        .clone();
-    let rclone = state.rclone.clone().unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut lines = vec![
-            format!("rclone: {rclone}"),
-            format!(
-                "offline root: {}",
-                offline_root()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "unavailable".into())
-            ),
-        ];
-        for remote in remotes {
-            let records = offline_records(&remote.id);
-            let protected = records
-                .values()
-                .filter(|record| {
-                    record
-                        .get("protected")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                })
-                .count();
-            let files = records
-                .values()
-                .filter(|record| {
-                    !record
-                        .get("is_dir")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                })
-                .count();
-            let missing = offline_root()
-                .map(|root| root.join(mount_slug(&remote.id)))
-                .map(|root| {
-                    records
-                        .keys()
-                        .filter(|path| !root.join(path).exists())
-                        .count()
-                })
-                .unwrap_or(0);
-            lines.push(format!(
-                "{} ({}): records={files}, protected={protected}, missing={missing}",
-                remote.name, remote.provider_label
-            ));
-        }
-        Ok(lines.join("\n"))
-    })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
 fn app_diagnostics(window: tauri::WebviewWindow, state: tauri::State<'_, AppState>) -> String {
@@ -4635,7 +4713,7 @@ async fn list_folder(
 ) -> Result<FolderSnapshot, String> {
     let key = (request.remote_id.clone(), request.path.clone());
     let cached = state.folders.read().await.get(&key).cloned();
-    let entries = if let Some(entries) = cached {
+    let mut entries = if let Some(entries) = cached {
         entries
     } else {
         let remote_id = request.remote_id.clone();
@@ -4644,6 +4722,14 @@ async fn list_folder(
             .await
             .map_err(|error| error.to_string())??
     };
+    // Folder snapshots cache remote metadata, not local availability. External
+    // editors can close and trigger a repaint long before the next remote
+    // listing, so always derive badges from the manifest and actual files.
+    let records = offline_records(&request.remote_id);
+    let local_root = offline_root().map(|root| root.join(mount_slug(&request.remote_id)));
+    for entry in &mut entries {
+        entry.cache = cache_state(&records, local_root.as_deref(), &entry.path, entry.is_dir);
+    }
     let cached_file_bytes: u64 = entries
         .iter()
         .filter(|entry| !entry.is_dir)
@@ -7512,7 +7598,6 @@ pub fn run() {
             create_remote,
             delete_remote,
             rclone_output,
-            cache_sync_diagnostics,
             app_version,
             show_startup_windows,
             clipboard_text,
@@ -7548,6 +7633,7 @@ pub fn run() {
             persist_browser_memory,
             list_folder,
             search_index,
+            start_initial_metadata_index,
             remember_selection,
             toggle_mount,
             open_remote_web,
@@ -7753,6 +7839,22 @@ mod tests {
             &fs::metadata(&path).unwrap()
         ));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn cache_badge_follows_an_existing_local_file() {
+        let root = env::temp_dir().join(format!("mountlet-cache-badge-{}", std::process::id()));
+        fs::create_dir_all(root.join("folder")).unwrap();
+        fs::write(root.join("folder/document.txt"), b"cached").unwrap();
+        let state = cache_state(
+            &serde_json::Map::new(),
+            Some(&root),
+            "folder/document.txt",
+            false,
+        );
+        assert!(state.cached);
+        assert!(!state.offline);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
