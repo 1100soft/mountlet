@@ -100,10 +100,10 @@ try {
 
   $manifest = Get-Content (Join-Path $windowsDir "Package.appxmanifest") -Raw
   $manifest = $manifest.Replace("__VERSION__", $msixVersion)
-    .Replace("__ARCH__", $Architecture)
-    .Replace("__IDENTITY_NAME__", [Security.SecurityElement]::Escape($IdentityName))
-    .Replace("__PUBLISHER__", [Security.SecurityElement]::Escape($Publisher))
-    .Replace("__PUBLISHER_DISPLAY_NAME__", [Security.SecurityElement]::Escape($PublisherDisplayName))
+  $manifest = $manifest.Replace("__ARCH__", $Architecture)
+  $manifest = $manifest.Replace("__IDENTITY_NAME__", [Security.SecurityElement]::Escape($IdentityName))
+  $manifest = $manifest.Replace("__PUBLISHER__", [Security.SecurityElement]::Escape($Publisher))
+  $manifest = $manifest.Replace("__PUBLISHER_DISPLAY_NAME__", [Security.SecurityElement]::Escape($PublisherDisplayName))
   $utf8Bom = New-Object System.Text.UTF8Encoding $true
   [System.IO.File]::WriteAllText((Join-Path $layout "AppxManifest.xml"), $manifest, $utf8Bom)
 
