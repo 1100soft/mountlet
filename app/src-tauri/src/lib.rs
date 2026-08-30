@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -3625,7 +3625,7 @@ fn redact_sensitive_text(text: &str) -> String {
 fn runtime_log_path() -> Result<PathBuf, String> {
     Ok(mountlet_state_dir()
         .ok_or("Mountlet state directory is unavailable")?
-        .join("runtime.log"))
+        .join("tauri-runtime.log"))
 }
 
 fn begin_runtime_log_session() {
@@ -5841,19 +5841,22 @@ fn cloud_snapshot_path(remote_id: &str, path: &str) -> Result<PathBuf, String> {
         .join(path))
 }
 
+fn is_complete_managed_file(record: &serde_json::Value) -> bool {
+    !record
+        .get("is_dir")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        && record
+            .get("complete")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+}
+
 fn managed_file_records(remote_id: &str) -> Vec<(String, String)> {
     offline_records(remote_id)
         .into_iter()
         .filter_map(|(path, record)| {
-            if record
-                .get("is_dir")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || !record
-                    .get("protected")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            {
+            if !is_complete_managed_file(&record) {
                 return None;
             }
             Some((
@@ -5896,15 +5899,7 @@ async fn detect_remote_cache_changes(
             else {
                 continue;
             };
-            if record
-                .get("is_dir")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || !record
-                    .get("protected")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            {
+            if !is_complete_managed_file(&serde_json::Value::Object(record.clone())) {
                 continue;
             }
             let old_size = record.get("remote_size").and_then(|value| value.as_u64());
@@ -5954,15 +5949,7 @@ async fn changed_offline_remotes() -> Result<Vec<String>, String> {
                 .into_iter()
                 .flatten()
                 .any(|(path, record)| {
-                    if record
-                        .get("is_dir")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                        || !record
-                            .get("protected")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false)
-                    {
+                    if !is_complete_managed_file(record) {
                         return false;
                     }
                     let Ok(metadata) = root.join(path).metadata() else {
@@ -7305,20 +7292,48 @@ pub fn write_license_diagnostics(path: &Path) -> Result<(), String> {
     license::write_diagnostics(path)
 }
 
+const INSTANCE_ADDRESS: &str = "127.0.0.1:47653";
+const INSTANCE_SHOW_REQUEST: &[u8] = b"mountlet-v1 show\n";
+const INSTANCE_SHOW_RESPONSE: &[u8] = b"mountlet-v1 ok\n";
+
+fn acquire_instance_listener() -> Option<TcpListener> {
+    match TcpListener::bind(INSTANCE_ADDRESS) {
+        Ok(listener) => Some(listener),
+        Err(error) if error.kind() == ErrorKind::AddrInUse => {
+            let existing = TcpStream::connect_timeout(
+                &INSTANCE_ADDRESS.parse().expect("valid instance address"),
+                Duration::from_millis(500),
+            )
+            .and_then(|mut stream| {
+                stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+                stream.write_all(INSTANCE_SHOW_REQUEST)?;
+                let mut response = [0u8; 15];
+                stream.read_exact(&mut response)?;
+                Ok(response == INSTANCE_SHOW_RESPONSE)
+            })
+            .unwrap_or(false);
+            if existing {
+                eprintln!("[mountlet] The running Mountlet instance was asked to show.");
+                None
+            } else {
+                // A stale/foreign listener must not make a desktop application
+                // silently disappear. This process still runs, but does not
+                // claim the fixed single-instance endpoint.
+                eprintln!("[mountlet] {INSTANCE_ADDRESS} belongs to another process; continuing without the fixed listener.");
+                TcpListener::bind("127.0.0.1:0").ok()
+            }
+        }
+        Err(error) => {
+            eprintln!("[mountlet] Could not create the instance listener: {error}");
+            TcpListener::bind("127.0.0.1:0").ok()
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    const INSTANCE_ADDRESS: &str = "127.0.0.1:47653";
-    let listener = match TcpListener::bind(INSTANCE_ADDRESS) {
-        Ok(listener) => listener,
-        Err(_) => {
-            eprintln!(
-                "[mountlet] Another instance is already running on {INSTANCE_ADDRESS}; asked it to show."
-            );
-            if let Ok(mut stream) = TcpStream::connect(INSTANCE_ADDRESS) {
-                let _ = stream.write_all(b"show\n");
-            }
-            return;
-        }
+    let Some(listener) = acquire_instance_listener() else {
+        return;
     };
     // Only the process that owns the single-instance listener starts a log
     // session. A second launch must not split the running process's report log.
@@ -7349,9 +7364,16 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 for connection in listener.incoming() {
-                    if connection.is_err() {
+                    let Ok(mut connection) = connection else {
                         break;
+                    };
+                    let mut request = [0u8; 17];
+                    if connection.read_exact(&mut request).is_err()
+                        || request != INSTANCE_SHOW_REQUEST
+                    {
+                        continue;
                     }
+                    let _ = connection.write_all(INSTANCE_SHOW_RESPONSE);
                     eprintln!("[mountlet] Existing instance received a show request.");
                     let app = handle.clone();
                     if let Err(error) = handle.run_on_main_thread(move || show_window_stack(&app)) {
@@ -7650,6 +7672,22 @@ mod tests {
             &fs::metadata(&path).unwrap()
         ));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn temporary_cache_files_participate_in_sync_and_conflict_detection() {
+        assert!(is_complete_managed_file(
+            &serde_json::json!({"is_dir": false, "protected": false, "complete": true})
+        ));
+        assert!(is_complete_managed_file(
+            &serde_json::json!({"is_dir": false, "protected": true, "complete": true})
+        ));
+        assert!(!is_complete_managed_file(
+            &serde_json::json!({"is_dir": true, "protected": false, "complete": true})
+        ));
+        assert!(!is_complete_managed_file(
+            &serde_json::json!({"is_dir": false, "protected": false, "complete": false})
+        ));
     }
 
     #[test]

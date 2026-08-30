@@ -95,3 +95,7 @@ paths, remote names, and filenames.
 
 Mountlet user data is stored outside the installation directory and is retained
 when the application is upgraded or uninstalled.
+
+On Windows, installing 0.7.0 or later removes the retired Python/Qt application
+before installing the Tauri application. Settings, trial history, rclone data,
+and managed cached files are preserved during this replacement.

@@ -15,6 +15,7 @@
     "web:license:smoke": "node web/tools/test-license-flow.mjs",
     "web:notices": "node web/tools/manage-notices.mjs",
     "web:notices:test": "node web/tools/test-notice-audiences.mjs",
+    "web:reports:test": "node web/tools/test-report-delivery.mjs",
     "docs:vars": "node web/tools/update-doc-vars.mjs"
   },
   "devDependencies": {

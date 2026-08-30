@@ -13,6 +13,10 @@
   single and detached browser layouts, and platform-native integration.
 - Replaced Python/PyInstaller packaging with Tauri `.deb`, NSIS `.exe`, and
   `.dmg` installers for the existing standard and lean release matrix.
+- Made the Windows installer replace the retired Python/Qt installation while
+  preserving its user data, trial history, and managed cache.
+- Kept all managed cached files in change detection and conflict resolution,
+  including temporary copies created by opening a remote file.
 
 The archived Python changelog is available under
 `legacy/python-0.6.8/CHANGELOG.md`.
