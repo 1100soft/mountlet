@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -18,16 +18,16 @@ use tauri::{Emitter, Manager};
 use tauri::{LogicalPosition, LogicalSize};
 use tokio::sync::RwLock;
 
-mod config_bundle;
 mod child_process;
+mod config_bundle;
 mod file_managers;
 mod license;
 #[cfg(target_os = "linux")]
 mod linux_tray;
 mod platform;
 mod work_area;
-use work_area::WorkArea;
 use child_process::Command;
+use work_area::WorkArea;
 
 const SECRET_FIELD_MASK: &str = "••••••";
 const RUNTIME_SESSION_MARKER: &str = "Mountlet Rust runtime started";
@@ -35,6 +35,20 @@ const BUILD_CHANNEL: &str = match option_env!("MOUNTLET_BUILD_CHANNEL") {
     Some(channel) => channel,
     None => "production",
 };
+
+fn build_revision() -> &'static str {
+    option_env!("GITHUB_SHA")
+        .and_then(|revision| revision.get(..7))
+        .unwrap_or("local")
+}
+
+fn build_id() -> String {
+    format!(
+        "{}-{BUILD_CHANNEL}-{}",
+        env!("CARGO_PKG_VERSION"),
+        build_revision()
+    )
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +81,13 @@ struct CacheState {
     cached: bool,
     offline: bool,
     partial: bool,
+}
+
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ConfigSyncStatus {
+    local_changed: bool,
+    remote_changed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -653,7 +674,11 @@ fn prepare_bundled_rclone(source: &Path) -> PathBuf {
 }
 
 fn home_relative(parts: &[&str]) -> Option<PathBuf> {
-    let mut path = PathBuf::from(env::var_os("HOME")?);
+    #[cfg(target_os = "windows")]
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    let mut path = PathBuf::from(home?);
     for part in parts {
         path.push(part);
     }
@@ -691,7 +716,7 @@ fn mountlet_state_dir() -> Option<PathBuf> {
     {
         env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("Mountlet"))
+            .map(|path| path.join("Mountlet/State"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -782,7 +807,7 @@ fn fetch_and_remember_notices() -> Result<Vec<NoticeView>, String> {
         .query(&[
             ("appVersion", env!("CARGO_PKG_VERSION")),
             ("buildChannel", BUILD_CHANNEL),
-            ("buildId", env!("CARGO_PKG_VERSION")),
+            ("buildId", &build_id()),
         ])
         .header("Accept", "application/json")
         .header(
@@ -1419,9 +1444,128 @@ fn store_indexed_folder(
     transaction.commit().map_err(|error| error.to_string())
 }
 
+fn remote_fully_indexed(remote_id: &str) -> bool {
+    let Some(database) = metadata_database().filter(|path| path.is_file()) else {
+        return false;
+    };
+    rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT complete FROM index_state WHERE remote_name = ?1",
+                    rusqlite::params![remote_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        })
+        == Some(1)
+}
+
+fn index_remote_tree(rclone: &str, config: &Path, remote: &Remote) -> Result<usize, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct IndexedRcloneEntry {
+        name: String,
+        path: String,
+        is_dir: bool,
+        #[serde(default)]
+        size: i64,
+        #[serde(default)]
+        mod_time: String,
+    }
+
+    let target = checked_remote_path(&remote.id, "")?;
+    let output = Command::low_priority(rclone)
+        .args(["--config"])
+        .arg(config)
+        .args(["lsjson", &target, "--recursive", "--no-mimetype"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let entries: Vec<IndexedRcloneEntry> =
+        serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
+    let database = metadata_database().ok_or("Metadata index path is unavailable")?;
+    if let Some(parent) = database.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut connection = rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS entries (remote_name TEXT NOT NULL, remote_display TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', backend_type TEXT NOT NULL DEFAULT '', path TEXT NOT NULL, parent_path TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, name_folded TEXT NOT NULL, is_dir INTEGER NOT NULL DEFAULT 0, size INTEGER NOT NULL DEFAULT 0, modified TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL DEFAULT 0, PRIMARY KEY (remote_name, path)); CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(remote_name, parent_path); CREATE INDEX IF NOT EXISTS idx_entries_name ON entries(name_folded); CREATE TABLE IF NOT EXISTS index_state (remote_name TEXT PRIMARY KEY, complete INTEGER NOT NULL DEFAULT 0, completed_at REAL NOT NULL DEFAULT 0);").map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM entries WHERE remote_name = ?1",
+            rusqlite::params![remote.id],
+        )
+        .map_err(|error| error.to_string())?;
+    {
+        let mut insert = transaction.prepare("INSERT OR REPLACE INTO entries (remote_name, remote_display, provider, backend_type, path, parent_path, name, name_folded, is_dir, size, modified, updated_at) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())").map_err(|error| error.to_string())?;
+        for entry in &entries {
+            let path = entry.path.trim_matches('/');
+            let parent = path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or("");
+            insert
+                .execute(rusqlite::params![
+                    remote.id,
+                    remote.name,
+                    remote.provider,
+                    path,
+                    parent,
+                    entry.name,
+                    entry.name.to_lowercase(),
+                    entry.is_dir as i64,
+                    entry.size.max(0),
+                    entry
+                        .mod_time
+                        .get(..16)
+                        .unwrap_or(&entry.mod_time)
+                        .replace('T', " ")
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    transaction.execute("INSERT OR REPLACE INTO index_state (remote_name, complete, completed_at) VALUES (?1, 1, unixepoch())", rusqlite::params![remote.id]).map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(entries.len())
+}
+
+#[tauri::command]
+async fn start_initial_metadata_index(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let rclone = state.rclone.clone().ok_or("rclone is unavailable")?;
+    let config = state
+        .rclone_config
+        .clone()
+        .ok_or("rclone configuration is unavailable")?;
+    let remotes = state
+        .remotes
+        .read()
+        .map_err(|_| "Remote state is unavailable")?
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        for remote in remotes {
+            // Google Photos exposes virtual/date trees that cannot be reliably
+            // represented by one recursive listing. It remains visit-indexed.
+            if remote.provider == "gphotos" || remote_fully_indexed(&remote.id) {
+                continue;
+            }
+            let _ = index_remote_tree(&rclone, &config, &remote);
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn offline_root() -> Option<PathBuf> {
     let mut root = home_relative(&["Mountlet"])?;
-    if let Some(path) = home_relative(&[".config", "mountlet", "config.toml"]) {
+    if let Some(path) = app_config_path() {
         if let Ok(text) = fs::read_to_string(path) {
             for raw in text.lines() {
                 let line = raw.trim();
@@ -2190,7 +2334,10 @@ fn cache_state(
         let complete = record
             .and_then(|value| value.get("complete"))
             .and_then(|value| value.as_bool())
-            .unwrap_or(false);
+            // The filesystem is authoritative for temporary cache visibility.
+            // Older/interrupted writes may leave a valid local file before its
+            // manifest record reaches disk.
+            .unwrap_or(exists);
         let protected = record
             .and_then(|value| value.get("protected"))
             .and_then(|value| value.as_bool())
@@ -2228,49 +2375,14 @@ fn cache_state(
 }
 
 fn ui_preferences() -> UiPreferences {
-    let mut result = UiPreferences {
-        mode: "single".into(),
-        theme: "system".into(),
-        zoom_step: 0,
-        integrated_file_edits: false,
-        file_list_max_items: 0,
-    };
-    let Some(path) = home_relative(&[".config", "mountlet", "config.toml"]) else {
-        return result;
-    };
-    let Ok(text) = fs::read_to_string(path) else {
-        return result;
-    };
-    let mut section = "";
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.starts_with('[') {
-            section = line;
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let value = value.trim().trim_matches('"');
-            match (section, key.trim()) {
-                ("[ui]", "window_mode") if matches!(value, "single" | "multiple") => {
-                    result.mode = platform::effective_window_mode(value)
-                }
-                ("[ui]", "theme") if matches!(value, "system" | "light" | "dark") => {
-                    result.theme = value.into()
-                }
-                ("[ui]", "zoom_steps") => {
-                    result.zoom_step = value.parse::<i32>().unwrap_or(0).clamp(-4, 6)
-                }
-                ("[ui]", "file_list_max_items") => {
-                    result.file_list_max_items = value.parse().unwrap_or(0)
-                }
-                ("[app]", "integrated_file_edits") => {
-                    result.integrated_file_edits = matches!(value, "true" | "1" | "yes" | "on")
-                }
-                _ => {}
-            }
-        }
+    let settings = app_settings();
+    UiPreferences {
+        mode: settings.window_mode,
+        theme: settings.theme,
+        zoom_step: settings.zoom_steps,
+        integrated_file_edits: settings.integrated_file_edits,
+        file_list_max_items: settings.file_list_max_items,
     }
-    result
 }
 
 fn unquote_toml(value: &str) -> String {
@@ -2541,7 +2653,7 @@ fn apply_start_at_login(enabled: bool) -> Result<(), String> {
 
 fn shortcut_preferences() -> HashMap<String, Vec<String>> {
     let mut values: HashMap<String, Vec<String>> = HashMap::new();
-    let Some(path) = home_relative(&[".config", "mountlet", "config.toml"]) else {
+    let Some(path) = app_config_path() else {
         return values;
     };
     let Ok(text) = fs::read_to_string(path) else {
@@ -2743,10 +2855,19 @@ fn path_is_mounted(path: &Path) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        path.symlink_metadata()
-            .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        let path = path.to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            let mounted = path
+                .symlink_metadata()
+                .map(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+                .unwrap_or(false);
+            let _ = sender.send(mounted);
+        });
+        receiver
+            .recv_timeout(Duration::from_millis(200))
             .unwrap_or(false)
     }
     #[cfg(target_os = "macos")]
@@ -2952,20 +3073,27 @@ pub(crate) fn remote_is_configured(remote_id: &str, provider: &str) -> bool {
 
 #[tauri::command]
 async fn list_remotes(state: tauri::State<'_, AppState>) -> Result<Vec<Remote>, String> {
-    Ok(state
+    let remotes = state
         .remotes
         .read()
         .map_err(|_| "Remote state is unavailable")?
         .iter()
-        .filter(|remote| remote_is_configured(&remote.id, &remote.provider))
         .cloned()
-        .map(|mut remote| {
-            remote.mounted = remote_mount_path(&remote.id)
-                .map(|path| path_is_mounted(&path))
-                .unwrap_or(false);
-            remote
-        })
-        .collect())
+        .collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || {
+        remotes
+            .into_iter()
+            .filter(|remote| remote_is_configured(&remote.id, &remote.provider))
+            .map(|mut remote| {
+                remote.mounted = remote_mount_path(&remote.id)
+                    .map(|path| path_is_mounted(&path))
+                    .unwrap_or(false);
+                remote
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3208,10 +3336,17 @@ fn rename_persistent_remote(old: &str, new: &str, display: &str) -> Result<(), S
     }
     if let Some(database) = metadata_database().filter(|path| path.exists()) {
         let connection = rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS index_state (remote_name TEXT PRIMARY KEY, complete INTEGER NOT NULL DEFAULT 0, completed_at REAL NOT NULL DEFAULT 0);").map_err(|error| error.to_string())?;
         connection
             .execute(
                 "UPDATE entries SET remote_name = ?1, remote_display = ?2 WHERE remote_name = ?3",
                 rusqlite::params![new, display, old],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE index_state SET remote_name = ?1 WHERE remote_name = ?2",
+                rusqlite::params![new, old],
             )
             .map_err(|error| error.to_string())?;
     }
@@ -3221,8 +3356,15 @@ fn rename_persistent_remote(old: &str, new: &str, display: &str) -> Result<(), S
 fn remove_persistent_remote(remote_id: &str) -> Result<(), String> {
     if let Some(database) = metadata_database().filter(|path| path.exists()) {
         let connection = rusqlite::Connection::open(database).map_err(|error| error.to_string())?;
+        connection.execute_batch("CREATE TABLE IF NOT EXISTS index_state (remote_name TEXT PRIMARY KEY, complete INTEGER NOT NULL DEFAULT 0, completed_at REAL NOT NULL DEFAULT 0);").map_err(|error| error.to_string())?;
         connection
             .execute("DELETE FROM entries WHERE remote_name = ?1", [remote_id])
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM index_state WHERE remote_name = ?1",
+                [remote_id],
+            )
             .map_err(|error| error.to_string())?;
     }
     let browser_path = home_relative(&[".local", "state", "mountlet", "browser.json"]);
@@ -3271,76 +3413,11 @@ fn rclone_output(state: tauri::State<'_, AppState>) -> String {
         .unwrap_or_default()
 }
 
-#[tauri::command]
-async fn cache_sync_diagnostics(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let remotes = state
-        .remotes
-        .read()
-        .map_err(|_| "Remote state is unavailable")?
-        .clone();
-    let rclone = state.rclone.clone().unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut lines = vec![
-            format!("rclone: {rclone}"),
-            format!(
-                "offline root: {}",
-                offline_root()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "unavailable".into())
-            ),
-        ];
-        for remote in remotes {
-            let records = offline_records(&remote.id);
-            let protected = records
-                .values()
-                .filter(|record| {
-                    record
-                        .get("protected")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                })
-                .count();
-            let files = records
-                .values()
-                .filter(|record| {
-                    !record
-                        .get("is_dir")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                })
-                .count();
-            let missing = offline_root()
-                .map(|root| root.join(mount_slug(&remote.id)))
-                .map(|root| {
-                    records
-                        .keys()
-                        .filter(|path| !root.join(path).exists())
-                        .count()
-                })
-                .unwrap_or(0);
-            lines.push(format!(
-                "{} ({}): records={files}, protected={protected}, missing={missing}",
-                remote.name, remote.provider_label
-            ));
-        }
-        Ok(lines.join("\n"))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
 fn app_diagnostics(window: tauri::WebviewWindow, state: tauri::State<'_, AppState>) -> String {
     let rclone_version = state
         .rclone
         .as_ref()
-        .and_then(|binary| Command::new(binary).arg("version").output().ok())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or("unknown")
-                .to_string()
-        })
+        .map(|binary| format!("configured ({binary})"))
         .unwrap_or_else(|| "unavailable".into());
     let remote_count = state
         .remotes
@@ -3372,10 +3449,68 @@ fn app_diagnostics(window: tauri::WebviewWindow, state: tauri::State<'_, AppStat
     )
 }
 
-#[tauri::command]
-fn app_version() -> String {
-    env!("CARGO_PKG_VERSION").into()
+async fn run_on_main_async<T, F>(app: tauri::AppHandle, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(work());
+    })
+    .map_err(|error| error.to_string())?;
+    receiver
+        .await
+        .map_err(|_| "The UI thread did not run the request.".into())
 }
+
+#[tauri::command]
+async fn app_version() -> String {
+    if BUILD_CHANNEL == "production" && build_revision() == "local" {
+        env!("CARGO_PKG_VERSION").into()
+    } else {
+        format!(
+            "{} ({BUILD_CHANNEL} {})",
+            env!("CARGO_PKG_VERSION"),
+            build_revision()
+        )
+    }
+}
+
+#[tauri::command]
+async fn show_startup_windows(app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        if ui.get_webview_window("main").is_none() {
+            return Err("main window is unavailable".into());
+        }
+        show_window_stack(&ui);
+        schedule_startup_tray_layout(&ui);
+        Ok(())
+    })
+    .await?
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn schedule_startup_tray_layout(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        // Shell_NotifyIcon and NSStatusItem registration become observable
+        // asynchronously. Retry from the native event loop and reapply the
+        // cached frontend layout as soon as the real tray rectangle is present.
+        for delay in [50, 150, 300, 600] {
+            std::thread::sleep(Duration::from_millis(delay));
+            let dispatch = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                seed_tray_anchor_from_os(&dispatch);
+                relayout_from_cache(&dispatch);
+            });
+        }
+    });
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn schedule_startup_tray_layout(_app: &tauri::AppHandle) {}
 
 #[tauri::command]
 fn startup_smoke_enabled() -> bool {
@@ -3392,6 +3527,10 @@ fn complete_startup_smoke(
         return Ok(false);
     };
     let main_window_ready = app.get_webview_window("main").is_some();
+    let main_window_visible = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
     let remote_count = state
         .remotes
         .read()
@@ -3403,10 +3542,14 @@ fn complete_startup_smoke(
         "remote-state",
         "preferences",
         "settings",
+        "settings-compatibility",
         "shortcuts",
+        "license",
+        "report-preview",
         "tray-menu",
         "add-remote-fields",
         "frontend-render",
+        "startup-window-visible",
     ];
     #[cfg(not(target_os = "macos"))]
     let expected_checks = [
@@ -3414,10 +3557,14 @@ fn complete_startup_smoke(
         "remote-state",
         "preferences",
         "settings",
+        "settings-compatibility",
         "shortcuts",
+        "license",
+        "report-preview",
         "tray-menu",
         "add-remote-fields",
         "frontend-render",
+        "startup-window-visible",
         "desktop-hints",
         "prerequisites",
     ];
@@ -3427,12 +3574,18 @@ fn complete_startup_smoke(
     {
         return Err(format!("Startup smoke checks are incomplete: {checks:?}"));
     }
+    let settings = app_settings();
     let result = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "buildId": build_id(),
         "frontendReady": true,
         "mainWindowReady": main_window_ready,
+        "mainWindowVisible": main_window_visible,
         "remoteStateReady": true,
         "remoteCount": remote_count,
+        "windowMode": settings.window_mode,
+        "theme": settings.theme,
+        "offlineRootReady": offline_root().is_some(),
         "behaviorChecks": checks,
         "behaviorComplete": true,
     });
@@ -3454,15 +3607,29 @@ fn complete_startup_smoke(
 }
 
 #[tauri::command]
-fn clipboard_text() -> Result<String, String> {
+async fn clipboard_text(app: tauri::AppHandle) -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
-        Ok(gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD)
-            .wait_for_text()
-            .map(|text| text.to_string())
-            .unwrap_or_default())
+        run_on_main_async(app, || {
+            Ok(gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD)
+                .wait_for_text()
+                .map(|text| text.to_string())
+                .unwrap_or_default())
+        })
+        .await?
     }
 
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(read_clipboard)
+            .await
+            .map_err(|error| error.to_string())?
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_clipboard() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let output = Command::new("pbpaste")
@@ -3479,7 +3646,12 @@ fn clipboard_text() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         let output = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-Clipboard -Raw",
+            ])
             .output()
             .map_err(|error| format!("Could not read the clipboard: {error}"))?;
         if !output.status.success() {
@@ -3492,7 +3664,7 @@ fn clipboard_text() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn license_default_device_label() -> String {
+async fn license_default_device_label() -> String {
     license::default_device_label()
 }
 
@@ -3538,7 +3710,7 @@ fn redact_sensitive_text(text: &str) -> String {
 fn runtime_log_path() -> Result<PathBuf, String> {
     Ok(mountlet_state_dir()
         .ok_or("Mountlet state directory is unavailable")?
-        .join("runtime.log"))
+        .join("tauri-runtime.log"))
 }
 
 fn begin_runtime_log_session() {
@@ -3731,7 +3903,7 @@ fn bug_report_payload(
         "kind": if kind == "crash" { "crash" } else { "bug" },
         "message": redact_sensitive_text(message.trim()).chars().take(8000).collect::<String>(),
         "contact": contact.trim().chars().take(240).collect::<String>(),
-        "metadata": {"appVersion":env!("CARGO_PKG_VERSION"),"buildChannel":BUILD_CHANNEL,"buildId":env!("CARGO_PKG_VERSION"),"platform":format!("{} {}",env::consts::OS,env::consts::ARCH),"rust":true,"node":env::var("HOSTNAME").unwrap_or_default(),"frozen":true},
+        "metadata": {"appVersion":env!("CARGO_PKG_VERSION"),"buildChannel":BUILD_CHANNEL,"buildId":build_id(),"platform":format!("{} {}",env::consts::OS,env::consts::ARCH),"rust":true,"node":env::var("HOSTNAME").unwrap_or_default(),"frozen":true},
         "logs": if include_logs { serde_json::json!({"runtime":redact_sensitive_text(&runtime.chars().rev().take(18_000).collect::<String>().chars().rev().collect::<String>()),"rclone":redact_sensitive_text(&rclone.chars().rev().take(18_000).collect::<String>().chars().rev().collect::<String>())}) } else { serde_json::json!({}) }
     })
 }
@@ -3760,6 +3932,9 @@ fn bug_report_preview(
 
 #[tauri::command]
 async fn license_status() -> Result<license::Status, String> {
+    // Local status evaluation can touch replicated trial files. Keep it off the
+    // WebView IPC thread so a slow disk or leftover mount cannot freeze About,
+    // Buy license, or other commands.
     tauri::async_runtime::spawn_blocking(license::status)
         .await
         .map_err(|error| error.to_string())?
@@ -4272,7 +4447,14 @@ fn offline_record_changed(record: &serde_json::Value, metadata: &fs::Metadata) -
             .is_some_and(|value| value != modified)
 }
 
-fn record_config_sync(config: &Path) -> Result<(), String> {
+fn config_sync_state() -> serde_json::Value {
+    mountlet_state_dir()
+        .and_then(|root| fs::read_to_string(root.join("config-sync-state.json")).ok())
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn save_config_sync_state(state: &serde_json::Value) -> Result<(), String> {
     let path = mountlet_state_dir()
         .ok_or("Mountlet state directory is unavailable")?
         .join("config-sync-state.json");
@@ -4281,27 +4463,88 @@ fn record_config_sync(config: &Path) -> Result<(), String> {
     }
     fs::write(
         path,
-        serde_json::to_vec(&serde_json::json!({"fingerprint":config_fingerprint(config)}))
-            .map_err(|error| error.to_string())?,
+        serde_json::to_vec(state).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
 }
 
+fn record_config_sync(config: &Path, remote_signature: Option<&str>) -> Result<(), String> {
+    let mut state = serde_json::json!({"fingerprint":config_fingerprint(config)});
+    if let Some(signature) = remote_signature {
+        state["remote_signature"] = serde_json::json!(signature);
+    }
+    save_config_sync_state(&state)
+}
+
+fn remote_config_signature(rclone: &str, config: &Path, source: &str) -> Result<String, String> {
+    let output = Command::new(rclone)
+        .args(["--config"])
+        .arg(config)
+        .args(["lsjson", source, "--stat", "--hash"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "The synced configuration metadata is invalid.".to_string())?;
+    Ok(serde_json::json!({
+        "size": value.get("Size"),
+        "modified": value.get("ModTime"),
+        "hashes": value.get("Hashes"),
+    })
+    .to_string())
+}
+
+fn config_fingerprint_changed(recorded: Option<&str>, current: &str) -> bool {
+    recorded.is_none_or(|value| value != current)
+}
+
 #[tauri::command]
-fn config_sync_dirty(state: tauri::State<'_, AppState>) -> bool {
-    let Some(config) = state.rclone_config.as_ref() else {
-        return false;
+async fn config_sync_status(state: tauri::State<'_, AppState>) -> Result<ConfigSyncStatus, String> {
+    let settings = app_settings();
+    if settings.config_sync_remote.is_empty() || settings.config_sync_path.is_empty() {
+        return Ok(ConfigSyncStatus::default());
+    }
+    let config = state
+        .rclone_config
+        .clone()
+        .ok_or("rclone configuration is unavailable")?;
+    let rclone = state.rclone.clone().ok_or("rclone is unavailable")?;
+    let saved = config_sync_state();
+    let local_changed = config_fingerprint_changed(
+        saved.get("fingerprint").and_then(|value| value.as_str()),
+        &config_fingerprint(&config),
+    );
+    let previous_remote = saved
+        .get("remote_signature")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let source = format!(
+        "{}:{}",
+        settings.config_sync_remote,
+        settings.config_sync_path.trim_start_matches('/')
+    );
+    let remote_signature = tauri::async_runtime::spawn_blocking(move || {
+        remote_config_signature(&rclone, &config, &source).ok()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let remote_changed = match (previous_remote.as_deref(), remote_signature.as_deref()) {
+        (Some(previous), Some(current)) => previous != current,
+        _ => false,
     };
-    let recorded = mountlet_state_dir()
-        .and_then(|root| fs::read_to_string(root.join("config-sync-state.json")).ok())
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(&value).ok())
-        .and_then(|value| {
-            value
-                .get("fingerprint")
-                .and_then(|item| item.as_str())
-                .map(str::to_string)
-        });
-    recorded.is_some_and(|value| value != config_fingerprint(config))
+    if previous_remote.is_none() {
+        if let Some(signature) = remote_signature {
+            let mut initialized = saved;
+            initialized["remote_signature"] = serde_json::json!(signature);
+            let _ = save_config_sync_state(&initialized);
+        }
+    }
+    Ok(ConfigSyncStatus {
+        local_changed,
+        remote_changed,
+    })
 }
 
 #[tauri::command]
@@ -4336,7 +4579,10 @@ fn import_config_bundle(
 }
 
 #[tauri::command]
-async fn push_config_sync(password: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn push_config_sync(
+    password: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let settings = app_settings();
     if settings.config_sync_remote.is_empty() || settings.config_sync_path.is_empty() {
         return Err("Set a config sync remote and path in App configuration first.".into());
@@ -4346,7 +4592,11 @@ async fn push_config_sync(password: String, state: tauri::State<'_, AppState>) -
         .as_ref()
         .ok_or("rclone configuration is unavailable")?
         .clone();
-    let rclone = state.rclone.as_ref().ok_or("rclone is unavailable")?.clone();
+    let rclone = state
+        .rclone
+        .as_ref()
+        .ok_or("rclone is unavailable")?
+        .clone();
     tauri::async_runtime::spawn_blocking(move || {
         let temporary = env::temp_dir().join(format!(
             "mountlet-config-sync-{}.mountlet",
@@ -4358,17 +4608,18 @@ async fn push_config_sync(password: String, state: tauri::State<'_, AppState>) -
             settings.config_sync_remote,
             settings.config_sync_path.trim_start_matches('/')
         );
-        let output = Command::new(rclone)
+        let output = Command::new(&rclone)
             .args(["--config"])
             .arg(&config)
             .args(["copyto"])
             .arg(&temporary)
-            .arg(destination)
+            .arg(&destination)
             .output()
             .map_err(|error| error.to_string())?;
         let _ = fs::remove_file(temporary);
         if output.status.success() {
-            record_config_sync(&config)?;
+            let signature = remote_config_signature(&rclone, &config, &destination).ok();
+            record_config_sync(&config, signature.as_deref())?;
             Ok(())
         } else {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
@@ -4403,7 +4654,7 @@ fn pull_config_sync(password: String, state: tauri::State<'_, AppState>) -> Resu
         .args(["--config"])
         .arg(&config)
         .args(["copyto"])
-        .arg(source)
+        .arg(&source)
         .arg(&temporary)
         .output()
         .map_err(|error| error.to_string())?;
@@ -4414,18 +4665,21 @@ fn pull_config_sync(password: String, state: tauri::State<'_, AppState>) -> Resu
     let _ = fs::remove_file(temporary);
     let backup = backup?;
     refresh_remote_state(&state)?;
-    record_config_sync(&config)?;
+    let signature = remote_config_signature(rclone, &config, &source).ok();
+    record_config_sync(&config, signature.as_deref())?;
     Ok(backup
         .map(|path| path.display().to_string())
         .unwrap_or_default())
 }
 
 #[tauri::command]
-fn open_external(url: String) -> Result<(), String> {
+async fn open_external(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only web links can be opened".into());
     }
-    open_external_target(&url)
+    tauri::async_runtime::spawn_blocking(move || open_external_target(&url))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4459,7 +4713,7 @@ async fn list_folder(
 ) -> Result<FolderSnapshot, String> {
     let key = (request.remote_id.clone(), request.path.clone());
     let cached = state.folders.read().await.get(&key).cloned();
-    let entries = if let Some(entries) = cached {
+    let mut entries = if let Some(entries) = cached {
         entries
     } else {
         let remote_id = request.remote_id.clone();
@@ -4468,6 +4722,14 @@ async fn list_folder(
             .await
             .map_err(|error| error.to_string())??
     };
+    // Folder snapshots cache remote metadata, not local availability. External
+    // editors can close and trigger a repaint long before the next remote
+    // listing, so always derive badges from the manifest and actual files.
+    let records = offline_records(&request.remote_id);
+    let local_root = offline_root().map(|root| root.join(mount_slug(&request.remote_id)));
+    for entry in &mut entries {
+        entry.cache = cache_state(&records, local_root.as_deref(), &entry.path, entry.is_dir);
+    }
     let cached_file_bytes: u64 = entries
         .iter()
         .filter(|entry| !entry.is_dir)
@@ -4842,19 +5104,32 @@ fn seed_tray_anchor_from_os(app: &tauri::AppHandle) {
     if valid {
         return;
     }
-    if let Some(tray) = app.tray_by_id("mountlet") {
-        if let Ok(Some(rect)) = tray.rect() {
-            let (x, y) = tray_rect_center(&rect);
-            cache_tray_anchor(app, x, y);
-            return;
-        }
+    let native_anchor = app
+        .tray_by_id("mountlet")
+        .and_then(|tray| tray.rect().ok().flatten());
+    if let Some(rect) = native_anchor {
+        let (x, y) = tray_rect_center(&rect);
+        cache_tray_anchor(app, x, y);
+    } else {
+        fallback_tray_anchor(app);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn fallback_tray_anchor(app: &tauri::AppHandle) {
+    // Windows and macOS expose the actual notification/status item rectangle.
+    // During process startup the shell can need another event-loop turn before
+    // it returns that rectangle. Do not permanently replace it with the cursor:
+    // leaving the anchor invalid lets the final layout pass retry the native API.
     if let Ok(position) = app.cursor_position() {
         if position.x.abs() > 1.0 || position.y.abs() > 1.0 {
             cache_tray_anchor(app, position.x, position.y);
         }
     }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn fallback_tray_anchor(_app: &tauri::AppHandle) {}
 
 fn tray_rect_box(rect: &tauri::Rect) -> (f64, f64, f64, f64) {
     let position = match rect.position {
@@ -5059,13 +5334,13 @@ fn fallback_tray_popup_position(
 }
 
 #[tauri::command]
-fn apply_window_layout(
+async fn apply_window_layout(
     request: WindowLayoutRequest,
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    if window.label() == "browser" {
+    let stored = if window.label() == "browser" {
         let Some(mut stored) = state
             .last_layout
             .lock()
@@ -5079,12 +5354,19 @@ fn apply_window_layout(
         if let Ok(mut last) = state.last_layout.lock() {
             *last = Some(stored.clone());
         }
-        return layout_windows(&app, state.inner(), &stored);
-    }
-    if let Ok(mut last) = state.last_layout.lock() {
-        *last = Some(request.clone());
-    }
-    layout_windows(&app, state.inner(), &request)
+        stored
+    } else {
+        if let Ok(mut last) = state.last_layout.lock() {
+            *last = Some(request.clone());
+        }
+        request
+    };
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        let state = ui.state::<AppState>();
+        layout_windows(&ui, state.inner(), &stored)
+    })
+    .await?
 }
 
 fn layout_windows(
@@ -5095,7 +5377,9 @@ fn layout_windows(
     let main = app
         .get_webview_window("main")
         .ok_or("main window is unavailable")?;
-    seed_tray_anchor_from_os(app);
+    // TrayIcon::rect() talks to the shell. Querying it from a command handler
+    // can stall WebView IPC on Windows. Startup retries seed the cache from
+    // the native event loop instead.
     let requested_area = WorkArea {
         x: request.available_x,
         y: request.available_y,
@@ -5720,19 +6004,22 @@ fn cloud_snapshot_path(remote_id: &str, path: &str) -> Result<PathBuf, String> {
         .join(path))
 }
 
+fn is_complete_managed_file(record: &serde_json::Value) -> bool {
+    !record
+        .get("is_dir")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        && record
+            .get("complete")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+}
+
 fn managed_file_records(remote_id: &str) -> Vec<(String, String)> {
     offline_records(remote_id)
         .into_iter()
         .filter_map(|(path, record)| {
-            if record
-                .get("is_dir")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || !record
-                    .get("protected")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            {
+            if !is_complete_managed_file(&record) {
                 return None;
             }
             Some((
@@ -5775,15 +6062,7 @@ async fn detect_remote_cache_changes(
             else {
                 continue;
             };
-            if record
-                .get("is_dir")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-                || !record
-                    .get("protected")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            {
+            if !is_complete_managed_file(&serde_json::Value::Object(record.clone())) {
                 continue;
             }
             let old_size = record.get("remote_size").and_then(|value| value.as_u64());
@@ -5833,15 +6112,7 @@ async fn changed_offline_remotes() -> Result<Vec<String>, String> {
                 .into_iter()
                 .flatten()
                 .any(|(path, record)| {
-                    if record
-                        .get("is_dir")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-                        || !record
-                            .get("protected")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false)
-                    {
+                    if !is_complete_managed_file(record) {
                         return false;
                     }
                     let Ok(metadata) = root.join(path).metadata() else {
@@ -6057,12 +6328,6 @@ async fn open_entry(
 ) -> Result<(), String> {
     let remote_id = request.remote_id;
     let path = request.path;
-    let mounted = remote_mount_path(&remote_id)
-        .ok()
-        .map(|root| root.join(&path));
-    if let Some(local) = mounted.filter(|candidate| candidate.exists()) {
-        return open_local_path(&local);
-    }
     let offline = offline_root().map(|root| root.join(mount_slug(&remote_id)).join(&path));
     if let Some(local) = offline.filter(|candidate| candidate.exists()) {
         return open_local_path(&local);
@@ -6098,12 +6363,16 @@ async fn open_entry(
 
 #[tauri::command]
 fn open_mounted_folder(request: EntryRequest) -> Result<(), String> {
-    let path = remote_mount_path(&request.remote_id)?.join(request.path);
-    if !path.is_dir() {
+    if request.path.split('/').any(|part| part == "..") {
+        return Err("Invalid mounted folder path.".into());
+    }
+    let root = remote_mount_path(&request.remote_id)?;
+    if !path_is_mounted(&root) {
         return Err("This remote folder is not currently mounted.".into());
     }
+    let path = root.join(request.path);
     let settings = app_settings();
-    file_managers::open_folder(
+    file_managers::open_mounted_folder(
         &path,
         &settings.file_manager,
         &settings.open_folder_behavior,
@@ -6489,7 +6758,12 @@ async fn reauthenticate_remote(
 }
 
 #[tauri::command]
-fn set_browser_window(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+async fn set_browser_window(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || set_browser_window_on_main(&ui, enabled)).await?
+}
+
+fn set_browser_window_on_main(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("browser") {
         if enabled {
             let main_visible = app
@@ -6509,7 +6783,7 @@ fn set_browser_window(enabled: bool, app: tauri::AppHandle) -> Result<(), String
             .get_webview_window("main")
             .ok_or("main window is unavailable")?;
         tauri::WebviewWindowBuilder::new(
-            &app,
+            app,
             "browser",
             tauri::WebviewUrl::App("index.html?browser=1".into()),
         )
@@ -6559,16 +6833,20 @@ async fn get_browser_state(state: tauri::State<'_, AppState>) -> Result<(String,
 }
 
 #[tauri::command]
-fn focus_window(label: String, app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("{label} window is unavailable"))?;
-    if let Ok(mut focused) = app.state::<AppState>().last_focused_window.lock() {
-        *focused = label;
-    }
-    window.show().map_err(|error| error.to_string())?;
-    activate_window_keyboard(&window);
-    Ok(())
+async fn focus_window(label: String, app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        let window = ui
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("{label} window is unavailable"))?;
+        if let Ok(mut focused) = ui.state::<AppState>().last_focused_window.lock() {
+            *focused = label.clone();
+        }
+        window.show().map_err(|error| error.to_string())?;
+        activate_window_keyboard(&window);
+        Ok(())
+    })
+    .await?
 }
 
 fn activate_window_keyboard(window: &tauri::WebviewWindow) {
@@ -6618,18 +6896,22 @@ fn grab_webkit_focus(widget: &gtk::Widget) {
 }
 
 #[tauri::command]
-fn set_window_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
+async fn set_window_pinned(pinned: bool, app: tauri::AppHandle) -> Result<(), String> {
     if pinned && !platform::desktop_hints().pin_supported {
         return Err("GNOME on Wayland does not allow apps to pin their own windows.".into());
     }
-    for label in ["main", "browser"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .set_always_on_top(pinned)
-                .map_err(|error| error.to_string())?;
+    let ui = app.clone();
+    run_on_main_async(app, move || {
+        for label in ["main", "browser"] {
+            if let Some(window) = ui.get_webview_window(label) {
+                window
+                    .set_always_on_top(pinned)
+                    .map_err(|error| error.to_string())?;
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -6803,8 +7085,13 @@ struct DriveOauthSource {
 }
 
 #[tauri::command]
-fn check_prerequisites(state: tauri::State<'_, AppState>) -> Vec<platform::Prerequisite> {
-    platform::check_prerequisites(state.rclone.as_deref())
+async fn check_prerequisites(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<platform::Prerequisite>, String> {
+    let rclone = state.rclone.clone();
+    tauri::async_runtime::spawn_blocking(move || platform::check_prerequisites(rclone.as_deref()))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -7085,19 +7372,24 @@ fn build_tray_menu<M: Manager<tauri::Wry>>(app: &M) -> tauri::Result<Menu<tauri:
 }
 
 #[tauri::command]
-fn refresh_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
+async fn refresh_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
+    let ui = app.clone();
+    run_on_main_async(app, move || refresh_tray_menu_on_main(&ui)).await?
+}
+
+fn refresh_tray_menu_on_main(app: &tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        linux_tray::refresh(&app);
+        linux_tray::refresh(app);
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let menu = build_tray_menu(&app).map_err(|error| error.to_string())?;
+        let menu = build_tray_menu(app).map_err(|error| error.to_string())?;
         if let Some(tray) = app.tray_by_id("mountlet") {
             tray.set_menu(Some(menu))
                 .map_err(|error| error.to_string())?;
-            tray.set_tooltip(Some(tray_status_tooltip(&app)))
+            tray.set_tooltip(Some(tray_status_tooltip(app)))
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
@@ -7163,20 +7455,52 @@ fn install_native_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::E
     }
 }
 
+pub fn write_license_diagnostics(path: &Path) -> Result<(), String> {
+    license::write_diagnostics(path)
+}
+
+const INSTANCE_ADDRESS: &str = "127.0.0.1:47653";
+const INSTANCE_SHOW_REQUEST: &[u8] = b"mountlet-v1 show\n";
+const INSTANCE_SHOW_RESPONSE: &[u8] = b"mountlet-v1 ok\n";
+
+fn acquire_instance_listener() -> Option<TcpListener> {
+    match TcpListener::bind(INSTANCE_ADDRESS) {
+        Ok(listener) => Some(listener),
+        Err(error) if error.kind() == ErrorKind::AddrInUse => {
+            let existing = TcpStream::connect_timeout(
+                &INSTANCE_ADDRESS.parse().expect("valid instance address"),
+                Duration::from_millis(500),
+            )
+            .and_then(|mut stream| {
+                stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+                stream.write_all(INSTANCE_SHOW_REQUEST)?;
+                let mut response = [0u8; 15];
+                stream.read_exact(&mut response)?;
+                Ok(response == INSTANCE_SHOW_RESPONSE)
+            })
+            .unwrap_or(false);
+            if existing {
+                eprintln!("[mountlet] The running Mountlet instance was asked to show.");
+                None
+            } else {
+                // A stale/foreign listener must not make a desktop application
+                // silently disappear. This process still runs, but does not
+                // claim the fixed single-instance endpoint.
+                eprintln!("[mountlet] {INSTANCE_ADDRESS} belongs to another process; continuing without the fixed listener.");
+                TcpListener::bind("127.0.0.1:0").ok()
+            }
+        }
+        Err(error) => {
+            eprintln!("[mountlet] Could not create the instance listener: {error}");
+            TcpListener::bind("127.0.0.1:0").ok()
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    const INSTANCE_ADDRESS: &str = "127.0.0.1:47653";
-    let listener = match TcpListener::bind(INSTANCE_ADDRESS) {
-        Ok(listener) => listener,
-        Err(_) => {
-            eprintln!(
-                "[mountlet] Another instance is already running on {INSTANCE_ADDRESS}; asked it to show."
-            );
-            if let Ok(mut stream) = TcpStream::connect(INSTANCE_ADDRESS) {
-                let _ = stream.write_all(b"show\n");
-            }
-            return;
-        }
+    let Some(listener) = acquire_instance_listener() else {
+        return;
     };
     // Only the process that owns the single-instance listener starts a log
     // session. A second launch must not split the running process's report log.
@@ -7207,9 +7531,16 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 for connection in listener.incoming() {
-                    if connection.is_err() {
+                    let Ok(mut connection) = connection else {
                         break;
+                    };
+                    let mut request = [0u8; 17];
+                    if connection.read_exact(&mut request).is_err()
+                        || request != INSTANCE_SHOW_REQUEST
+                    {
+                        continue;
                     }
+                    let _ = connection.write_all(INSTANCE_SHOW_RESPONSE);
                     eprintln!("[mountlet] Existing instance received a show request.");
                     let app = handle.clone();
                     if let Err(error) = handle.run_on_main_thread(move || show_window_stack(&app)) {
@@ -7267,8 +7598,8 @@ pub fn run() {
             create_remote,
             delete_remote,
             rclone_output,
-            cache_sync_diagnostics,
             app_version,
+            show_startup_windows,
             clipboard_text,
             license_default_device_label,
             bug_report_preview,
@@ -7295,13 +7626,14 @@ pub fn run() {
             import_config_bundle,
             push_config_sync,
             pull_config_sync,
-            config_sync_dirty,
+            config_sync_status,
             open_external,
             quit_app,
             load_browser_memory,
             persist_browser_memory,
             list_folder,
             search_index,
+            start_initial_metadata_index,
             remember_selection,
             toggle_mount,
             open_remote_web,
@@ -7507,6 +7839,45 @@ mod tests {
             &fs::metadata(&path).unwrap()
         ));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn cache_badge_follows_an_existing_local_file() {
+        let root = env::temp_dir().join(format!("mountlet-cache-badge-{}", std::process::id()));
+        fs::create_dir_all(root.join("folder")).unwrap();
+        fs::write(root.join("folder/document.txt"), b"cached").unwrap();
+        let state = cache_state(
+            &serde_json::Map::new(),
+            Some(&root),
+            "folder/document.txt",
+            false,
+        );
+        assert!(state.cached);
+        assert!(!state.offline);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn temporary_cache_files_participate_in_sync_and_conflict_detection() {
+        assert!(is_complete_managed_file(
+            &serde_json::json!({"is_dir": false, "protected": false, "complete": true})
+        ));
+        assert!(is_complete_managed_file(
+            &serde_json::json!({"is_dir": false, "protected": true, "complete": true})
+        ));
+        assert!(!is_complete_managed_file(
+            &serde_json::json!({"is_dir": true, "protected": false, "complete": true})
+        ));
+        assert!(!is_complete_managed_file(
+            &serde_json::json!({"is_dir": false, "protected": false, "complete": false})
+        ));
+    }
+
+    #[test]
+    fn config_sync_detects_changes_before_and_after_first_push() {
+        assert!(config_fingerprint_changed(None, "current"));
+        assert!(!config_fingerprint_changed(Some("current"), "current"));
+        assert!(config_fingerprint_changed(Some("previous"), "current"));
     }
 
     #[test]

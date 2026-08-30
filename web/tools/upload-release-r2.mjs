@@ -5,6 +5,7 @@ import {tmpdir} from "node:os";
 import {basename, join, resolve} from "node:path";
 import {
   RELEASE_INDEX_KEY,
+  normalizeFileQualifier,
   normalizeVersion,
   readProjectVersion,
   readReleaseConfig,
@@ -19,11 +20,14 @@ const cliArgs = process.argv.slice(2);
 const useRemote = takeFlag("--remote") || process.env.MOUNTLET_R2_REMOTE === "1";
 const dryRun = takeFlag("--dry-run");
 const requestedVersion = takeOption("--version") || process.env.MOUNTLET_RELEASE_VERSION || readProjectVersion();
+const requestedQualifier = takeOption("--qualifier") || process.env.MOUNTLET_RELEASE_QUALIFIER
+  || (process.env.GITHUB_REF_NAME === "wip" && process.env.GITHUB_SHA ? `preview-${process.env.GITHUB_SHA.slice(0, 7)}` : "");
 const requestedRetention = takeOption("--retain") || process.env.MOUNTLET_RELEASE_RETENTION || "";
 const positionalArgs = cliArgs.filter((arg) => !arg.startsWith("--"));
 const bucket = positionalArgs[0] || process.env.MOUNTLET_R2_BUCKET || "";
 const sourcePath = positionalArgs[1] || process.env.MOUNTLET_RELEASE_SOURCE || resolve("release-artifacts");
 const version = normalizeVersion(requestedVersion);
+const qualifier = normalizeFileQualifier(requestedQualifier);
 validateReleaseRef(version);
 const config = readReleaseConfig();
 const retention = Math.max(1, Number(requestedRetention || config.retention || 5));
@@ -40,7 +44,7 @@ if (useRemote && !hasS3Credentials()) {
 
 const availableFiles = listFilesRecursive(resolve(sourcePath));
 const publishedAt = new Date().toISOString();
-const release = {version, publishedAt, files: {}};
+const release = {version, buildId: qualifier || version, publishedAt, files: {}};
 const uploads = [];
 for (const [logicalKey, artifact] of Object.entries(config.artifacts)) {
   const source = availableFiles.find((candidate) => basename(candidate) === artifact.source);
@@ -48,8 +52,8 @@ for (const [logicalKey, artifact] of Object.entries(config.artifacts)) {
     fail(`Release artifact not found in ${sourcePath}: ${artifact.source}`);
   }
   const filePath = resolve(source);
-  const objectKey = releaseObjectKey(config.objectPrefix, version, artifact);
-  const fileName = releaseFileName(version, artifact);
+  const objectKey = releaseObjectKey(config.objectPrefix, version, artifact, qualifier);
+  const fileName = releaseFileName(version, artifact, qualifier);
   release.files[logicalKey] = {
     objectKey,
     fileName,

@@ -24,9 +24,10 @@ release site or repository Actions artifacts.
 
 ## First run and daily use
 
-Mountlet starts hidden in the system tray. Open the tray icon, add a remote,
-and follow the provider or rclone authentication flow. The app supports both
-its integrated, cached file browser and native mounted folders.
+Mountlet opens beside the system tray at startup. Add a remote and follow the
+provider or rclone authentication flow. Hiding the window leaves Mountlet in
+the tray. The app supports both its integrated, cached file browser and native
+mounted folders.
 
 Integrated edits are disabled by default because cloud copy, move, upload,
 rename, and delete operations are direct and cannot be undone by Mountlet.
@@ -56,8 +57,8 @@ npm run build
 npm run tauri:build
 ```
 
-The application intentionally opens no taskbar window at startup. Use the tray
-icon or **Open Mountlet** tray action to reveal it.
+The application intentionally uses tray-style windows rather than a normal
+taskbar window. Use the tray icon or **Open Mountlet** after hiding it.
 
 ## Architecture and maintenance rules
 
@@ -74,7 +75,9 @@ icon or **Open Mountlet** tray action to reveal it.
   keyboard and focus behavior in `src/dialogs.ts`.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for regression-sensitive invariants and
-[PARITY.md](PARITY.md) for the native acceptance ledger.
+[PARITY.md](PARITY.md) for the native acceptance ledger. Production promotion,
+service checks, upgrade testing, tagging, and rollback rules are documented in
+[docs/RELEASE.md](docs/RELEASE.md).
 
 ## Required checks
 
@@ -95,3 +98,7 @@ paths, remote names, and filenames.
 
 Mountlet user data is stored outside the installation directory and is retained
 when the application is upgraded or uninstalled.
+
+On Windows, installing 0.7.0 or later removes the retired Python/Qt application
+before installing the Tauri application. Settings, trial history, rclone data,
+and managed cached files are preserved during this replacement.

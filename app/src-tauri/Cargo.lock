@@ -2246,6 +2246,7 @@ dependencies = [
  "tauri-plugin-drag",
  "time",
  "tokio",
+ "winreg",
  "zip",
 ]
 

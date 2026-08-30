@@ -1,20 +1,125 @@
-# Desktop release process
+# Production release process
 
-Version 0.7.0 and later are built from the Tauri application in `app/`.
+Version 0.7.0 is the first Tauri release. Version 0.6.8 is the final Python
+release and remains frozen under `legacy/python-0.6.8/`.
 
-1. Update the matching versions in `app/package.json`,
-   `app/src-tauri/Cargo.toml`, and `app/src-tauri/tauri.conf.json`.
-2. Run the required checks documented in `app/README.md`.
-3. Push a matching `vX.Y.Z` tag or run **Native package CI** manually.
-4. Verify all eight standard/lean installers and their startup probes.
-5. The release job uploads installers using the stable names in
-   `web/release-files.json`; the website publishes versioned R2 object names.
+## Release invariants
+
+- Release from a clean commit that passed both **CI** and all eight jobs in
+  **Native package CI**.
+- Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
+  `app/src-tauri/tauri.conf.json` identical to the release tag.
+- A `wip` build is a preview build and uploads to preview R2. A `vX.Y.Z` tag is
+  a production build and uploads to production R2. Do not publish production
+  installers by manually reusing preview artifacts.
+- Packaged applications use `https://mountlet.app` for license and report APIs
+  unless `MOUNTLET_LICENSE_API_URL` or `MOUNTLET_REPORT_API_URL` is set in the
+  process environment. The build-channel marker does not change these URLs.
+- Bug and crash reports are successful only after GitHub creates an issue.
+  Email is an optional secondary sink, not a substitute.
+- Never delete or reset user configuration, trial replicas, rclone data,
+  offline files, or metadata during an upgrade. On Windows the NSIS installer
+  removes the Python/Inno application but preserves those user directories.
+
+## 1. Freeze and validate the candidate
+
+1. Update the version and changelog, then run from the repository root:
+
+   ```bash
+   cd app
+   npm ci
+   npm run build
+   cargo test --locked -j 2 --manifest-path src-tauri/Cargo.toml
+   cargo clippy --locked -j 2 --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+   cd ..
+   npm ci
+   npm run web:release:check
+   npm run web:release:test
+   npm run web:notices:test
+   npm run web:reports:test
+   ```
+
+2. Push the candidate to `wip`. Wait for both workflows to pass; do not accept
+   a successful aggregate job while one platform/variant job is cancelled or
+   skipped unexpectedly.
+3. Download installers by artifact name or use the uniquely versioned preview
+   filenames. Do not identify a preview solely by the displayed `0.7.0`.
+
+## 2. Exercise preview installers
+
+Test the standard installer on each supported OS and at least install/start the
+lean variant. The workflow smoke probe is necessary but does not replace these
+upgrade tests:
+
+- Linux X11: install the `.deb`, start from a desktop session, open both window
+  modes, browse/download a file, mount/unmount, quit, and reopen from the tray.
+- Windows: install over Python 0.6.8 with an existing expired trial, cached
+  file, metadata database, non-default theme, and multi-window setting. Confirm
+  that there is one Installed Apps entry, no default desktop shortcut, no
+  console windows, the old trial remains expired, and License/Report/Quit work.
+- Windows: verify file download and cache/conflict indicators, mounted-folder
+  opening, Explorer access, usage loading, initial metadata indexing, and
+  restoration of the last focused window.
+- macOS arm64 and x64: launch the DMG application, verify tray-only lifecycle,
+  both layouts, Finder opening, download/cache behavior, and quit.
+- Standard builds must find their bundled rclone. Lean builds must report a
+  missing system rclone cleanly and work after one is provided.
+
+Submit one Windows report and verify its issue number in the configured private
+GitHub repository. Delete or close the test issue according to support policy.
+
+## 3. Prepare production services
+
+Before merging, verify the Cloudflare Pages production environment separately
+from preview:
+
+- Production branch is `main`; project root is the repository root; output is
+  `web`; Functions are loaded from `functions/`.
+- `DB` points to production D1 and `DOWNLOADS` points to production R2.
+- Live Stripe keys and webhook secret are present.
+- License signing keys, key pepper, and admin token are present and match the
+  public key compiled into the desktop app.
+- `REPORT_GITHUB_TOKEN` has Issues read/write access to
+  `REPORT_GITHUB_REPO`; Resend settings are optional.
+- Production and preview notice audiences and secrets are not interchanged.
+- GitHub Actions has production/preview R2 bucket variables plus bucket-scoped
+  R2 upload credentials.
+
+## 4. Promote and publish
+
+1. Merge the tested `wip` commit to `main` without adding untested changes.
+2. Wait for the production Pages deployment, then initialize/upgrade D1 and
+   run the deployment check described in `web/README.md`.
+3. Confirm `/api/health` reports healthy licensing, GitHub reporting, D1, and
+   R2 bindings. Exercise a live-mode-safe license status check and a controlled
+   report test before publishing downloads.
+4. Tag the exact tested `main` commit and push the tag:
+
+   ```bash
+   git tag -a vX.Y.Z -m "Mountlet X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+5. Wait for all eight tagged package jobs and **Upload installers to R2**.
+   The uploader validates `web/release-files.json`, writes versioned objects,
+   updates the release index, and retains the configured five versions.
 
 Bundled builds stage an official current rclone under an app-versioned resource
 directory. Lean builds intentionally contain no rclone executable. Windows
 copies bundled rclone to a versioned LocalAppData runtime directory so upgrades
 do not overwrite a binary still serving a mount.
 
-Version 0.6.8 is the final Python release. Its reproducible source, tests, and
-packaging scripts remain under `legacy/python-0.6.8/` and are not part of the
-current release pipeline.
+## 5. Post-publication verification
+
+- Run `npm run web:deploy:check -- https://mountlet.app`.
+- Confirm `/api/releases` reports `vX.Y.Z` and download each of the eight
+  logical artifacts through `/api/download/...`; do not validate R2 URLs only.
+- Install the public Windows standard installer over 0.6.8 once more and verify
+  retained trial/license/config/cache state.
+- Confirm purchase, webhook fulfillment, license activation/deactivation,
+  report issue creation, notices, and installer links in production.
+- Record the workflow run, tag, installer checksums, report test issue, and any
+  known limitations in the release record.
+
+If any production check fails, stop linking the new release index. Fix from a
+new commit and tag; do not replace installer bytes underneath an existing tag.

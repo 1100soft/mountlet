@@ -28,6 +28,14 @@ export function normalizeVersion(value) {
   return version;
 }
 
+export function normalizeFileQualifier(value) {
+  const qualifier = String(value || "").trim().replace(/^-+|-+$/g, "");
+  if (qualifier && !/^[0-9A-Za-z][0-9A-Za-z.-]*$/.test(qualifier)) {
+    throw new Error(`Invalid release filename qualifier: ${value}`);
+  }
+  return qualifier;
+}
+
 export function validateReleaseRef(version, environment = process.env) {
   if (environment.GITHUB_REF_TYPE !== "tag") return;
   const tagVersion = normalizeVersion(environment.GITHUB_REF_NAME || "");
@@ -36,14 +44,15 @@ export function validateReleaseRef(version, environment = process.env) {
   }
 }
 
-export function releaseFileName(version, artifact) {
+export function releaseFileName(version, artifact, qualifier = "") {
   const normalized = normalizeVersion(version);
-  return `mountlet-v${normalized}-${artifact.platform}-${artifact.architecture}-${artifact.variant}${artifact.suffix}`;
+  const suffix = normalizeFileQualifier(qualifier);
+  return `mountlet-v${normalized}${suffix ? `-${suffix}` : ""}-${artifact.platform}-${artifact.architecture}-${artifact.variant}${artifact.suffix}`;
 }
 
-export function releaseObjectKey(prefix, version, artifact) {
+export function releaseObjectKey(prefix, version, artifact, qualifier = "") {
   const normalized = normalizeVersion(version);
-  return `${String(prefix || "releases").replace(/^\/+|\/+$/g, "")}/v${normalized}/${artifact.platform}/${artifact.architecture}/${artifact.variant}/${releaseFileName(normalized, artifact)}`;
+  return `${String(prefix || "releases").replace(/^\/+|\/+$/g, "")}/v${normalized}/${artifact.platform}/${artifact.architecture}/${artifact.variant}/${releaseFileName(normalized, artifact, qualifier)}`;
 }
 
 export function updatedReleaseIndex(existing, release, retention = 5) {

@@ -68,3 +68,4 @@ jobs:
           npm run web:release:check
           npm run web:release:test
           npm run web:notices:test
+          npm run web:reports:test

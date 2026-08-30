@@ -25,6 +25,7 @@ export function publicReleaseIndex(index) {
     retention: Number(index?.retention || 5),
     releases: (index?.releases || []).map((release) => ({
       version: String(release.version || ""),
+      buildId: String(release.buildId || release.version || ""),
       publishedAt: String(release.publishedAt || ""),
       files: Object.fromEntries(Object.entries(release.files || {}).map(([key, file]) => [key, {
         fileName: String(file.fileName || ""),

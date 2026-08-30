@@ -13,7 +13,8 @@ async function openConfiguredLink(group, key) {
         window.alert(`That build is not available for Mountlet v${version}.`);
         return;
       }
-      window.location.href = `/api/download/${encodeURIComponent(key)}?version=${encodeURIComponent(version)}`;
+      const build = release.buildId || release.publishedAt || version;
+      window.location.href = `/api/download/${encodeURIComponent(key)}?version=${encodeURIComponent(version)}&build=${encodeURIComponent(build)}`;
       return;
     }
     const fileName = await getReleaseDownloadFile(key);

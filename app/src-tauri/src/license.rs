@@ -14,14 +14,20 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const API: &str = "https://mountlet.app/api/license";
 const TRIAL_SECONDS: f64 = 7.0 * 24.0 * 60.0 * 60.0;
 const TRIAL_SALT: &[u8] = b"mountlet trial state v1";
+// Public verification material is safe to distribute. Bundling it keeps local
+// license checks independent of DNS, TLS and the availability of the website.
+// The endpoint is still used as a rotation fallback when a signature does not
+// match this key or a previously cached replacement.
+const BUNDLED_PUBLIC_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENrcIcgvV+4hGhJI9dmZO3vEMA4Rz\
+     e8kfNS97OhxF7xXuCeKjnV+ERmtJF+3Dhqw9NysrFiXEUgws/nd5e7Y3Cg==";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,18 +78,13 @@ fn stable_machine_identifier() -> String {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = crate::child_process::Command::new("reg")
-            .args([
-                "query",
-                r"HKLM\SOFTWARE\Microsoft\Cryptography",
-                "/v",
-                "MachineGuid",
-            ])
-            .output()
+        use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+        if let Ok(value) = RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\Microsoft\Cryptography")
+            .and_then(|key| key.get_value::<String, _>("MachineGuid"))
         {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if let Some(value) = text.split_whitespace().last() {
-                return format!("machine-guid:{value}");
+            if !value.trim().is_empty() {
+                return format!("machine-guid:{}", value.trim());
             }
         }
     }
@@ -106,6 +107,11 @@ fn stable_machine_identifier() -> String {
     env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into())
 }
 fn machine_hint() -> String {
+    #[cfg(target_os = "windows")]
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
     let home = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .unwrap_or_default();
@@ -126,16 +132,41 @@ fn state_license(name: &str) -> Option<PathBuf> {
 fn config_license(name: &str) -> Option<PathBuf> {
     Some(mountlet_config_dir()?.join(name))
 }
+fn legacy_tauri_state_license(name: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("Mountlet/license").join(name))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = name;
+        None
+    }
+}
 fn paths(name: &str) -> Vec<PathBuf> {
-    [state_license(name), config_license(name)]
-        .into_iter()
-        .flatten()
-        .collect()
+    let mut result = Vec::new();
+    for path in [
+        state_license(name),
+        config_license(name),
+        legacy_tauri_state_license(name),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !result.contains(&path) {
+            result.push(path);
+        }
+    }
+    result
 }
 fn home() -> Option<PathBuf> {
-    env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+    #[cfg(target_os = "windows")]
+    let value = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let value = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    value.map(PathBuf::from)
 }
 fn trial_paths() -> Vec<PathBuf> {
     let mut result = Vec::new();
@@ -145,9 +176,18 @@ fn trial_paths() -> Vec<PathBuf> {
     if let Some(path) = config_license(".license-trial") {
         result.push(path);
     }
+    if let Some(path) = legacy_tauri_state_license("trial.dat") {
+        result.push(path);
+    }
     #[cfg(target_os = "windows")]
     if let Some(path) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
         result.push(path.join("Mountlet/.license-trial"));
+        result.push(path.join("Mountlet/State/license/trial.dat"));
+        result.push(path.join("Mountlet/Cache/.license-trial"));
+        result.push(path.join("Microsoft/MountletTrial.dat"));
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(path) = env::var_os("APPDATA").map(PathBuf::from) {
         result.push(path.join("Microsoft/MountletTrial.dat"));
     }
     #[cfg(target_os = "macos")]
@@ -180,14 +220,26 @@ fn read_first(name: &str) -> String {
         })
         .unwrap_or_default()
 }
-fn store(name: &str, value: &str) -> Result<(), String> {
-    for path in paths(name) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+fn write_replicated(path: &Path, contents: &str) -> bool {
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return false;
         }
-        fs::write(path, format!("{}\n", value.trim())).map_err(|error| error.to_string())?;
     }
-    Ok(())
+    fs::write(path, contents).is_ok()
+}
+
+fn store(name: &str, value: &str) -> Result<(), String> {
+    let contents = format!("{}\n", value.trim());
+    let mut wrote = false;
+    for path in paths(name) {
+        wrote |= write_replicated(&path, &contents);
+    }
+    if wrote {
+        Ok(())
+    } else {
+        Err("Could not store license state.".into())
+    }
 }
 fn clear(name: &str) {
     for path in paths(name) {
@@ -202,10 +254,18 @@ fn trial_signature(payload: &str, hint: &str) -> String {
 }
 fn trial() -> Result<Value, String> {
     let hint = machine_hint();
-    for path in trial_paths() {
+    let paths = trial_paths();
+    let mut valid = Vec::new();
+    let mut encoded_records = std::collections::HashMap::<String, usize>::new();
+    for path in &paths {
         let Ok(encoded) = fs::read_to_string(path) else {
             continue;
         };
+        let encoded = encoded.trim().to_string();
+        if encoded.is_empty() {
+            continue;
+        }
+        *encoded_records.entry(encoded.clone()).or_default() += 1;
         let Ok(envelope_bytes) = URL_SAFE_NO_PAD.decode(encoded.trim()) else {
             continue;
         };
@@ -219,13 +279,33 @@ fn trial() -> Result<Value, String> {
         let Ok(bytes) = URL_SAFE_NO_PAD.decode(payload) else {
             continue;
         };
-        let Ok(mut record) = serde_json::from_slice::<Value>(&bytes) else {
+        let Ok(record) = serde_json::from_slice::<Value>(&bytes) else {
             continue;
         };
         if record["version"].as_i64() != Some(2) || record["machine_hint"].as_str() != Some(&hint) {
             continue;
         }
-        record["last_seen_at"] = json!(record["last_seen_at"].as_f64().unwrap_or(0.0).max(now()));
+        valid.push(record);
+    }
+    let current = now();
+    let mut selected = oldest_trial(valid, current);
+    if selected.is_none() {
+        selected = recover_legacy_trial(&encoded_records, current, &hint);
+    }
+    if let Some(mut record) = selected {
+        if let Some(created) = oldest_trial_replica_creation(&paths, current) {
+            let started = record["started_at"].as_f64().unwrap_or(current);
+            // Early Tauri builds replaced the Python payload in-place. NTFS
+            // retains file creation time when a file is truncated, which lets
+            // us recover the earlier clock without ever granting more trial.
+            record["started_at"] = json!(earlier_trial_start(started, Some(created)));
+        }
+        record["version"] = json!(2);
+        record["machine_hint"] = json!(hint);
+        record["last_seen_at"] = json!(record["last_seen_at"]
+            .as_f64()
+            .unwrap_or(current)
+            .max(current));
         write_trial(&record, &hint)?;
         return Ok(record);
     }
@@ -235,17 +315,104 @@ fn trial() -> Result<Value, String> {
     write_trial(&record, &hint)?;
     Ok(record)
 }
+
+fn oldest_trial_replica_creation(paths: &[PathBuf], current: f64) -> Option<f64> {
+    #[cfg(target_os = "windows")]
+    {
+        paths
+            .iter()
+            .filter_map(|path| fs::metadata(path).ok()?.created().ok())
+            .filter_map(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|created| created.as_secs_f64())
+            // Mountlet did not exist before 2020; reject filesystem sentinel
+            // dates and future timestamps rather than accidentally expiring a
+            // legitimate trial.
+            .filter(|created| *created >= 1_577_836_800.0 && *created <= current + 86_400.0)
+            .min_by(f64::total_cmp)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (paths, current);
+        None
+    }
+}
+
+fn earlier_trial_start(recorded: f64, replica_created: Option<f64>) -> f64 {
+    replica_created.map_or(recorded, |created| recorded.min(created))
+}
+
+fn oldest_trial(valid: Vec<Value>, current: f64) -> Option<Value> {
+    valid.into_iter().min_by(|left, right| {
+        left["started_at"]
+            .as_f64()
+            .unwrap_or(current)
+            .total_cmp(&right["started_at"].as_f64().unwrap_or(current))
+    })
+}
+
+fn recover_legacy_trial(
+    encoded_records: &std::collections::HashMap<String, usize>,
+    current: f64,
+    current_hint: &str,
+) -> Option<Value> {
+    let mut candidates = encoded_records.iter().collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+    for (encoded, count) in candidates {
+        if *count < 2 {
+            continue;
+        }
+        let Some(envelope) = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        let Some(payload) = envelope["payload"].as_str() else {
+            continue;
+        };
+        let Some(record) = URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        let (Some(legacy_hint), Some(started), Some(last_seen)) = (
+            record["machine_hint"].as_str(),
+            record["started_at"].as_f64(),
+            record["last_seen_at"].as_f64(),
+        ) else {
+            continue;
+        };
+        let hint_valid =
+            legacy_hint.len() == 64 && legacy_hint.bytes().all(|value| value.is_ascii_hexdigit());
+        if matches!(record["version"].as_i64(), Some(1 | 2))
+            && hint_valid
+            && envelope["signature"].as_str() == Some(&trial_signature(payload, legacy_hint))
+            && started <= current + 86_400.0
+            && last_seen >= started
+        {
+            let mut migrated = record;
+            migrated["version"] = json!(2);
+            migrated["machine_hint"] = json!(current_hint);
+            migrated["last_seen_at"] = json!(last_seen.max(current));
+            return Some(migrated);
+        }
+    }
+    None
+}
 fn write_trial(record: &Value, hint: &str) -> Result<(), String> {
     let payload =
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(record).map_err(|error| error.to_string())?);
     let envelope = json!({"payload":payload,"signature":trial_signature(&payload,hint)});
     let encoded =
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope).map_err(|error| error.to_string())?);
+    let contents = format!("{encoded}\n");
     for path in trial_paths() {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::write(path, format!("{encoded}\n")).map_err(|error| error.to_string())?;
+        // Match Python: a permission, OneDrive, or antivirus failure on one
+        // replica must not abort status evaluation or block startup.
+        let _ = write_replicated(&path, &contents);
     }
     Ok(())
 }
@@ -283,7 +450,10 @@ fn parse_public_key(pem: &str) -> Result<VerifyingKey, String> {
     }
 }
 fn fetch_public_key() -> Result<VerifyingKey, String> {
-    let response: get_reqwest::Response = reqwest::blocking::Client::new()
+    let response: get_reqwest::Response = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .map_err(|error| error.to_string())?
         .get(format!("{}/public-key", api()))
         .send()
         .map_err(|error| error.to_string())?;
@@ -301,21 +471,46 @@ fn fetch_public_key() -> Result<VerifyingKey, String> {
 }
 fn public_key() -> Result<VerifyingKey, String> {
     let configured = env::var("MOUNTLET_LICENSE_PUBLIC_KEY").unwrap_or_default();
-    let cached = read_first("license-public.pem");
     let pem = if !configured.trim().is_empty() {
         configured
-    } else if !cached.is_empty() {
-        cached
     } else {
-        return fetch_public_key();
+        BUNDLED_PUBLIC_KEY.into()
     };
     parse_public_key(&pem)
+}
+
+fn verify_with_rotated_key(signed: &[u8], signature: &Signature) -> Result<bool, String> {
+    let cached = read_first("license-public.pem");
+    if !cached.is_empty()
+        && parse_public_key(&cached).is_ok_and(|key| key.verify(signed, signature).is_ok())
+    {
+        return Ok(true);
+    }
+    Ok(fetch_public_key()?.verify(signed, signature).is_ok())
 }
 // Alias keeps the long reqwest response type out of diagnostics and generated command metadata.
 mod get_reqwest {
     pub type Response = reqwest::blocking::Response;
 }
 fn verify_token(token: &str) -> Result<Value, String> {
+    verify_token_with(token, true)
+}
+
+fn verify_token_local(token: &str) -> Result<Value, String> {
+    verify_token_with(token, false)
+}
+
+fn verify_token_with(token: &str, allow_network: bool) -> Result<Value, String> {
+    let payload = verify_token_payload(token)?;
+    let parts = token.split('.').collect::<Vec<_>>();
+    let bytes = decode_part(parts[2])?;
+    let signature = signature_from_bytes(&bytes)?;
+    let signed = format!("{}.{}", parts[0], parts[1]);
+    verify_signature(signed.as_bytes(), &signature, allow_network)?;
+    Ok(payload)
+}
+
+fn verify_token_payload(token: &str) -> Result<Value, String> {
     let parts = token.split('.').collect::<Vec<_>>();
     if parts.len() != 3 {
         return Err("Invalid license token format.".into());
@@ -327,26 +522,6 @@ fn verify_token(token: &str) -> Result<Value, String> {
     }
     let payload: Value = serde_json::from_slice(&decode_part(parts[1])?)
         .map_err(|_| "Invalid license token data.")?;
-    let bytes = decode_part(parts[2])?;
-    let signature = if bytes.len() == 64 {
-        Signature::from_slice(&bytes)
-    } else {
-        Signature::from_der(&bytes)
-    }
-    .map_err(|_| "License token signature is not valid.")?;
-    let signed = format!("{}.{}", parts[0], parts[1]);
-    let configured = !env::var("MOUNTLET_LICENSE_PUBLIC_KEY")
-        .unwrap_or_default()
-        .trim()
-        .is_empty();
-    if public_key()?.verify(signed.as_bytes(), &signature).is_err()
-        && (configured
-            || fetch_public_key()?
-                .verify(signed.as_bytes(), &signature)
-                .is_err())
-    {
-        return Err("License token signature is not valid.".into());
-    }
     if let Some(expires) = payload["expiresAt"]
         .as_str()
         .filter(|value| !value.is_empty())
@@ -358,6 +533,33 @@ fn verify_token(token: &str) -> Result<Value, String> {
         }
     }
     Ok(payload)
+}
+
+fn signature_from_bytes(bytes: &[u8]) -> Result<Signature, String> {
+    if bytes.len() == 64 {
+        Signature::from_slice(bytes)
+    } else {
+        Signature::from_der(bytes)
+    }
+    .map_err(|_| "License token signature is not valid.".into())
+}
+
+fn verify_signature(
+    signed: &[u8],
+    signature: &Signature,
+    allow_network: bool,
+) -> Result<(), String> {
+    if public_key()?.verify(signed, signature).is_ok() {
+        return Ok(());
+    }
+    let configured = !env::var("MOUNTLET_LICENSE_PUBLIC_KEY")
+        .unwrap_or_default()
+        .trim()
+        .is_empty();
+    if allow_network && !configured && verify_with_rotated_key(signed, signature)? {
+        return Ok(());
+    }
+    Err("License token signature is not valid.".into())
 }
 fn api() -> String {
     env::var("MOUNTLET_LICENSE_API_URL")
@@ -404,11 +606,7 @@ fn host_name() -> String {
         .unwrap_or_else(|| "This device".into())
 }
 pub fn default_device_label() -> String {
-    format!(
-        "{} ({})",
-        host_name(),
-        system_name()
-    )
+    format!("{} ({})", host_name(), system_name())
 }
 fn fingerprint() -> Result<String, String> {
     let record = trial()?;
@@ -453,7 +651,7 @@ fn from_payload(payload: &Value, key: String) -> Status {
 pub fn status() -> Result<Status, String> {
     let token = read_first("license-token.jwt");
     if !token.is_empty() {
-        match verify_token(&token) {
+        match verify_token_local(&token) {
             Ok(payload) => return Ok(from_payload(&payload, read_first("license-key.txt"))),
             Err(error) => {
                 if error.to_ascii_lowercase().contains("expired") {
@@ -462,11 +660,9 @@ pub fn status() -> Result<Status, String> {
                     if payload["licenseKind"].as_str() == Some("beta")
                         || key.to_ascii_uppercase().starts_with("MTB-")
                     {
-                        if !key.is_empty() {
-                            if let Ok(status) = activate(&key, "") {
-                                return Ok(status);
-                            }
-                        }
+                        // Status is a local query and must never make startup
+                        // wait for the network. A user can explicitly activate
+                        // the stored key again from the License dialog.
                         clear("license-token.jwt");
                         clear("license-key.txt");
                         return Ok(Status {
@@ -611,4 +807,150 @@ pub fn deactivate(device_id: &str) -> Result<(), String> {
         clear("license-key.txt");
     }
     Ok(())
+}
+
+pub fn write_diagnostics(path: &Path) -> Result<(), String> {
+    let mut lines = vec![
+        format!("Mountlet {}", env!("CARGO_PKG_VERSION")),
+        format!(
+            "config: {}",
+            mountlet_config_dir()
+                .map(|value| value.display().to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        ),
+        format!(
+            "state: {}",
+            mountlet_state_dir()
+                .map(|value| value.display().to_string())
+                .unwrap_or_else(|| "unavailable".into())
+        ),
+    ];
+    let started = Instant::now();
+    let hint_at = Instant::now();
+    let _ = machine_hint();
+    lines.push(format!("machine_hint: {}ms", hint_at.elapsed().as_millis()));
+    let token_at = Instant::now();
+    let token = read_first("license-token.jwt");
+    lines.push(format!(
+        "token_present: {} ({}ms)",
+        !token.is_empty(),
+        token_at.elapsed().as_millis()
+    ));
+    if !token.is_empty() {
+        let verify_at = Instant::now();
+        let verified = verify_token_local(&token);
+        lines.push(format!(
+            "local_verify: {} ({}ms)",
+            verified
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| "ok".into()),
+            verify_at.elapsed().as_millis()
+        ));
+    }
+    lines.push("trial_paths:".into());
+    for trial_path in trial_paths() {
+        lines.push(format!("  {}", trial_path.display()));
+    }
+    let status_at = Instant::now();
+    match status() {
+        Ok(value) => lines.push(format!(
+            "status: {} ({}) ({}ms)",
+            value.state,
+            value.summary,
+            status_at.elapsed().as_millis()
+        )),
+        Err(error) => lines.push(format!(
+            "status_error: {error} ({}ms)",
+            status_at.elapsed().as_millis()
+        )),
+    }
+    lines.push(format!("total: {}ms", started.elapsed().as_millis()));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, lines.join("\n") + "\n").map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trial_migration_keeps_the_oldest_valid_clock() {
+        let selected = oldest_trial(
+            vec![
+                json!({"install_id":"tauri","started_at":200.0,"last_seen_at":210.0}),
+                json!({"install_id":"python","started_at":100.0,"last_seen_at":190.0}),
+            ],
+            300.0,
+        )
+        .unwrap();
+        assert_eq!(selected["install_id"], "python");
+        assert_eq!(selected["started_at"], 100.0);
+    }
+
+    #[test]
+    fn replica_creation_can_only_shorten_a_trial() {
+        assert_eq!(earlier_trial_start(200.0, Some(100.0)), 100.0);
+        assert_eq!(earlier_trial_start(100.0, Some(200.0)), 100.0);
+        assert_eq!(earlier_trial_start(100.0, None), 100.0);
+        let recovered = earlier_trial_start(200.0, Some(100.0));
+        assert!(recovered + TRIAL_SECONDS < 100.0 + TRIAL_SECONDS + 1.0);
+    }
+
+    #[test]
+    fn replicated_python_v2_trial_can_migrate_to_the_current_machine_hint() {
+        let old_hint = "a".repeat(64);
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "version": 2,
+                "install_id": "python",
+                "machine_hint": old_hint,
+                "started_at": 100.0,
+                "last_seen_at": 200.0
+            }))
+            .unwrap(),
+        );
+        let envelope = json!({
+            "payload": payload,
+            "signature": trial_signature(&payload, &old_hint)
+        });
+        let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&envelope).unwrap());
+        let recovered = recover_legacy_trial(
+            &std::collections::HashMap::from([(encoded, 2)]),
+            300.0,
+            &"b".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(recovered["started_at"], 100.0);
+        assert_eq!(recovered["machine_hint"], "b".repeat(64));
+    }
+
+    #[test]
+    fn bundled_license_public_key_is_valid() {
+        parse_public_key(BUNDLED_PUBLIC_KEY).unwrap();
+    }
+
+    fn unsigned_token() -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(br#"{"email":"user@example.com","expiresAt":"2099-01-01T00:00:00Z"}"#);
+        let signature = URL_SAFE_NO_PAD.encode([0u8; 64]);
+        format!("{header}.{payload}.{signature}")
+    }
+
+    #[test]
+    fn local_status_rejects_unknown_signatures_without_waiting_on_the_network() {
+        let token = unsigned_token();
+        let started = Instant::now();
+        let error = verify_token_local(&token).expect_err("zero signatures must not verify");
+        assert!(error.to_ascii_lowercase().contains("signature"));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "local verification waited on the network: {:?}",
+            started.elapsed()
+        );
+    }
 }

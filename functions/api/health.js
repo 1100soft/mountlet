@@ -23,7 +23,10 @@ export async function onRequestGet({env}) {
     stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
     stripeMode: stripeMode(env.STRIPE_SECRET_KEY),
     resendConfigured: Boolean(env.RESEND_API_KEY && (env.RESEND_FROM || env.EMAIL_FROM)),
-    reportsConfigured: github.enabled || email,
+    // Desktop bug and crash reports are only complete after GitHub accepts the
+    // issue. Email remains an optional secondary sink and supports contact
+    // requests, but must not make this readiness flag a false positive.
+    reportsConfigured: github.enabled,
     reportSinks: {
       github: github.enabled,
       githubNeedsAttention: github.present && !github.enabled,

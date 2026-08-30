@@ -28,6 +28,7 @@ export async function onRequestPost({request, env}) {
   const sinks = [];
   const failures = [];
   const githubState = githubConfig(env);
+  const githubRequired = report.kind === "bug" || report.kind === "crash";
 
   if (githubState.enabled) {
     try {
@@ -35,7 +36,7 @@ export async function onRequestPost({request, env}) {
     } catch (error) {
       failures.push(`GitHub: ${String(error.message || error).slice(0, 500)}`);
     }
-  } else if (githubState.present) {
+  } else if (githubState.present || githubRequired) {
     failures.push(githubConfigurationError(githubState));
   }
 
@@ -50,12 +51,21 @@ export async function onRequestPost({request, env}) {
   if (!githubState.present && !resendConfigured(env)) {
     return jsonResponse({ok: false, error: "Report delivery is not configured."}, 503);
   }
+  const githubSink = sinks.find((sink) => sink.kind === "github");
+  if (githubRequired && !githubSink) {
+    return jsonResponse({
+      ok: false,
+      error: failures.find((failure) => failure.startsWith("GitHub:")) || "GitHub issue creation failed.",
+      sinks,
+    }, 502);
+  }
   if (sinks.length === 0) {
     return jsonResponse({ok: false, error: failures.join("\n") || "Report delivery failed."}, 502);
   }
   return jsonResponse({
     ok: true,
-    id: sinks[0]?.id || "",
+    id: githubSink?.id || sinks[0]?.id || "",
+    issueUrl: githubSink?.url || "",
     sinks,
     warning: failures.join("\n"),
   });

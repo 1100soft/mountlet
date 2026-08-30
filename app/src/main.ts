@@ -3,13 +3,12 @@ import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrash
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
 import { detectRemoteCacheChanges } from "./backend.ts";
-import { configSyncDirty } from "./backend.ts";
-import { cacheSyncDiagnostics } from "./backend.ts";
+import { configSyncStatus } from "./backend.ts";
 import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { activateLicense, clipboardText, deactivateLicenseDevice, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
-import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
+import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, startInitialMetadataIndex, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
 import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
 import { applyMetricVariables, metricsAt, scaledMetric } from "./geometry.ts";
 import { MAX_ZOOM_STEP, MIN_ZOOM_STEP, formatBytes, parentPath, zoomFactor, type AppSettings, type FileEntry, type FolderSnapshot, type Notice, type Preferences, type Remote } from "./model.ts";
@@ -64,6 +63,7 @@ const pendingReauthentication = new Set<string>();
 const remoteErrors = new Map<string, string>();
 const usageRefreshQueue = new Set<string>();
 let usageRefreshTimer = 0;
+let usageRefreshActive = 0;
 let folderPollTimer = 0;
 let browserMemory: BrowserMemory = {};
 let draggedRemote = "";
@@ -71,6 +71,20 @@ let sortMode = "manual";
 let sortReverse = false;
 let shortcuts: Record<string, string[]> = {};
 let completeSettings: AppSettings | null = null;
+let cachedConfigSyncStatus = { localChanged: false, remoteChanged: false };
+let configSyncStatusCheckedAt = 0;
+let configSyncStatusPending: Promise<typeof cachedConfigSyncStatus> | null = null;
+
+function currentConfigSyncStatus(): Promise<typeof cachedConfigSyncStatus> {
+  const now = Date.now();
+  if (now - configSyncStatusCheckedAt < 30_000) return Promise.resolve(cachedConfigSyncStatus);
+  configSyncStatusPending ??= configSyncStatus().then(status => {
+    cachedConfigSyncStatus = status;
+    configSyncStatusCheckedAt = Date.now();
+    return status;
+  }).finally(() => { configSyncStatusPending = null; });
+  return configSyncStatusPending;
+}
 let currentHints: DesktopHints | null = null;
 let windowPinned = false;
 let registrationOrder: readonly string[] = [];
@@ -92,6 +106,19 @@ function requireIntegratedEdits(): boolean {
   return false;
 }
 function licenseLocked(): boolean { return currentLicense?.state === "expired"; }
+
+function applyLicense(status: LicenseStatus | null): void {
+  currentLicense = status;
+  render();
+  scheduleNativeLayout(0);
+}
+
+function bounded<T>(operation: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), milliseconds);
+    operation.then(value => { window.clearTimeout(timer); resolve(value); }, error => { window.clearTimeout(timer); reject(error); });
+  });
+}
 
 function formatLocalDate(value: string): string {
   if (!value) return "";
@@ -306,7 +333,7 @@ async function layoutNativeWindows(): Promise<void> {
   const globalSearchHeight = remoteFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(4, preferences.zoomStep) : 0;
   const browserSearchHeight = fileFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(5, preferences.zoomStep) : 0;
   await applyWindowLayout({
-    mode: preferences.mode,
+    mode: licenseLocked() ? "single" : preferences.mode,
     selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
     remoteCount: remotes.length,
     browserItems: preferences.fileListMaxItems > 0
@@ -498,19 +525,22 @@ async function syncConfiguration(direction: "push" | "pull"): Promise<void> {
   try {
     if (direction === "push") { await pushConfigSync(password); showToast("Configuration pushed to the sync location."); }
     else { const backup = await pullConfigSync(password); await refreshRemoteStatus(); showToast(`Configuration pulled.${backup ? ` Backup: ${backup}` : ""}`); }
+    configSyncStatusCheckedAt = 0;
     document.querySelectorAll(".sync-dirty").forEach(element => element.classList.remove("sync-dirty"));
   } catch (error) { await showError(direction === "push" ? "Push config" : "Pull config", error); }
 }
 
 async function showLicense(): Promise<void> {
   document.querySelector(".modal-layer")?.remove();
-  const defaultDeviceLabel = await licenseDefaultDeviceLabel().catch(() => "This device");
   const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog license-dialog");
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
-  const title = element("h2", "", "License"); const content = element("div", "license-content"); const actions = element("div", "dialog-actions");
+  const title = element("h2", "", "License"); const content = element("div", "license-content"); content.append(element("p", "dialog-status", "Checking license…")); const actions = element("div", "dialog-actions");
   const close = element("button", "primary", "Close"); close.addEventListener("click", () => layer.remove()); actions.append(close); dialog.append(title, content, actions); layer.append(dialog); document.body.append(layer);
-  const renderLicense = async () => {
-    const status = await licenseStatus(); currentLicense = status; content.replaceChildren();
+  trapModalFocus(layer, dialog, close);
+  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
+  const defaultDeviceLabelPromise = bounded(licenseDefaultDeviceLabel(), 5000, "Could not identify this device.").catch(() => "This device");
+  const renderLicense = async (status: LicenseStatus, defaultDeviceLabel: string) => {
+    currentLicense = status; render(); scheduleNativeLayout(0); content.replaceChildren();
     content.append(element("p", `license-summary${status.state === "expired" ? " error" : ""}`, status.summary));
     const expiry = status.licenseKind === "beta" && status.state === "licensed"
       ? "Public beta access renews daily and can end when the beta closes."
@@ -543,7 +573,7 @@ async function showLicense(): Promise<void> {
     activate.dataset.dialogConfirm = "true";
     key.addEventListener("input", () => { copy.disabled = !key.value; activate.disabled = !key.value || status.state === "licensed"; void updateCopyState(); });
     void updateCopyState();
-    activate.addEventListener("click", async () => { activate.disabled = true; try { currentLicense = await activateLicense(key.value, device.value); render(); if (preferences.mode === "multiple") { await setDetachedBrowser(true); await emitBrowserState(selectedRemote, currentPath); } scheduleNativeLayout(0); await renderLicense(); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
+    activate.addEventListener("click", async () => { activate.disabled = true; try { const next = await activateLicense(key.value, device.value); currentLicense = next; render(); if (preferences.mode === "multiple") { await setDetachedBrowser(true); await emitBrowserState(selectedRemote, currentPath); } scheduleNativeLayout(0); await renderLicense(next, device.value || defaultDeviceLabel); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
     const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing"));
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
@@ -558,16 +588,28 @@ async function showLicense(): Promise<void> {
       for (const item of devices) {
         const row = element("div", "license-device"); const label = String(item.deviceLabel ?? item.device_label ?? item.label ?? "Unnamed device"); const meta = [item.platform, formatLocalDate(String(item.activatedAt ?? item.activated_at ?? "")), item.current ? "current" : ""].filter(Boolean).join(" · ");
         const text = element("span"); text.append(element("strong", "", label)); if (meta) text.append(element("small", "", meta));
-        const remove = element("button", "", item.current ? "Deactivate this device" : "Deactivate"); remove.addEventListener("click", async () => { const id = String(item.deviceId ?? item.device_id ?? item.id ?? ""); if (!await confirmOwned("Deactivate device?", `Deactivate ${label} and free one device slot?`, "Deactivate")) return; await deactivateLicenseDevice(id); if (item.current) { currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); } await renderLicense(); }); row.append(text, remove); list.append(row);
+        const remove = element("button", "", item.current ? "Deactivate this device" : "Deactivate"); remove.addEventListener("click", async () => { const id = String(item.deviceId ?? item.device_id ?? item.id ?? ""); if (!await confirmOwned("Deactivate device?", `Deactivate ${label} and free one device slot?`, "Deactivate")) return; await deactivateLicenseDevice(id); if (item.current) { currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); } await renderLicense(currentLicense ?? await licenseStatus(), defaultDeviceLabel); }); row.append(text, remove); list.append(row);
       }
       deviceSection.append(list);
     } catch (error) { deviceSection.append(element("p", "dialog-status error", String(error))); }
-    const deactivate = element("button", "", "Deactivate this device"); deactivate.addEventListener("click", async () => { if (!await confirmOwned("Deactivate this device?", "Deactivate this Mountlet installation and free one device slot?", "Deactivate")) return; await deactivateLicenseDevice(); currentLicense = await licenseStatus(); await setDetachedBrowser(false); render(); scheduleNativeLayout(0); await renderLicense(); });
+    const deactivate = element("button", "", "Deactivate this device"); deactivate.addEventListener("click", async () => { if (!await confirmOwned("Deactivate this device?", "Deactivate this Mountlet installation and free one device slot?", "Deactivate")) return; await deactivateLicenseDevice(); const next = await licenseStatus(); currentLicense = next; await setDetachedBrowser(false); render(); scheduleNativeLayout(0); await renderLicense(next, defaultDeviceLabel); });
     deviceSection.append(deactivate); content.append(deviceSection);
   };
-  await renderLicense();
-  trapModalFocus(layer, dialog, close);
-  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
+  const cached = currentLicense;
+  if (cached) await renderLicense(cached, cached.deviceLabel || "This device");
+  try {
+    const [status, defaultDeviceLabel] = await Promise.all([
+      bounded(licenseStatus(), 15000, "License status timed out. Please try again."),
+      defaultDeviceLabelPromise,
+    ]);
+    await renderLicense(status, defaultDeviceLabel);
+  }
+  catch (error) {
+    if (!content.querySelector(".license-summary")) {
+      content.replaceChildren(element("p", "dialog-status error", String(error)));
+      const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing")); content.append(buy);
+    }
+  }
 }
 
 function renderToolbar(): HTMLElement {
@@ -592,9 +634,12 @@ function renderToolbar(): HTMLElement {
   pushConfig.addEventListener("click", () => void syncConfiguration("push"));
   const pullConfig = actionIcon("⇩", "Pull configuration");
   pullConfig.addEventListener("click", () => void syncConfiguration("pull"));
-  if (completeSettings?.configSyncRemote) void configSyncDirty().then(dirty => {
-    pushConfig.classList.toggle("sync-dirty", dirty);
-    pushConfig.title = dirty ? "Push configuration (local config changed)" : "Push configuration";
+  if (completeSettings?.configSyncRemote) void currentConfigSyncStatus().then(status => {
+    if (!pushConfig.isConnected || !pullConfig.isConnected) return;
+    pushConfig.classList.toggle("sync-dirty", status.localChanged);
+    pushConfig.title = status.localChanged ? "Push configuration (local config changed)" : "Push configuration";
+    pullConfig.classList.toggle("sync-dirty", status.remoteChanged);
+    pullConfig.title = status.remoteChanged ? "Pull configuration (synced config changed)" : "Pull configuration";
   });
   const syncAll = actionIcon("↻", "Sync all cached files");
   syncAll.addEventListener("click", () => void synchronizeAllOffline());
@@ -680,7 +725,6 @@ function showApplicationMenu(label: string, event: MouseEvent): void {
     { label: "Sync cached files now", run: () => void synchronizeAllOffline() },
     { label: "Remove all offline files", run: () => void removeAllOffline() },
     { label: "Clear all resolved cache", run: () => void clearAllCache() },
-    { label: "Debug cache sync", run: () => void showCacheSyncDiagnostics() },
     { label: "Report bug", run: () => void reportBug() }, separators,
     { label: "License", run: () => void showLicense() }, { label: "About Mountlet", run: () => void showAbout() }, separators,
     { label: "Quit", run: () => void quitApp() },
@@ -747,17 +791,21 @@ function queueUsageRefresh(remoteId: string): void {
   if (usageRefreshTimer) return;
   usageRefreshTimer = window.setTimeout(async function drain() {
     usageRefreshTimer = 0;
-    if (pendingMounts.size || browserLoading) { usageRefreshTimer = window.setTimeout(drain, 500); return; }
-    const next = usageRefreshQueue.values().next().value as string | undefined;
-    if (!next) return;
-    usageRefreshQueue.delete(next);
-    try {
-      const updated = await refreshRemoteUsage(next);
-      remotes = remotes.map(remote => remote.id === next ? updated : remote);
-      renderRemoteList();
-    } catch { /* Usage is optional and stale cached data remains preferable. */ }
-    if (usageRefreshQueue.size) usageRefreshTimer = window.setTimeout(drain, 300);
-  }, 1200);
+    if (pendingMounts.size) { usageRefreshTimer = window.setTimeout(drain, 250); return; }
+    while (usageRefreshActive < 2) {
+      const next = usageRefreshQueue.values().next().value as string | undefined;
+      if (!next) break;
+      usageRefreshQueue.delete(next);
+      usageRefreshActive += 1;
+      void refreshRemoteUsage(next).then(updated => {
+        remotes = remotes.map(remote => remote.id === next ? updated : remote);
+        renderRemoteList();
+      }).catch(() => undefined).finally(() => {
+        usageRefreshActive -= 1;
+        if (usageRefreshQueue.size) queueUsageRefresh(usageRefreshQueue.values().next().value as string);
+      });
+    }
+  }, 150);
 }
 
 function scheduleFolderPoll(): void {
@@ -815,30 +863,20 @@ async function showRcloneOutput(): Promise<void> {
   trapModalFocus(layer, dialog, close);
 }
 
-async function showCacheSyncDiagnostics(): Promise<void> {
-  document.querySelector(".modal-layer")?.remove();
-  const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog output-dialog");
-  dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.append(element("h2", "", "Cache sync diagnostics"));
-  const output = element("pre", "rclone-output", "Collecting diagnostics…"); output.tabIndex = 0; dialog.append(output);
-  const actions = element("div", "dialog-actions"); const copy = element("button", "", "Copy"); const close = element("button", "primary", "Close");
-  copy.addEventListener("click", () => void navigator.clipboard.writeText(output.textContent ?? "")); close.addEventListener("click", () => layer.remove());
-  actions.append(copy, close); dialog.append(actions); layer.append(dialog); document.body.append(layer);
-  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
-  trapModalFocus(layer, dialog, close);
-  try { output.textContent = await cacheSyncDiagnostics(); } catch (error) { output.textContent = String(error); }
-}
-
 async function showAbout(): Promise<void> {
   document.querySelector(".modal-layer")?.remove();
   const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog about-dialog");
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true"); dialog.append(element("h2", "", "About Mountlet"));
-  const version = await appVersion(); dialog.append(element("p", "about-product", "Mountlet"), element("p", "about-version", `Version ${version}`), element("p", "", "Cloud storage access from your desktop."));
+  const version = element("p", "about-version", "Version …");
+  dialog.append(element("p", "about-product", "Mountlet"), version, element("p", "", "Cloud storage access from your desktop."));
   const actions = element("div", "dialog-actions");
   const website = element("button", "", "Website"); website.addEventListener("click", () => void openExternal("https://mountlet.app"));
   const close = element("button", "primary", "Close"); close.addEventListener("click", () => layer.remove());
   actions.append(website, close); dialog.append(actions); layer.append(dialog); document.body.append(layer);
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   trapModalFocus(layer, dialog, close);
+  try { version.textContent = `Version ${await bounded(appVersion(), 5000, "Version is unavailable.")}`; }
+  catch (error) { version.textContent = String(error); }
 }
 
 async function reportBug(crash = ""): Promise<void> {
@@ -855,11 +893,11 @@ async function reportBug(crash = ""): Promise<void> {
   fields.append(contactLabel, messageLabel, logsLabel);
   const previewLabel = element("label", "dialog-field report-preview-field"); previewLabel.append(element("span", "", "Report preview")); const preview = element("pre", "rclone-output", "Preparing report…"); preview.tabIndex = 0; previewLabel.append(preview);
   const status = element("p", "dialog-status"); const actions = element("div", "dialog-actions");
-  const send = element("button", "primary", "Send"); send.addEventListener("click", async () => { send.disabled = true; status.textContent = "Sending report…"; try { const url = await submitBugReport(kind, message.value, contact.value, logs.checked, crash); status.textContent = url ? `Report sent: ${url}` : "Report sent. Thank you."; if (url) { const open = element("button", "", "Open report"); open.addEventListener("click", () => void openExternal(url)); actions.prepend(open); } } catch (error) { status.textContent = String(error); send.disabled = false; } });
+  const send = element("button", "primary", "Send"); send.addEventListener("click", async () => { send.disabled = true; status.textContent = "Sending report…"; try { const url = await bounded(submitBugReport(kind, message.value, contact.value, logs.checked, crash), 20000, "Sending the report timed out. Please try again."); status.textContent = url ? `Report sent: ${url}` : "Report sent. Thank you."; if (url) { const open = element("button", "", "Open report"); open.addEventListener("click", () => void openExternal(url)); actions.prepend(open); } } catch (error) { status.textContent = String(error); send.disabled = false; } });
   const close = element("button", "", "Close"); close.addEventListener("click", () => layer.remove());
   actions.append(send, close); dialog.append(fields, previewLabel, status, actions); layer.append(dialog); document.body.append(layer);
   let previewGeneration = 0; let previewTimer = 0;
-  const updatePreview = () => { const generation = ++previewGeneration; window.clearTimeout(previewTimer); previewTimer = window.setTimeout(async () => { try { const text = await bugReportPreview(kind, message.value, contact.value, logs.checked, crash); if (generation === previewGeneration) preview.textContent = text; } catch (error) { if (generation === previewGeneration) preview.textContent = `Could not prepare report preview: ${String(error)}`; } }, 100); };
+  const updatePreview = () => { const generation = ++previewGeneration; window.clearTimeout(previewTimer); previewTimer = window.setTimeout(async () => { try { const text = await bounded(bugReportPreview(kind, message.value, contact.value, logs.checked, crash), 8000, "Report preview timed out."); if (generation === previewGeneration) preview.textContent = text; } catch (error) { if (generation === previewGeneration) preview.textContent = `Could not prepare report preview: ${String(error)}`; } }, 100); };
   message.addEventListener("input", updatePreview); contact.addEventListener("input", updatePreview); logs.addEventListener("change", updatePreview); updatePreview();
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   trapModalFocus(layer, dialog, close);
@@ -2473,9 +2511,15 @@ async function start(): Promise<void> {
     const checks: string[] = [];
     await appVersion(); checks.push("app-version");
     await listRemotes(); checks.push("remote-state");
-    await loadPreferences(); checks.push("preferences");
-    await loadAppSettings(); checks.push("settings");
+    const smokePreferences = await loadPreferences(); checks.push("preferences");
+    const smokeSettings = await loadAppSettings(); checks.push("settings");
+    if (!smokePreferences || smokePreferences.mode !== smokeSettings.windowMode || smokePreferences.theme !== smokeSettings.theme) {
+      throw new Error("UI preferences did not use the app settings source");
+    }
+    checks.push("settings-compatibility");
     await loadShortcuts(); checks.push("shortcuts");
+    await bounded(licenseStatus(), 15000, "License status did not respond"); checks.push("license");
+    await bounded(bugReportPreview("bug", "Startup behavior probe", "", true), 8000, "Report preview did not respond"); checks.push("report-preview");
     const isMac = navigator.userAgent.includes("Macintosh");
     if (!isMac) {
       await desktopHints(); checks.push("desktop-hints");
@@ -2517,11 +2561,18 @@ async function start(): Promise<void> {
       throw new Error("The production frontend did not render its startup probe");
     }
     checks.push("frontend-render");
+    await showStartupWindows(); checks.push("startup-window-visible");
     await completeStartupSmoke(checks);
     return;
   }
   await listenRestoreKeyboardFocus(firstShow => scheduleFocusRestore(firstShow));
-  const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder, savedLicense] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder(), licenseStatus().catch(() => null)]);
+  // Do not make native license, rclone, or network initialization a prerequisite
+  // for seeing the application. The final layout pass below will resize and
+  // reposition the already-visible window once settings have loaded.
+  if (!isBrowserWindow) await showStartupWindows();
+  const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder()]);
+  const licenseRequest = licenseStatus();
+  const savedLicense = await bounded(licenseRequest, 15000, "License status timed out.").catch(() => null);
   registrationOrder = savedRegistrationOrder;
   completeSettings = savedSettings;
   browserMemory = savedBrowserMemory;
@@ -2529,6 +2580,7 @@ async function start(): Promise<void> {
   currentLicense = savedLicense;
   if (saved) Object.assign(preferences, saved);
   applyPreferences();
+  void licenseRequest.then(status => applyLicense(status)).catch(() => undefined);
   await listenNativeLayout(event => {
     cachedBrowserSide = event.browserSide === "left" ? "left" : "right";
     nativeBrowserInnerHeight = event.browserInnerHeight;
@@ -2595,7 +2647,6 @@ async function start(): Promise<void> {
       else if (command === "sync-all") void synchronizeAllOffline();
       else if (command === "remove-all-offline") void removeAllOffline();
       else if (command === "clear-all-cache") void clearAllCache();
-      else if (command === "cache-debug") void showCacheSyncDiagnostics();
       else if (command === "open-config-backup") void openConfigBackupFolder();
       else if (command.startsWith("select-remote:")) void selectRemote(command.slice("select-remote:".length));
       else if (command.startsWith("remote-action:")) {
@@ -2662,14 +2713,26 @@ async function start(): Promise<void> {
   if (!isBrowserWindow && preferences.mode === "multiple" && !licenseLocked()) {
     await setDetachedBrowser(true);
     await emitBrowserState(selectedRemote, currentPath);
-  } else if (!isBrowserWindow && licenseLocked()) await setDetachedBrowser(false);
+  } else if (!isBrowserWindow && licenseLocked()) {
+    void setDetachedBrowser(false);
+    void showLicense();
+    void layoutNativeWindows().then(() => showStartupWindows());
+    return;
+  }
   if (selectedRemote) {
     await loadSnapshot();
     if (preferences.mode === "single" || isBrowserWindow) renderBrowserOnly();
     else await emitBrowserState(selectedRemote, currentPath);
   }
   scheduleFolderPoll();
-  if (!isBrowserWindow) await layoutNativeWindows();
+  if (!isBrowserWindow) {
+    for (const remote of remotes) queueUsageRefresh(remote.id);
+    window.setTimeout(() => void startInitialMetadataIndex(), 4000);
+  }
+  if (!isBrowserWindow) {
+    await layoutNativeWindows();
+    await showStartupWindows();
+  }
   if ((isBrowserWindow || preferences.mode === "single") && fileFilter.trim()) {
     remoteSearchLoading = true;
     scheduleSearch("remote");

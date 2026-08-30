@@ -105,11 +105,12 @@ CLI/TUI and Qt-only test harness remain in the archived source:
 - File-manager settings are executed (Dolphin tab / `xdg-mime` / FileManager1
   on Linux, Explorer/Finder elsewhere). Wayland forces single-window mode;
   GNOME on Wayland disables pin.
-- The window starts hidden. Linux StatusNotifierItem does not expose tray
-  geometry until a click, so the first tray activation supplies the anchor
-  (matching Python when `QSystemTrayIcon.geometry()` is empty). Windows and
-  macOS use `TrayIcon::rect()` when the OS reports it. After that the popup
-  stays beside the tray unless the user drags the window. Zoom and reopen both
+- The window opens during startup. Linux StatusNotifierItem does not expose
+  tray geometry until a click, so startup uses the work-area fallback and the
+  first tray activation supplies the anchor (matching Python when
+  `QSystemTrayIcon.geometry()` is empty). Windows and macOS use
+  `TrayIcon::rect()` when the OS reports it. After that the popup stays beside
+  the tray unless the user drags the window. Zoom and reopen both
   re-anchor to the tray; a true user drag (`Moved` after the programmatic
   layout grace period) keeps resize-in-place. Linux tray callbacks only cache
   the click and hop to the UI thread; GTK window layout must not run on the

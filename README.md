@@ -27,9 +27,10 @@ npm ci
 npm run tauri:dev
 ```
 
-Mountlet starts hidden; open it from the system tray. Use `npm run build` for
-the frontend regression gate and `npm run tauri:build` to create the native
-installer for the current platform.
+Mountlet opens its tray-adjacent window at startup and remains available from
+the system tray after it is hidden. Use `npm run build` for the frontend
+regression gate and `npm run tauri:build` to create the native installer for
+the current platform.
 
 See [the desktop README](app/README.md), [development invariants](app/DEVELOPMENT.md),
 and [release notes](app/CHANGELOG.md).
@@ -44,7 +45,12 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 ```
 
 Website checks remain available from the repository root with
-`npm run web:release:test` and `npm run web:notices:test`.
+`npm run web:release:test`, `npm run web:notices:test`, and
+`npm run web:reports:test`.
+
+Before publishing, follow the complete [production release checklist](app/docs/RELEASE.md).
+Preview installers and tagged production installers use different R2 buckets;
+only a version tag publishes the production native artifacts.
 
 The source is available for non-commercial use under [LICENSE](LICENSE).
 Installer builds are covered by [the installer EULA](app/docs/EULA.md).
