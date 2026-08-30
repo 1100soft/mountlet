@@ -49,8 +49,9 @@ Website checks remain available from the repository root with
 `npm run web:reports:test`.
 
 Before publishing, follow the complete [production release checklist](app/docs/RELEASE.md).
-Preview installers and tagged production installers use different R2 buckets;
-only a version tag publishes the production native artifacts.
+Preview and production installers use different R2 buckets: `wip` publishes
+preview artifacts, and a push to `main` or a version tag publishes production
+native artifacts.
 
 The source is available for non-commercial use under [LICENSE](LICENSE).
 Installer builds are covered by [the installer EULA](app/docs/EULA.md).

@@ -2,8 +2,20 @@ name: CI
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "app/**"
+    paths-ignore:
+      - "app/**/*.md"
+      - "app/docs/**"
   push:
     branches: [main, master, wip]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "app/**"
+    paths-ignore:
+      - "app/**/*.md"
+      - "app/docs/**"
 
 permissions:
   contents: read
@@ -51,21 +63,3 @@ jobs:
           cargo build --locked --manifest-path src-tauri/Cargo.toml
           version=$(node -p "require('./package.json').version")
           test "$(src-tauri/target/debug/mountlet --version)" = "Mountlet ${version}"
-
-  web:
-    name: Website and release tooling
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - name: Validate website and release system
-        run: |
-          node --check web/script.js
-          npm run web:release:check
-          npm run web:release:test
-          npm run web:notices:test
-          npm run web:reports:test

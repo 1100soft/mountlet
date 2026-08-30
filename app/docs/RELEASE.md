@@ -9,9 +9,12 @@ release and remains frozen under `legacy/python-0.6.8/`.
   **Native package CI**.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
   `app/src-tauri/tauri.conf.json` identical to the release tag.
-- A `wip` build is a preview build and uploads to preview R2. A `vX.Y.Z` tag is
-  a production build and uploads to production R2. Do not publish production
-  installers by manually reusing preview artifacts.
+- A `wip` build is a preview build and uploads to preview R2. A push to `main`
+  or a `vX.Y.Z` tag is a production build and uploads to production R2. Do not
+  publish production installers by manually reusing preview artifacts.
+- Only a `vX.Y.Z` tag publishes to the 1100 Software APT repository. APT carries
+  the standard Linux package with bundled rclone; the lean package remains a
+  direct download because both variants have the same Debian package identity.
 - Packaged applications use `https://mountlet.app` for license and report APIs
   unless `MOUNTLET_LICENSE_API_URL` or `MOUNTLET_REPORT_API_URL` is set in the
   process environment. The build-channel marker does not change these URLs.
@@ -84,25 +87,33 @@ from preview:
 - Production and preview notice audiences and secrets are not interchanged.
 - GitHub Actions has production/preview R2 bucket variables plus bucket-scoped
   R2 upload credentials.
+- GitHub Actions has an `APT_DISPATCH_TOKEN` secret able to create a repository
+  dispatch event in `1100soft/1100`. Do not store APT signing or repository
+  storage credentials in this repository.
 
 ## 4. Promote and publish
 
 1. Merge the tested `wip` commit to `main` without adding untested changes.
-2. Wait for the production Pages deployment, then initialize/upgrade D1 and
+2. Wait for Native package CI on `main`: all eight package jobs and
+   **Upload installers to R2**. The uploader validates `web/release-files.json`,
+   writes versioned objects, updates the release index, and retains the
+   configured five versions.
+3. Wait for the production Pages deployment, then initialize/upgrade D1 and
    run the deployment check described in `web/README.md`.
-3. Confirm `/api/health` reports healthy licensing, GitHub reporting, D1, and
+4. Confirm `/api/health` reports healthy licensing, GitHub reporting, D1, and
    R2 bindings. Exercise a live-mode-safe license status check and a controlled
-   report test before publishing downloads.
-4. Tag the exact tested `main` commit and push the tag:
+   report test.
+5. Tag the exact tested `main` commit as an immutable release point:
 
    ```bash
    git tag -a vX.Y.Z -m "Mountlet X.Y.Z"
    git push origin vX.Y.Z
    ```
 
-5. Wait for all eight tagged package jobs and **Upload installers to R2**.
-   The uploader validates `web/release-files.json`, writes versioned objects,
-   updates the release index, and retains the configured five versions.
+6. Wait for **Publish standard Linux package to APT** in the tagged Native
+   package CI run, followed by **Publish APT repository** in `1100soft/1100`.
+   The source workflow validates and uploads exactly one `apt-packages`
+   artifact, while the central workflow signs and publishes it.
 
 Bundled builds stage an official current rclone under an app-versioned resource
 directory. Lean builds intentionally contain no rclone executable. Windows
@@ -114,6 +125,9 @@ do not overwrite a binary still serving a mount.
 - Run `npm run web:deploy:check -- https://mountlet.app`.
 - Confirm `/api/releases` reports `vX.Y.Z` and download each of the eight
   logical artifacts through `/api/download/...`; do not validate R2 URLs only.
+- Confirm `apt-cache policy mountlet` reports the new version from
+  `https://apt.1100soft.com`, then install or upgrade it with APT and run the
+  Linux acceptance checks above.
 - Install the public Windows standard installer over 0.6.8 once more and verify
   retained trial/license/config/cache state.
 - Confirm purchase, webhook fulfillment, license activation/deactivation,

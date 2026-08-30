@@ -245,9 +245,8 @@ access. Wrangler's Cloudflare REST upload path requires broader account-level
 R2 permissions, so Mountlet uploads release artifacts through the
 S3-compatible API instead.
 
-The `wip` branch uploads to the preview bucket. Version tags upload to the
-production bucket. Ordinary `main` pushes deploy the production website but do
-not duplicate the tagged native-package publication.
+The `wip` branch uploads to the preview bucket. `main` and version tags upload
+to the production bucket.
 
 Packaged preview and production applications currently default to the
 production license and report APIs under `https://mountlet.app`. Build channel
