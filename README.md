@@ -37,8 +37,8 @@ and [release notes](app/CHANGELOG.md).
 
 ## Install from the 1100 APT repository
 
-On Debian, Ubuntu, Linux Mint, and compatible x86-64 systems, add the signed
-1100 Software repository and install the current Mountlet public beta with:
+On Debian, Ubuntu, Linux Mint, and compatible x86-64 systems, first add the
+signed 1100 Software repository:
 
 ```bash
 curl -fsSL https://apt.1100soft.com/1100-archive-keyring.gpg \
@@ -46,16 +46,22 @@ curl -fsSL https://apt.1100soft.com/1100-archive-keyring.gpg \
 echo "deb [signed-by=/usr/share/keyrings/1100-archive-keyring.gpg] https://apt.1100soft.com stable main" \
   | sudo tee /etc/apt/sources.list.d/1100.list >/dev/null
 sudo apt update
-sudo apt install mountlet-preview
 ```
 
-The preview and stable packages install the same application files and cannot
-be installed simultaneously. When a stable APT release is available, switch
-channels with:
+Then install the official Mountlet package. Pre-1.0 releases use the same
+package; beta access is managed by Mountlet's license service, not by a separate
+APT channel.
 
 ```bash
-sudo apt remove mountlet-preview
 sudo apt install mountlet
+```
+
+For deliberate testing only, `mountlet-preview` tracks manually selected
+development builds. It replaces the official package without resetting
+application data:
+
+```bash
+sudo apt install mountlet-preview
 ```
 
 ## Validation

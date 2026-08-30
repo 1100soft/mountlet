@@ -80,6 +80,8 @@ async function copyElementText(button) {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
+    button.classList.add("copied");
+    button.title = "Copied to clipboard.";
     if (status) status.textContent = "Copied.";
   } catch {
     const selection = window.getSelection();
@@ -90,6 +92,8 @@ async function copyElementText(button) {
     if (status) status.textContent = "Selected—press Ctrl+C or ⌘C.";
   }
   setTimeout(() => {
+    button.classList.remove("copied");
+    button.title = button.getAttribute("aria-label") || "Copy";
     if (status) status.textContent = "";
   }, 2400);
 }
@@ -925,6 +929,15 @@ function updateDownloadSelection() {
   const note = document.querySelector("#download-selection-note");
   const label = downloadTargetLabels[input?.value] || "selected platform";
   const version = document.querySelector("#release-version")?.value || "";
+  const aptInstall = document.querySelector("#apt-install");
+  const aptVersionCommand = document.querySelector("#apt-version-install-command code");
+  const linuxSelected = input?.value === "linux-x64";
+  if (aptInstall) aptInstall.hidden = !linuxSelected;
+  if (aptVersionCommand) {
+    aptVersionCommand.textContent = version
+      ? `sudo apt install mountlet=${version}`
+      : "sudo apt install mountlet";
+  }
   if (button) {
     button.disabled = !input;
     button.textContent = `Download ${lean ? "lean " : ""}Mountlet${version ? ` v${version}` : ""} for ${label}`;

@@ -640,8 +640,22 @@ h3 {
   box-shadow: 0 16px 46px rgba(15, 123, 191, 0.14);
 }
 
+.release-version-bar {
+  align-items: center;
+  display: flex;
+  max-width: 760px;
+  width: 100%;
+}
+
 .apt-install {
-  max-width: 920px;
+  background: color-mix(in srgb, var(--panel-soft) 82%, var(--accent) 18%);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  margin: 4px 0 18px;
+  padding: 18px;
+}
+
+.apt-install > p:not(.eyebrow) {
+  color: var(--muted);
 }
 
 .command-block pre {
@@ -653,24 +667,90 @@ h3 {
   user-select: all;
 }
 
+.command-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.command-heading strong {
+  font-size: 0.9rem;
+}
+
 .command-block code {
   font-size: 0.84rem;
   white-space: pre;
 }
 
-.command-actions {
+.copy-command {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 6px;
+  position: relative;
+  width: 36px;
+}
+
+.copy-command:hover,
+.copy-command:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.copy-command img {
+  display: block;
+  height: 22px;
+  width: 22px;
+}
+
+.copy-command.copied::after {
   align-items: center;
+  background: #22c55e;
+  border-radius: 50%;
+  color: #fff;
+  content: "✓";
   display: flex;
-  gap: 12px;
+  font-size: 10px;
+  font-weight: 800;
+  height: 15px;
+  justify-content: center;
+  line-height: 1;
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  width: 15px;
 }
 
-.command-actions .button {
-  min-height: 38px;
-  padding-block: 7px;
+.command-status {
+  display: block;
+  min-height: 1.25em;
 }
 
-.apt-channel-note {
-  margin: 16px 0 0;
+.preview-install {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 14px;
+}
+
+.preview-install summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 720;
+}
+
+.preview-install p {
+  color: var(--muted);
+  margin: 10px 0 0;
+}
+
+.command-block.compact pre {
+  margin-top: 10px;
 }
 
 .future-linux {
