@@ -23,11 +23,9 @@ function Find-WindowsKitTool([string]$name) {
 
 $packagePath = (Resolve-Path $Package).Path
 $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-$work = Join-Path $tempRoot "mountlet-msix-sign"
+$work = Join-Path $tempRoot "mountlet-msix-smoke"
+if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Path $work -Force | Out-Null
-$pfx = Join-Path $work "msix.pfx"
-$cer = Join-Path $work "msix.cer"
-$signed = Join-Path $work ([IO.Path]::GetFileName($packagePath))
 $unpacked = Join-Path $work "unpacked"
 
 $makeAppx = Find-WindowsKitTool "makeappx.exe"
@@ -35,39 +33,14 @@ $makeAppx = Find-WindowsKitTool "makeappx.exe"
 if ($LASTEXITCODE -ne 0) { throw "MakeAppx unpack failed with exit code $LASTEXITCODE" }
 [xml]$manifest = Get-Content (Join-Path $unpacked "AppxManifest.xml") -Raw
 $identityName = $manifest.Package.Identity.Name
-$publisher = $manifest.Package.Identity.Publisher
 $applicationId = $manifest.Package.Applications.Application.Id
-if (-not $identityName -or -not $publisher -or -not $applicationId) {
+if (-not $identityName -or -not $applicationId) {
   throw "MSIX manifest identity is incomplete"
 }
 
-$certificate = New-SelfSignedCertificate `
-  -Type Custom `
-  -Subject $publisher `
-  -FriendlyName "Mountlet CI MSIX" `
-  -KeyUsage DigitalSignature `
-  -CertStoreLocation "Cert:\CurrentUser\My" `
-  -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-$password = ConvertTo-SecureString "mountlet-ci" -AsPlainText -Force
-Export-PfxCertificate -Cert $certificate -FilePath $pfx -Password $password | Out-Null
-Export-Certificate -Cert $certificate -FilePath $cer | Out-Null
-Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPeople" | Out-Null
-Write-Host "Trusting the temporary MSIX certificate"
-& certutil.exe -user -silent -addstore -f Root $cer | Out-Host
-if ($LASTEXITCODE -ne 0) {
-  throw "certutil failed to trust the temporary MSIX certificate with exit code $LASTEXITCODE"
-}
-
-Copy-Item $packagePath $signed -Force
-$signTool = Find-WindowsKitTool "signtool.exe"
-& $signTool sign /fd SHA256 /f $pfx /p mountlet-ci $signed
-if ($LASTEXITCODE -ne 0) {
-  throw "SignTool failed with exit code $LASTEXITCODE"
-}
-
 Get-AppxPackage -Name $identityName | Remove-AppxPackage -ErrorAction SilentlyContinue
-Write-Host "Installing the CI-signed MSIX package"
-Add-AppxPackage -Path $signed
+Write-Host "Registering the unpacked MSIX layout for package-identity testing"
+Add-AppxPackage -Register (Join-Path $unpacked "AppxManifest.xml")
 $installed = Get-AppxPackage -Name $identityName | Select-Object -First 1
 if (-not $installed) {
   throw "MSIX package $identityName was not installed"
@@ -151,7 +124,4 @@ try {
 } finally {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
   Get-AppxPackage -Name $identityName | Remove-AppxPackage -ErrorAction SilentlyContinue
-  Remove-Item "Cert:\CurrentUser\Root\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
-  Remove-Item "Cert:\CurrentUser\TrustedPeople\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
-  Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
 }

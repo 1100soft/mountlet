@@ -76,13 +76,15 @@ GitHub repository. Delete or close the test issue according to support policy.
 
 ### Microsoft Store package
 
-The bundled Windows x64 job also builds and installs an unsigned MSIX with a
-temporary CI identity, activates it through its package application ID, and
-runs the same startup/behavior probe used for NSIS. It uploads the package as
-the distinct `microsoft-store-mountlet-x64` workflow artifact. Do not publish
-that artifact on the website: ordinary sideload installation requires a
-trusted signature, while Partner Center accepts the unsigned package and signs
-it after certification.
+The bundled Windows x64 job also builds an unsigned MSIX with a temporary CI
+identity and validates the archive with the Windows App Certification Kit. It
+then development-registers the unpacked package layout, activates it through
+its package application ID, and runs the same startup/behavior probe used for
+NSIS. It uploads the package as the distinct
+`microsoft-store-mountlet-x64` workflow artifact. Do not publish that artifact
+on the website: ordinary sideload installation requires a trusted signature,
+while Partner Center accepts the unsigned package and signs it after
+certification.
 
 Before the first Store submission, reserve **Mountlet** in Partner Center and
 copy the three exact values from **Product identity** into GitHub repository
