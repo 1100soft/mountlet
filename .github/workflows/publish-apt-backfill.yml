@@ -60,6 +60,15 @@ jobs:
           bash .github/scripts/prepare-apt-packages.sh \
             apt-input/standard/*.deb apt-input/lean/*.deb apt-packages \
             "${{ inputs.channel }}" "${{ steps.source.outputs.release_id }}"
+          # This maintenance workflow adds only the missing lean identity. The
+          # bundled identity from the source run is already immutable in APT;
+          # repacking preview metadata would produce different archive bytes.
+          if [ "${{ inputs.channel }}" = stable ]; then
+            rm apt-packages/mountlet_*.deb
+          else
+            rm apt-packages/mountlet-preview_*.deb
+          fi
+          test "$(find apt-packages -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
       - uses: actions/upload-artifact@v4
         with:
           name: apt-packages
