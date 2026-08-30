@@ -52,6 +52,7 @@ $password = ConvertTo-SecureString "mountlet-ci" -AsPlainText -Force
 Export-PfxCertificate -Cert $certificate -FilePath $pfx -Password $password | Out-Null
 Export-Certificate -Cert $certificate -FilePath $cer | Out-Null
 Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPeople" | Out-Null
+Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
 
 Copy-Item $packagePath $signed -Force
 $signTool = Find-WindowsKitTool "signtool.exe"
@@ -143,6 +144,7 @@ try {
 } finally {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
   Get-AppxPackage -Name $identityName | Remove-AppxPackage -ErrorAction SilentlyContinue
+  Remove-Item "Cert:\CurrentUser\Root\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
   Remove-Item "Cert:\CurrentUser\TrustedPeople\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
   Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
 }
