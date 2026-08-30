@@ -640,6 +640,39 @@ h3 {
   box-shadow: 0 16px 46px rgba(15, 123, 191, 0.14);
 }
 
+.apt-install {
+  max-width: 920px;
+}
+
+.command-block pre {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  margin: 16px 0 10px;
+  overflow-x: auto;
+  padding: 16px;
+  user-select: all;
+}
+
+.command-block code {
+  font-size: 0.84rem;
+  white-space: pre;
+}
+
+.command-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.command-actions .button {
+  min-height: 38px;
+  padding-block: 7px;
+}
+
+.apt-channel-note {
+  margin: 16px 0 0;
+}
+
 .future-linux {
   border-top: 1px solid var(--line);
   display: grid;

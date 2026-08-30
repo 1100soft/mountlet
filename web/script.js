@@ -73,6 +73,27 @@ function applyConfiguredLinks() {
   });
 }
 
+async function copyElementText(button) {
+  const target = document.getElementById(button.dataset.copyTarget || "");
+  const status = document.getElementById(button.dataset.copyStatus || "");
+  const text = target?.textContent?.trim() || "";
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    if (status) status.textContent = "Copied.";
+  } catch {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    if (status) status.textContent = "Selected—press Ctrl+C or ⌘C.";
+  }
+  setTimeout(() => {
+    if (status) status.textContent = "";
+  }, 2400);
+}
+
 async function startCheckout(button) {
   const kind = selectedLicenseAction();
   if (!kind) {
@@ -998,6 +1019,12 @@ document.addEventListener("click", (event) => {
   const licenseActionButton = event.target.closest("[data-license-action]");
   if (licenseActionButton) {
     setLicenseAction(licenseActionButton.dataset.licenseAction);
+    return;
+  }
+
+  const copyCommandButton = event.target.closest("[data-copy-target]");
+  if (copyCommandButton) {
+    copyElementText(copyCommandButton);
     return;
   }
 

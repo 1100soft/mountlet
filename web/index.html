@@ -127,6 +127,25 @@
           <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
         </section>
 
+        <section class="download-card apt-install" aria-labelledby="apt-install-title">
+          <p class="eyebrow">Debian / Ubuntu</p>
+          <h3 id="apt-install-title">Install from the 1100 APT repository</h3>
+          <p>Add the signed repository and install the current Mountlet public beta. Linux Mint and compatible x86-64 distributions are also supported.</p>
+          <div class="command-block">
+            <pre id="apt-install-command"><code>curl -fsSL https://apt.1100soft.com/1100-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/1100-archive-keyring.gpg &gt;/dev/null
+echo "deb [signed-by=/usr/share/keyrings/1100-archive-keyring.gpg] https://apt.1100soft.com stable main" \
+  | sudo tee /etc/apt/sources.list.d/1100.list &gt;/dev/null
+sudo apt update
+sudo apt install mountlet-preview</code></pre>
+            <div class="command-actions">
+              <button class="button secondary copy-command" type="button" data-copy-target="apt-install-command" data-copy-status="apt-install-copy-status">Copy commands</button>
+              <span class="inline-status" id="apt-install-copy-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <p class="apt-channel-note"><code>mountlet-preview</code> is the opt-in beta channel. Production releases use the <code>mountlet</code> package; the two channels replace one another and do not reset application data.</p>
+        </section>
+
         <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
           <div class="mount-dependencies-heading">
             <p class="eyebrow">Mounted folders</p>
