@@ -332,6 +332,28 @@ async function layoutNativeWindows(): Promise<void> {
   const purchaseHeight = currentLicense && currentLicense.state !== "licensed" ? metrics.purchaseRow : 0;
   const globalSearchHeight = remoteFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(4, preferences.zoomStep) : 0;
   const browserSearchHeight = fileFilter.trim() ? metrics.searchHeader + 6 * metrics.searchRow + scaledMetric(5, preferences.zoomStep) : 0;
+  const remotePane = document.querySelector<HTMLElement>(".remote-pane");
+  const remoteList = document.querySelector<HTMLElement>(".remote-list");
+  let layoutGlobalSearchHeight = globalSearchHeight;
+  let remoteChromeHeight = metrics.remoteChrome + purchaseHeight + globalSearchHeight;
+  let remoteCardTop = metrics.remoteCardTop + purchaseHeight + globalSearchHeight;
+  if (remotePane && remoteList) {
+    const paneRect = remotePane.getBoundingClientRect();
+    const listRect = remoteList.getBoundingClientRect();
+    const listStyle = getComputedStyle(remoteList);
+    const borderTop = Number.parseFloat(listStyle.borderTopWidth) || 0;
+    const borderBottom = Number.parseFloat(listStyle.borderBottomWidth) || 0;
+    // Derive fixed chrome from the actual rendered boxes. CSS gaps can be
+    // fractional at non-default zoom and must not be reconstructed by adding
+    // independently rounded reference metrics.
+    remoteCardTop = Math.ceil(listRect.top - paneRect.top + borderTop);
+    remoteChromeHeight = Math.ceil(
+      (listRect.top - paneRect.top + borderTop)
+      + (paneRect.bottom - listRect.bottom + borderBottom),
+    );
+    // The measured chrome already includes the visible global-results box.
+    layoutGlobalSearchHeight = 0;
+  }
   await applyWindowLayout({
     mode: licenseLocked() ? "single" : preferences.mode,
     selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
@@ -339,11 +361,12 @@ async function layoutNativeWindows(): Promise<void> {
     browserItems: preferences.fileListMaxItems > 0
       ? Math.min(snapshot?.entries.length ?? 0, preferences.fileListMaxItems)
       : snapshot?.entries.length ?? 0,
-    remoteCardTop: metrics.remoteCardTop + purchaseHeight + globalSearchHeight,
-    globalSearchHeight,
+    remoteCardTop,
+    globalSearchHeight: layoutGlobalSearchHeight,
     browserSearchHeight,
-    remoteChromeHeight: metrics.remoteChrome + purchaseHeight,
+    remoteChromeHeight,
     remoteRowHeight: metrics.remoteRow,
+    remoteListMinHeight: scaledMetric(180, preferences.zoomStep),
     remotePaneWidth: metrics.remotePaneWidth,
     singleWindowWidth: metrics.singleWindowWidth,
     browserChromeHeight: metrics.browserChrome,
@@ -578,11 +601,14 @@ async function showLicense(): Promise<void> {
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
     if (status.state !== "licensed") return;
+    // The public beta key is shared by every beta user. Its server-side device
+    // records are not meaningful account data and must not be exposed here.
+    if (status.licenseKind === "beta") return;
     const deviceSection = element("section", "license-device-section"); const heading = element("div", "license-device-heading"); const headingText = element("strong", "", "Activated devices");
-    const addDevices = element("button", "", "+ Add devices"); addDevices.hidden = status.licenseKind === "beta"; addDevices.addEventListener("click", () => void openExternal(`https://mountlet.app/?license_action=add_devices&license_key=${encodeURIComponent(status.licenseKey)}#pricing`)); heading.append(headingText, addDevices); deviceSection.append(heading);
+    const addDevices = element("button", "", "+ Add devices"); addDevices.addEventListener("click", () => void openExternal(`https://mountlet.app/?license_action=add_devices&license_key=${encodeURIComponent(status.licenseKey)}#pricing`)); heading.append(headingText, addDevices); deviceSection.append(heading);
     try {
       const result = await licenseDevices(); const devices = Array.isArray(result.devices) ? result.devices as Array<Record<string, unknown>> : []; const used = Number(result.usedDevices ?? devices.length); const maximum = Number(result.maxDevices ?? status.maxDevices);
-      headingText.textContent = status.licenseKind === "beta" ? "Public beta" : `Activated devices (${used}${maximum ? `/${maximum}` : ""})`;
+      headingText.textContent = `Activated devices (${used}${maximum ? `/${maximum}` : ""})`;
       const list = element("div", "license-devices");
       if (!devices.length) list.append(element("p", "license-devices-empty", "No activated devices were returned."));
       for (const item of devices) {
@@ -624,10 +650,6 @@ function renderToolbar(): HTMLElement {
   header.append(menu);
 
   const toolbar = element("div", "toolbar");
-  const dragHandle = element("span", "window-drag-handle", "✥");
-  dragHandle.setAttribute("data-tauri-drag-region", "");
-  dragHandle.title = "Drag to move Mountlet.";
-  dragHandle.setAttribute("aria-label", dragHandle.title);
   const settingsButton = actionIcon("⚙", "App configuration");
   settingsButton.addEventListener("click", () => void showAppSettings());
   const pushConfig = actionIcon("⇧", "Push configuration");
@@ -648,7 +670,6 @@ function renderToolbar(): HTMLElement {
   const clearCache = actionIcon("⌫", "Clear all cached files");
   clearCache.addEventListener("click", () => void clearAllCache());
   toolbar.append(
-    dragHandle,
     settingsButton,
     pushConfig,
     pullConfig,

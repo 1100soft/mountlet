@@ -20,6 +20,16 @@ fn main() {
             }
             return;
         }
+        if argument == "--startup-smoke" {
+            let Some(path) = arguments.next() else {
+                eprintln!("usage: mountlet --startup-smoke <marker-path>");
+                std::process::exit(2);
+            };
+            // Package activation does not inherit ad-hoc environment changes
+            // from a CI shell because Explorer is already running. Normalize
+            // the explicit test-only argument to the existing smoke contract.
+            std::env::set_var("MOUNTLET_STARTUP_SMOKE", path);
+        }
     }
     mountlet::run();
 }

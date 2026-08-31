@@ -258,6 +258,7 @@ struct WindowLayoutRequest {
     browser_search_height: u32,
     remote_chrome_height: u32,
     remote_row_height: u32,
+    remote_list_min_height: u32,
     remote_pane_width: u32,
     single_window_width: u32,
     browser_chrome_height: u32,
@@ -5033,6 +5034,17 @@ fn clamped_origin(x: f64, y: f64, width: f64, height: f64, area: WorkArea) -> (f
     (x.max(area.x).min(max_x), y.max(area.y).min(max_y))
 }
 
+fn remote_content_height(
+    chrome: u32,
+    row: u32,
+    count: usize,
+    list_minimum: u32,
+    search: u32,
+) -> f64 {
+    let list_height = (f64::from(row) * count as f64).max(f64::from(list_minimum));
+    f64::from(chrome) + list_height + f64::from(search)
+}
+
 fn remember_set_position(
     window: &tauri::WebviewWindow,
     state: &AppState,
@@ -5391,11 +5403,10 @@ fn layout_windows(
             .valid
             .then_some((anchor.physical_x, anchor.physical_y))
     });
-    let monitor_area = tray_point.and_then(|point| {
-        app.available_monitors().ok().and_then(|monitors| {
-            monitors
-                .into_iter()
-                .find(|monitor| {
+    let monitor = tray_point
+        .and_then(|point| {
+            app.available_monitors().ok().and_then(|monitors| {
+                monitors.into_iter().find(|monitor| {
                     let position = monitor.position();
                     let size = monitor.size();
                     point.0 >= f64::from(position.x)
@@ -5403,18 +5414,19 @@ fn layout_windows(
                         && point.0 < f64::from(position.x) + f64::from(size.width)
                         && point.1 < f64::from(position.y) + f64::from(size.height)
                 })
-                .map(|monitor| {
-                    let scale = monitor.scale_factor();
-                    let position = monitor.position();
-                    let size = monitor.size();
-                    WorkArea {
-                        x: f64::from(position.x) / scale,
-                        y: f64::from(position.y) / scale,
-                        width: f64::from(size.width) / scale,
-                        height: f64::from(size.height) / scale,
-                    }
-                })
+            })
         })
+        .or_else(|| main.current_monitor().ok().flatten());
+    let monitor_area = monitor.map(|monitor| {
+        let scale = monitor.scale_factor();
+        let position = monitor.position();
+        let size = monitor.size();
+        WorkArea {
+            x: f64::from(position.x) / scale,
+            y: f64::from(position.y) / scale,
+            width: f64::from(size.width) / scale,
+            height: f64::from(size.height) / scale,
+        }
     });
     let combined = match monitor_area {
         Some(monitor) if monitor.overlaps(requested_area) => monitor.intersect(requested_area),
@@ -5501,9 +5513,13 @@ fn layout_windows(
     } else {
         f64::from(request.remote_pane_width)
     };
-    let remote_content_height = f64::from(request.remote_chrome_height)
-        + f64::from(request.remote_row_height) * request.remote_count as f64
-        + f64::from(request.global_search_height);
+    let remote_content_height = remote_content_height(
+        request.remote_chrome_height,
+        request.remote_row_height,
+        request.remote_count,
+        request.remote_list_min_height,
+        request.global_search_height,
+    );
     let main_content_height = if request.mode == "single" {
         // Single-window height follows the remote list. The file viewport
         // fills leftover space and scrolls; file count must not grow the frame.
@@ -5556,7 +5572,23 @@ fn layout_windows(
         ))
     };
     begin_programmatic_layout(state);
-    let _ = main.set_min_size(Some(LogicalSize::new(360.0, 120.0)));
+    let main_max_inner_width = (available_width - main_frame_w).max(1.0);
+    let main_max_inner_height = (available_height - main_frame_h).max(1.0);
+    let main_min_inner_height = remote_content_height
+        .max(if request.mode == "single" {
+            f64::from(request.browser_min_height)
+        } else {
+            0.0
+        })
+        .min(main_max_inner_height);
+    let _ = main.set_min_size(Some(LogicalSize::new(
+        360.0_f64.min(main_max_inner_width),
+        main_min_inner_height,
+    )));
+    let _ = main.set_max_size(Some(LogicalSize::new(
+        main_max_inner_width,
+        main_max_inner_height,
+    )));
     main.set_size(LogicalSize::new(
         (target_main_outer_width - main_frame_w).max(1.0),
         (target_main_outer_height - main_frame_h).max(1.0),
@@ -5584,7 +5616,16 @@ fn layout_windows(
     let desired_browser_outer_height = (desired_browser_content_height + browser_frame_h)
         .max(f64::from(request.browser_min_height) + browser_frame_h)
         .min(available_height);
-    let _ = browser.set_min_size(Some(LogicalSize::new(200.0, 120.0)));
+    let browser_max_inner_width = (available_width - browser_frame_w).max(1.0);
+    let browser_max_inner_height = (available_height - browser_frame_h).max(1.0);
+    let _ = browser.set_min_size(Some(LogicalSize::new(
+        200.0_f64.min(browser_max_inner_width),
+        120.0_f64.min(browser_max_inner_height),
+    )));
+    let _ = browser.set_max_size(Some(LogicalSize::new(
+        browser_max_inner_width,
+        browser_max_inner_height,
+    )));
     browser
         .set_size(LogicalSize::new(
             (desired_browser_outer_width - browser_frame_w).max(1.0),
@@ -8001,5 +8042,12 @@ mod tests {
             ),
             (600.0, 430.0)
         );
+    }
+
+    #[test]
+    fn empty_remote_list_keeps_its_usable_minimum_height() {
+        assert_eq!(remote_content_height(142, 40, 0, 180, 0), 322.0);
+        assert_eq!(remote_content_height(142, 40, 2, 180, 0), 322.0);
+        assert_eq!(remote_content_height(142, 40, 5, 180, 0), 342.0);
     }
 }

@@ -1,4 +1,5 @@
 import {strict as assert} from "node:assert";
+import {readFileSync} from "node:fs";
 import {
   compareVersions,
   normalizeFileQualifier,
@@ -56,5 +57,20 @@ const rebuiltOld = updatedReleaseIndex(index, {
 }, 5);
 assert.equal(rebuiltOld.latest, "0.6.5");
 assert.deepEqual(rebuiltOld.releases.map((release) => release.version), ["0.6.5", "0.6.4", "0.6.3", "0.6.2", "0.6.1"]);
+
+const downloadPage = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const websiteScript = readFileSync(new URL("../script.js", import.meta.url), "utf8");
+assert.match(downloadPage, /id="apt-install"[^>]*hidden/);
+assert.match(downloadPage, /id="apt-setup-command"/);
+assert.match(downloadPage, /id="apt-version-install-command"/);
+assert.match(downloadPage, /sudo apt install mountlet-preview/);
+assert.match(websiteScript, /input\?\.value === "linux-x64"/);
+assert.match(websiteScript, /lean \? "mountlet-lean" : "mountlet"/);
+assert.match(websiteScript, /lean \? "mountlet-lean-preview" : "mountlet-preview"/);
+assert.ok(downloadPage.indexOf('id="release-version"') < downloadPage.indexOf('id="apt-install"'));
+assert.ok(downloadPage.indexOf('id="apt-install"') < downloadPage.indexOf('id="selected-download-button"'));
+assert.ok(downloadPage.indexOf('id="selected-download-button"') < downloadPage.indexOf('id="download-platform-label"'));
+assert.match(downloadPage, /id="public-beta-key-output"/);
+assert.match(websiteScript, /setPurchaseFollowupVisible\(false\);\s*setAddDeviceEnabled\(false\);/);
 
 console.log("Release layout checks passed.");

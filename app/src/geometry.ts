@@ -64,8 +64,9 @@ export function metricsAt(step: number): UiMetrics {
     purchaseRow: scaledMetric(36, normalized),
   };
   const remoteGap = scaledMetric(4, normalized);
-  metrics.remoteCardTop = metrics.layoutMargin + metrics.menuRow + remoteGap + metrics.toolbarRow + remoteGap + scaledMetric(28, normalized) + remoteGap;
-  metrics.remoteChrome = metrics.remoteCardTop + remoteGap + metrics.toolbarRow + metrics.layoutMargin;
+  const remoteListBorder = scaledMetric(2, normalized);
+  metrics.remoteCardTop = metrics.layoutMargin + metrics.menuRow + remoteGap + metrics.toolbarRow + remoteGap + scaledMetric(28, normalized) + remoteGap + remoteListBorder;
+  metrics.remoteChrome = metrics.remoteCardTop + remoteListBorder + remoteGap + metrics.toolbarRow + metrics.layoutMargin;
   metrics.browserChrome = 2 * metrics.layoutMargin + 2 * metrics.toolbarRow + scaledMetric(28, normalized) + metrics.toolbarRow
     + metrics.fileHeader + scaledMetric(26, normalized) + 6 * metrics.layoutSpacing;
   METRICS_CACHE.set(normalized, metrics);

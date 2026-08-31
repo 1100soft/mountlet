@@ -73,6 +73,31 @@ function applyConfiguredLinks() {
   });
 }
 
+async function copyElementText(button) {
+  const target = document.getElementById(button.dataset.copyTarget || "");
+  const status = document.getElementById(button.dataset.copyStatus || "");
+  const text = target?.textContent?.trim() || "";
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.classList.add("copied");
+    button.title = "Copied to clipboard.";
+    if (status) status.textContent = "Copied.";
+  } catch {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    if (status) status.textContent = "Selected—press Ctrl+C or ⌘C.";
+  }
+  setTimeout(() => {
+    button.classList.remove("copied");
+    button.title = button.getAttribute("aria-label") || "Copy";
+    if (status) status.textContent = "";
+  }, 2400);
+}
+
 async function startCheckout(button) {
   const kind = selectedLicenseAction();
   if (!kind) {
@@ -200,10 +225,10 @@ async function validateLicenseKey() {
     validatedLicenseKind = String(data.licenseKind || "paid");
     if (validatedLicenseKind === "beta") {
       setLicenseStatus(
-        "Valid public beta key. It renews daily while the beta is open; add-device checkout is disabled.",
+        "Valid public beta key. It renews daily while the beta is open.",
         "valid"
       );
-      setPurchaseFollowupVisible(true);
+      setPurchaseFollowupVisible(false);
       setAddDeviceEnabled(false);
       updateCart();
       return;
@@ -233,6 +258,8 @@ async function validateLicenseKey() {
 
 function usePublicBetaKey() {
   setLicenseAction("add_devices");
+  setPurchaseFollowupVisible(false);
+  setAddDeviceEnabled(false);
   const input = document.querySelector("#existing-license-key");
   if (input) {
     input.value = PUBLIC_BETA_KEY;
@@ -904,6 +931,20 @@ function updateDownloadSelection() {
   const note = document.querySelector("#download-selection-note");
   const label = downloadTargetLabels[input?.value] || "selected platform";
   const version = document.querySelector("#release-version")?.value || "";
+  const aptInstall = document.querySelector("#apt-install");
+  const aptVersionCommand = document.querySelector("#apt-version-install-command code");
+  const aptPreviewCommand = document.querySelector("#apt-preview-install-command code");
+  const linuxSelected = input?.value === "linux-x64";
+  if (aptInstall) aptInstall.hidden = !linuxSelected;
+  if (aptVersionCommand) {
+    const packageName = lean ? "mountlet-lean" : "mountlet";
+    aptVersionCommand.textContent = version
+      ? `sudo apt install ${packageName}=${version}`
+      : `sudo apt install ${packageName}`;
+  }
+  if (aptPreviewCommand) {
+    aptPreviewCommand.textContent = `sudo apt install ${lean ? "mountlet-lean-preview" : "mountlet-preview"}`;
+  }
   if (button) {
     button.disabled = !input;
     button.textContent = `Download ${lean ? "lean " : ""}Mountlet${version ? ` v${version}` : ""} for ${label}`;
@@ -998,6 +1039,12 @@ document.addEventListener("click", (event) => {
   const licenseActionButton = event.target.closest("[data-license-action]");
   if (licenseActionButton) {
     setLicenseAction(licenseActionButton.dataset.licenseAction);
+    return;
+  }
+
+  const copyCommandButton = event.target.closest("[data-copy-target]");
+  if (copyCommandButton) {
+    copyElementText(copyCommandButton);
     return;
   }
 
@@ -1203,6 +1250,8 @@ window.addEventListener("popstate", () => {
 });
 
 applyConfiguredLinks();
+const publicBetaKeyOutput = document.querySelector("#public-beta-key-output");
+if (publicBetaKeyOutput) publicBetaKeyOutput.textContent = PUBLIC_BETA_KEY;
 setActiveTab(window.location.hash, {skipHash: true});
 openLinkedFaq();
 const shouldValidatePrefilledLicense = applyPricingUrlParams();
