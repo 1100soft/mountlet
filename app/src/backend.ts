@@ -436,6 +436,7 @@ export interface WindowLayoutRequest {
   browserRowHeight: number;
   browserWidth: number;
   browserMinHeight: number;
+  dialogMinHeight: number;
   availableX: number;
   availableY: number;
   availableWidth: number;

@@ -56,6 +56,11 @@ export interface AddRemoteResult {
   mountAfter: boolean;
 }
 
+export interface AddRemoteDialogOptions {
+  tutorial?: boolean;
+  onTutorialSkip?: () => void;
+}
+
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] {
   const value = document.createElement(tag);
   value.className = className;
@@ -98,7 +103,7 @@ function setVisible(rows: HTMLElement[], visible: boolean): void {
   for (const row of rows) row.hidden = !visible;
 }
 
-export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external" | null> {
+export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}): Promise<AddRemoteResult | "external" | null> {
   document.querySelector(".modal-layer")?.remove();
   const sources = await driveOauthSources().catch(() => [] as DriveOauthSource[]);
   const layer = node("div", "modal-layer");
@@ -112,7 +117,7 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
   const name = input("Personal Drive");
   const credentialSource = select([
     ...sources.map(source => [source.remoteId, `Use ${source.label} credentials`] as const),
-    ["builtin", "Built-in rclone client"] as const,
+    ["builtin", "Built-in rclone client (retires in 2026)"] as const,
     ["custom", "Enter client ID and secret"] as const,
   ]);
   if (sources.length) credentialSource.value = sources[0].remoteId;
@@ -175,10 +180,18 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
   gphotosLink.type = "button";
   gphotosLink.addEventListener("click", () => void openExternal("https://rclone.org/googlephotos/"));
   gphotosHelp.append(document.createTextNode(" "), gphotosLink);
+  const driveClientHelp = node("p", "add-remote-help drive-client-help", "For reliable long-term access, create your own Google OAuth client. ");
+  const rcloneClientGuide = node("button", "link-button", "Setup guide");
+  const googleOauthGuide = node("button", "link-button", "Google OAuth help");
+  rcloneClientGuide.type = googleOauthGuide.type = "button";
+  rcloneClientGuide.addEventListener("click", () => void openExternal("https://rclone.org/drive/#making-your-own-client-id"));
+  googleOauthGuide.addEventListener("click", () => void openExternal("https://developers.google.com/workspace/guides/configure-oauth-consent"));
+  driveClientHelp.append(rcloneClientGuide, document.createTextNode(" · "), googleOauthGuide);
 
   const rows = {
     name: labeled("Remote name", name),
     credentials: labeled("Google client", credentialSource),
+    driveClientHelp,
     clientId: labeled("Client ID", clientId),
     clientSecret: labeled("Client secret", clientSecret),
     account: labeled("Google account", account),
@@ -214,7 +227,7 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
   };
   rows.port.append(portStatus, killRclone);
   form.append(
-    labeled("Provider", provider), rows.name, rows.credentials, rows.clientId, rows.clientSecret, rows.account,
+    labeled("Provider", provider), rows.name, rows.credentials, rows.driveClientHelp, rows.clientId, rows.clientSecret, rows.account,
     rows.gphotosReadOnly, rows.gphotosHelp, rows.driveKind, rows.sharedDriveId, rows.auth, rows.port,
     rows.s3Provider, rows.s3Endpoint, rows.s3Region, rows.s3Access, rows.s3Secret, rows.s3Path,
     rows.webdavVendor, rows.webdavUrl, rows.webdavUser, rows.webdavPass,
@@ -262,7 +275,7 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
     const isWebdav = type === "webdav" || type === "nextcloud";
     const isExternal = type === "__external__";
     setVisible([rows.name, rows.mount], !isExternal);
-    setVisible([rows.credentials], isDrive);
+    setVisible([rows.credentials, rows.driveClientHelp], isDrive);
     setVisible([rows.account], isDrive || isGphotos);
     setVisible([rows.gphotosReadOnly, rows.gphotosHelp], isGphotos);
     setVisible([rows.driveKind, rows.sharedDriveId], isDrive);
@@ -420,6 +433,75 @@ export async function openAddRemoteDialog(): Promise<AddRemoteResult | "external
   dialog.append(form, actions);
   layer.append(dialog);
   document.body.append(layer);
+
+  if (options.tutorial) {
+    const coach = node("aside", "tutorial-coach");
+    coach.setAttribute("role", "status");
+    const progress = node("span", "tutorial-progress");
+    const message = node("strong", "tutorial-message");
+    const controls = node("div", "tutorial-controls");
+    const skip = node("button", "tutorial-skip", "Skip tutorial");
+    const next = node("button", "primary tutorial-next", "Next");
+    skip.type = next.type = "button";
+    controls.append(skip, next);
+    coach.append(progress, message, controls);
+    dialog.prepend(coach);
+
+    const providerRow = provider.closest<HTMLElement>(".settings-row")!;
+    type TutorialStep = { target: HTMLElement; text: string };
+    const detailRows = (): HTMLElement[] => {
+      const byProvider: Record<string, HTMLElement[]> = {
+        drive: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
+        gphotos: [rows.clientId, rows.clientSecret, rows.auth], dropbox: [rows.auth], onedrive: [rows.auth], box: [rows.auth], pcloud: [rows.auth],
+        s3: [rows.s3Provider, rows.s3Access, rows.s3Secret, rows.s3Path],
+        nextcloud: [rows.webdavUrl, rows.webdavUser, rows.webdavPass],
+        webdav: [rows.webdavVendor, rows.webdavUrl, rows.webdavUser, rows.webdavPass],
+        iclouddrive: [rows.icloudService, rows.icloudUser, rows.icloudPass],
+        mega: [rows.megaUser, rows.megaPass], protondrive: [rows.protonUser, rows.protonPass], koofr: [rows.koofrUser, rows.koofrPass],
+      };
+      return (byProvider[provider.value] ?? []).filter(item => !item.hidden);
+    };
+    const steps = (): TutorialStep[] => [
+      { target: providerRow, text: "Choose your storage provider." },
+      { target: rows.name, text: "Give this remote a recognizable name." },
+      ...detailRows().map(target => ({
+        target,
+        text: target === rows.credentials
+          ? "Choose your own client for reliable long-term access. Use Setup guide below."
+          : `Set ${target.querySelector(".settings-label")?.textContent?.toLowerCase() || "the connection details"}.`,
+      })),
+      { target: rows.mount, text: "Choose whether to mount it now." },
+      { target: create, text: "Create the remote and finish setup." },
+    ];
+    let step = 0;
+    const paintStep = () => {
+      dialog.querySelectorAll(".tutorial-highlight").forEach(item => item.classList.remove("tutorial-highlight"));
+      const currentSteps = steps();
+      step = Math.min(step, currentSteps.length - 1);
+      const current = currentSteps[step];
+      current.target.classList.add("tutorial-highlight");
+      progress.textContent = `${step + 1} of ${currentSteps.length}`;
+      message.textContent = current.text;
+      next.textContent = step === currentSteps.length - 1 ? "Got it" : "Next";
+      current.target.scrollIntoView({ block: "nearest" });
+    };
+    const stopTutorial = (skipped: boolean) => {
+      dialog.querySelectorAll(".tutorial-highlight").forEach(item => item.classList.remove("tutorial-highlight"));
+      coach.remove();
+      if (skipped) options.onTutorialSkip?.();
+    };
+    skip.addEventListener("click", () => stopTutorial(true));
+    next.addEventListener("click", () => {
+      if (step === steps().length - 1) { stopTutorial(false); create.focus(); return; }
+      step += 1;
+      paintStep();
+      if (step === 1) name.focus();
+    });
+    provider.addEventListener("change", () => { if (step === 0) { step = 1; paintStep(); name.focus(); } else paintStep(); });
+    credentialSource.addEventListener("change", paintStep);
+    name.addEventListener("input", () => { if (step === 1 && name.value.trim()) { step = 2; paintStep(); } }, { once: true });
+    queueMicrotask(paintStep);
+  }
   trapModalFocus(layer, dialog, name);
   return closed;
 }

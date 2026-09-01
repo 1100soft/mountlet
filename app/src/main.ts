@@ -39,6 +39,7 @@ let outwardDragEntries: FileEntry[] = [];
 let outwardDragStarted = false;
 let browserError = "";
 let nativeLayoutTimer = 0;
+let modalMinHeight = 0;
 let focusRefreshTimer = 0;
 let zoomRenderTimer = 0;
 let persistUiTimer = 0;
@@ -72,6 +73,8 @@ let sortReverse = false;
 let shortcuts: Record<string, string[]> = {};
 let completeSettings: AppSettings | null = null;
 let cachedConfigSyncStatus = { localChanged: false, remoteChanged: false };
+const TUTORIAL_SEEN_KEY = "mountlet-add-remote-tutorial-seen";
+let addRemoteTutorialActive = false;
 let configSyncStatusCheckedAt = 0;
 let configSyncStatusPending: Promise<typeof cachedConfigSyncStatus> | null = null;
 
@@ -373,6 +376,7 @@ async function layoutNativeWindows(): Promise<void> {
     browserRowHeight: metrics.fileRow,
     browserWidth: metrics.browserWidth,
     browserMinHeight: preferences.mode === "single" ? scaledMetric(340, preferences.zoomStep) : metrics.browserMinHeight,
+    dialogMinHeight: modalMinHeight,
     ...availableDesktop(),
   });
 }
@@ -381,6 +385,20 @@ function scheduleNativeLayout(delay = 70): void {
   window.clearTimeout(nativeLayoutTimer);
   nativeLayoutTimer = window.setTimeout(() => void layoutNativeWindows(), delay);
 }
+
+document.addEventListener("mountlet-modal-change", () => {
+  if (isBrowserWindow) return;
+  requestAnimationFrame(() => {
+    const dialog = document.querySelector<HTMLElement>(".modal-layer .modal-dialog");
+    const layer = dialog?.closest<HTMLElement>(".modal-layer");
+    const nextHeight = dialog && layer
+      ? Math.ceil(dialog.scrollHeight + 2 * (Number.parseFloat(getComputedStyle(layer).paddingTop) || 0))
+      : 0;
+    if (nextHeight === modalMinHeight) return;
+    modalMinHeight = nextHeight;
+    scheduleNativeLayout(0);
+  });
+});
 
 function setZoom(delta: number): void {
   preferences.zoomStep = Math.min(MAX_ZOOM_STEP, Math.max(MIN_ZOOM_STEP, preferences.zoomStep + delta));
@@ -641,7 +659,7 @@ async function showLicense(): Promise<void> {
 function renderToolbar(): HTMLElement {
   const header = element("header", "app-header");
   const menu = element("nav", "menu-bar");
-  ["App", "Mount", "Config"].forEach(label => {
+  ["App", "Mount", "Config", "Help"].forEach(label => {
     const button = element("button", "menu-button", label);
     button.type = "button";
     button.addEventListener("click", event => showApplicationMenu(label, event));
@@ -745,9 +763,8 @@ function showApplicationMenu(label: string, event: MouseEvent): void {
     { label: "Update status", run: () => void refreshRemoteStatus() }, separators,
     { label: "Sync cached files now", run: () => void synchronizeAllOffline() },
     { label: "Remove all offline files", run: () => void removeAllOffline() },
-    { label: "Clear all resolved cache", run: () => void clearAllCache() },
-    { label: "Report bug", run: () => void reportBug() }, separators,
-    { label: "License", run: () => void showLicense() }, { label: "About Mountlet", run: () => void showAbout() }, separators,
+    { label: "Clear all resolved cache", run: () => void clearAllCache() }, separators,
+    { label: "License", run: () => void showLicense() }, separators,
     { label: "Quit", run: () => void quitApp() },
   ]);
   else if (label === "Mount") showContextMenu(event, [
@@ -755,8 +772,7 @@ function showApplicationMenu(label: string, event: MouseEvent): void {
     { label: "Unmount all", enabled: remotes.length > 0, run: () => void setAllMounted(false) }, separators,
     { label: "Add remote", run: () => void showAddRemote() },
   ]);
-  else showContextMenu(event, [
-    { label: "Keyboard shortcuts", run: () => void showShortcuts() }, separators,
+  else if (label === "Config") showContextMenu(event, [
     { label: "Export config bundle", run: () => void exportBundle() }, { label: "Import config bundle", run: () => void importBundle() },
     { label: "Open config backup folder", run: () => void openConfigBackupFolder() }, separators,
     { label: "Set config sync location", run: () => void showAppSettings("Config Sync") }, { label: "Push config to sync location", run: () => void syncConfiguration("push") },
@@ -764,6 +780,13 @@ function showApplicationMenu(label: string, event: MouseEvent): void {
     { label: "Open rclone config file", run: () => void openConfigFile("rclone") },
     { label: "Open App config file", run: () => void openConfigFile("app") },
     { label: "Open Mounts config file", run: () => void openConfigFile("mounts") },
+  ]);
+  else showContextMenu(event, [
+    { label: "Add a remote tutorial", run: () => startAddRemoteTutorial() },
+    { label: "Keyboard shortcuts", run: () => void showShortcuts() },
+    { separator: true },
+    { label: "Report bug", run: () => void reportBug() },
+    { label: "About Mountlet", run: () => void showAbout() },
   ]);
 }
 
@@ -1249,12 +1272,40 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
 
 const OAUTH_REMOTE_TYPES = new Set(["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]);
 
-async function showAddRemote(): Promise<void> {
-  const result = await openAddRemoteDialog();
-  if (!result) return;
+function finishAddRemoteTutorial(): void {
+  addRemoteTutorialActive = false;
+  localStorage.setItem(TUTORIAL_SEEN_KEY, "true");
+  document.querySelector(".tutorial-overlay")?.remove();
+  document.querySelectorAll(".tutorial-highlight").forEach(item => item.classList.remove("tutorial-highlight"));
+}
+
+function startAddRemoteTutorial(): void {
+  dismissContextMenu();
+  addRemoteTutorialActive = true;
+  document.querySelector(".tutorial-overlay")?.remove();
+  const add = document.querySelector<HTMLButtonElement>('[data-tutorial="add-remote"]');
+  if (!add) { void showAddRemote(true); return; }
+  add.classList.add("tutorial-highlight");
+  const overlay = element("aside", "tutorial-overlay");
+  overlay.setAttribute("role", "status");
+  overlay.append(element("strong", "", "Start by adding a remote."));
+  const skip = element("button", "tutorial-skip", "Skip tutorial");
+  skip.type = "button";
+  skip.addEventListener("click", finishAddRemoteTutorial);
+  overlay.append(skip);
+  document.body.append(overlay);
+  add.focus();
+}
+
+async function showAddRemote(tutorial = addRemoteTutorialActive): Promise<void> {
+  document.querySelector(".tutorial-overlay")?.remove();
+  document.querySelector('[data-tutorial="add-remote"]')?.classList.remove("tutorial-highlight");
+  const result = await openAddRemoteDialog({ tutorial, onTutorialSkip: finishAddRemoteTutorial });
+  if (!result) { if (tutorial && addRemoteTutorialActive) startAddRemoteTutorial(); return; }
   remotes = await listRemotes();
   if (result === "external") {
     render();
+    if (tutorial) finishAddRemoteTutorial();
     return;
   }
   selectedRemote = result.remoteId;
@@ -1269,6 +1320,7 @@ async function showAddRemote(): Promise<void> {
   render();
   if (remotes.some(remote => remote.id === result.remoteId)) await selectRemote(result.remoteId);
   if (result.mountAfter) await changeRemoteMount(result.remoteId);
+  if (tutorial) finishAddRemoteTutorial();
 }
 
 function selectAdjacentRemote(delta: number): void {
@@ -1316,7 +1368,11 @@ function focusBrowserList(): void {
 }
 
 function restoreFocusOwner(): void {
-  if (document.querySelector(".modal-layer")) return;
+  const modal = document.querySelector<HTMLElement>(".modal-layer .modal-dialog");
+  if (modal) {
+    (modal.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)") ?? modal).focus({ preventScroll: true });
+    return;
+  }
   if (parkedFocusOwner) {
     lastFocusOwner = parkedFocusOwner;
     parkedFocusOwner = null;
@@ -1527,6 +1583,8 @@ function renderFooter(): void {
   const footer = document.querySelector<HTMLElement>("#main-footer");
   if (!footer) return;
   const add = actionIcon("＋", "Add remote");
+  add.dataset.tutorial = "add-remote";
+  if (addRemoteTutorialActive) add.classList.add("tutorial-highlight");
   add.addEventListener("click", () => void showAddRemote());
   const zoom = element("div", "zoom-controls");
   const minus = actionIcon("−", "Zoom out");
@@ -1539,6 +1597,12 @@ function renderFooter(): void {
   zoom.append(minus, label, plus, reset);
   footer.replaceChildren(add, element("span", "build-label", "Local source"), zoom);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  if (addRemoteTutorialActive && !document.querySelector(".modal-layer")) startAddRemoteTutorial();
+  else restoreFocusOwner();
+});
 
 class VirtualFileList {
   private readonly viewport: HTMLElement;
@@ -2586,7 +2650,10 @@ async function start(): Promise<void> {
     await completeStartupSmoke(checks);
     return;
   }
-  await listenRestoreKeyboardFocus(firstShow => scheduleFocusRestore(firstShow));
+  await listenRestoreKeyboardFocus(firstShow => {
+    if (addRemoteTutorialActive && !document.querySelector(".modal-layer")) startAddRemoteTutorial();
+    scheduleFocusRestore(firstShow);
+  });
   // Do not make native license, rclone, or network initialization a prerequisite
   // for seeing the application. The final layout pass below will resize and
   // reposition the already-visible window once settings have loaded.
@@ -2731,6 +2798,7 @@ async function start(): Promise<void> {
     });
   }
   render();
+  if (!isBrowserWindow && !localStorage.getItem(TUTORIAL_SEEN_KEY)) queueMicrotask(startAddRemoteTutorial);
   if (!isBrowserWindow && preferences.mode === "multiple" && !licenseLocked()) {
     await setDetachedBrowser(true);
     await emitBrowserState(selectedRemote, currentPath);
