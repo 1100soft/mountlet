@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mountlet — Manage all your cloud drives</title>
+    <meta
+      name="description"
+      content="Mountlet is a desktop app for managing many cloud storage accounts from different providers in one place."
+    />
+    <meta property="og:title" content="Mountlet" />
+    <meta
+      property="og:description"
+      content="Browse, open, sync, and organize many cloud storage accounts from one compact desktop app."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/mountlet-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="config.js"></script>
+    <script defer src="script.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <button class="brand tab-link" type="button" data-tab="home" aria-label="Mountlet home">
+        <img src="assets/mountlet-icon.png" alt="" />
+        <span>Mountlet</span>
+      </button>
+      <nav aria-label="Website sections" class="tab-nav" role="tablist">
+        <button class="tab-link active" type="button" id="tab-home" role="tab" data-tab="home" aria-controls="panel-home" aria-selected="true">
+          Home
+        </button>
+        <button class="tab-link" type="button" id="tab-download" role="tab" data-tab="download" aria-controls="panel-download" aria-selected="false">
+          Download
+        </button>
+        <button class="tab-link" type="button" id="tab-pricing" role="tab" data-tab="pricing" aria-controls="panel-pricing" aria-selected="false">
+          Pricing
+        </button>
+        <button class="tab-link" type="button" id="tab-features" role="tab" data-tab="features" aria-controls="panel-features" aria-selected="false">
+          Features
+        </button>
+        <button class="tab-link" type="button" id="tab-how" role="tab" data-tab="how" aria-controls="panel-how" aria-selected="false">
+          How it works
+        </button>
+        <button class="tab-link" type="button" id="tab-notifications" role="tab" data-tab="notifications" aria-controls="panel-notifications" aria-selected="false">
+          Notifications
+        </button>
+        <button class="tab-link" type="button" id="tab-faq" role="tab" data-tab="faq" aria-controls="panel-faq" aria-selected="false">
+          FAQ
+        </button>
+        <button class="tab-link" type="button" id="tab-support" role="tab" data-tab="support" aria-controls="panel-support" aria-selected="false">
+          Support
+        </button>
+      </nav>
+    </header>
+
+    <main class="page-frame">
+      <section class="tab-panel active" id="panel-home" role="tabpanel" aria-labelledby="tab-home" data-panel="home">
+        <div class="hero-copy">
+          <div class="hero-actions">
+            <button class="button primary tab-action" type="button" data-tab="download">Download beta</button>
+            <button class="button secondary tab-action" type="button" data-tab="features">See features</button>
+          </div>
+          <p class="eyebrow">Home</p>
+          <h2>Many accounts, one app.</h2>
+          <p class="lede">
+            Mountlet brings cloud storage accounts from different providers into one simple desktop app. Browse, open, sync, cache, and organize files without jumping between provider apps and web interfaces.
+          </p>
+        </div>
+        <div class="hero-workflows" aria-label="Mountlet file access workflows">
+          <article>
+            <img src="assets/mode-managed.svg" alt="" />
+            <div><strong>Mountlet file management</strong><span>Browse, cache, search, and keep files offline.</span></div>
+          </article>
+          <article>
+            <img src="assets/mode-mounted.svg" alt="" />
+            <div><strong>Mounted folder access</strong><span>Use cloud files from desktop apps and system file managers.</span></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="panel-download" role="tabpanel" aria-labelledby="tab-download" data-panel="download" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Download</p>
+        </div>
+
+        <div class="release-version-bar">
+          <label class="release-version-choice" for="release-version">Version <select id="release-version" aria-label="Mountlet version"><option value="">Latest</option></select></label>
+          <div class="lean-build-row">
+            <label class="lean-build-choice"><input id="lean-build" type="checkbox" /> Use lean build</label>
+            <details class="info-popover">
+              <summary aria-label="About standard and lean builds">i</summary>
+              <div class="info-popover-panel">
+                <p><strong>Standard build:</strong> includes a current, app-local rclone. It is the recommended choice and does not replace a system installation.</p>
+                <p><strong>Lean build:</strong> uses rclone already installed on the computer. It is intended for technical users and managed environments.</p>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <section class="download-card emphasized download-selector" aria-labelledby="download-selector-title">
+          <h3 id="download-selector-title" class="sr-only">Download Mountlet</h3>
+          <p class="download-selection-status" id="download-selection-status" role="status"></p>
+          <section class="apt-install" id="apt-install" aria-labelledby="apt-install-title" hidden>
+            <p class="eyebrow">Recommended on Debian</p>
+            <h3 id="apt-install-title">Install from the 1100 APT repository</h3>
+            <p>APT verifies Mountlet, installs required libraries, and provides normal package upgrades. Linux Mint and compatible x86-64 distributions are also supported.</p>
+            <div class="command-block">
+              <div class="command-heading"><strong>1. Set up the 1100 repository</strong><button class="copy-command" type="button" data-copy-target="apt-setup-command" data-copy-status="apt-setup-copy-status" title="Copy repository setup commands" aria-label="Copy repository setup commands"><img src="assets/ui-copy.svg" alt="" /></button></div>
+              <pre id="apt-setup-command"><code>curl -fsSL https://apt.1100soft.com/1100-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/1100-archive-keyring.gpg &gt;/dev/null
+echo "deb [signed-by=/usr/share/keyrings/1100-archive-keyring.gpg] https://apt.1100soft.com stable main" \
+  | sudo tee /etc/apt/sources.list.d/1100.list &gt;/dev/null
+sudo apt update</code></pre>
+              <span class="inline-status command-status" id="apt-setup-copy-status" role="status" aria-live="polite"></span>
+            </div>
+
+            <div class="command-block">
+              <div class="command-heading"><strong>2. Install the selected version</strong><button class="copy-command" type="button" data-copy-target="apt-version-install-command" data-copy-status="apt-install-copy-status" title="Copy install command" aria-label="Copy install command"><img src="assets/ui-copy.svg" alt="" /></button></div>
+              <pre id="apt-version-install-command"><code>sudo apt install mountlet</code></pre>
+              <span class="inline-status command-status" id="apt-install-copy-status" role="status" aria-live="polite"></span>
+            </div>
+
+            <details class="preview-install">
+              <summary>Testing builds</summary>
+              <p><code>mountlet-preview</code> is an optional testing package and may be less stable. It replaces the official package without resetting application data.</p>
+              <div class="command-block compact">
+                <div class="command-heading"><strong>Install the latest testing build</strong><button class="copy-command" type="button" data-copy-target="apt-preview-install-command" data-copy-status="apt-preview-copy-status" title="Copy testing install command" aria-label="Copy testing install command"><img src="assets/ui-copy.svg" alt="" /></button></div>
+                <pre id="apt-preview-install-command"><code>sudo apt install mountlet-preview</code></pre>
+                <span class="inline-status command-status" id="apt-preview-copy-status" role="status" aria-live="polite"></span>
+              </div>
+            </details>
+          </section>
+
+          <button class="button full primary" id="selected-download-button" type="button">Download Mountlet for Windows x64</button>
+          <p class="download-note" id="download-selection-note">The standard build includes an app-local rclone.</p>
+          <p class="download-platform-label" id="download-platform-label">Platform</p>
+          <div class="download-matrix-wrap">
+            <table class="download-matrix">
+              <colgroup><col class="platform-column" /><col class="architecture-column" /><col class="architecture-column" /></colgroup>
+              <thead><tr><th scope="col">Platform</th><th scope="col">x64</th><th scope="col">ARM64</th></tr></thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/windows.svg" alt="" /> <span>Windows</span></th>
+                  <td><label><input type="radio" name="download-target" value="windows-x64" data-download-standard="windows" data-download-lean="windowsLean" aria-label="Windows x64" checked /></label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/macos.svg" alt="" /> <span>macOS</span></th>
+                  <td><label><input type="radio" name="download-target" value="macos-x64" data-download-standard="macosX64" data-download-lean="macosLeanX64" aria-label="macOS x64" /></label></td>
+                  <td><label><input type="radio" name="download-target" value="macos-arm64" data-download-standard="macos" data-download-lean="macosLean" aria-label="macOS ARM64" /></label></td>
+                </tr>
+                <tr>
+                  <th scope="row"><img src="assets/platforms/linux.svg" alt="" /> <span>Linux <small>Debian/Ubuntu</small></span></th>
+                  <td><label><input type="radio" name="download-target" value="linux-x64" data-download-standard="linux" data-download-lean="linuxLean" aria-label="Linux x64" /></label></td>
+                  <td><span class="unavailable">Not available</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="mount-dependencies" id="mount-dependencies" aria-labelledby="mount-dependencies-title">
+          <div class="mount-dependencies-heading">
+            <p class="eyebrow">Mounted folders</p>
+            <h3 id="mount-dependencies-title">Filesystem driver</h3>
+            <p>Mountlet detects the driver and enables mounted folder access after installation.</p>
+          </div>
+          <div class="dependency-grid">
+            <article>
+              <img src="assets/platforms/windows.svg" alt="" />
+              <div>
+                <h4>Windows</h4>
+                <p>Download and run the signed WinFsp installer, then restart Mountlet.</p>
+                <a class="external-link" href="https://winfsp.dev/rel/" target="_blank" rel="noopener">Download WinFsp</a>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/macos.svg" alt="" />
+              <div>
+                <h4>macOS</h4>
+                <p>Install macFUSE. Approve its system software in Privacy &amp; Security and restart when macOS requests it.</p>
+                <a class="external-link" href="https://github.com/macfuse/macfuse/wiki/Getting-Started" target="_blank" rel="noopener">Install macFUSE</a>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/linux.svg" alt="" />
+              <div>
+                <h4>Linux</h4>
+                <p>Install FUSE 3 with the command for the distribution.</p>
+                <div class="dependency-commands" aria-label="Distribution-specific FUSE 3 installation commands">
+                  <span><b>Debian / Ubuntu</b><code>sudo apt install fuse3</code></span>
+                  <span><b>Fedora / RHEL</b><code>sudo dnf install fuse3</code></span>
+                  <span><b>Arch Linux</b><code>sudo pacman -S fuse3</code></span>
+                </div>
+                <a class="external-link" href="https://github.com/libfuse/libfuse" target="_blank" rel="noopener">FUSE project</a>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <p class="note">
+          Current beta installers are unsigned and may show an operating-system
+          warning. See the <button class="inline-link tab-action" type="button" data-tab="faq">FAQ</button>
+          before installing.
+        </p>
+      </section>
+
+      <section class="tab-panel" id="panel-pricing" role="tabpanel" aria-labelledby="tab-pricing" data-panel="pricing" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Pricing</p>
+        </div>
+        <div class="pricing-layout">
+          <div class="pricing-primary">
+            <article class="price-card featured license-card">
+              <p class="price" id="license-plan-price">$5/mo</p>
+              <h3>License</h3>
+              <p>One device included. Extra devices are optional.</p>
+              <input type="hidden" id="license-action" name="license-action" value="" />
+              <div class="license-action-buttons" role="group" aria-label="License action">
+                <button class="button secondary" type="button" data-license-action="new_license" aria-pressed="false">Buy a license</button>
+                <button class="button secondary" type="button" data-license-action="add_devices" aria-pressed="false">Add devices to my license</button>
+              </div>
+              <div class="existing-license-fields" id="existing-license-fields" hidden>
+                <label class="license-key-label" for="existing-license-key">License key</label>
+                <input id="existing-license-key" type="text" autocomplete="off" spellcheck="false" maxlength="27" placeholder="MNT-..." disabled />
+                <div class="button-row">
+                  <button class="button secondary" type="button" id="validate-license-key" disabled>Check key</button>
+                  <span id="license-key-status" class="inline-status" hidden></span>
+                </div>
+              </div>
+            </article>
+            <article class="price-card plan-card" id="plan-card">
+              <h3>Plan</h3>
+              <fieldset class="plan-choice" id="license-plan-choice">
+                <legend class="sr-only">Plan</legend>
+                <label>
+                  <input type="radio" name="license-plan" value="monthly" checked />
+                  Monthly
+                </label>
+                <label>
+                  <input type="radio" name="license-plan" value="annual" />
+                  Annual
+                </label>
+                <label>
+                  <input type="radio" name="license-plan" value="lifetime" />
+                  Lifetime
+                </label>
+              </fieldset>
+            </article>
+          </div>
+          <div class="pricing-followup" id="pricing-followup" hidden>
+            <article class="price-card add-device-card disabled" id="add-device-card">
+              <h3>Devices</h3>
+              <p class="price" id="add-device-price">$1/device</p>
+              <p>Add extra device slots if you need more than one.</p>
+              <label class="device-field">
+                Extra devices
+                <input id="add-device-count" type="number" min="0" max="50" value="0" disabled />
+              </label>
+            </article>
+            <article class="price-card cart-card" id="cart-card">
+              <h3>Cart</h3>
+              <dl class="cart-lines" id="cart-lines"></dl>
+              <p class="cart-devices" id="cart-devices">1 device total</p>
+              <p class="cart-total" id="cart-total">$5</p>
+              <button class="button primary checkout-button" id="checkout-button">Checkout</button>
+            </article>
+          </div>
+          <article class="price-card beta-card">
+            <h3>Public beta</h3>
+            <p>Free during beta. Use the public beta key for temporary access. It renews daily while the beta is open and can be disabled when the beta ends.</p>
+            <div class="beta-key-controls">
+              <code id="public-beta-key-output"></code>
+              <button class="copy-command" type="button" data-copy-target="public-beta-key-output" data-copy-status="beta-key-copy-status" title="Copy public beta key" aria-label="Copy public beta key"><img src="assets/ui-copy.svg" alt="" /></button>
+              <span class="inline-status" id="beta-key-copy-status" role="status" aria-live="polite"></span>
+            </div>
+            <button class="button secondary" type="button" id="use-beta-key">Select beta license</button>
+          </article>
+        </div>
+        <p class="note">
+          Mountlet starts with a 7-day trial, then unlocks with one online
+          activation. Lifetime licenses keep working offline; subscriptions
+          work offline until the current paid period ends. The license key is
+          your support identity; keep it somewhere safe. Subscription prices
+          may change for future renewals with advance notice.
+        </p>
+      </section>
+
+      <section class="tab-panel license-panel" id="panel-license" role="tabpanel" data-panel="license" hidden>
+        <div class="license-result" id="license-result">
+          <p class="eyebrow">License</p>
+          <h2>Your license key</h2>
+          <p id="license-result-message">Save this key now. Mountlet does not keep customer records, so lost keys cannot be recovered.</p>
+          <pre id="license-key-output"></pre>
+          <div class="button-row">
+            <button class="button primary" type="button" id="copy-license-key">Copy key</button>
+            <button class="button secondary" type="button" id="email-license-key" hidden>Email key</button>
+            <button class="button secondary tab-action" type="button" data-tab="download">Go to downloads</button>
+            <span class="inline-status" id="copy-license-status"></span>
+            <span class="inline-status" id="email-license-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel feature-panel" id="panel-features" role="tabpanel" aria-labelledby="tab-features" data-panel="features" hidden>
+        <div class="panel-heading feature-heading">
+          <p class="eyebrow">Features</p>
+          <p class="lede">
+            Mountlet keeps accounts from different providers together, with two
+            complementary ways to work: a fully managed file browser and native mounting.
+          </p>
+        </div>
+
+        <section class="shared-feature-band" aria-labelledby="shared-feature-title">
+          <div class="section-kicker">
+            <span id="shared-feature-title">Core features</span>
+          </div>
+          <div class="shared-feature-grid">
+            <article>
+              <strong>Unified ergonomic UI</strong>
+              <p>View files from all accounts across many providers in one integrated interface.</p>
+            </article>
+            <article>
+              <strong>Seamless navigation</strong>
+              <p>Smart background metadata indexing and caching eliminate network latency, keeping navigation and search fast.</p>
+            </article>
+            <article>
+              <strong>Flexible, instant search</strong>
+              <p>Find files instantly from every remote at once, or from a specific remote.</p>
+            </article>
+            <article>
+              <strong>Portable config</strong>
+              <p>Easily share the app setup and preferences between devices with encrypted config bundles.</p>
+            </article>
+          </div>
+        </section>
+
+        <div class="mode-intro">
+          <p class="eyebrow">Two complete workflows</p>
+          <h3>Manage files in Mountlet and through mounted folders.</h3>
+          <p>Use either workflow for each remote and switch between them at any time.</p>
+        </div>
+        <div class="mode-branch-grid">
+          <article class="mode-branch managed">
+            <img src="assets/mode-managed.svg" alt="" />
+            <div>
+              <span class="mode-label">Mountlet file browser</span>
+              <h3>Mountlet file management</h3>
+              <p>Browse, open, upload, copy, move, rename, and delete through one interface across every remote.</p>
+              <ul>
+                <li>Files open through a managed local cache in their normal desktop apps.</li>
+                <li>Selected files and folders can remain available offline.</li>
+                <li>Local edits upload automatically when the cloud copy is unchanged.</li>
+                <li>If both copies changed, Mountlet offers simple version choices.</li>
+              </ul>
+            </div>
+          </article>
+          <article class="mode-branch mounted">
+            <img src="assets/mode-mounted.svg" alt="" />
+            <div>
+              <span class="mode-label">System file manager</span>
+              <h3>Mounted folder access</h3>
+              <p>Mount any remote as an ordinary folder for Finder, Explorer, Dolphin, command-line tools, and other desktop software.</p>
+              <ul>
+                <li>Use familiar file-manager features and existing application workflows.</li>
+                <li>Let desktop apps work with remote files through standard file paths.</li>
+                <li>Mount and unmount each remote independently from Mountlet.</li>
+                <li>Keep Mountlet’s integrated browser available alongside every mounted folder.</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+
+        <div class="feature-list feature-details">
+          <details open>
+            <summary>File operations</summary>
+            <p>Transfer files within an account or between providers, drag files in from the desktop, and queue offline downloads directly from the integrated browser.</p>
+          </details>
+          <details>
+            <summary>Offline control</summary>
+            <p>Temporary cache and protected offline copies are tracked separately. Clear resolved cache globally or per item without removing files explicitly kept offline.</p>
+          </details>
+          <details>
+            <summary>Account overview</summary>
+            <p>See reachability, mount state, storage usage where providers expose it, and direct links to provider web interfaces from the remote list.</p>
+          </details>
+          <details>
+            <summary>Keyboard workflow</summary>
+            <p>Navigate remotes, search results, folders, and file actions with configurable shortcuts designed for quick repeated use.</p>
+          </details>
+        </div>
+
+        <section class="provider-section" aria-labelledby="provider-title">
+          <div class="provider-section-heading">
+            <div>
+              <p class="eyebrow">Supported providers</p>
+              <h3 id="provider-title">Guided setup for major cloud services</h3>
+            </div>
+            <div class="provider-legend" aria-label="Provider test status">
+              <span><i class="tested"></i>Locally tested</span>
+              <span><i class="available"></i>Available, less tested</span>
+            </div>
+          </div>
+          <div class="provider-grid">
+            <article><img src="assets/providers/google-drive.png" alt="" /><span><strong>Google Drive</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/google-photos.svg" alt="" /><span><strong>Google Photos</strong><small class="tested">Tested, limited by Google</small></span></article>
+            <article><img src="assets/providers/dropbox.svg" alt="" /><span><strong>Dropbox</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/onedrive.svg" alt="" /><span><strong>OneDrive</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/box.svg" alt="" /><span><strong>Box</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/pcloud.png" alt="" /><span><strong>pCloud</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/icloud.svg" alt="" /><span><strong>iCloud</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/koofr.png" alt="" /><span><strong>Koofr</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/proton-drive.svg" alt="" /><span><strong>Proton Drive</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/mega.svg" alt="" /><span><strong>MEGA</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/cloudflare-r2.svg" alt="" /><span><strong>Cloudflare R2</strong><small class="tested">Locally tested</small></span></article>
+            <article><img src="assets/providers/nextcloud.svg" alt="" /><span><strong>Nextcloud</strong><small class="available">Guided setup</small></span></article>
+            <article><img src="assets/providers/amazon-s3.svg" alt="" /><span><strong>S3-compatible</strong><small class="available">AWS, MinIO, Wasabi, and more</small></span></article>
+            <article><span class="provider-fallback">W</span><span><strong>WebDAV</strong><small class="available">Guided and terminal setup</small></span></article>
+          </div>
+          <p class="note">Other rclone backends remain available through the terminal setup fallback. Provider capabilities and quota reporting vary.</p>
+        </section>
+
+        <section class="platform-support" aria-labelledby="platform-support-title">
+          <div class="platform-support-heading">
+            <p class="eyebrow">Supported platforms</p>
+            <h3 id="platform-support-title">Desktop support</h3>
+          </div>
+          <div class="platform-support-grid">
+            <article>
+              <img src="assets/platforms/windows.svg" alt="" />
+              <div>
+                <h4>Windows</h4>
+                <strong class="support-state tested">Supported</strong>
+                <p>Windows 10 and 11, with Explorer mounting through WinFsp.</p>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/macos.svg" alt="" />
+              <div>
+                <h4>macOS</h4>
+                <strong class="support-state tested">Supported</strong>
+                <p>Apple silicon and Intel Macs, with Finder mounting through macFUSE.</p>
+              </div>
+            </article>
+            <article>
+              <img src="assets/platforms/linux.svg" alt="" />
+              <div>
+                <h4>Linux</h4>
+                <strong class="support-state tested">Debian-based distributions</strong>
+                <p>Current packages target Debian, Ubuntu, Linux Mint, and compatible x86-64 systems. Fedora, RHEL-compatible, Arch Linux, and openSUSE packages are under development.</p>
+              </div>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-panel how-panel" id="panel-how" role="tabpanel" aria-labelledby="tab-how" data-panel="how" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">How it works</p>
+          <p class="lede">
+            Mountlet coordinates rclone rather than reimplementing each provider protocol.
+            The same configured cloud account can be managed through Mountlet’s file browser
+            or exposed to the operating system as a mounted folder.
+          </p>
+        </div>
+
+        <div class="workflow-map" aria-label="Cloud accounts connect through Mountlet and rclone to integrated and mounted access routes">
+          <div class="workflow-stage provider-stage">
+            <span class="workflow-step">1</span>
+            <h3>Cloud accounts</h3>
+            <p>Each account is stored as an rclone remote with its provider settings and authentication data.</p>
+          </div>
+          <span class="workflow-arrow" aria-hidden="true">→</span>
+          <div class="workflow-stage engine-stage">
+            <span class="workflow-step">2</span>
+            <img class="workflow-mountlet-icon" src="assets/mountlet-icon.png" alt="" />
+            <h3>Mountlet + rclone</h3>
+            <p>Mountlet runs rclone in the background and adds indexing, cache management, search, status, and desktop controls.</p>
+          </div>
+          <span class="workflow-arrow workflow-split" aria-hidden="true">↗<br />↘</span>
+          <div class="workflow-routes">
+            <div class="workflow-route">
+              <strong>Mountlet file management</strong>
+              <span>Managed cache, offline files, and conflict checks</span>
+            </div>
+            <div class="workflow-route">
+              <strong>Mounted folder access</strong>
+              <span>Native paths for the system and desktop apps</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="access-explanation">
+          <article>
+            <p class="eyebrow">Integrated browser</p>
+            <h3>Operations run through rclone commands</h3>
+            <p>Folder listings, downloads, uploads, copies, moves, and deletions are performed by background rclone commands. Files opened from Mountlet use its managed local cache, even when the same remote is mounted. Mountlet can therefore detect local edits, compare the cloud state, upload safe changes, and ask before resolving a conflict.</p>
+          </article>
+          <article>
+            <p class="eyebrow">Mounted filesystem</p>
+            <h3>Applications use normal file paths</h3>
+            <p>Mountlet starts <code>rclone mount</code>, which exposes the remote through FUSE on Linux, macFUSE on macOS, or WinFsp on Windows. Finder, Explorer, Dolphin, terminals, and other applications then interact with the remote through ordinary filesystem operations. Those direct edits bypass Mountlet’s cache and conflict resolver.</p>
+          </article>
+        </div>
+
+        <section class="technical-details" aria-labelledby="technical-details-title">
+          <div class="technical-details-heading">
+            <p class="eyebrow">Technical details</p>
+            <h3 id="technical-details-title">The layers remain separate.</h3>
+          </div>
+          <div class="technical-grid">
+            <article>
+              <h4>Configuration and authentication</h4>
+              <p>rclone stores each remote in <code>rclone.conf</code>. Mountlet uses that same configuration for browser operations and mounted folders, and provides guided setup for common backends.</p>
+            </article>
+            <article>
+              <h4>Metadata and search</h4>
+              <p>Mountlet builds a local SQLite metadata index from recursive rclone listings. Search and initial navigation use the index; current folders are refreshed against the remote in the background.</p>
+            </article>
+            <article>
+              <h4>Cache and offline files</h4>
+              <p>Files opened through Mountlet are copied into its managed local store. Temporary cache can be cleared, while protected offline files remain available and participate in change detection.</p>
+            </article>
+            <article>
+              <h4>Processes and failures</h4>
+              <p>Network operations and mounts run in background rclone processes so the interface remains responsive. Mountlet records rclone output and reports connection or mount failures without blocking unrelated remotes.</p>
+            </article>
+          </div>
+          <p class="technical-reference">
+            <a class="external-link" href="https://rclone.org/docs/" target="_blank" rel="noopener">rclone documentation</a>
+            <a class="external-link" href="https://rclone.org/commands/rclone_mount/" target="_blank" rel="noopener">rclone mount documentation</a>
+          </p>
+        </section>
+      </section>
+
+      <section class="tab-panel notifications-panel" id="panel-notifications" role="tabpanel" aria-labelledby="tab-notifications" data-panel="notifications" hidden>
+        <div class="notifications-heading">
+          <div class="panel-heading">
+            <p class="eyebrow">Notifications</p>
+          </div>
+          <button class="button secondary compact" type="button" id="refresh-notifications">Refresh</button>
+        </div>
+        <label class="site-search" for="notification-search">
+          <span class="sr-only">Search notifications</span>
+          <input id="notification-search" type="search" placeholder="Search notifications" autocomplete="off" />
+        </label>
+        <p class="notice-load-status" id="notifications-status" role="status">Loading notifications...</p>
+        <div class="notifications-list" id="notifications-list" aria-live="polite"></div>
+      </section>
+
+      <section class="tab-panel faq" id="panel-faq" role="tabpanel" aria-labelledby="tab-faq" data-panel="faq" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">FAQ</p>
+        </div>
+        <label class="site-search" for="faq-search">
+          <span class="sr-only">Search frequently asked questions</span>
+          <input id="faq-search" type="search" placeholder="Search FAQ" autocomplete="off" />
+        </label>
+        <p class="filter-status" id="faq-search-status" role="status"></p>
+        <details>
+          <summary>Can Mountlet replace provider desktop apps?</summary>
+          <p>For many daily file tasks, yes. Provider apps may still be better for provider-specific sharing, collaboration, or backup features.</p>
+        </details>
+        <details id="google-photos">
+          <summary>What should I know about Google Photos?</summary>
+          <p>Google limits third-party access. Mountlet can download only media previously uploaded through rclone, and uploads accept images and videos only. Uploads use original quality and count against your Google storage. Drops outside a specific album are sent through Google Photos' upload area rather than the displayed virtual folder.</p>
+          <p>Some virtual views, especially date-based folders, can be slow. Downloaded media may differ from the original: location metadata is removed, images may use a different resolution, and videos may be compressed.</p>
+          <p>Google Photos is not a normal filesystem. Media views are read-only; rclone can remove media only from albums it created and cannot permanently delete it from Google Photos.</p>
+          <p>To conserve Google's restricted API quota, Mountlet does not recursively index Photos or poll cached Photos files for cloud changes. Folders refresh when visited; use Sync now for a manual cached-file check. Custom OAuth clients also need sufficient Photos Library API quota.</p>
+          <p>Uploads require the Google Photos Library API. Mountlet's built-in credentials are prepared for it; if you use your own Google OAuth client, enable the API before uploading. See the <a class="external-link" href="https://rclone.org/googlephotos/#limitations" target="_blank" rel="noopener">rclone Google Photos limitations</a>.</p>
+        </details>
+        <details>
+          <summary>How does Open in web choose a Google account?</summary>
+          <p>Drive and Google Photos remotes can include an optional Google account email. Mountlet passes it to Google when opening the provider website so Google can select the matching browser session.</p>
+          <p>The account must already be signed in within your default browser. This hint does not start a new Google sign-in or redirect an unsigned-in account through authentication. If no matching session exists, Google may keep the current account or show its normal account chooser.</p>
+        </details>
+        <details id="icloud-authentication">
+          <summary>Why does iCloud ask me to sign in again?</summary>
+          <p>Apple can expire an iCloud session even when the remote worked previously. If mounting detects an invalid session or missing authentication cookies, open Mountlet's main window. Mountlet shows one reauthentication prompt there and retries the mount after saving the refreshed session.</p>
+          <p>Approve the sign-in on a trusted Apple device and enter its verification code in Mountlet. To receive a text message instead, enter <code>sms</code>, select a trusted phone number when asked, then enter the SMS code.</p>
+          <p>Use your regular Apple Account password, not an app-specific password. With Advanced Data Protection, enable <strong>Access iCloud Data on the Web</strong> and approve the access request on an Apple device. Account recovery and security-key challenges must still be completed through Apple.</p>
+        </details>
+        <details>
+          <summary>Do I need FUSE, WinFsp, or macFUSE?</summary>
+          <p>A platform filesystem driver provides mounted folder access. Mountlet file management runs independently through the integrated browser, and both workflows can be used together.</p>
+          <p><button class="inline-link tab-action" type="button" data-tab="download" data-scroll-target="mount-dependencies">See platform installation instructions</button>.</p>
+        </details>
+        <details>
+          <summary>How are edits handled when a remote is mounted?</summary>
+          <p>Files opened from Mountlet still use its managed cache and conflict checks. Files opened from the mounted folder in Finder, Explorer, Dolphin, terminals, or other apps use the live rclone mount directly and bypass Mountlet's conflict resolver. Close those files before unmounting.</p>
+        </details>
+        <details>
+          <summary>What is rclone?</summary>
+          <p>It is the cloud access engine Mountlet uses behind the scenes for provider access, file operations, and mounted folders.</p>
+        </details>
+        <details>
+          <summary>Is this open source?</summary>
+          <p>The source is available for non-commercial use. Commercial use or redistribution requires separate permission.</p>
+        </details>
+        <details>
+          <summary>Does Mountlet need to stay online for licensing?</summary>
+          <p>No. Paid builds use a 7-day trial and online activation. Lifetime licenses keep working offline. Subscriptions store a signed local license through the current paid period.</p>
+        </details>
+        <details>
+          <summary>Can subscription prices change?</summary>
+          <p>Yes. Price changes apply only to future renewals, with notice before renewal. You can cancel before the new price applies.</p>
+        </details>
+        <details>
+          <summary>Why does the installer show a security warning?</summary>
+          <p>Current beta builds are not code-signed or Apple-notarized. Only install Mountlet from this site or Mountlet's GitHub release/build artifacts.</p>
+          <ul>
+            <li><strong>Windows:</strong> if SmartScreen shows <em>Windows protected your PC</em>, choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+            <li><strong>macOS:</strong> in Finder, Control-click <strong>Mountlet</strong>, choose <strong>Open</strong>, then confirm. If macOS still blocks it, use <strong>System Settings > Privacy & Security > Open Anyway</strong> for Mountlet.</li>
+            <li><strong>Linux:</strong> install the `.deb` normally. For an extracted portable build, mark the launcher executable if your file manager refuses to run it.</li>
+          </ul>
+          <p>Do not disable SmartScreen, Gatekeeper, or other system protection globally.</p>
+        </details>
+        <details>
+          <summary>How do I get help?</summary>
+          <p>Search this FAQ first. If it does not answer your question, send a support request. Mountlet is independently maintained, so replies may take time.</p>
+        </details>
+      </section>
+
+      <section class="tab-panel support-panel" id="panel-support" role="tabpanel" aria-labelledby="tab-support" data-panel="support" hidden>
+        <div class="panel-heading">
+          <p class="eyebrow">Support</p>
+          <p class="lede">Most common questions are answered in the FAQ. Mountlet is independently maintained, so individual replies may take time.</p>
+        </div>
+        <div class="button-row">
+          <button class="button secondary tab-action" type="button" data-tab="faq">Search FAQ</button>
+        </div>
+        <form class="support-form" id="support-form">
+          <label>
+            Request type
+            <select id="support-category" name="category">
+              <option value="question">Question</option>
+              <option value="problem">Problem</option>
+              <option value="feature">Feature request</option>
+              <option value="billing">License or billing</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            Email <span class="field-note">Optional, needed for a reply</span>
+            <input id="support-contact" name="contact" type="email" autocomplete="email" maxlength="240" />
+          </label>
+          <label>
+            Message
+            <textarea id="support-message" name="message" rows="7" minlength="10" maxlength="12000" required></textarea>
+          </label>
+          <label class="support-honeypot" aria-hidden="true">
+            Website
+            <input name="website" type="text" tabindex="-1" autocomplete="off" />
+          </label>
+          <div class="button-row">
+            <button class="button primary" type="submit">Send request</button>
+            <span class="inline-status" id="support-status" role="status"></span>
+          </div>
+          <p class="note">Do not include passwords, access keys, tokens, or other secrets.</p>
+        </form>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>© 2026 Mountlet</span>
+      <a class="external-link" href="#" data-config-link="repository">GitHub</a>
+      <button class="footer-link tab-action" type="button" data-tab="support">Support</button>
+    </footer>
+  </body>
+</html>

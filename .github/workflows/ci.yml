@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "app/**"
+      - "!app/**/*.md"
+      - "!app/docs/**"
+  push:
+    branches: [main, master, wip]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "app/**"
+      - "!app/**/*.md"
+      - "!app/docs/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Tauri desktop
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+      - name: Check and build frontend
+        working-directory: app
+        run: npm run build
+      - name: Run Rust tests
+        working-directory: app
+        run: cargo test --locked -j 2 --manifest-path src-tauri/Cargo.toml
+      - name: Lint Rust targets
+        working-directory: app
+        run: cargo clippy --locked -j 2 --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Build and probe desktop executable
+        working-directory: app
+        run: |
+          cargo build --locked --manifest-path src-tauri/Cargo.toml
+          version=$(node -p "require('./package.json').version")
+          test "$(src-tauri/target/debug/mountlet --version)" = "Mountlet ${version}"
