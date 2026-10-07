@@ -1,8 +1,10 @@
 # Mountlet OAuth clients
 
 Release builds can include Mountlet-owned OAuth application credentials for the
-six rclone backends that support them. Set these as GitHub Actions repository or
-environment secrets; never commit their values:
+six rclone backends that support them. Save both the client ID and client secret
+as **GitHub Actions repository secrets in `1100soft/mountlet`**, not Actions
+variables. The packaging workflow reads `secrets.MOUNTLET_*`; never commit their
+values:
 
 | Provider | Client ID secret | Client secret secret |
 | --- | --- | --- |
@@ -43,10 +45,19 @@ Use `Mountlet` as the public application name. Prepare a public Mountlet homepag
 privacy-policy URL, and support email; providers may request these during review.
 Create credentials in your developer accounts, then save each pair here:
 
-1. Open https://github.com/1100soft/mountlet/settings/secrets/actions.
-2. Click **New repository secret**.
-3. Enter the exact name from the table above and paste its value.
-4. Click **Add secret**. Repeat for the matching secret.
+1. Open the **`1100soft/mountlet` repository → Settings → Secrets and variables
+   → Actions → Secrets**. Direct link:
+   https://github.com/1100soft/mountlet/settings/secrets/actions.
+2. Click **New repository secret** (not **New repository variable**).
+3. In **Name**, enter the exact name from the table above. In **Secret**, paste
+   the corresponding value from the provider's developer console.
+4. Click **Add secret**. Repeat for the matching client-secret entry. Both
+   entries belong in the **Secrets** tab, including the client ID.
+
+Use repository secrets for the current workflow. Environment secrets require
+the packaging job to reference that GitHub environment; no such environment
+selection is currently configured. After saving the secrets, run a new native
+package build to embed them in the installers.
 
 Do this once as the app publisher. Mountlet users will only sign in to their own
 storage accounts. Registering an app does not automatically grant production
@@ -73,8 +84,12 @@ approval, increase quota, or eliminate provider throttling.
 6. Under **Audience**, add your Google account as a test user.
 7. Under **Clients → Create client**, choose **Desktop app**, name it `Mountlet
    Desktop`, and click **Create**. No manually entered redirect URI is needed.
-8. Save **Client ID** as `MOUNTLET_DRIVE_CLIENT_ID` and **Client secret** as
-   `MOUNTLET_DRIVE_CLIENT_SECRET` in GitHub.
+8. In **`1100soft/mountlet` → Settings → Secrets and variables → Actions →
+   Secrets**, create two **repository secrets**:
+   - **Name:** `MOUNTLET_DRIVE_CLIENT_ID`; **Secret:** the Google **Client ID**.
+   - **Name:** `MOUNTLET_DRIVE_CLIENT_SECRET`; **Secret:** the Google **Client
+     secret**.
+   Click **Add secret** for each. Do not put these in the Variables tab.
 9. Test sign-in, then use **Audience → Publish app** and submit verification
    through Google's verification interface. Prepare a video showing Mountlet's
    sign-in and use of the requested scopes. Review may require additional
