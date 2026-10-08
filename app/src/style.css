@@ -172,6 +172,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .add-remote-form { display: grid; gap: calc(8px * var(--zoom)); }
 .add-remote-help, .add-remote-status { margin: 0; color: var(--muted); }
 .add-remote-port { display: grid; gap: calc(6px * var(--zoom)); }
+.tutorial-highlight { position: relative; z-index: 1401; border-radius: calc(6px * var(--zoom)); animation: tutorial-pulse 1.25s ease-in-out infinite; }
+@keyframes tutorial-pulse { 0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--highlight) 75%, transparent), 0 0 0 7px color-mix(in srgb, var(--highlight) 20%, transparent); } 50% { box-shadow: 0 0 0 5px var(--highlight), 0 0 0 12px color-mix(in srgb, var(--highlight) 12%, transparent); } }
+.tutorial-overlay { position: fixed; z-index: 1400; left: var(--layout-margin); bottom: calc(54px * var(--zoom)); display: flex; align-items: center; gap: calc(12px * var(--zoom)); max-width: calc(310px * var(--zoom)); padding: calc(10px * var(--zoom)) calc(12px * var(--zoom)); color: var(--text); background: var(--window); border: 2px solid var(--highlight); border-radius: calc(7px * var(--zoom)); box-shadow: 0 7px 24px var(--overlay-shadow); }
+.tutorial-coach { position: sticky; z-index: 3; top: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: calc(10px * var(--zoom)); margin: calc(-4px * var(--zoom)) 0 calc(8px * var(--zoom)); padding: calc(8px * var(--zoom)); background: var(--highlight-soft); border: 1px solid var(--highlight); border-radius: calc(6px * var(--zoom)); }
+.tutorial-progress { color: var(--muted); white-space: nowrap; }
+.tutorial-controls { display: flex; gap: calc(6px * var(--zoom)); }
+.tutorial-skip { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .tutorial-highlight { animation: none; box-shadow: 0 0 0 4px var(--highlight); } }
 .link-button { border: 0; padding: 0; background: transparent; color: var(--highlight); text-decoration: underline; }
 .prerequisite-rows { display: grid; gap: calc(8px * var(--zoom)); margin: 0 0 calc(12px * var(--zoom)); }
 

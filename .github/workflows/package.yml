@@ -346,7 +346,9 @@ jobs:
     name: Upload installers to R2
     needs: package
     runs-on: ubuntu-24.04
-    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'wip' || github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v')
+    # Production publication is release-tag-only. Branch builds may validate
+    # packages, and wip may publish previews, but main must never update R2.
+    if: github.ref_name == 'wip' || startsWith(github.ref, 'refs/tags/v')
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}

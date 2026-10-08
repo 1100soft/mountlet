@@ -91,14 +91,19 @@ export function trapModalFocus(layer: HTMLElement, dialog: HTMLElement, defaultF
   app?.setAttribute("inert", "");
   const release = () => {
     if (!document.querySelector(".modal-layer")) app?.removeAttribute("inert");
+    document.dispatchEvent(new Event("mountlet-modal-change"));
   };
   const observer = new MutationObserver(() => {
     if (!layer.isConnected) {
       release();
       observer.disconnect();
+      sizeObserver.disconnect();
     }
   });
+  const sizeObserver = new ResizeObserver(() => document.dispatchEvent(new Event("mountlet-modal-change")));
+  sizeObserver.observe(dialog);
   observer.observe(document.body, { childList: true });
+  queueMicrotask(() => document.dispatchEvent(new Event("mountlet-modal-change")));
   const focusable = () => [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(item => !item.closest("[hidden], [inert]"));
   layer.addEventListener("keydown", event => {
     event.stopPropagation();
@@ -127,6 +132,12 @@ export function trapModalFocus(layer: HTMLElement, dialog: HTMLElement, defaultF
       event.preventDefault();
       first.focus();
     }
+  });
+  layer.addEventListener("mousedown", event => {
+    if (event.target !== layer || !layer.isConnected) return;
+    const cancel = dialog.querySelector<HTMLButtonElement>("[data-dialog-cancel]")
+      ?? [...dialog.querySelectorAll<HTMLButtonElement>(".dialog-actions button")].find(button => /^(cancel|close|no|later)$/i.test(button.textContent?.trim() ?? ""));
+    if (cancel && !cancel.disabled) cancel.click(); else layer.remove();
   });
   window.focus();
   queueMicrotask(() => (defaultFocus && dialog.contains(defaultFocus) ? defaultFocus : focusable()[0])?.focus());

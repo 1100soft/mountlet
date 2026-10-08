@@ -265,6 +265,7 @@ struct WindowLayoutRequest {
     browser_row_height: u32,
     browser_width: u32,
     browser_min_height: u32,
+    dialog_min_height: u32,
     available_x: f64,
     available_y: f64,
     available_width: f64,
@@ -5526,7 +5527,8 @@ fn layout_windows(
         remote_content_height.max(f64::from(request.browser_min_height))
     } else {
         remote_content_height
-    };
+    }
+    .max(f64::from(request.dialog_min_height));
     let target_main_outer_width = (main_content_width + main_frame_w).min(available_width);
     let target_main_outer_height = (main_content_height + main_frame_h).min(available_height);
     let visible = main.is_visible().unwrap_or(false);
@@ -5580,6 +5582,7 @@ fn layout_windows(
         } else {
             0.0
         })
+        .max(f64::from(request.dialog_min_height))
         .min(main_max_inner_height);
     let _ = main.set_min_size(Some(LogicalSize::new(
         360.0_f64.min(main_max_inner_width),

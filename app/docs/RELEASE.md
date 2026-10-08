@@ -9,9 +9,10 @@ release and remains frozen under `legacy/python-0.6.8/`.
   **Native package CI**.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
   `app/src-tauri/tauri.conf.json` identical to the release tag.
-- A `wip` build is a preview build and uploads to preview R2. A push to `main`
-  or a `vX.Y.Z` tag is a production build and uploads to production R2. Do not
-  publish production installers by manually reusing preview artifacts.
+- A `wip` build is a preview build and uploads to preview R2. Production
+  installers are uploaded to production R2 only by a `vX.Y.Z` tag. Pushes and
+  manual workflow runs on `main` validate packages but must never publish them.
+  Do not publish production installers by manually reusing preview artifacts.
 - Only a `vX.Y.Z` tag publishes to the 1100 Software APT repository. APT carries
   the standard Linux package with bundled rclone; the lean package remains a
   direct download because both variants have the same Debian package identity.
@@ -49,7 +50,7 @@ release and remains frozen under `legacy/python-0.6.8/`.
    a successful aggregate job while one platform/variant job is cancelled or
    skipped unexpectedly.
 3. Download installers by artifact name or use the uniquely versioned preview
-   filenames. Do not identify a preview solely by the displayed `0.7.0`.
+   filenames. Do not identify a preview solely by the displayed `0.7.1`.
 
 ## 2. Exercise preview installers
 
@@ -95,7 +96,7 @@ variables (values are case-sensitive):
 - `MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME` = Package/Properties/PublisherDisplayName
 
 A tagged build deliberately fails its bundled Windows job if any identity value
-is absent. Mountlet `0.7.0` maps to Store package version `1.7.0.0`: the major
+is absent. Mountlet `0.7.1` maps to Store package version `1.7.1.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth
 component remains zero because Microsoft reserves it. Application-visible
 versions remain normal SemVer.
@@ -138,10 +139,8 @@ from preview:
 ## 4. Promote and publish
 
 1. Merge the tested `wip` commit to `main` without adding untested changes.
-2. Wait for Native package CI on `main`: all eight package jobs and
-   **Upload installers to R2**. The uploader validates `web/release-files.json`,
-   writes versioned objects, updates the release index, and retains the
-   configured five versions.
+2. Wait for Native package CI on `main`: all eight package jobs must pass. The
+   main-branch run deliberately does not upload production installers.
 3. Wait for the production Pages deployment, then initialize/upgrade D1 and
    run the deployment check described in `web/README.md`.
 4. Confirm `/api/health` reports healthy licensing, GitHub reporting, D1, and
@@ -154,7 +153,10 @@ from preview:
    git push origin vX.Y.Z
    ```
 
-6. Wait for **Publish Linux package to APT** in the tagged Native
+6. Wait for the tagged Native package CI run. Its **Upload installers to R2**
+   job validates `web/release-files.json`, writes versioned production objects,
+   updates the release index, and retains the configured five versions. Also
+   wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
    The source workflow validates and uploads one `apt-packages` artifact
    containing both `mountlet` and `mountlet-lean`, while the central workflow

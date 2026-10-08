@@ -1,6 +1,6 @@
 [package]
 name = "mountlet-desktop"
-version = "0.7.0"
+version = "0.7.1"
 description = "Mountlet desktop tray application"
 authors = ["Mountlet contributors"]
 edition = "2021"

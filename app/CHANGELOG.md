@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 - 2026-09-01
+
+- Added a concise first-run tutorial for creating the first remote, with
+  animated, provider-aware highlights and a reusable Help menu entry.
+- Restored Google OAuth client setup guidance and warned that rclone's shared
+  Google client is retiring during 2026.
+- Made dialogs dismiss when their backdrop is clicked and resize the native
+  parent window to fit when the monitor has enough room.
+- Kept tutorial state and focus intact when reopening Mountlet from the tray.
+- Restricted production installer publication to version-tag builds.
+
 ## 0.7.0 - 2026-08-27
 
 - Replaced the Python/Qt desktop application with the Rust/Tauri implementation.
