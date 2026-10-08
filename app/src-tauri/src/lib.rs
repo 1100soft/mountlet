@@ -1780,7 +1780,15 @@ fn safe_rclone_keys(provider: &str) -> &'static [&'static str] {
             "include_archived",
             "start_year",
         ],
-        "onedrive" => &["description", "drive_type", "region", "drive_id"],
+        "dropbox" | "box" | "pcloud" => &["description", "client_id", "client_secret"],
+        "onedrive" => &[
+            "description",
+            "client_id",
+            "client_secret",
+            "drive_type",
+            "region",
+            "drive_id",
+        ],
         "webdav" => &[
             "description",
             "url",
@@ -4220,15 +4228,13 @@ fn create_remote(
             if let (Some(client_id), Some(client_secret)) =
                 (section.get("client_id"), section.get("client_secret"))
             {
-                fields
-                    .entry("client_id".into())
-                    .or_insert_with(|| client_id.clone());
-                fields
-                    .entry("client_secret".into())
-                    .or_insert_with(|| client_secret.clone());
+                if request.provider == "drive" {
+                    apply_oauth_credentials(&mut fields, (Some(client_id), Some(client_secret)));
+                }
             }
         }
     }
+    apply_embedded_oauth_credentials(&request.provider, &mut fields);
     let mut command = Command::new(rclone);
     command.args(["--config"]).arg(config).args([
         "config",
@@ -4283,6 +4289,62 @@ fn create_remote(
     )?;
     refresh_remote_state(&state)?;
     Ok(remote_id)
+}
+
+fn embedded_oauth_credentials(provider: &str) -> (Option<&'static str>, Option<&'static str>) {
+    match provider {
+        "drive" => (
+            option_env!("MOUNTLET_DRIVE_CLIENT_ID"),
+            option_env!("MOUNTLET_DRIVE_CLIENT_SECRET"),
+        ),
+        "gphotos" => (
+            option_env!("MOUNTLET_GPHOTOS_CLIENT_ID"),
+            option_env!("MOUNTLET_GPHOTOS_CLIENT_SECRET"),
+        ),
+        "dropbox" => (
+            option_env!("MOUNTLET_DROPBOX_CLIENT_ID"),
+            option_env!("MOUNTLET_DROPBOX_CLIENT_SECRET"),
+        ),
+        "onedrive" => (
+            option_env!("MOUNTLET_ONEDRIVE_CLIENT_ID"),
+            option_env!("MOUNTLET_ONEDRIVE_CLIENT_SECRET"),
+        ),
+        "box" => (
+            option_env!("MOUNTLET_BOX_CLIENT_ID"),
+            option_env!("MOUNTLET_BOX_CLIENT_SECRET"),
+        ),
+        "pcloud" => (
+            option_env!("MOUNTLET_PCLOUD_CLIENT_ID"),
+            option_env!("MOUNTLET_PCLOUD_CLIENT_SECRET"),
+        ),
+        _ => (None, None),
+    }
+}
+
+fn apply_embedded_oauth_credentials(provider: &str, fields: &mut HashMap<String, String>) {
+    apply_oauth_credentials(fields, embedded_oauth_credentials(provider));
+}
+
+fn apply_oauth_credentials(
+    fields: &mut HashMap<String, String>,
+    credentials: (Option<&str>, Option<&str>),
+) {
+    // Credentials belong to one registration: never fill half of a custom pair.
+    if ["client_id", "client_secret"].iter().any(|key| {
+        fields
+            .get(*key)
+            .is_some_and(|value| !value.trim().is_empty())
+    }) {
+        return;
+    }
+    let Some(client_id) = credentials.0.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    fields.insert("client_id".into(), client_id.into());
+    fields.insert(
+        "client_secret".into(),
+        credentials.1.unwrap_or_default().into(),
+    );
 }
 
 #[tauri::command]
@@ -7726,6 +7788,39 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oauth_defaults_preserve_registration_boundaries() {
+        use super::apply_oauth_credentials;
+        use std::collections::HashMap;
+        for explicit in [
+            vec![("client_id", "custom")],
+            vec![("client_secret", "custom-secret")],
+            vec![("client_id", "custom"), ("client_secret", "custom-secret")],
+            vec![("client_id", "custom"), ("client_secret", "")],
+        ] {
+            let mut fields: HashMap<String, String> = explicit
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect();
+            let original = fields.clone();
+            apply_oauth_credentials(&mut fields, (Some("embedded"), Some("embedded-secret")));
+            assert_eq!(fields, original);
+        }
+        let mut fields = HashMap::from([("client_id".into(), "  ".into())]);
+        apply_oauth_credentials(&mut fields, (None, Some("orphan-secret")));
+        assert!(!fields.contains_key("client_secret"));
+        apply_oauth_credentials(&mut fields, (Some("embedded"), Some("embedded-secret")));
+        assert_eq!(fields["client_id"], "embedded");
+        assert_eq!(fields["client_secret"], "embedded-secret");
+        apply_oauth_credentials(&mut fields, (Some("other"), Some("other-secret")));
+        assert_eq!(fields["client_id"], "embedded");
+        assert_eq!(fields["client_secret"], "embedded-secret");
+        let mut public_client = HashMap::new();
+        apply_oauth_credentials(&mut public_client, (Some("public"), None));
+        assert_eq!(public_client["client_id"], "public");
+        assert_eq!(public_client["client_secret"], "");
+    }
+
     use super::*;
 
     #[test]

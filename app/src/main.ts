@@ -2627,7 +2627,7 @@ async function start(): Promise<void> {
       return match;
     };
     const providerField = row("Provider").querySelector("select") as HTMLSelectElement;
-    const credentialField = row("Google client").querySelector("select") as HTMLSelectElement;
+    const credentialField = row("OAuth client").querySelector("select") as HTMLSelectElement;
     const clientIdRow = row("Client ID");
     const clientSecretRow = row("Client secret");
     const s3ProviderRow = row("S3 provider");
@@ -2636,8 +2636,23 @@ async function start(): Promise<void> {
     if (getComputedStyle(clientIdRow).display === "none" || getComputedStyle(clientSecretRow).display === "none") throw new Error("Custom Drive client fields stayed hidden");
     credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
     if (getComputedStyle(clientIdRow).display !== "none" || getComputedStyle(clientSecretRow).display !== "none") throw new Error("Existing Drive client showed custom credential fields");
+    const reuseOption = new Option("Smoke test Drive credentials", "smoke-drive-source");
+    credentialField.add(reuseOption);
+    for (const type of ["gphotos", "dropbox", "onedrive", "box", "pcloud"]) {
+      credentialField.value = reuseOption.value;
+      providerField.value = type; providerField.dispatchEvent(new Event("change"));
+      if (credentialField.value !== "builtin" || !reuseOption.disabled || !reuseOption.hidden) throw new Error(`${type} offered Drive credential reuse`);
+      if (row("OAuth client").hidden) throw new Error(`${type} hid its OAuth client selector`);
+      credentialField.value = "custom"; credentialField.dispatchEvent(new Event("change"));
+      if (clientIdRow.hidden || clientSecretRow.hidden) throw new Error(`${type} hid custom credentials`);
+      credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
+      if (!clientIdRow.hidden || !clientSecretRow.hidden) throw new Error(`${type} showed default client credentials`);
+    }
+    providerField.value = "drive"; providerField.dispatchEvent(new Event("change"));
+    if (reuseOption.disabled || reuseOption.hidden) throw new Error("Drive credential reuse stayed disabled");
+    reuseOption.remove();
     providerField.value = "s3"; providerField.dispatchEvent(new Event("change"));
-    if (getComputedStyle(s3ProviderRow).display === "none" || getComputedStyle(row("Google client")).display !== "none") throw new Error("S3 provider fields were not isolated");
+    if (getComputedStyle(s3ProviderRow).display === "none" || getComputedStyle(row("OAuth client")).display !== "none") throw new Error("S3 provider fields were not isolated");
     (addRemoteDialog.querySelector(".dialog-actions button") as HTMLButtonElement).click();
     await addRemoteResult;
     checks.push("add-remote-fields");

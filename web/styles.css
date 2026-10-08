@@ -13,6 +13,33 @@
   --shadow: 0 22px 70px rgba(25, 35, 55, 0.14);
 }
 
+body.privacy-page {
+  height: auto;
+  min-height: 100vh;
+  overflow: auto;
+  grid-template-rows: auto 1fr auto;
+}
+
+.privacy-content {
+  width: min(100% - 2rem, 52rem);
+  margin: 2rem auto 4rem;
+  overflow-wrap: anywhere;
+}
+
+.privacy-content h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+}
+
+.privacy-content h2 {
+  margin-top: 2rem;
+  font-size: 1.35rem;
+}
+
+.privacy-content a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
 * {
   box-sizing: border-box;
 }

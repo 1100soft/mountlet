@@ -1,4 +1,4 @@
-name: CI
+name: App CI
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
       - "!app/**/*.md"
       - "!app/docs/**"
   push:
-    branches: [main, master, wip]
+    branches: [main, wip]
     paths:
       - ".github/workflows/ci.yml"
       - "app/**"

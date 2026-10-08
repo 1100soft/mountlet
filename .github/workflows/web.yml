@@ -1,4 +1,4 @@
-name: Website
+name: Website integration
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ on:
       - "wrangler.toml"
       - "!web/**/*.md"
   push:
-    branches: [main, master, wip]
+    branches: [main, wip]
     paths:
       - ".github/workflows/web.yml"
       - ".github/workflows/package.yml"
