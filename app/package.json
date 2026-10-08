@@ -1,0 +1,24 @@
+{
+  "name": "mountlet-desktop",
+  "private": true,
+  "version": "0.7.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "check": "node scripts/check-version.mjs && tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "build": "npm run check && vite build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:msix": "powershell -NoProfile -File src-tauri/windows/pack-msix.ps1 -Output artifacts/mountlet-windows.msix"
+  },
+  "dependencies": {
+    "@crabnebula/tauri-plugin-drag": "^2.1.0",
+    "@tauri-apps/api": "^2.8.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2"
+  }
+}

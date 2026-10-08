@@ -1,0 +1,4510 @@
+from __future__ import annotations
+
+from contextlib import suppress
+import json
+import threading
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable
+
+from . import core, rclone_log
+from .badged_button import create_badged_button, set_badge
+from .cloud_browser import (
+    BrowserEntry,
+    CloudBrowserBackend,
+    DRIVE_EDITABLE_DOCUMENT_FORMATS,
+    ListingCancelled,
+    TransferItem,
+    format_file_size,
+    normalize_browser_path,
+    parent_browser_path,
+)
+from .metadata_index import IndexedEntry
+from .settings import load_app_settings
+from .shortcuts import matches_shortcut
+from .ui_icons import apply_button_icon, mountlet_icon, refresh_widget_icons, refresh_widget_palette
+
+MIME_TYPE = "application/x-mountlet-remote-files"
+EMBEDDED_BROWSER_MIN_WIDTH = 540
+EMBEDDED_BROWSER_MIN_HEIGHT = 340
+FILE_BROWSER_MIN_HEIGHT = 240
+FILE_BROWSER_STATUS_MAX_CHARS = 140
+RCLONE_OUTPUT_TAIL_LINES = 10
+RCLONE_OUTPUT_MIN_LINES = 8
+RCLONE_OUTPUT_MAX_LINES = 16
+CHILD_FOLDER_PREFETCH_LIMIT = 24
+OFFLINE_SAVED_BADGE_COLOR = "#22c55e"
+ENTRY_ICON_SIZE = 30
+OFFLINE_JOB_CONCURRENCY = 3
+FILE_BROWSER_SELECTION_STYLE = """
+QTreeWidget {
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+}
+QTreeWidget::item:hover:!selected {
+    background: transparent;
+}
+QTreeWidget::item:focus {
+    outline: 0;
+}
+QTreeWidget::item:selected,
+QTreeWidget::item:selected:active,
+QTreeWidget::item:selected:!active {
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
+}
+"""
+
+
+def cascade_position(
+    main_rect: tuple[int, int, int, int],
+    row_y: int,
+    available: tuple[int, int, int, int],
+    browser_size: tuple[int, int],
+) -> tuple[int, int]:
+    main_x, _main_y, main_width, _main_height = main_rect
+    left, top, available_width, available_height = available
+    width = browser_size[0] if browser_size[0] > 0 else EMBEDDED_BROWSER_MIN_WIDTH
+    height = browser_size[1] if browser_size[1] > 0 else EMBEDDED_BROWSER_MIN_HEIGHT
+    right_edge = left + available_width
+    main_right = main_x + main_width
+    right_space = right_edge - main_right
+    left_space = main_x - left
+    x = main_right + 8 if right_space >= width + 8 or right_space >= left_space else main_x - width - 8
+    x = min(max(x, left), max(left, right_edge - width))
+    y = min(max(row_y, top), max(top, top + available_height - height))
+    return x, y
+
+
+def _paths_overlap(left_paths: list[str], right_paths: list[str]) -> bool:
+    for left in left_paths:
+        normalized_left = normalize_browser_path(left)
+        for right in right_paths:
+            normalized_right = normalize_browser_path(right)
+            if not normalized_left or not normalized_right:
+                return True
+            if normalized_left == normalized_right:
+                return True
+            if normalized_left and normalized_right.startswith(f"{normalized_left}/"):
+                return True
+            if normalized_right and normalized_left.startswith(f"{normalized_right}/"):
+                return True
+    return False
+
+
+class CompactCloudBrowser:
+    def __init__(
+        self,
+        qt: Any,
+        main_window: Any,
+        *,
+        remotes: Callable[[], list[core.RemoteInfo]],
+        notify: Callable[[str, str, bool], None],
+        open_mount: Callable[[core.RemoteInfo, str], None],
+        file_manager_label: Callable[[], str],
+        open_file: Callable[[Path], bool] | None = None,
+        open_local_folder: Callable[[Path], bool] | None = None,
+        is_mounted: Callable[[core.RemoteInfo], bool] | None = None,
+        toggle_mount: Callable[[str, bool], None] | None = None,
+        sync_paths: Callable[[core.RemoteInfo, list[tuple[str, bool]]], None] | None = None,
+        embedded: bool = False,
+        keyboard_shortcuts_enabled: bool = True,
+        layout_changed: Callable[[], None] | None = None,
+        local_files_changed: Callable[[], None] | None = None,
+    ) -> None:
+        self.qt = qt
+        self.main_window = main_window
+        self._remotes = remotes
+        self._notify = notify
+        self._open_mount = open_mount
+        self._open_file = open_file
+        self._open_local_folder = open_local_folder
+        self._is_mounted = is_mounted or core.is_mounted
+        self._toggle_mount = toggle_mount
+        self._sync_paths = sync_paths
+        self._keyboard_shortcuts_enabled = keyboard_shortcuts_enabled
+        self._file_manager_name = file_manager_label
+        self._embedded = embedded
+        self._layout_changed = layout_changed or (lambda: None)
+        self._local_files_changed = local_files_changed or (lambda: None)
+        app_settings = load_app_settings()
+        self._integrated_file_edits = bool(app_settings.integrated_file_edits)
+        self._file_list_max_items = max(int(getattr(app_settings, "file_list_max_items", 0)), 0)
+        self.backend = CloudBrowserBackend()
+        self.remote: core.RemoteInfo | None = None
+        self.path = ""
+        self._side = "right"
+        self.entries: list[BrowserEntry] = []
+        self._rendered_key: tuple[str, str] | None = None
+        self.clipboard: tuple[list[TransferItem], bool] | None = None
+        self._pending_operations: dict[int, dict[str, object]] = {}
+        self._next_operation_id = 1
+        self._zoom_steps = 0
+        self._folder_cache: dict[tuple[str, str], list[BrowserEntry]] = {}
+        self._loads_pending: set[tuple[str, str]] = set()
+        self._listing_cancel_events: dict[tuple[str, str], threading.Event] = {}
+        self._active_listing_by_remote: dict[str, tuple[str, str]] = {}
+        self._listing_request_ids: dict[tuple[str, str], int] = {}
+        self._next_listing_request_id = 1
+        self._entry_state_cache: dict[tuple[str, str, bool], tuple[bool, bool, bool, bool, bool]] = {}
+        self._remote_managed_cache: dict[str, bool] = {}
+        self._entry_state_scans_pending: set[tuple[str, str]] = set()
+        self._entry_state_scan_slots = threading.BoundedSemaphore(1)
+        self._painted_selected_items: set[Any] = set()
+        self._rendering_entries = False
+        self._working_paths: dict[tuple[str, str], str] = {}
+        self._working_directory_kinds: dict[tuple[str, str], str] = {}
+        self._working_paths_by_kind: dict[tuple[str, str], set[str]] = {}
+        self._working_phase = 0
+        self._working_timer: Any | None = None
+        self._working_state_scan_running = False
+        self._working_state_scan_requested = False
+        self._rclone_output_dialog: Any | None = None
+        self._rclone_output_text: Any | None = None
+        self._rclone_raw_output_text: Any | None = None
+        self._search_dialog: Any | None = None
+        self._search_tree: Any | None = None
+        self._search_results: list[IndexedEntry] = []
+        self._search_pending = False
+        self._search_verify_pending = False
+        self._search_timer: Any | None = None
+        self._search_filters: list[Any] = []
+        self._rclone_output_lines: list[str] = []
+        self._rclone_progress_block: list[str] = []
+        self._offline_jobs_running = 0
+        self._offline_job_queue: list[
+            tuple[str, str, Callable[[], object], list[str], str, Callable[[], list[BrowserEntry]] | None]
+        ] = []
+        self._drag_export_pending: set[tuple[str, str]] = set()
+        self._drag_export_slots = threading.BoundedSemaphore(2)
+        self._drop_hover_item: Any | None = None
+        self._theme_icon_refresh_pending = False
+        self._indexing_remote_names: set[str] = set()
+        self._auto_index_requested = False
+        self._pending_select_path = ""
+        self._closed_until_selected = False
+        self._disposed = False
+        self._load_slots = threading.BoundedSemaphore(4)
+        self._photo_load_slots = threading.BoundedSemaphore(1)
+        self._bridge = self._make_bridge()
+        self._bridge.listing_ready.connect(self._listing_ready)
+        self._bridge.operation_finished.connect(self._operation_finished)
+        self._bridge.cached_file_ready.connect(self._cached_file_ready)
+        self._bridge.drag_export_ready.connect(self._drag_export_ready)
+        self._bridge.offline_job_paths_ready.connect(self._offline_job_paths_ready)
+        self._bridge.offline_job_finished.connect(self._offline_job_finished)
+        self._bridge.rclone_output_ready.connect(self._append_rclone_output)
+        self._bridge.rclone_raw_log_changed.connect(self._raw_rclone_log_changed)
+        self._bridge.search_ready.connect(self._search_ready)
+        self._bridge.index_finished.connect(self._index_finished)
+        self._bridge.entry_states_ready.connect(self._entry_states_ready)
+        self._bridge.working_paths_ready.connect(self._working_paths_ready)
+        self.backend.operation_output_callback = lambda text: self._bridge.rclone_output_ready.emit(text)
+        self._unsubscribe_rclone_log = rclone_log.subscribe(
+            lambda _text: self._bridge.rclone_raw_log_changed.emit()
+        )
+        self.window = self._make_window()
+        self._file_icon_provider = self._make_file_icon_provider()
+        self._base_entry_icon_cache: dict[tuple[str, str], Any] = {}
+        self._build()
+        self._setup_search_timer()
+        self._setup_working_animation()
+
+    def _make_bridge(self) -> Any:
+        qt = self.qt
+
+        class Bridge(qt.QObject):
+            listing_ready = qt.Signal(str, str, int, object, str)
+            operation_finished = qt.Signal(int, bool, str)
+            cached_file_ready = qt.Signal(str, str, object, str)
+            drag_export_ready = qt.Signal(str, object, str)
+            offline_job_paths_ready = qt.Signal(str, object, str)
+            offline_job_finished = qt.Signal(str, object, str, bool, str)
+            rclone_output_ready = qt.Signal(str)
+            rclone_raw_log_changed = qt.Signal()
+            search_ready = qt.Signal(str, object, str)
+            index_finished = qt.Signal(str, int, str)
+            entry_states_ready = qt.Signal(str, str, object, object, str)
+            working_paths_ready = qt.Signal(object)
+
+        return Bridge()
+
+    def _make_window(self) -> Any:
+        outer = self
+        flags = self.qt.Qt.WindowType.Tool | self.qt.Qt.WindowType.FramelessWindowHint
+
+        class BrowserWindow(self.qt.QMainWindow):
+            def mousePressEvent(self, event: Any) -> None:
+                outer._activate_from_mouse()
+                super().mousePressEvent(event)
+
+            def keyPressEvent(self, event: Any) -> None:
+                outer._release_main_hover_suppression()
+                if outer._handle_key(event):
+                    return
+                super().keyPressEvent(event)
+
+            def focusInEvent(self, event: Any) -> None:
+                super().focusInEvent(event)
+                outer._set_focus_owner("browser")
+                outer.qt.QTimer.singleShot(0, lambda: outer._set_focus_owner("browser"))
+                outer._ensure_tree_selection()
+
+            def changeEvent(self, event: Any) -> None:
+                super().changeEvent(event)
+                if event.type() in {
+                    outer.qt.QEvent.Type.ActivationChange,
+                    outer.qt.QEvent.Type.WindowActivate,
+                    outer.qt.QEvent.Type.WindowDeactivate,
+                }:
+                    if event.type() == outer.qt.QEvent.Type.WindowActivate:
+                        outer._set_focus_owner("browser")
+                        outer.qt.QTimer.singleShot(0, lambda: outer._set_focus_owner("browser"))
+                    outer._position_rclone_output()
+
+            def moveEvent(self, event: Any) -> None:
+                super().moveEvent(event)
+                outer._position_rclone_output()
+
+            def resizeEvent(self, event: Any) -> None:
+                super().resizeEvent(event)
+                outer._position_rclone_output()
+
+        try:
+            window = BrowserWindow(None, flags)
+        except Exception:
+            window = BrowserWindow()
+            window.setWindowFlags(flags)
+        window.setWindowTitle("Mountlet Files")
+        window.resize(520, 390)
+        return window
+
+    def _build(self) -> None:
+        qt = self.qt
+        root = qt.QWidget()
+        root.setObjectName("fileBrowserSurface")
+        root.setMinimumSize(EMBEDDED_BROWSER_MIN_WIDTH, EMBEDDED_BROWSER_MIN_HEIGHT)
+        root.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
+        root.enterEvent = lambda event: self._release_main_hover_suppression()
+        self.root = root
+        layout = qt.QVBoxLayout(root)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(5)
+        with suppress(Exception):
+            layout.setAlignment(qt.Qt.AlignmentFlag.AlignTop)
+
+        header = qt.QHBoxLayout()
+        self.title = qt.QLabel("Files")
+        font = self.title.font()
+        font.setBold(True)
+        self.title.setFont(font)
+        header.addWidget(self.title)
+        header.addStretch(1)
+        self.mount_switch = self._mount_switch()
+        header.addWidget(self.mount_switch)
+        self.remote_sync_button = self._button(
+            "⇄",
+            self.sync_remote,
+            "Sync cached files for this remote",
+            square=True,
+            icon_name="ui-sync",
+        )
+        header.addWidget(self.remote_sync_button)
+        self.remote_remove_offline_button = self._button(
+            "",
+            self.remove_remote_offline,
+            "Remove offline files for this remote",
+            square=True,
+            icon_name="ui-remove-offline",
+        )
+        header.addWidget(self.remote_remove_offline_button)
+        self.remote_clear_cache_button = self._button(
+            "",
+            self.clear_remote_cache,
+            "Clear resolved cache for this remote",
+            square=True,
+            icon_name="ui-clear-cache",
+        )
+        header.addWidget(self.remote_clear_cache_button)
+        self.rclone_output_button = self._button(
+            "▤",
+            self._show_rclone_output,
+            "Show rclone output",
+            square=True,
+            icon_name="ui-rclone-output",
+        )
+        header.addWidget(self.rclone_output_button)
+        if not self._embedded:
+            header.addWidget(
+                self._button(
+                    "×",
+                    self.hide_until_selected,
+                    "Close file browser",
+                    square=True,
+                    icon_name="ui-window-close",
+                )
+            )
+        layout.addLayout(header)
+
+        navigation = qt.QHBoxLayout()
+        self.up_button = self._button("↑", self.go_up, "Parent folder", square=True, icon_name="ui-parent")
+        self.root_button = self._button("⌂", self.go_root, "Remote root", square=True, icon_name="ui-home")
+        self.path_field = qt.QLineEdit()
+        self.path_field.setReadOnly(True)
+        self.path_field.setPlaceholderText("Remote root")
+        self.path_field.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.path_field.customContextMenuRequested.connect(self._show_folder_menu)
+        navigation.addWidget(self.up_button)
+        navigation.addWidget(self.root_button)
+        navigation.addWidget(self.path_field, 1)
+        navigation.addWidget(
+            self._button(
+                "↻",
+                lambda: self.refresh(force=True),
+                "Refresh folder",
+                square=True,
+                icon_name="ui-refresh",
+            )
+        )
+        self.open_folder_button = self._button(
+            "↗",
+            self._open_current_mount,
+            "Open this folder in the system file manager",
+            square=True,
+            icon_name="ui-folder-open",
+        )
+        navigation.addWidget(self.open_folder_button)
+        layout.addLayout(navigation)
+
+        search_layout = qt.QHBoxLayout()
+        self.search_field = qt.QLineEdit()
+        self.search_field.setPlaceholderText("Search this remote")
+        self._style_search_field(self.search_field)
+        self.search_field.textChanged.connect(self._search_text_changed)
+        self.search_field.returnPressed.connect(self._open_current_search_result)
+        self.search_field.installEventFilter(self._make_search_key_filter())
+        search_layout.addWidget(self.search_field, 1)
+        layout.addLayout(search_layout)
+
+        self.search_results = qt.QTreeWidget()
+        self.search_results.setColumnCount(3)
+        self.search_results.setHeaderLabels(["Name", "Path", "Modified"])
+        self.search_results.setRootIsDecorated(False)
+        self.search_results.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.search_results.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        with suppress(Exception):
+            self.search_results.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.search_results.setMaximumHeight(0)
+        self.search_results.setMinimumHeight(0)
+        self.search_results.setVisible(False)
+        self.search_results.itemClicked.connect(self._open_search_result)
+        self.search_results.itemDoubleClicked.connect(self._open_search_result)
+        self.search_results.currentItemChanged.connect(self._preview_search_result)
+        self.search_results.installEventFilter(self._make_search_key_filter())
+        layout.addWidget(self.search_results)
+
+        item_actions = qt.QHBoxLayout()
+        self.copy_button = self._button("⧉", self.copy_selected, "Copy selected items", square=True, icon_name="ui-copy")
+        self.cut_button = self._button("✂", self.cut_selected, "Cut selected items", square=True, icon_name="ui-cut")
+        self.paste_button = self._button("▣", self.paste, "Paste into this folder", square=True, icon_name="ui-paste")
+        self.delete_button = self._button(
+            "⌫",
+            self.delete_selected,
+            "Delete selected items",
+            square=True,
+            icon_name="ui-delete",
+        )
+        self.offline_button = self._button(
+            "",
+            self.toggle_offline,
+            "Make selected items available offline",
+            square=True,
+            icon_name="ui-save-offline",
+        )
+        self.selection_remove_offline_button = self._button(
+            "",
+            self.remove_selected_offline,
+            "Remove offline copies for selected items",
+            square=True,
+            icon_name="ui-remove-offline",
+        )
+        self.selection_clear_cache_button = self._button(
+            "",
+            self.clear_selected_cache,
+            "Clear resolved cache for selected items",
+            square=True,
+            icon_name="ui-clear-cache",
+        )
+        self.selection_sync_button = self._button(
+            "⇄",
+            self.sync_selected,
+            "Sync selected local copies",
+            square=True,
+            icon_name="ui-sync",
+        )
+        save_icon = self._offline_icon()
+        self._offline_base_icon = save_icon
+        if save_icon is not None:
+            self.offline_button.setIcon(save_icon)
+        item_actions.addWidget(self.copy_button)
+        item_actions.addWidget(self.cut_button)
+        item_actions.addWidget(self.paste_button)
+        item_actions.addWidget(self.delete_button)
+        item_actions.addWidget(self.offline_button)
+        item_actions.addWidget(self.selection_remove_offline_button)
+        item_actions.addWidget(self.selection_clear_cache_button)
+        item_actions.addWidget(self.selection_sync_button)
+        item_actions.addStretch(1)
+        layout.addLayout(item_actions)
+
+        outer = self
+
+        class FileTree(qt.QTreeWidget):
+            def mousePressEvent(self, event: Any) -> None:
+                outer._activate_from_mouse()
+                super().mousePressEvent(event)
+
+            def startDrag(self, _supported_actions: Any) -> None:
+                outer._start_file_drag(self, outer._selected_entries())
+
+            def dragEnterEvent(self, event: Any) -> None:
+                if outer.preview_drop(event, self):
+                    return
+                super().dragEnterEvent(event)
+
+            def dragMoveEvent(self, event: Any) -> None:
+                if outer.preview_drop(event, self):
+                    return
+                super().dragMoveEvent(event)
+
+            def dragLeaveEvent(self, event: Any) -> None:
+                outer.leave_drop()
+                super().dragLeaveEvent(event)
+
+            def dropEvent(self, event: Any) -> None:
+                if outer.perform_drop(event):
+                    return
+                super().dropEvent(event)
+
+            def keyPressEvent(self, event: Any) -> None:
+                if outer._handle_key(event):
+                    return
+                super().keyPressEvent(event)
+
+            def wheelEvent(self, event: Any) -> None:
+                try:
+                    modifiers = event.modifiers()
+                except Exception:
+                    modifiers = qt.Qt.KeyboardModifier.NoModifier
+                if modifiers & qt.Qt.KeyboardModifier.ControlModifier:
+                    delta = event.angleDelta().y()
+                    if delta > 0:
+                        outer.zoom_in()
+                    elif delta < 0:
+                        outer.zoom_out()
+                    event.accept()
+                    return
+                super().wheelEvent(event)
+
+        self.tree = FileTree()
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Name", "Size", "Modified"])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setAlternatingRowColors(False)
+        self.tree.setSelectionMode(qt.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setSelectionBehavior(qt.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tree.setDragDropMode(qt.QAbstractItemView.DragDropMode.DragDrop)
+        self.tree.setDragEnabled(False)
+        self.tree.setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(True)
+        self.tree.setEditTriggers(qt.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_tree_menu)
+        self.tree.itemDoubleClicked.connect(self._open_item)
+        self.tree.itemSelectionChanged.connect(self._selection_changed)
+        with suppress(Exception):
+            self.tree.setIconSize(qt.QSize(ENTRY_ICON_SIZE, ENTRY_ICON_SIZE))
+        self.tree.setColumnWidth(0, 282)
+        self.tree.setColumnWidth(1, 72)
+        self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
+        layout.addWidget(self.tree, 1)
+        class StatusLabel(qt.QLabel):
+            def setText(self, text: str) -> None:
+                full_text = str(text or "").replace("\n", " ").strip()
+                display_text = full_text
+                if len(display_text) > FILE_BROWSER_STATUS_MAX_CHARS:
+                    display_text = f"{display_text[: FILE_BROWSER_STATUS_MAX_CHARS - 1].rstrip()}…"
+                super().setText(display_text)
+                self.setToolTip(full_text)
+
+        self.status = StatusLabel("")
+        self.status.setMinimumWidth(0)
+        self.status.setSizePolicy(qt.QSizePolicy.Policy.Ignored, qt.QSizePolicy.Policy.Fixed)
+        with suppress(Exception):
+            self.status.setFixedHeight(self.status.fontMetrics().height() + 8)
+        layout.addWidget(self.status)
+        self.window.setCentralWidget(root)
+        self._update_actions()
+        self._update_focus_style()
+        self._schedule_theme_icon_refresh()
+
+    def _show_rclone_output(self) -> None:
+        dialog = self._rclone_output_dialog
+        if dialog is None:
+            dialog = self.qt.QDialog(self.window)
+            dialog.setWindowTitle("rclone output")
+            layout = self.qt.QVBoxLayout(dialog)
+            layout.addWidget(self.qt.QLabel("Current operation"))
+            text = self.qt.QPlainTextEdit()
+            text.setReadOnly(True)
+            text.setMinimumWidth(520)
+            layout.addWidget(text)
+            layout.addWidget(self.qt.QLabel("Recent raw rclone log"))
+            raw_text = self.qt.QPlainTextEdit()
+            raw_text.setReadOnly(True)
+            raw_text.setMinimumWidth(520)
+            layout.addWidget(raw_text)
+            buttons = self.qt.QDialogButtonBox(self.qt.QDialogButtonBox.StandardButton.Close)
+            copy_button = buttons.addButton("Copy output", self.qt.QDialogButtonBox.ButtonRole.ActionRole)
+            copy_button.clicked.connect(self._copy_rclone_output)
+            buttons.rejected.connect(dialog.hide)
+            layout.addWidget(buttons)
+            self._rclone_output_dialog = dialog
+            self._rclone_output_text = text
+            self._rclone_raw_output_text = raw_text
+            self._refresh_rclone_output_text()
+            self._resize_rclone_output_text()
+            self._scroll_rclone_output_to_end()
+            self._scroll_raw_rclone_output_to_end()
+        else:
+            self._refresh_rclone_output_text()
+        dialog.show()
+        self._position_rclone_output()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _append_rclone_output(self, text: str) -> None:
+        if not text:
+            return
+        rclone_log.append_raw(text, notify=False)
+        lines = self._split_rclone_output_lines(text)
+        if not lines:
+            return
+        for line in lines:
+            self._record_rclone_output_line(line)
+        if len(self._rclone_output_lines) > RCLONE_OUTPUT_TAIL_LINES:
+            self._rclone_output_lines = self._rclone_output_lines[-RCLONE_OUTPUT_TAIL_LINES:]
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        self._refresh_rclone_output_text()
+        self._resize_rclone_output_text()
+        self._scroll_rclone_output_to_end()
+        self._position_rclone_output()
+
+    def _raw_rclone_log_changed(self) -> None:
+        dialog = getattr(self, "_rclone_output_dialog", None)
+        if dialog is not None:
+            with suppress(Exception):
+                if not dialog.isVisible():
+                    return
+        self._refresh_rclone_output_text()
+        self._scroll_rclone_output_to_end()
+        self._scroll_raw_rclone_output_to_end()
+        self._position_rclone_output()
+
+    def _record_rclone_output_line(self, line: str) -> None:
+        if line.startswith("[rclone exited with code"):
+            if not getattr(self, "_rclone_progress_block", []):
+                self._rclone_output_lines.append(line)
+            return
+        if self._is_rclone_progress_header(line):
+            self._rclone_progress_block = [line]
+            self._rclone_output_lines = [line]
+            return
+        if getattr(self, "_rclone_progress_block", []):
+            self._rclone_progress_block.append(line)
+            self._rclone_output_lines = list(self._rclone_progress_block)
+            return
+        self._rclone_output_lines.append(line)
+
+    def _is_rclone_progress_header(self, line: str) -> bool:
+        if not line.startswith("Transferred:"):
+            return False
+        value = line.split(":", 1)[1]
+        return any(unit in value for unit in (" B", "KiB", "MiB", "GiB", "TiB", "PiB"))
+
+    def _split_rclone_output_lines(self, text: str) -> list[str]:
+        normalized = text.replace("\r", "\n")
+        normalized = normalized.replace("Transferred:\t", "\nTransferred:\t")
+        normalized = normalized.replace("Transferred:   ", "\nTransferred:   ")
+        normalized = normalized.replace("Checks:", "\nChecks:")
+        normalized = normalized.replace("Elapsed time:", "\nElapsed time:")
+        normalized = normalized.replace("Transferring:", "\nTransferring:")
+        normalized = normalized.replace("[rclone exited with code", "\n[rclone exited with code")
+        return [line for line in normalized.splitlines() if line.strip()]
+
+    def _rclone_output_text_block(self) -> str:
+        parsed = "\n".join(self._rclone_output_lines)
+        raw = rclone_log.tail_text()
+        if parsed and raw:
+            return f"Current operation:\n{parsed}\n\nRecent raw rclone log:\n{raw}"
+        if parsed:
+            return f"Current operation:\n{parsed}"
+        if raw:
+            return f"Recent raw rclone log:\n{raw}"
+        return "No rclone output has been recorded yet."
+
+    def _refresh_rclone_output_text(self) -> None:
+        editor = self._rclone_output_text
+        if editor is not None:
+            editor.setPlainText("\n".join(self._rclone_output_lines) or "No current operation output.")
+        raw_editor = getattr(self, "_rclone_raw_output_text", None)
+        if raw_editor is not None:
+            raw_editor.setPlainText(rclone_log.tail_text() or "No raw rclone output has been recorded.")
+
+    def _copy_rclone_output(self) -> None:
+        text = self._rclone_output_text_block()
+        if not text:
+            return
+        with suppress(Exception):
+            self.qt.QApplication.clipboard().setText(text)
+
+    def _resize_rclone_output_text(self) -> None:
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        line_count = max(RCLONE_OUTPUT_MIN_LINES, min(RCLONE_OUTPUT_MAX_LINES, len(self._rclone_output_lines) or 1))
+        try:
+            line_height = editor.fontMetrics().lineSpacing()
+        except Exception:
+            line_height = 18
+        height = int(line_height * line_count + 18)
+        with suppress(Exception):
+            editor.setMinimumHeight(height)
+            editor.setMaximumHeight(height)
+
+    def _scroll_rclone_output_to_end(self) -> None:
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        with suppress(Exception):
+            self._move_rclone_output_cursor_to_end()
+
+    def _scroll_raw_rclone_output_to_end(self) -> None:
+        editor = getattr(self, "_rclone_raw_output_text", None)
+        if editor is None:
+            return
+        with suppress(Exception):
+            self._move_text_editor_cursor_to_end(editor)
+
+    def _position_rclone_output(self) -> None:
+        dialog = getattr(self, "_rclone_output_dialog", None)
+        if dialog is None:
+            return
+        with suppress(Exception):
+            if not dialog.isVisible():
+                return
+        try:
+            frame = self.window.frameGeometry()
+            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+            available = screen.availableGeometry()
+            width = max(dialog.width(), 420)
+            height = max(dialog.height(), 120)
+            gap = 8
+            if self._side == "left":
+                x = frame.x() - width - gap
+                if x < available.x():
+                    x = frame.x() + frame.width() + gap
+            else:
+                x = frame.x() + frame.width() + gap
+                if x + width > available.x() + available.width():
+                    x = frame.x() - width - gap
+            y = frame.y()
+            x = min(max(x, available.x()), max(available.x(), available.x() + available.width() - width))
+            y = min(max(y, available.y()), max(available.y(), available.y() + available.height() - height))
+            dialog.move(x, y)
+        except Exception:
+            return
+
+    def _move_rclone_output_cursor_to_end(self) -> None:
+        editor = self._rclone_output_text
+        if editor is None:
+            return
+        self._move_text_editor_cursor_to_end(editor)
+
+    def _move_text_editor_cursor_to_end(self, editor: Any) -> None:
+        text_cursor = getattr(self.qt, "QTextCursor", None)
+        move_operation = getattr(text_cursor, "MoveOperation", None)
+        end = getattr(move_operation, "End", None)
+        if end is not None:
+            with suppress(Exception):
+                editor.moveCursor(end)
+
+    def _button(
+        self,
+        text: str,
+        callback: Callable[[], None],
+        tooltip: str,
+        *,
+        square: bool = False,
+        icon_name: str = "",
+    ) -> Any:
+        button = create_badged_button(self.qt, text)
+        if square:
+            button.setFixedSize(30, 28)
+            if icon_name:
+                apply_button_icon(self.qt, button, icon_name, fallback_text=text, size=22)
+            self._enlarge_button_text(button)
+            with suppress(Exception):
+                button.setIconSize(self.qt.QSize(22, 22))
+        button.setToolTip(tooltip)
+        button.clicked.connect(lambda _checked=False: callback())
+        return button
+
+    def _style_search_field(self, field: Any) -> None:
+        with suppress(Exception):
+            field.setFixedHeight(28)
+            field.setClearButtonEnabled(True)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=self._widget_text_color(field))
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if icon is not None and leading_position is not None:
+            with suppress(Exception):
+                action = field.addAction(icon, leading_position)
+                setattr(field, "_mountlet_search_icon_action", action)
+        field.setStyleSheet(
+            """
+            QLineEdit {
+                border: 1px solid rgba(107, 114, 128, 130);
+                border-radius: 14px;
+                padding: 2px 8px;
+                background: palette(base);
+                color: palette(text);
+            }
+            QLineEdit:focus {
+                border: 1px solid #3b82f6;
+            }
+            """
+        )
+
+    def _widget_text_color(self, widget: Any) -> str | None:
+        try:
+            palette = widget.palette()
+            role = widget.foregroundRole()
+            color = palette.color(role)
+            if color.isValid():
+                return color.name()
+        except Exception:
+            return None
+        return None
+
+    def _mount_switch(self) -> Any:
+        qt = self.qt
+        outer = self
+
+        class Switch(qt.QCheckBox):
+            def __init__(self) -> None:
+                super().__init__()
+                self.setText("")
+                self.setFixedSize(42, 22)
+                self.setCursor(qt.QCursor(qt.Qt.CursorShape.PointingHandCursor))
+
+            def paintEvent(self, event: Any) -> None:
+                painter = qt.QPainter(self)
+                painter.setRenderHint(qt.QPainter.RenderHint.Antialiasing)
+                painter.setPen(qt.Qt.PenStyle.NoPen)
+                track = qt.QColor("#16a34a" if self.isChecked() else "#9ca3af")
+                if not self.isEnabled():
+                    track = qt.QColor("#6b7280")
+                painter.setBrush(track)
+                painter.drawRoundedRect(1, 2, 40, 18, 9, 9)
+                painter.setBrush(qt.QColor("#ffffff"))
+                painter.drawEllipse(22 if self.isChecked() else 4, 4, 14, 14)
+
+            def hitButton(self, position: Any) -> bool:
+                return bool(self.rect().contains(position))
+
+        switch = Switch()
+        switch.stateChanged.connect(lambda state: outer._mount_switch_changed(bool(state)))
+        return switch
+
+    def _mount_switch_changed(self, want_mounted: bool) -> None:
+        if self.remote is None or self._toggle_mount is None:
+            return
+        self._toggle_mount(self.remote.name, want_mounted)
+
+    def _update_mount_switch(self) -> None:
+        switch = getattr(self, "mount_switch", None)
+        if switch is None:
+            return
+        remote = getattr(self, "remote", None)
+        mounted = bool(remote and self._remote_is_mounted(remote))
+        try:
+            switch.blockSignals(True)
+            switch.setChecked(mounted)
+            switch.blockSignals(False)
+        except Exception:
+            pass
+        switch.setEnabled(remote is not None)
+        if remote is None:
+            switch.setToolTip("Select a remote")
+            return
+        switch.setToolTip(f"{'Unmount' if mounted else 'Mount'} {remote.display_name}")
+
+    def zoom_in(self) -> None:
+        self._set_zoom(self._zoom_steps + 1)
+
+    def zoom_out(self) -> None:
+        self._set_zoom(self._zoom_steps - 1)
+
+    def _set_zoom(self, steps: int) -> None:
+        steps = min(max(steps, -4), 6)
+        if steps == self._zoom_steps:
+            return
+        self._zoom_steps = steps
+        for widget in (getattr(self, "tree", None), getattr(self, "path_field", None), getattr(self, "status", None)):
+            if widget is None:
+                continue
+            try:
+                font = widget.font()
+                base = getattr(widget, "_mountlet_base_point_size", None)
+                if base is None:
+                    base = font.pointSizeF()
+                    if base <= 0:
+                        base = max(font.pointSize(), 10)
+                    setattr(widget, "_mountlet_base_point_size", base)
+                font.setPointSizeF(max(7.0, float(base) + steps))
+                widget.setFont(font)
+            except Exception:
+                continue
+        with suppress(Exception):
+            self.tree.resizeColumnToContents(0)
+            self.tree.resizeColumnToContents(1)
+        self._resize_to_rendered_items()
+        self._layout_changed()
+
+    def _offline_icon(self) -> Any | None:
+        color = None
+        button = getattr(self, "offline_button", None)
+        if button is not None:
+            try:
+                palette = button.palette()
+                role = button.foregroundRole()
+                qt_color = palette.color(role)
+                if qt_color.isValid():
+                    color = qt_color.name()
+            except Exception:
+                color = None
+        icon = mountlet_icon(self.qt, "ui-save-offline", size=22, color=color)
+        if icon is not None:
+            return icon
+        try:
+            return self.window.style().standardIcon(self.qt.QStyle.StandardPixmap.SP_DialogSaveButton)
+        except Exception:
+            return None
+
+    def _make_file_icon_provider(self) -> Any | None:
+        provider_type = getattr(self.qt, "QFileIconProvider", None)
+        if provider_type is None:
+            return None
+        try:
+            return provider_type()
+        except Exception:
+            return None
+
+    def _base_entry_icon(
+        self,
+        entry: BrowserEntry,
+        *,
+        directory_icon: Any,
+        file_icon: Any,
+        local_available: bool,
+    ) -> Any:
+        provider = getattr(self, "_file_icon_provider", None)
+        file_info_type = getattr(self.qt, "QFileInfo", None)
+        if provider is None or file_info_type is None:
+            return directory_icon if entry.is_dir else file_icon
+        try:
+            if entry.is_dir:
+                return directory_icon
+            suffix = Path(entry.name).suffix.casefold()
+            cache_key = ("local" if local_available else "type", suffix)
+            icon_cache = getattr(self, "_base_entry_icon_cache", None)
+            if icon_cache is None:
+                icon_cache = {}
+                self._base_entry_icon_cache = icon_cache
+            cached = icon_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            if self.remote is not None and local_available:
+                local = self.backend.offline_path(self.remote.name, entry.path)
+                icon = provider.icon(file_info_type(str(local)))
+            else:
+                icon = provider.icon(file_info_type(entry.name))
+            resolved = icon or file_icon
+            icon_cache[cache_key] = resolved
+            return resolved
+        except Exception:
+            return directory_icon if entry.is_dir else file_icon
+
+    def _entry_icon(
+        self,
+        entry: BrowserEntry,
+        *,
+        directory_icon: Any,
+        file_icon: Any,
+        temporary_cached: bool = False,
+        protected_cached: bool = False,
+        cache_partial: bool = False,
+        changed: bool = False,
+        working: str = "",
+    ) -> Any:
+        base_icon = self._base_entry_icon(
+            entry,
+            directory_icon=directory_icon,
+            file_icon=file_icon,
+            local_available=temporary_cached or protected_cached,
+        )
+        if not any((temporary_cached, protected_cached, changed, working)):
+            return base_icon
+        return self._composite_entry_icon(
+            base_icon,
+            temporary_cached=temporary_cached,
+            protected_cached=protected_cached,
+            cache_partial=cache_partial,
+            changed=changed,
+            working=working,
+        )
+
+    def _composite_entry_icon(
+        self,
+        base_icon: Any,
+        *,
+        temporary_cached: bool,
+        protected_cached: bool,
+        cache_partial: bool = False,
+        changed: bool = False,
+        working: str = "",
+    ) -> Any:
+        pixmap_type = getattr(self.qt, "QPixmap", None)
+        painter_type = getattr(self.qt, "QPainter", None)
+        icon_type = getattr(self.qt, "QIcon", None)
+        if pixmap_type is None or painter_type is None or icon_type is None:
+            return base_icon
+        try:
+            size = self.qt.QSize(ENTRY_ICON_SIZE, ENTRY_ICON_SIZE)
+            pixmap = pixmap_type(size)
+            pixmap.fill(self.qt.Qt.GlobalColor.transparent)
+            painter = painter_type(pixmap)
+            painter.setRenderHint(painter_type.RenderHint.Antialiasing, True)
+            base_pixmap = base_icon.pixmap(size)
+            painter.drawPixmap(0, 0, base_pixmap)
+            if temporary_cached or protected_cached:
+                color = "#00ff00" if protected_cached else "#ff0000"
+                painter.setOpacity(0.5 if cache_partial else 1.0)
+                pen = self.qt.QPen(self.qt.QColor(0, 0, 0, 170))
+                pen.setWidth(5)
+                painter.setPen(pen)
+                painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
+                painter.drawLine(20, 12, 20, 24)
+                painter.drawLine(15, 19, 20, 24)
+                painter.drawLine(25, 19, 20, 24)
+                painter.drawLine(14, 27, 26, 27)
+                pen = self.qt.QPen(self.qt.QColor(color))
+                pen.setWidth(3)
+                painter.setPen(pen)
+                painter.drawLine(20, 12, 20, 24)
+                painter.drawLine(15, 19, 20, 24)
+                painter.drawLine(25, 19, 20, 24)
+                painter.drawLine(14, 27, 26, 27)
+            if changed:
+                painter.setOpacity(1.0)
+                painter.setPen(self.qt.Qt.PenStyle.NoPen)
+                painter.setBrush(self.qt.QColor(0, 0, 0, 180))
+                painter.drawEllipse(19, -1, 12, 12)
+                painter.setBrush(self.qt.QColor("#ef4444"))
+                painter.drawEllipse(21, 1, 8, 8)
+            if working:
+                opacity = 0.45 if self._working_phase % 2 else 1.0
+                color = "#38bdf8" if working == "download" else "#f59e0b"
+                painter.setOpacity(opacity)
+                painter.setPen(self.qt.Qt.PenStyle.NoPen)
+                painter.setBrush(self.qt.QColor(0, 0, 0, 165))
+                painter.drawEllipse(1, 1, 14, 14)
+                pen = self.qt.QPen(self.qt.QColor(color))
+                pen.setWidth(2)
+                painter.setPen(pen)
+                painter.setBrush(self.qt.Qt.BrushStyle.NoBrush)
+                if working == "download":
+                    painter.drawLine(8, 3, 8, 10)
+                    painter.drawLine(5, 7, 8, 10)
+                    painter.drawLine(11, 7, 8, 10)
+                    painter.drawLine(4, 13, 12, 13)
+                else:
+                    painter.drawArc(4, 4, 9, 9, 40 * 16, 260 * 16)
+                    painter.drawLine(12, 5, 12, 9)
+                    painter.drawLine(12, 5, 8, 5)
+            painter.end()
+            return icon_type(pixmap)
+        except Exception:
+            return base_icon
+
+    def _setup_working_animation(self) -> None:
+        timer_type = getattr(self.qt, "QTimer", None)
+        if timer_type is None:
+            return
+        try:
+            timer = timer_type(self.window)
+            timer.setInterval(450)
+            timer.timeout.connect(self._advance_working_animation)
+        except Exception:
+            return
+        self._working_timer = timer
+
+    def _advance_working_animation(self) -> None:
+        working_paths = getattr(self, "_working_paths", {})
+        if not working_paths:
+            timer = getattr(self, "_working_timer", None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+            return
+        self._request_working_state_scan()
+        self._working_phase += 1
+        self._refresh_entry_icons()
+
+    def _request_working_state_scan(self) -> None:
+        if getattr(self, "_working_state_scan_running", False):
+            self._working_state_scan_requested = True
+            return
+        candidates = [
+            (str(key[0]), str(key[1]))
+            for key, kind in list(getattr(self, "_working_paths", {}).items())
+            if kind == "download"
+        ]
+        if not candidates or getattr(self, "_bridge", None) is None:
+            return
+        self._working_state_scan_running = True
+
+        def worker() -> None:
+            completed: list[tuple[str, str]] = []
+            for remote_name, path in candidates:
+                try:
+                    if self.backend.is_cached(remote_name, path, is_dir=False):
+                        completed.append((remote_name, path))
+                except Exception:
+                    continue
+            self._bridge.working_paths_ready.emit(completed)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _working_paths_ready(self, completed: object) -> None:
+        self._working_state_scan_running = False
+        rerun = self._working_state_scan_requested
+        self._working_state_scan_requested = False
+        changed = False
+        if isinstance(completed, list):
+            for key in completed:
+                if isinstance(key, tuple) and len(key) == 2:
+                    normalized = (str(key[0]), normalize_browser_path(str(key[1])))
+                    if self._working_paths.get(normalized) == "download":
+                        self._working_paths.pop(normalized, None)
+                        changed = True
+        if changed:
+            self._rebuild_working_directory_index()
+        if not self._working_paths:
+            timer = getattr(self, "_working_timer", None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+        self._refresh_entry_icons()
+        if rerun:
+            self._request_working_state_scan()
+
+    def _start_working_paths(self, remote_name: str, paths: list[str], kind: str) -> None:
+        if not paths:
+            return
+        if not hasattr(self, "_working_paths"):
+            self._working_paths = {}
+        for path in paths:
+            self._working_paths[(remote_name, normalize_browser_path(path))] = kind
+        self._rebuild_working_directory_index()
+        timer = getattr(self, "_working_timer", None)
+        if timer is not None:
+            with suppress(Exception):
+                if not timer.isActive():
+                    timer.start()
+        self._refresh_entry_icons()
+
+    def _finish_working_paths(self, remote_name: str, paths: list[str], kind: str = "") -> None:
+        if not hasattr(self, "_working_paths"):
+            return
+        changed = False
+        for path in paths:
+            key = (remote_name, normalize_browser_path(path))
+            if not kind or self._working_paths.get(key) == kind:
+                self._working_paths.pop(key, None)
+                changed = True
+        if changed:
+            self._rebuild_working_directory_index()
+        if not self._working_paths:
+            timer = getattr(self, "_working_timer", None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+        self._refresh_entry_icons()
+
+    def _working_kind_for_entry(self, remote_name: str, path: str, *, is_dir: bool) -> str:
+        normalized = normalize_browser_path(path)
+        working_paths = getattr(self, "_working_paths", {})
+        exact = working_paths.get((remote_name, normalized))
+        if exact:
+            return exact
+        if not is_dir:
+            return ""
+        if not hasattr(self, "_working_directory_kinds"):
+            self._rebuild_working_directory_index()
+        return self._working_directory_kinds.get((remote_name, normalized), "")
+
+    def _rebuild_working_directory_index(self) -> None:
+        directory_kinds: dict[tuple[str, str], str] = {}
+        paths_by_kind: dict[tuple[str, str], set[str]] = {}
+        for (remote_name, path), kind in getattr(self, "_working_paths", {}).items():
+            paths_by_kind.setdefault((remote_name, kind), set()).add(str(path))
+            parent = parent_browser_path(str(path))
+            while parent:
+                directory_kinds.setdefault((remote_name, parent), kind)
+                parent = parent_browser_path(parent)
+        self._working_directory_kinds = directory_kinds
+        self._working_paths_by_kind = paths_by_kind
+
+    def _refresh_entry_icons(self) -> None:
+        remote = getattr(self, "remote", None)
+        tree = getattr(self, "tree", None)
+        window = getattr(self, "window", None)
+        if remote is None or tree is None or window is None:
+            return
+        style = window.style()
+        directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            if item is None:
+                continue
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(entry, BrowserEntry):
+                self._apply_entry_state(
+                    item,
+                    entry,
+                    remote,
+                    directory_icon,
+                    file_icon,
+                    refresh_state=False,
+                )
+
+    def _entry_has_operation(self, remote_name: str, path: str, *, is_dir: bool, kind: str) -> bool:
+        return self._working_kind_for_entry(remote_name, path, is_dir=is_dir) == kind
+
+    def _operation_paths_overlap(self, remote_name: str, paths: list[str], kind: str) -> bool:
+        if not paths:
+            return False
+        if not hasattr(self, "_working_paths_by_kind"):
+            self._rebuild_working_directory_index()
+        working_paths = self._working_paths_by_kind.get((remote_name, kind), set())
+        if not working_paths:
+            return False
+        for path in paths:
+            normalized = normalize_browser_path(path)
+            for working_path in working_paths:
+                if _paths_overlap([normalized], [working_path]):
+                    return True
+        return False
+
+    def _queued_offline_job_overlaps(self, remote_name: str, paths: list[str], kind: str) -> bool:
+        normalized_paths = [normalize_browser_path(path) for path in paths]
+        for queued_remote, _message, _action, queued_paths, queued_kind, _discover_paths in getattr(
+            self,
+            "_offline_job_queue",
+            [],
+        ):
+            if queued_remote != remote_name or queued_kind != kind:
+                continue
+            if _paths_overlap(normalized_paths, queued_paths):
+                return True
+        return False
+
+    def _offline_remove_pending(self, remote_name: str, paths: list[str]) -> bool:
+        return self._operation_paths_overlap(remote_name, paths, "remove") or self._queued_offline_job_overlaps(
+            remote_name,
+            paths,
+            "remove",
+        )
+
+    def _offline_download_pending(self, remote_name: str, paths: list[str]) -> bool:
+        return self._operation_paths_overlap(remote_name, paths, "download") or self._queued_offline_job_overlaps(
+            remote_name,
+            paths,
+            "download",
+        )
+
+    def _remote_has_operation(self, remote_name: str, kind: str) -> bool:
+        if not hasattr(self, "_working_paths_by_kind"):
+            self._rebuild_working_directory_index()
+        return bool(self._working_paths_by_kind.get((remote_name, kind)))
+
+    def _enlarge_button_text(self, button: Any) -> None:
+        try:
+            font = button.font()
+            font.setPointSize(max(font.pointSize() + 3, 13))
+            button.setFont(font)
+        except Exception:
+            return
+
+    def is_visible(self) -> bool:
+        return bool(self.root.isVisible()) if self._embedded else bool(self.window.isVisible())
+
+    def hide(self) -> None:
+        if self._embedded:
+            # The embedded browser is a permanent part of single-window mode.
+            # Hiding the containing main window is sufficient; keep this panel
+            # visible so it returns with its parent.
+            self.root.show()
+        else:
+            self.window.hide()
+
+    def hide_until_selected(self) -> None:
+        if self._embedded:
+            self._closed_until_selected = False
+            self.root.show()
+            return
+        self._closed_until_selected = True
+        self.hide()
+
+    def close(self) -> None:
+        if self._embedded:
+            self._closed_until_selected = False
+            self.root.show()
+            return
+        self._closed_until_selected = True
+        self.window.close()
+
+    def dispose(self) -> None:
+        self._disposed = True
+        self._cancel_folder_loads()
+        for timer_name in ("_working_timer", "_search_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                with suppress(Exception):
+                    timer.stop()
+        unsubscribe = getattr(self, "_unsubscribe_rclone_log", None)
+        if unsubscribe is not None:
+            with suppress(Exception):
+                unsubscribe()
+            self._unsubscribe_rclone_log = None
+        with suppress(Exception):
+            if self._embedded:
+                self.root.hide()
+            else:
+                self.close()
+
+    def embed_into(self, layout: Any) -> None:
+        if not self._embedded:
+            return
+        if self.window.centralWidget() is self.root:
+            self.window.takeCentralWidget()
+        self.root.setParent(layout.parentWidget())
+        layout.addWidget(self.root, 1)
+        self._closed_until_selected = False
+        self.root.show()
+
+    def owns_focus_widget(self, widget: Any | None = None) -> bool:
+        if widget is None:
+            application = getattr(self.qt, "QApplication", None)
+            widget = application.focusWidget() if application is not None else None
+        current = widget
+        while current is not None:
+            if current is getattr(self, "root", None) or current is getattr(self, "window", None):
+                return True
+            try:
+                current = current.parentWidget()
+            except Exception:
+                return False
+        return False
+
+    def focus_snapshot(self) -> str:
+        application = getattr(self.qt, "QApplication", None)
+        widget = application.focusWidget() if application is not None else None
+        if widget is getattr(self, "search_field", None):
+            return "search"
+        if widget is getattr(self, "search_results", None):
+            return "search_results"
+        return "tree"
+
+    def restore_focus_snapshot(self, target: str) -> None:
+        if not self.is_visible():
+            return
+        self._set_focus_owner("browser")
+        if target == "search" and getattr(self, "search_field", None) is not None:
+            with suppress(Exception):
+                self.search_field.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        if (
+            target == "search_results"
+            and getattr(self, "search_results", None) is not None
+            and self.search_results.isVisible()
+        ):
+            with suppress(Exception):
+                self.search_results.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            return
+        with suppress(Exception):
+            self.tree.setFocus(self.qt.Qt.FocusReason.OtherFocusReason)
+            self._ensure_tree_selection()
+
+    def preload(self, remotes: list[core.RemoteInfo]) -> None:
+        for remote in remotes:
+            # Google Photos exposes expensive virtual folders rather than a
+            # normal directory tree. Load it only when the user selects it.
+            if remote.backend_type.casefold() == "gphotos":
+                continue
+            path = self.backend.current_path(remote.name)
+            key = (remote.name, path)
+            if key not in self._folder_cache and key not in self._loads_pending:
+                self._load_folder(remote, path)
+        self._start_missing_index(remotes)
+
+    def _start_missing_index(self, remotes: list[core.RemoteInfo]) -> None:
+        if self._auto_index_requested:
+            return
+        self._auto_index_requested = True
+        missing: list[core.RemoteInfo] = []
+        for remote in remotes:
+            if remote.backend_type.casefold() == "gphotos":
+                continue
+            try:
+                if not self.backend.remote_fully_indexed(remote.name):
+                    missing.append(remote)
+            except Exception:
+                continue
+        if missing:
+            self._index_remotes(missing, "Indexing metadata for search…")
+
+    def invalidate(self, remote_name: str | None = None) -> None:
+        if remote_name is None:
+            self._cancel_folder_loads()
+            self._folder_cache.clear()
+            self._loads_pending.clear()
+            if self.remote is not None:
+                self.refresh(force=True)
+            return
+        self._cancel_folder_loads(remote_name)
+        self._folder_cache = {
+            key: entries for key, entries in self._folder_cache.items() if key[0] != remote_name
+        }
+        self._loads_pending = {key for key in self._loads_pending if key[0] != remote_name}
+        if self.remote is not None and self.remote.name == remote_name:
+            self.refresh(force=True)
+
+    def show_remote(
+        self,
+        remote: core.RemoteInfo,
+        row: Any,
+        *,
+        show_browser: bool,
+        focus_browser: bool = False,
+    ) -> None:
+        previous_remote_name = self.remote.name if self.remote is not None else ""
+        previous_key = (previous_remote_name, self.path) if previous_remote_name else None
+        if previous_remote_name and previous_remote_name != remote.name:
+            self._cancel_folder_loads(previous_remote_name)
+        self.remote = remote
+        self.path = self.backend.current_path(remote.name)
+        changed = previous_key != (remote.name, self.path)
+        if focus_browser:
+            self._closed_until_selected = False
+        elif show_browser and getattr(self, "_closed_until_selected", False):
+            show_browser = False
+        if not self._embedded and (changed or not self.window.isVisible()):
+            self._position(row)
+        if show_browser:
+            if self._embedded:
+                was_visible = self.root.isVisible()
+                self.root.show()
+                if not was_visible:
+                    self._layout_changed()
+            else:
+                with suppress(Exception):
+                    self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
+                self.window.show()
+                self.window.raise_()
+            if focus_browser:
+                self.focus()
+        if changed or getattr(self, "_rendered_key", None) != (remote.name, self.path):
+            self.refresh(force=False)
+        self._schedule_theme_icon_refresh()
+
+    def reposition(self, row: Any) -> None:
+        if not self._embedded:
+            self._position(row)
+
+    def focus(self) -> None:
+        self._set_focus_owner("browser")
+        if self._embedded:
+            self.root.show()
+            self.main_window.raise_()
+            self.main_window.activateWindow()
+            self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            self._ensure_tree_selection()
+            self._layout_changed()
+            return
+        with suppress(Exception):
+            self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+        self.tree.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+        self._ensure_tree_selection()
+        self.qt.QTimer.singleShot(0, lambda: self._set_focus_owner("browser"))
+
+    def _activate_from_mouse(self) -> None:
+        self._release_main_hover_suppression()
+        self._set_focus_owner("browser")
+        if self._embedded:
+            with suppress(Exception):
+                self.main_window.raise_()
+                self.main_window.activateWindow()
+        else:
+            with suppress(Exception):
+                self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+                self.window.raise_()
+                self.window.activateWindow()
+        with suppress(Exception):
+            self.tree.setFocus(self.qt.Qt.FocusReason.MouseFocusReason)
+        self._ensure_tree_selection()
+        timer = getattr(self.qt, "QTimer", None)
+        if timer is not None:
+            timer.singleShot(0, lambda: self._set_focus_owner("browser"))
+
+    def _release_main_hover_suppression(self) -> None:
+        callback = getattr(self.main_window, "release_remote_hover_suppression", None)
+        if callable(callback):
+            callback()
+
+    def focus_main_window(self) -> None:
+        self._set_focus_owner("main")
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+        callback = getattr(self.main_window, "focus_remote_row", None)
+        if callable(callback):
+            callback()
+
+    def _set_focus_owner(self, owner: str) -> None:
+        callback = getattr(self.main_window, "set_mountlet_focus_owner", None)
+        if callable(callback):
+            callback(owner)
+            return
+        self._update_focus_style(owner == "browser")
+        self._update_main_focus_style()
+
+    def _focus_owner_is_browser(self) -> bool:
+        callback = getattr(getattr(self, "main_window", None), "mountlet_focus_owner", None)
+        if callable(callback):
+            return callback() == "browser"
+        return self.has_focus()
+
+    def has_focus(self) -> bool:
+        callback = getattr(getattr(self, "main_window", None), "mountlet_focus_owner", None)
+        if callable(callback):
+            return callback() == "browser"
+        focus = self.qt.QApplication.focusWidget()
+        if focus is not None:
+            return bool(self.root.isAncestorOf(focus) or focus is self.root)
+        if self._embedded:
+            return False
+        with suppress(Exception):
+            return bool(self.tree.hasFocus())
+        return False
+
+    def _update_main_focus_style(self) -> None:
+        callback = getattr(self.main_window, "update_focus_style", None)
+        if callable(callback):
+            callback()
+
+    def _update_focus_style(self, active: bool | None = None) -> None:
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        if active is None:
+            active = self._focus_owner_is_browser()
+        color = "#2563eb" if active else "rgba(107, 114, 128, 110)"
+        root.setStyleSheet(f"QWidget#fileBrowserSurface {{ border: 2px solid {color}; border-radius: 4px; }}")
+
+    def _handle_key(self, event: Any) -> bool:
+        if not getattr(self, "_keyboard_shortcuts_enabled", True):
+            return False
+        key = event.key()
+        modifiers = event.modifiers()
+        control = bool(modifiers & self.qt.Qt.KeyboardModifier.ControlModifier)
+        if self._matches_shortcut(event, "common_search"):
+            self.focus_search()
+        elif control and key == self.qt.Qt.Key.Key_C:
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.copy_selected()
+        elif control and key == self.qt.Qt.Key.Key_X:
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.cut_selected()
+        elif control and key == self.qt.Qt.Key.Key_V:
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.paste()
+        elif key == self.qt.Qt.Key.Key_Delete:
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.delete_selected()
+        elif key == self.qt.Qt.Key.Key_Escape:
+            self.focus_main_window()
+        elif key in {self.qt.Qt.Key.Key_Left, self.qt.Qt.Key.Key_Right}:
+            if self._direction_points_to_main(key):
+                self.focus_main_window()
+            else:
+                pass
+        elif matches_shortcut(self.qt, event, "browser_copy"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.copy_selected()
+        elif matches_shortcut(self.qt, event, "browser_cut"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.cut_selected()
+        elif matches_shortcut(self.qt, event, "browser_paste"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.paste()
+        elif matches_shortcut(self.qt, event, "browser_delete"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.delete_selected()
+        elif matches_shortcut(self.qt, event, "common_previous"):
+            self._focus_relative_item(-1)
+        elif matches_shortcut(self.qt, event, "common_next"):
+            self._focus_relative_item(1)
+        elif matches_shortcut(self.qt, event, "browser_parent"):
+            self.go_up()
+        elif matches_shortcut(self.qt, event, "browser_root"):
+            self.go_root()
+        elif matches_shortcut(self.qt, event, "browser_refresh"):
+            self.refresh(force=True)
+        elif self._is_fixed_zoom_in(key, control) or matches_shortcut(self.qt, event, "browser_zoom_in"):
+            self.zoom_in()
+        elif self._is_fixed_zoom_out(key, control) or matches_shortcut(self.qt, event, "browser_zoom_out"):
+            self.zoom_out()
+        elif matches_shortcut(self.qt, event, "browser_open_folder"):
+            self._open_current_mount()
+        elif matches_shortcut(self.qt, event, "browser_new_folder"):
+            if not self._edits_enabled():
+                return self._edit_disabled()
+            self.create_folder()
+        elif key in {self.qt.Qt.Key.Key_Return, self.qt.Qt.Key.Key_Enter} or matches_shortcut(
+            self.qt, event, "browser_open"
+        ):
+            item = self.tree.currentItem()
+            if item is None:
+                return False
+            self._open_item(item)
+        else:
+            return False
+        event.accept()
+        return True
+
+    def _is_fixed_zoom_in(self, key: Any, control: bool) -> bool:
+        return bool(
+            control
+            and key
+            in {
+                getattr(self.qt.Qt.Key, "Key_Plus", None),
+                getattr(self.qt.Qt.Key, "Key_Equal", None),
+            }
+        )
+
+    def _is_fixed_zoom_out(self, key: Any, control: bool) -> bool:
+        return bool(control and key == getattr(self.qt.Qt.Key, "Key_Minus", None))
+
+    def _matches_shortcut(self, event: Any, action: str) -> bool:
+        with suppress(Exception):
+            return matches_shortcut(self.qt, event, action)
+        return False
+
+    def _direction_points_to_main(self, key: Any) -> bool:
+        if self._side == "left":
+            return key == self.qt.Qt.Key.Key_Right
+        return key == self.qt.Qt.Key.Key_Left
+
+    def refresh(self, *, force: bool = False) -> None:
+        if self.remote is None:
+            return
+        remote, path = self.remote, self.path
+        self.title.setText(remote.display_name)
+        self._update_mount_switch()
+        self.path_field.setText(path)
+        self.path_field.setToolTip(path or "Remote root")
+        self.up_button.setEnabled(bool(path))
+        self.root_button.setEnabled(bool(path))
+        key = (remote.name, path)
+        cached = self._folder_cache.get(key)
+        if cached is None and not force:
+            indexed: list[BrowserEntry] = []
+            with suppress(Exception):
+                indexed = self.backend.cached_entries(remote, path)
+            if indexed:
+                cached = indexed
+                self._folder_cache[key] = indexed
+        if cached is None and getattr(self, "_rendered_key", None) != key:
+            self.entries = []
+            self.tree.clear()
+            self._update_actions()
+            self._resize_to_rendered_items()
+        if cached is not None and not force:
+            self._display_entries(cached)
+            if key not in self._loads_pending:
+                self._load_folder(remote, path)
+            return
+        if key in self._loads_pending:
+            if cached is not None:
+                self._display_entries(cached)
+            else:
+                self.status.setText("Loading…")
+            return
+        self.status.setText("Loading…")
+        self._load_folder(remote, path)
+
+    def _load_folder(self, remote: core.RemoteInfo, path: str) -> None:
+        key = (remote.name, path)
+        if key in self._loads_pending:
+            return
+        previous = self._active_listing_by_remote.get(remote.name)
+        if previous is not None and previous != key:
+            self._cancel_folder_load(previous)
+        cancel_event = threading.Event()
+        request_id = self._next_listing_request_id
+        self._next_listing_request_id += 1
+        self._listing_cancel_events[key] = cancel_event
+        self._listing_request_ids[key] = request_id
+        self._active_listing_by_remote[remote.name] = key
+        self._loads_pending.add(key)
+
+        def load_entries() -> None:
+            try:
+                entries = self.backend.list_entries(remote, path, cancel_event=cancel_event)
+            except ListingCancelled:
+                self._bridge.listing_ready.emit(remote.name, path, request_id, None, "__cancelled__")
+                return
+            except Exception as exc:
+                self._bridge.listing_ready.emit(remote.name, path, request_id, None, str(exc))
+                return
+            if cancel_event.is_set():
+                self._bridge.listing_ready.emit(remote.name, path, request_id, None, "__cancelled__")
+                return
+            self._bridge.listing_ready.emit(remote.name, path, request_id, entries, "")
+
+        def worker() -> None:
+            if remote.backend_type.casefold() == "gphotos":
+                with self._photo_load_slots:
+                    if not cancel_event.is_set():
+                        load_entries()
+                return
+            with self._load_slots:
+                if not cancel_event.is_set():
+                    load_entries()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _cancel_folder_load(self, key: tuple[str, str]) -> None:
+        event = getattr(self, "_listing_cancel_events", {}).pop(key, None)
+        if event is not None:
+            event.set()
+        getattr(self, "_listing_request_ids", {}).pop(key, None)
+        self._loads_pending.discard(key)
+        active = getattr(self, "_active_listing_by_remote", {})
+        if active.get(key[0]) == key:
+            active.pop(key[0], None)
+
+    def _cancel_folder_loads(self, remote_name: str | None = None) -> None:
+        keys = [
+            key
+            for key in getattr(self, "_listing_cancel_events", {})
+            if remote_name is None or key[0] == remote_name
+        ]
+        for key in keys:
+            self._cancel_folder_load(key)
+
+    def _listing_ready(
+        self,
+        remote_name: str,
+        path: str,
+        request_id: int,
+        entries: object,
+        error: str,
+    ) -> None:
+        key = (remote_name, path)
+        request_ids = getattr(self, "_listing_request_ids", {})
+        if request_ids and request_ids.get(key) != request_id:
+            return
+        request_ids.pop(key, None)
+        getattr(self, "_listing_cancel_events", {}).pop(key, None)
+        active = getattr(self, "_active_listing_by_remote", {})
+        if active.get(remote_name) == key:
+            active.pop(remote_name, None)
+        self._loads_pending.discard(key)
+        if error == "__cancelled__":
+            return
+        if not isinstance(entries, list):
+            cached = getattr(self, "_folder_cache", {}).get(key)
+            if self.remote and (self.remote.name, self.path) == key:
+                if cached is not None:
+                    self._display_entries(cached)
+                    detail = (error or "refresh failed").splitlines()[0]
+                    self.status.setText(f"Showing cached folder contents — {detail}")
+                else:
+                    self.entries = []
+                    self.tree.clear()
+                    self.status.setText(error or "Could not load this folder")
+                    self._update_actions()
+            return
+        self._folder_cache[key] = entries
+        if self.remote is None or (self.remote.name, self.path) != key:
+            return
+        self._display_entries(entries)
+
+    def _setup_search_timer(self) -> None:
+        timer = self.qt.QTimer()
+        timer.setSingleShot(True)
+        timer.setInterval(500)
+        timer.timeout.connect(self._verify_visible_search_results)
+        self._search_timer = timer
+
+    def _make_search_key_filter(self) -> Any:
+        outer = self
+
+        class SearchKeyFilter(self.qt.QObject):
+            def eventFilter(self, watched: object, event: object) -> bool:
+                try:
+                    if event.type() != outer.qt.QEvent.Type.KeyPress:
+                        return False
+                    if watched is not outer.search_field and outer._matches_shortcut(event, "common_search"):
+                        outer.focus_search()
+                        event.accept()
+                        return True
+                    key = event.key()
+                    if key == outer.qt.Qt.Key.Key_Down:
+                        outer._move_search_selection(1)
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Up:
+                        outer._move_search_selection(-1)
+                        event.accept()
+                        return True
+                    if key in {outer.qt.Qt.Key.Key_Return, outer.qt.Qt.Key.Key_Enter}:
+                        outer._open_current_search_result()
+                        event.accept()
+                        return True
+                    if key == outer.qt.Qt.Key.Key_Escape:
+                        outer._clear_search_results()
+                        event.accept()
+                        return True
+                except Exception:
+                    return False
+                return False
+
+        event_filter = SearchKeyFilter()
+        self._search_filters.append(event_filter)
+        return event_filter
+
+    def _search_text_changed(self, _text: str) -> None:
+        self.search_index()
+        timer = getattr(self, "_search_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def search_index(self) -> None:
+        query = self.search_field.text().strip()
+        if not query:
+            self._clear_search_results()
+            return
+        remote = self.remote
+        if remote is None:
+            self._clear_search_results()
+            return
+        self._search_pending = True
+        self.status.setText("Searching index…")
+        try:
+            results = self.backend.search_index(query, remotes=[remote], limit=50)
+        except Exception as exc:
+            self._search_ready(query, None, str(exc))
+            return
+        self._search_ready(query, results, "")
+
+    def _search_ready(self, query: str, results: object, error: str) -> None:
+        if query != self.search_field.text().strip():
+            return
+        self._search_pending = False
+        if error or not isinstance(results, list):
+            self.status.setText(error or "Search failed")
+            return
+        self._search_results = results
+        self._display_search_results(results)
+        suffix = "Checking…" if self._search_verify_pending else ""
+        self.status.setText(
+            f"{len(results)} indexed result{'s' if len(results) != 1 else ''} {suffix}".strip()
+        )
+
+    def _display_search_results(self, results: list[IndexedEntry]) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None:
+            return
+        previous_index = 0
+        previous_path = ""
+        previous_scroll = 0
+        current = tree.currentItem()
+        if current is not None:
+            previous = current.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(previous, IndexedEntry):
+                previous_path = previous.path
+            with suppress(Exception):
+                previous_index = max(tree.indexOfTopLevelItem(current), 0)
+        with suppress(Exception):
+            previous_scroll = int(tree.verticalScrollBar().value())
+        tree.clear()
+        selected_item = None
+        fallback_item = None
+        for result in results:
+            path_text = result.parent_path or "Remote root"
+            item = self.qt.QTreeWidgetItem([result.name, path_text, result.modified])
+            item.setData(0, self.qt.Qt.ItemDataRole.UserRole, result)
+            tree.addTopLevelItem(item)
+            if previous_path and result.path == previous_path:
+                selected_item = item
+            if fallback_item is None and tree.topLevelItemCount() - 1 >= previous_index:
+                fallback_item = item
+        target = selected_item or fallback_item or (tree.topLevelItem(0) if results else None)
+        if target is not None:
+            tree.setCurrentItem(target)
+            target.setSelected(True)
+        visible_rows = min(max(len(results), 1), 8)
+        try:
+            row_height = tree.sizeHintForRow(0)
+            if row_height <= 0:
+                row_height = tree.fontMetrics().height() + 8
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            row_height = 24
+            header_height = 28
+        height = int(header_height + row_height * visible_rows + 8) if results else 0
+        tree.setMaximumHeight(height)
+        tree.setMinimumHeight(height)
+        tree.setVisible(bool(results))
+        self._fit_search_result_columns()
+        with suppress(Exception):
+            tree.verticalScrollBar().setValue(previous_scroll)
+        self._resize_to_rendered_items()
+        self._layout_changed()
+
+    def _preview_search_result(self, item: Any, _previous: Any | None = None) -> None:
+        if item is None:
+            return
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(result, IndexedEntry):
+            return
+        remote = next((candidate for candidate in self._remotes() if candidate.name == result.remote_name), None)
+        if remote is None:
+            self.status.setText("That remote is no longer configured")
+            return
+        self.show_search_result(remote, None, result, show_browser=True, focus_browser=False)
+
+    def _open_search_result(self, item: Any, _column: int | None = None) -> None:
+        result = item.data(0, self.qt.Qt.ItemDataRole.UserRole) if item is not None else None
+        if isinstance(result, IndexedEntry):
+            remote = next((candidate for candidate in self._remotes() if candidate.name == result.remote_name), None)
+            if remote is not None:
+                self.show_search_result(remote, None, result, show_browser=True, focus_browser=True)
+            else:
+                self._preview_search_result(item)
+        else:
+            self._preview_search_result(item)
+        self._release_main_hover_suppression()
+
+    def _open_current_search_result(self) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None or not tree.isVisible():
+            return
+        item = tree.currentItem() or tree.topLevelItem(0)
+        if item is not None:
+            self._open_search_result(item)
+
+    def _move_search_selection(self, delta: int) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None or not tree.isVisible() or tree.topLevelItemCount() <= 0:
+            return
+        current = tree.currentItem() or tree.topLevelItem(0)
+        index = tree.indexOfTopLevelItem(current) if current is not None else 0
+        index = min(max(index + delta, 0), tree.topLevelItemCount() - 1)
+        target = tree.topLevelItem(index)
+        tree.setCurrentItem(target)
+        with suppress(Exception):
+            tree.scrollToItem(target)
+
+    def _clear_search_results(self) -> None:
+        self._search_results = []
+        tree = getattr(self, "search_results", None)
+        if tree is not None:
+            tree.clear()
+            tree.setMaximumHeight(0)
+            tree.setMinimumHeight(0)
+            tree.setVisible(False)
+        self._resize_to_rendered_items()
+        self._layout_changed()
+
+    def focus_search(self) -> None:
+        field = getattr(self, "search_field", None)
+        if field is None:
+            return
+        with suppress(Exception):
+            field.setFocus(self.qt.Qt.FocusReason.ShortcutFocusReason)
+            field.selectAll()
+
+    def show_search_result(
+        self,
+        remote: core.RemoteInfo,
+        row: Any | None,
+        result: IndexedEntry,
+        *,
+        show_browser: bool,
+        focus_browser: bool,
+    ) -> None:
+        previous_remote_name = self.remote.name if self.remote is not None else ""
+        previous_path = self.path
+        self.remote = remote
+        self.path = result.parent_path
+        self._pending_select_path = result.path
+        self.backend.remember_path(remote.name, result.parent_path)
+        if not self._embedded and row is not None:
+            self._position(row)
+        if show_browser:
+            if self._embedded:
+                was_visible = self.root.isVisible()
+                self.root.show()
+                if not was_visible:
+                    self._layout_changed()
+            else:
+                with suppress(Exception):
+                    self.window.setAttribute(self.qt.Qt.WidgetAttribute.WA_ShowWithoutActivating, not focus_browser)
+                self.window.show()
+                self.window.raise_()
+        if previous_remote_name == remote.name and previous_path == result.parent_path and self._select_visible_entry(result.path):
+            self._pending_select_path = ""
+            if focus_browser:
+                self.focus()
+            return
+        if self._display_cached_search_parent(remote, result):
+            if focus_browser:
+                self.focus()
+            return
+        self.refresh(force=False)
+        if focus_browser:
+            self.focus()
+
+    def _display_cached_search_parent(self, remote: core.RemoteInfo, result: IndexedEntry) -> bool:
+        key = (remote.name, result.parent_path)
+        entries = self._folder_cache.get(key)
+        if entries is None:
+            with suppress(Exception):
+                entries = self.backend.cached_entries(remote, result.parent_path)
+            if entries:
+                self._folder_cache[key] = entries
+        if not entries or not any(entry.path == result.path for entry in entries):
+            return False
+        self._display_entries(entries)
+        return self._select_visible_entry(result.path)
+
+    def _select_visible_entry(self, path: str) -> bool:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return False
+        for index in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(index)
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(entry, BrowserEntry) and entry.path == path:
+                with suppress(Exception):
+                    tree.clearSelection()
+                tree.setCurrentItem(item)
+                item.setSelected(True)
+                with suppress(Exception):
+                    tree.scrollToItem(item)
+                self._ensure_tree_selection()
+                self._refresh_selection_backgrounds()
+                self._update_actions()
+                return True
+        return False
+
+    def _fit_search_result_columns(self) -> None:
+        tree = getattr(self, "search_results", None)
+        if tree is None:
+            return
+        with suppress(Exception):
+            tree.setHorizontalScrollBarPolicy(self.qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        try:
+            width = tree.viewport().width()
+            if width <= 0:
+                width = tree.width()
+        except Exception:
+            width = 0
+        if width <= 0:
+            return
+        widths = (0.46, 0.38, 0.16)
+        for column, fraction in enumerate(widths):
+            with suppress(Exception):
+                tree.setColumnWidth(column, max(56, int(width * fraction)))
+
+    def _verify_visible_search_results(self) -> None:
+        if not self._search_results or self.remote is None:
+            self._search_verify_pending = False
+            return
+        query = self.search_field.text().strip()
+        remote = self.remote
+        if remote.backend_type.casefold() == "gphotos":
+            # Photos exposes virtual folders through a tightly quota-limited
+            # API. Navigation refreshes visited folders; search verification
+            # must not multiply those requests in the background.
+            self._finish_search_verification()
+            return
+        parents: list[str] = []
+        seen: set[str] = set()
+        for result in self._search_results:
+            parent = result.parent_path
+            if parent in seen:
+                continue
+            seen.add(parent)
+            parents.append(parent)
+            if len(parents) >= 5:
+                break
+        self._search_verify_pending = True
+        self.status.setText("Checking search results…")
+
+        def worker() -> None:
+            for parent in parents:
+                try:
+                    self.backend.list_entries(remote, parent)
+                except Exception:
+                    continue
+            try:
+                results = self.backend.search_index(query, remotes=[remote], limit=50)
+            except Exception as exc:
+                self._search_verify_pending = False
+                self._bridge.search_ready.emit(query, None, str(exc))
+                return
+            self._search_verify_pending = False
+            self._bridge.search_ready.emit(query, results, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_search_verification(self) -> None:
+        self._search_verify_pending = False
+        if self._search_results:
+            self.status.setText(f"{len(self._search_results)} indexed result{'s' if len(self._search_results) != 1 else ''}")
+
+    def index_current_remote(self) -> None:
+        if self.remote is None:
+            self.status.setText("Select a remote to index")
+            return
+        self._index_remotes([self.remote], "Indexing remote metadata…")
+
+    def index_all_remotes(self) -> None:
+        remotes = list(self._remotes())
+        if not remotes:
+            self.status.setText("No remotes to index")
+            return
+        self._index_remotes(remotes, "Indexing all remote metadata…")
+
+    def _index_remotes(self, remotes: list[core.RemoteInfo], message: str) -> None:
+        eligible = [remote for remote in remotes if remote.backend_type.casefold() != "gphotos"]
+        runnable = [
+            remote
+            for remote in eligible
+            if remote.name not in self._indexing_remote_names
+        ]
+        if not runnable:
+            self.status.setText(
+                "Google Photos is indexed as folders are visited"
+                if not eligible
+                else "Indexing is already running"
+            )
+            return
+        for remote in runnable:
+            self._indexing_remote_names.add(remote.name)
+        self.status.setText(message)
+        self._update_actions()
+
+        def worker() -> None:
+            total = 0
+            errors: list[str] = []
+            last_name = ""
+            try:
+                for remote in runnable:
+                    last_name = remote.name
+                    try:
+                        total += self.backend.index_remote_tree(remote)
+                    except Exception as exc:
+                        errors.append(f"{remote.display_name}: {exc}")
+            finally:
+                for remote in runnable:
+                    self._indexing_remote_names.discard(remote.name)
+            self._bridge.index_finished.emit(last_name or "all", total, "\n".join(errors))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _index_finished(self, remote_name: str, count: int, error: str) -> None:
+        if self._is_disposed():
+            return
+        self._update_actions()
+        if error:
+            first_error = error.splitlines()[0]
+            self.status.setText(f"Indexed {count} item{'s' if count != 1 else ''}; {first_error}")
+            return
+        self.status.setText(f"Indexed {count} item{'s' if count != 1 else ''}")
+
+    def _display_entries(self, entries: list[BrowserEntry]) -> None:
+        previous_path = ""
+        previous_index = 0
+        previous_scroll = 0
+        pending_select_path = getattr(self, "_pending_select_path", "")
+        selected_paths: set[str] = set()
+        with suppress(Exception):
+            previous_scroll = int(self.tree.verticalScrollBar().value())
+        current_item = self.tree.currentItem()
+        if current_item is not None:
+            previous = current_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(previous, BrowserEntry):
+                previous_path = previous.path
+            with suppress(Exception):
+                previous_index = max(self.tree.indexOfTopLevelItem(current_item), 0)
+        for selected_item in self.tree.selectedItems():
+            selected = selected_item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+            if isinstance(selected, BrowserEntry):
+                selected_paths.add(selected.path)
+        remote = self.remote
+        self.entries = entries
+        if remote is not None:
+            self._rendered_key = (remote.name, getattr(self, "path", ""))
+        self._rendering_entries = True
+        self._painted_selected_items = set()
+        self.tree.clear()
+        style = self.window.style()
+        directory_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = style.standardIcon(self.qt.QStyle.StandardPixmap.SP_FileIcon)
+        current_target = None
+        fallback_target = None
+        items_by_path = {}
+        for entry in entries:
+            item = self.qt.QTreeWidgetItem([entry.name, "" if entry.is_dir else format_file_size(entry.size), entry.modified])
+            item.setData(0, self.qt.Qt.ItemDataRole.UserRole, entry)
+            items_by_path[entry.path] = item
+            if pending_select_path and entry.path == pending_select_path:
+                current_target = item
+            if current_target is None and previous_path and entry.path == previous_path:
+                current_target = item
+            if remote is not None:
+                self._apply_entry_state(
+                    item,
+                    entry,
+                    remote,
+                    directory_icon,
+                    file_icon,
+                    refresh_state=False,
+                )
+            self.tree.addTopLevelItem(item)
+            if fallback_target is None and self.tree.topLevelItemCount() - 1 >= previous_index:
+                fallback_target = item
+        target = current_target or fallback_target
+        if target is not None:
+            self.tree.setCurrentItem(target)
+            if pending_select_path:
+                with suppress(Exception):
+                    self.tree.scrollToItem(target)
+        if selected_paths:
+            for path, item in items_by_path.items():
+                item.setSelected(path in selected_paths)
+        elif target is not None and target not in self.tree.selectedItems():
+            target.setSelected(True)
+        if pending_select_path:
+            self._pending_select_path = ""
+        self._rendering_entries = False
+        self.status.setText(f"{len(entries)} item{'s' if len(entries) != 1 else ''}")
+        if self.has_focus():
+            self._ensure_tree_selection()
+        self._refresh_selection_backgrounds()
+        self._update_actions()
+        self._update_open_folder_button()
+        if not pending_select_path:
+            with suppress(Exception):
+                self.tree.verticalScrollBar().setValue(previous_scroll)
+        self._resize_to_rendered_items()
+        getattr(self, "_layout_changed", lambda: None)()
+        if remote is not None:
+            self._request_entry_state_scan(remote, getattr(self, "path", ""), entries)
+        self.qt.QTimer.singleShot(0, lambda visible_entries=list(entries): self._prefetch_related_folders(visible_entries))
+
+    def _resize_to_rendered_items(self) -> None:
+        tree = getattr(self, "tree", None)
+        root = getattr(self, "root", None)
+        if tree is None or root is None:
+            return
+        entries = getattr(self, "entries", [])
+        count = len(entries) if entries else tree.topLevelItemCount()
+        count = max(1, int(count))
+        item_limit = max(int(getattr(self, "_file_list_max_items", 0)), 0)
+        visible_rows = min(count, item_limit) if item_limit else count
+        try:
+            row_height = tree.sizeHintForRow(0)
+        except Exception:
+            row_height = 0
+        if row_height <= 0:
+            try:
+                row_height = tree.fontMetrics().height() + 8
+            except Exception:
+                row_height = 24 + max(0, self._zoom_steps)
+        try:
+            header_height = tree.header().sizeHint().height()
+        except Exception:
+            header_height = 28
+        minimum_tree_height = int(header_height + row_height + 8)
+        desired_tree_height = int(header_height + row_height * visible_rows + 8)
+        if self._embedded:
+            with suppress(Exception):
+                tree.setMinimumHeight(minimum_tree_height)
+                tree.setMaximumHeight(desired_tree_height if item_limit else 16_777_215)
+            with suppress(Exception):
+                root.setMinimumHeight(EMBEDDED_BROWSER_MIN_HEIGHT)
+                root.setMaximumHeight(16_777_215)
+            return
+
+        available_height = 720
+        frame_overhead = 0
+        try:
+            screen = self.window.screen() or self.qt.QApplication.primaryScreen()
+            if screen is not None:
+                available_height = screen.availableGeometry().height()
+            frame_overhead = max(self.window.frameGeometry().height() - self.window.height(), 0)
+        except Exception:
+            pass
+        try:
+            current_tree_height = max(tree.height(), minimum_tree_height)
+        except Exception:
+            current_tree_height = minimum_tree_height
+        try:
+            non_tree_height = max(root.sizeHint().height() - current_tree_height, 0)
+        except Exception:
+            non_tree_height = 120
+        maximum_tree_height = max(
+            minimum_tree_height,
+            available_height - frame_overhead - non_tree_height,
+        )
+        tree_height = min(desired_tree_height, maximum_tree_height)
+        with suppress(Exception):
+            tree.setMinimumHeight(tree_height)
+            tree.setMaximumHeight(tree_height)
+        try:
+            root.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            with suppress(Exception):
+                self.window.setMinimumHeight(FILE_BROWSER_MIN_HEIGHT)
+            hint = root.sizeHint()
+            desired_height = min(max(FILE_BROWSER_MIN_HEIGHT, hint.height()), available_height - frame_overhead)
+            root.setMinimumHeight(desired_height)
+            self.window.resize(max(self.window.width(), hint.width()), desired_height)
+            self._position_rclone_output()
+        except Exception:
+            pass
+
+    def _apply_entry_state(
+        self,
+        item: Any,
+        entry: BrowserEntry,
+        remote: core.RemoteInfo,
+        directory_icon: Any,
+        file_icon: Any,
+        *,
+        refresh_state: bool = True,
+    ) -> None:
+        offline, protected_content, temporary_content, partial_cache, changed = self._cached_entry_state(
+            remote,
+            entry,
+            refresh=refresh_state,
+        )
+        working = self._working_kind_for_entry(remote.name, entry.path, is_dir=entry.is_dir)
+        item.setIcon(0, self._entry_icon(
+            entry,
+            directory_icon=directory_icon,
+            file_icon=file_icon,
+            temporary_cached=temporary_content,
+            protected_cached=protected_content,
+            cache_partial=partial_cache,
+            changed=changed,
+            working=working,
+        ))
+        tooltip = ""
+        if working == "download":
+            tooltip = "Downloading local copy"
+        elif working == "sync":
+            tooltip = "Syncing local copy"
+        elif changed:
+            tooltip = "Local copy has unresolved changes"
+        elif offline:
+            tooltip = "Available offline as a local snapshot"
+        elif protected_content and temporary_content:
+            tooltip = "Contains saved offline files and temporary cached files"
+        elif protected_content:
+            tooltip = "Contains files saved for offline access"
+        elif temporary_content:
+            tooltip = "Cached local copy"
+        item.setToolTip(0, tooltip)
+
+    def _cached_entry_state(
+        self,
+        remote: core.RemoteInfo,
+        entry: BrowserEntry,
+        *,
+        refresh: bool = False,
+    ) -> tuple[bool, bool, bool, bool, bool]:
+        key = (remote.name, normalize_browser_path(entry.path), entry.is_dir)
+        cached = getattr(self, "_entry_state_cache", {}).get(key)
+        if cached is not None and not refresh:
+            return cached
+        if not refresh:
+            return False, False, False, False, False
+        result = self._read_entry_state(remote.name, entry)
+        if not hasattr(self, "_entry_state_cache"):
+            self._entry_state_cache = {}
+        self._entry_state_cache[key] = result
+        return result
+
+    def _read_entry_state(
+        self,
+        remote_name: str,
+        entry: BrowserEntry,
+    ) -> tuple[bool, bool, bool, bool, bool]:
+        state = self.backend.offline_content_state(remote_name, entry.path, is_dir=entry.is_dir)
+        changed = False
+        if entry.path or not entry.is_dir:
+            changed = bool(self.backend.offline_changed(remote_name, entry.path, is_dir=entry.is_dir))
+        return (
+            bool(state and state.offline),
+            bool(state and state.protected),
+            bool(state and state.temporary),
+            bool(state and state.partial),
+            changed,
+        )
+
+    def _request_entry_state_scan(
+        self,
+        remote: core.RemoteInfo,
+        path: str,
+        entries: list[BrowserEntry],
+    ) -> None:
+        if getattr(self, "_bridge", None) is None:
+            return
+        if not hasattr(self, "_entry_state_scans_pending"):
+            self._entry_state_scans_pending = set()
+        if not hasattr(self, "_entry_state_scan_slots"):
+            self._entry_state_scan_slots = threading.BoundedSemaphore(1)
+        key = (remote.name, path)
+        if key in self._entry_state_scans_pending:
+            return
+        self._entry_state_scans_pending.add(key)
+        snapshot = list(entries)
+
+        def worker() -> None:
+            states: dict[tuple[str, bool], tuple[bool, bool, bool, bool, bool]] = {}
+            managed: bool | None = None
+            error = ""
+            with self._entry_state_scan_slots:
+                current_remote = getattr(self, "remote", None)
+                if (
+                    self._is_disposed()
+                    or current_remote is None
+                    or current_remote.name != remote.name
+                    or getattr(self, "path", "") != path
+                ):
+                    self._bridge.entry_states_ready.emit(remote.name, path, states, managed, error)
+                    return
+                try:
+                    states[("", True)] = self._read_entry_state(remote.name, BrowserEntry("", "", True))
+                    normalized_path = normalize_browser_path(path)
+                    states[(normalized_path, True)] = self._read_entry_state(
+                        remote.name,
+                        BrowserEntry(normalized_path.rsplit("/", 1)[-1], normalized_path, True),
+                    )
+                    for entry in snapshot:
+                        states[(normalize_browser_path(entry.path), entry.is_dir)] = self._read_entry_state(
+                            remote.name,
+                            entry,
+                        )
+                    managed = bool(self.backend.managed_record_paths(remote.name))
+                except Exception as exc:
+                    error = str(exc)
+            self._bridge.entry_states_ready.emit(remote.name, path, states, managed, error)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _entry_states_ready(
+        self,
+        remote_name: str,
+        path: str,
+        states: object,
+        managed: object,
+        _error: str,
+    ) -> None:
+        self._entry_state_scans_pending.discard((remote_name, path))
+        if self._is_disposed():
+            return
+        if isinstance(states, dict):
+            for key, value in states.items():
+                if (
+                    isinstance(key, tuple)
+                    and len(key) == 2
+                    and isinstance(value, tuple)
+                    and len(value) == 5
+                ):
+                    self._entry_state_cache[(remote_name, str(key[0]), bool(key[1]))] = value
+        if isinstance(managed, bool):
+            self._remote_managed_cache[remote_name] = managed
+        if self.remote is None or self.remote.name != remote_name or self.path != path:
+            return
+        self._refresh_entry_icons()
+        self._update_actions()
+
+    def _set_item_foreground(self, item: Any, color: str) -> None:
+        qt_color = self.qt.QColor(color)
+        brush_factory = getattr(self.qt, "QBrush", None)
+        brush = brush_factory(qt_color) if brush_factory is not None else qt_color
+        for column in range(self.tree.columnCount()):
+            item.setForeground(column, brush)
+
+    def _ensure_tree_selection(self) -> None:
+        if self.tree.topLevelItemCount() <= 0:
+            return
+        current = self.tree.currentItem() or self.tree.topLevelItem(0)
+        if current is None:
+            return
+        with suppress(Exception):
+            if self.tree.selectedItems():
+                return
+        self.tree.setCurrentItem(current)
+        selection_model = getattr(self.tree, "selectionModel", None)
+        selection = selection_model() if callable(selection_model) else None
+        if selection is not None:
+            selection_model = getattr(self.qt, "QItemSelectionModel", None)
+            selection_flags = getattr(selection_model, "SelectionFlag", None)
+            if selection_flags is not None:
+                flags = selection_flags.ClearAndSelect | selection_flags.Rows
+                selection.select(self.tree.currentIndex(), flags)
+            elif not self.tree.selectedItems():
+                current.setSelected(True)
+        elif not self.tree.selectedItems():
+            current.setSelected(True)
+
+    def _focus_relative_item(self, delta: int) -> None:
+        count = self.tree.topLevelItemCount()
+        if count <= 0:
+            return
+        current = self.tree.currentItem() or self.tree.topLevelItem(0)
+        index = self.tree.indexOfTopLevelItem(current) if current is not None else 0
+        index = max(index, 0)
+        index = min(max(index + delta, 0), count - 1)
+        self.tree.setCurrentItem(self.tree.topLevelItem(index))
+        self._ensure_tree_selection()
+
+    def _prefetch_related_folders(self, entries: list[BrowserEntry]) -> None:
+        self._prefetch_parent_folder()
+        self._prefetch_child_folders(entries)
+
+    def _prefetch_parent_folder(self) -> None:
+        remote = self.remote
+        if (
+            remote is None
+            or not self.path
+            or remote.backend_type.casefold() == "gphotos"
+        ):
+            return
+        parent = parent_browser_path(self.path)
+        key = (remote.name, parent)
+        if key in self._folder_cache or key in self._loads_pending:
+            return
+        self._load_folder(remote, parent)
+
+    def _prefetch_child_folders(self, entries: list[BrowserEntry]) -> None:
+        remote = self.remote
+        if remote is None or remote.backend_type.casefold() == "gphotos":
+            return
+        scheduled = 0
+        for entry in entries:
+            if not entry.is_dir:
+                continue
+            key = (remote.name, entry.path)
+            if key in self._folder_cache or key in self._loads_pending:
+                continue
+            self._load_folder(remote, entry.path)
+            scheduled += 1
+            if scheduled >= CHILD_FOLDER_PREFETCH_LIMIT:
+                return
+
+    def _selected_entries(self) -> list[BrowserEntry]:
+        if self._is_disposed():
+            return []
+        result: list[BrowserEntry] = []
+        try:
+            selected_items = self.tree.selectedItems()
+        except RuntimeError:
+            return []
+        for item in selected_items:
+            with suppress(RuntimeError):
+                entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+                if isinstance(entry, BrowserEntry):
+                    result.append(entry)
+        return result
+
+    def selected_transfer_items(self) -> list[TransferItem]:
+        if self.remote is None:
+            return []
+        return [
+            TransferItem(self.remote.name, entry.path, entry.name, entry.is_dir)
+            for entry in self._selected_entries()
+        ]
+
+    def _start_file_drag(self, source: Any, entries: list[BrowserEntry]) -> None:
+        remote = self.remote
+        if remote is None or not entries or self._remote_operation_pending(remote.name):
+            return
+
+        local_paths: list[Path] = []
+        missing: list[BrowserEntry] = []
+        for entry in entries:
+            local = self._drag_export_path(remote, entry)
+            if local is None:
+                missing.append(entry)
+            else:
+                local_paths.append(local)
+
+        items = [
+            TransferItem(remote.name, entry.path, entry.name, entry.is_dir)
+            for entry in entries
+        ]
+        mime = self.qt.QMimeData()
+        mime.setData(MIME_TYPE, json.dumps([item.__dict__ for item in items]).encode())
+        # A partial URL list would silently omit uncached selected items when
+        # dropping into an external file manager. Attach URLs only when the
+        # complete selection is ready; Mountlet's own MIME remains immediately
+        # usable for internal transfers.
+        if not missing:
+            mime.setUrls([self.qt.QUrl.fromLocalFile(str(path)) for path in local_paths])
+        drag = self.qt.QDrag(source)
+        drag.setMimeData(mime)
+        # External file managers receive only a copy operation. Moving a
+        # managed cache path would break Mountlet's local-state tracking.
+        result = drag.exec(self.qt.Qt.DropAction.CopyAction, self.qt.Qt.DropAction.CopyAction)
+        ignore_action = getattr(self.qt.Qt.DropAction, "IgnoreAction", None)
+        if missing and (result is None or ignore_action is None or result == ignore_action):
+            self._prepare_drag_export(remote, missing)
+
+    def _drag_export_path(self, remote: core.RemoteInfo, entry: BrowserEntry) -> Path | None:
+        cached = self.backend.cached_export_path(remote.name, entry)
+        if cached is not None:
+            return cached
+        if entry.is_dir and self.backend.has_cached_content(remote.name, entry.path, is_dir=True):
+            return None
+        # A Drive mount can omit Google-native documents from an otherwise
+        # valid directory. Export Drive folders through rclone instead.
+        if entry.is_dir and remote.backend_type.casefold() == "drive":
+            return None
+        if not self._remote_is_mounted(remote):
+            return None
+        relative = normalize_browser_path(entry.path)
+        mounted = (
+            Path(remote.mount_path).joinpath(*relative.split("/"))
+            if relative
+            else Path(remote.mount_path)
+        )
+        if entry.is_dir:
+            return mounted if mounted.is_dir() else None
+        if not mounted.is_file():
+            return None
+        if remote.backend_type.casefold() == "drive":
+            suffix = mounted.suffix.casefold().lstrip(".")
+            if suffix in DRIVE_EDITABLE_DOCUMENT_FORMATS:
+                with suppress(OSError):
+                    if mounted.stat().st_size == 0:
+                        return None
+        return mounted
+
+    def _prepare_drag_export(self, remote: core.RemoteInfo, entries: list[BrowserEntry]) -> None:
+        keys = {(remote.name, normalize_browser_path(entry.path)) for entry in entries}
+        pending = getattr(self, "_drag_export_pending", None)
+        if pending is None:
+            pending = set()
+            self._drag_export_pending = pending
+        if pending.intersection(keys):
+            return
+        pending.update(keys)
+        paths = [entry.path for entry in entries]
+        self._start_working_paths(remote.name, paths, "download")
+        self.status.setText(
+            f"Preparing {len(entries)} item{'s' if len(entries) != 1 else ''} for drag and drop…"
+        )
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                with self._drag_export_slots:
+                    for entry in entries:
+                        self.backend.cache_for_export(remote, entry)
+            except Exception as exc:
+                self._bridge.drag_export_ready.emit(remote.name, entries, str(exc))
+                return
+            self._bridge.drag_export_ready.emit(remote.name, entries, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drag_export_ready(self, remote_name: str, entries: object, error: str) -> None:
+        if not isinstance(entries, list) or not all(isinstance(entry, BrowserEntry) for entry in entries):
+            return
+        paths = [entry.path for entry in entries]
+        pending = getattr(self, "_drag_export_pending", set())
+        pending.difference_update((remote_name, normalize_browser_path(path)) for path in paths)
+        if self._is_disposed():
+            return
+        self._finish_working_paths(remote_name, paths, "download")
+        for key in list(getattr(self, "_entry_state_cache", {})):
+            if key[0] == remote_name and _paths_overlap([key[1]], paths):
+                self._entry_state_cache.pop(key, None)
+        getattr(self, "_remote_managed_cache", {}).pop(remote_name, None)
+        self._local_files_changed()
+        self._refresh_entry_icons()
+        self._update_actions()
+        if error:
+            self._notify("Drag and drop", error, False)
+            if self.remote is not None and self.remote.name == remote_name:
+                self.status.setText(error)
+            return
+        if self.remote is not None and self.remote.name == remote_name:
+            count = len(entries)
+            self.status.setText(
+                f"{count} item{'s are' if count != 1 else ' is'} ready. Drag again to copy."
+            )
+
+    def copy_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        items = self.selected_transfer_items()
+        if items:
+            self.clipboard = (items, False)
+            self.status.setText(f"Copied {len(items)} item{'s' if len(items) != 1 else ''}")
+            self._update_actions()
+
+    def cut_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        entries = self._selected_entries()
+        if not self._can_delete_entries(entries):
+            if self.remote is not None and self.remote.backend_type.casefold() == "gphotos":
+                self._notify(
+                    "Google Photos",
+                    "Google Photos media can be moved only from albums created through rclone.",
+                    False,
+                )
+            return
+        items = self.selected_transfer_items()
+        if items:
+            self.clipboard = (items, True)
+            self.status.setText(f"Cut {len(items)} item{'s' if len(items) != 1 else ''}")
+            self._update_actions()
+
+    def paste(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        if self.clipboard is not None:
+            items, move = self.clipboard
+            self._transfer(items, move=move)
+
+    def delete_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        entries = self._selected_entries()
+        if not entries or self.remote is None or self._remote_operation_pending(self.remote.name):
+            return
+        if not self._can_delete_entries(entries):
+            self._notify(
+                "Google Photos",
+                "Google Photos can remove media only from albums created through rclone.",
+                False,
+            )
+            return
+        names = ", ".join(entry.name for entry in entries[:3])
+        if len(entries) > 3:
+            names += f", and {len(entries) - 3} more"
+        is_google_photos = self.remote.backend_type.casefold() == "gphotos"
+        title = "Remove from album?" if is_google_photos else "Delete from cloud storage?"
+        message = (
+            f"Remove {names} from this album?\n\nThe media remains in your Google Photos library."
+            if is_google_photos
+            else f"Permanently delete {names}?\n\nThis cannot be undone by Mountlet."
+        )
+        reply = self.qt.QMessageBox.question(
+            self.window,
+            title,
+            message,
+            self.qt.QMessageBox.StandardButton.Yes | self.qt.QMessageBox.StandardButton.No,
+            self.qt.QMessageBox.StandardButton.No,
+        )
+        if reply != self.qt.QMessageBox.StandardButton.Yes:
+            return
+        remote = self.remote
+        self._run_operation("Deleting…", lambda: self.backend.delete_entries(remote, entries))
+
+    def create_folder(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        if self.remote is None or self._remote_operation_pending(self.remote.name):
+            return
+        if not self._can_create_folder():
+            self._notify("Google Photos", "Albums can be created only inside the album folder.", False)
+            return
+        name, accepted = self.qt.QInputDialog.getText(self.window, "New folder", "Folder name")
+        if not accepted or not name.strip():
+            return
+        remote, parent = self.remote, self.path
+        self._run_operation("Creating folder…", lambda: self.backend.create_folder(remote, parent, name.strip()))
+
+    def rename_selected(self) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        entries = self._selected_entries()
+        if len(entries) != 1 or self.remote is None or self._remote_operation_pending(self.remote.name):
+            return
+        if self.remote.backend_type.casefold() == "gphotos":
+            self._notify("Google Photos", "Google Photos does not support renaming media through rclone.", False)
+            return
+        entry = entries[0]
+        name, accepted = self.qt.QInputDialog.getText(
+            self.window,
+            "Rename",
+            "New name",
+            self.qt.QLineEdit.EchoMode.Normal,
+            entry.name,
+        )
+        new_name = name.strip()
+        if not accepted or not new_name or new_name == entry.name:
+            return
+        if any(candidate.path != entry.path and candidate.name.casefold() == new_name.casefold() for candidate in self.entries):
+            self._notify("Rename", f"An item named {new_name} already exists in this folder.", False)
+            return
+        remote = self.remote
+        parent = parent_browser_path(entry.path)
+        self._run_operation(
+            "Renaming…",
+            lambda: self.backend.rename_entry(remote, entry, new_name),
+            invalidate_keys={(remote.name, parent)},
+        )
+
+    def _show_tree_menu(self, point: Any) -> None:
+        item = self.tree.itemAt(point)
+        if item is None:
+            self._show_folder_menu(point, source=self.tree.viewport())
+            return
+        if not item.isSelected():
+            self.tree.clearSelection()
+            item.setSelected(True)
+            self.tree.setCurrentItem(item)
+        entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        if not isinstance(entry, BrowserEntry):
+            return
+        menu = self.qt.QMenu(self.window)
+        self._menu_action(menu, "Open", lambda selected=entry: self._open_entry(selected))
+        if self._can_replace_original_with_copy(entry):
+            self._menu_action(
+                menu,
+                "Replace original with this copy",
+                lambda selected=entry: self._replace_original_with_copy(selected),
+            )
+        if entry.is_dir:
+            state = self._cached_entry_state(self.remote, entry) if self.remote is not None else (False,) * 5
+            can_open_folder = bool(
+                self.remote
+                and (self._remote_is_mounted(self.remote) or state[1] or state[2])
+            )
+            self._menu_action(
+                menu,
+                f"Open in {self._file_manager_label()}",
+                lambda path=entry.path: self._open_external_folder(path),
+                enabled=can_open_folder,
+            )
+        menu.addSeparator()
+        edits_enabled = self._edits_enabled()
+        self._menu_action(menu, "Copy", self.copy_selected, enabled=edits_enabled)
+        destructive_enabled = edits_enabled and self._can_delete_entries(self._selected_entries())
+        self._menu_action(menu, "Cut", self.cut_selected, enabled=destructive_enabled)
+        self._menu_action(
+            menu,
+            "Rename",
+            self.rename_selected,
+            enabled=bool(
+                edits_enabled
+                and len(self._selected_entries()) == 1
+                and not self._current_remote_operation_pending()
+                and self.remote is not None
+                and self.remote.backend_type.casefold() != "gphotos"
+            ),
+        )
+        self._add_offline_menu_actions(menu, entry)
+        self._menu_action(
+            menu,
+            "Sync now",
+            lambda selected=entry: self._sync_cached_path(selected.path, selected.is_dir),
+            enabled=self._can_sync_cache(entry),
+        )
+        self._menu_action(
+            menu,
+            "Clear resolved cache",
+            lambda selected=entry: self._free_cache(selected.path),
+            enabled=self._can_free_cache(entry),
+        )
+        self._menu_action(menu, "Delete", self.delete_selected, enabled=destructive_enabled)
+        menu.exec(self.tree.viewport().mapToGlobal(point))
+
+    def _show_folder_menu(self, point: Any, *, source: Any | None = None) -> None:
+        menu = self.qt.QMenu(self.window)
+        self._menu_action(
+            menu,
+            f"Open in {self._file_manager_label()}",
+            lambda: self._open_external_folder(self.path),
+            enabled=bool(self.remote and (self._remote_is_mounted(self.remote) or self._current_cached_folder_available())),
+        )
+        edits_enabled = self._edits_enabled()
+        self._menu_action(
+            menu,
+            "Paste",
+            self.paste,
+            enabled=edits_enabled and self.clipboard is not None and not self._current_remote_operation_pending(),
+        )
+        self._menu_action(
+            menu,
+            "New folder",
+            self.create_folder,
+            enabled=edits_enabled and not self._current_remote_operation_pending() and self._can_create_folder(),
+        )
+        menu.addSeparator()
+        self._menu_action(menu, "Sync now", lambda: self._sync_cached_path(self.path, True), enabled=self._can_sync_folder())
+        self._menu_action(
+            menu,
+            "Remove offline files in this folder",
+            lambda: self._remove_offline_copy(self.path),
+            enabled=bool(
+                self.remote
+                and self.backend.has_offline_content(self.remote.name, self.path, is_dir=True)
+                and not self._current_remote_operation_pending()
+            ),
+        )
+        self._menu_action(
+            menu,
+            "Clear resolved cache in this folder",
+            lambda: self._free_cache(self.path),
+            enabled=bool(
+                self.remote
+                and self.backend.has_temporary_cache_content(self.remote.name, self.path, is_dir=True)
+                and not self._current_remote_operation_pending()
+            ),
+        )
+        origin = source or self.path_field
+        menu.exec(origin.mapToGlobal(point))
+
+    def _menu_action(self, menu: Any, label: str, callback: Callable[[], None], *, enabled: bool = True) -> Any:
+        action = menu.addAction(label)
+        action.setEnabled(enabled)
+        action.triggered.connect(lambda _checked=False: callback())
+        return action
+
+    def _can_replace_original_with_copy(self, entry: BrowserEntry) -> bool:
+        return bool(
+            self.remote
+            and not entry.is_dir
+            and self._remote_is_mounted(self.remote)
+            and self.backend.original_path_for_conflict_copy(entry.path)
+        )
+
+    def _can_free_cache(self, entry: BrowserEntry) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(
+            remote
+            and self._cached_entry_state(remote, entry)[2]
+            and not self._current_remote_operation_pending()
+        )
+
+    def _can_sync_cache(self, entry: BrowserEntry) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(
+            remote
+            and self._sync_paths is not None
+            and not self._current_remote_operation_pending()
+            and not self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="sync")
+            and self._entry_has_cached_content(entry)
+        )
+
+    def _can_sync_folder(self) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(
+            remote
+            and self._sync_paths is not None
+            and not self._current_remote_operation_pending()
+            and not self._entry_has_operation(remote.name, self.path, is_dir=True, kind="sync")
+            and self.backend.managed_file_paths_under(remote.name, self.path)
+        )
+
+    def _sync_cached_path(self, path: str, is_dir: bool) -> None:
+        if self.remote is None or self._sync_paths is None:
+            return
+        affected = self.backend.managed_record_paths_under(self.remote.name, path)
+        if not affected:
+            return
+        self._start_working_paths(self.remote.name, affected, "sync")
+        self._sync_paths(self.remote, [(path, is_dir)])
+
+    def start_sync(self, remote_name: str, paths: list[str]) -> None:
+        self._start_working_paths(remote_name, paths, "sync")
+
+    def sync_selected(self) -> None:
+        remote = getattr(self, "remote", None)
+        entries = self._selected_entries()
+        if remote is None or self._sync_paths is None or not entries or self._remote_operation_pending(remote.name):
+            return
+        paths = [(entry.path, entry.is_dir) for entry in entries]
+        affected = self._managed_record_paths_for_items(remote.name, paths)
+        if not affected:
+            return
+        self._start_working_paths(remote.name, affected, "sync")
+        self._sync_paths(remote, paths)
+
+    def sync_remote(self) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or self._sync_paths is None or self._remote_operation_pending(remote.name):
+            return
+        affected = self.backend.managed_record_paths(remote.name)
+        if not affected:
+            return
+        self._start_working_paths(remote.name, affected, "sync")
+        self._sync_paths(remote, [("", True)])
+
+    def remove_selected_offline(self) -> None:
+        remote = getattr(self, "remote", None)
+        entries = self._selected_entries()
+        if remote is None or not entries or self._remote_operation_pending(remote.name):
+            return
+        for entry in entries:
+            if self.backend.has_offline_content(remote.name, entry.path, is_dir=entry.is_dir):
+                self._queue_remove_offline_job(remote.name, entry.path)
+
+    def clear_selected_cache(self) -> None:
+        remote = getattr(self, "remote", None)
+        entries = self._selected_entries()
+        if remote is None or not entries or self._remote_operation_pending(remote.name):
+            return
+        paths = [entry.path for entry in entries]
+        self._run_operation(
+            "Clearing selected cache…",
+            lambda: sum(self.backend.free_cache(remote.name, path) for path in paths),
+            invalidate_keys={(remote.name, self.path)},
+        )
+
+    def remove_remote_offline(self) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or self._remote_operation_pending(remote.name):
+            return
+        self.remove_remote_offline_for(remote.name)
+
+    def clear_remote_cache(self) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or self._remote_operation_pending(remote.name):
+            return
+        self.clear_remote_cache_for(remote.name)
+
+    def remove_remote_offline_for(self, remote_name: str) -> None:
+        if self._remote_operation_pending(remote_name):
+            return
+        self._run_operation(
+            "Removing offline files…",
+            lambda: self.backend.remove_remote_offline(remote_name),
+            invalidate_keys={key for key in self._folder_cache if key[0] == remote_name},
+            remote_names={remote_name},
+        )
+
+    def clear_remote_cache_for(self, remote_name: str) -> None:
+        if self._remote_operation_pending(remote_name):
+            return
+        self._run_operation(
+            "Clearing remote cache…",
+            lambda: self.backend.free_remote_cache(remote_name),
+            invalidate_keys={key for key in self._folder_cache if key[0] == remote_name},
+            remote_names={remote_name},
+        )
+
+    def remove_all_offline(self) -> None:
+        if self._any_operation_pending():
+            return
+        self._run_operation(
+            "Removing all offline files…",
+            self.backend.remove_all_offline,
+            invalidate_keys=set(self._folder_cache),
+            remote_names={remote.name for remote in self._remotes()},
+        )
+
+    def clear_all_cache(self) -> None:
+        if self._any_operation_pending():
+            return
+        self._run_operation(
+            "Clearing all resolved cache…",
+            self.backend.free_all_resolved_cache,
+            invalidate_keys=set(self._folder_cache),
+            remote_names={remote.name for remote in self._remotes()},
+        )
+
+    def _managed_record_paths_for_items(self, remote_name: str, items: list[tuple[str, bool]]) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        for path, _is_dir in items:
+            for record_path in self.backend.managed_record_paths_under(remote_name, path):
+                if record_path in seen:
+                    continue
+                seen.add(record_path)
+                paths.append(record_path)
+        return paths
+
+    def _add_offline_menu_actions(self, menu: Any, entry: BrowserEntry) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return
+        offline = self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        downloading = self._entry_has_operation(
+            remote.name,
+            entry.path,
+            is_dir=entry.is_dir,
+            kind="download",
+        )
+        remove_pending = self._offline_remove_pending(remote.name, [entry.path])
+        available = not self._current_remote_operation_pending() and not downloading
+        has_local_content = self.backend.has_cached_content(remote.name, entry.path, is_dir=entry.is_dir)
+        self._menu_action(
+            menu,
+            "Make available offline",
+            self.toggle_offline,
+            enabled=available and not offline,
+        )
+        self._menu_action(
+            menu,
+            "Remove offline copies",
+            lambda selected=entry: self._remove_offline_copy(selected.path),
+            enabled=has_local_content and not self._current_remote_operation_pending() and not remove_pending,
+        )
+
+    def _remove_offline_copy(self, path: str) -> None:
+        if self.remote is None:
+            return
+        remote_name = self.remote.name
+        self._queue_remove_offline_job(remote_name, path)
+
+    def _queue_remove_offline_job(self, remote_name: str, path: str) -> None:
+        normalized = normalize_browser_path(path)
+        paths = [normalized]
+        if self._offline_remove_pending(remote_name, paths):
+            return
+
+        def action() -> None:
+            self.backend.remove_offline(remote_name, normalized)
+
+        if self._offline_download_pending(remote_name, paths):
+            self._offline_job_queue.append((remote_name, "Removing local copies…", action, paths, "remove", None))
+            self.status.setText("Queued removal after download…")
+            self._update_actions()
+            return
+        self._start_local_remove_job(remote_name, paths, action)
+
+    def _start_local_remove_job(self, remote_name: str, paths: list[str], action: Callable[[], object]) -> None:
+        self._start_working_paths(remote_name, paths, "remove")
+        self.status.setText("Removing local copies…")
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                action()
+            except Exception as exc:
+                self._bridge.offline_job_finished.emit(remote_name, paths, "remove", False, str(exc))
+                return
+            self._bridge.offline_job_finished.emit(remote_name, paths, "remove", True, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _free_cache(self, path: str) -> None:
+        if self.remote is None:
+            return
+        remote_name = self.remote.name
+        self._run_operation("Freeing cache…", lambda: self.backend.free_cache(remote_name, path))
+
+    def _free_all_resolved_cache(self) -> None:
+        self._run_operation("Freeing resolved cache…", self.backend.free_all_resolved_cache)
+
+    def _replace_original_with_copy(self, entry: BrowserEntry) -> None:
+        if self.remote is None or self._current_remote_operation_pending():
+            return
+        remote = self.remote
+        parent = parent_browser_path(entry.path)
+        self._run_operation(
+            "Replacing original…",
+            lambda: self.backend.replace_original_with_conflict_copy(remote, entry.path),
+            invalidate_keys={(remote.name, parent)},
+        )
+
+    def _file_manager_label(self) -> str:
+        try:
+            return self._file_manager_name()
+        except Exception:
+            return "file manager"
+
+    def accept_drop(
+        self,
+        payload: bytes,
+        *,
+        move: bool = False,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        try:
+            values = json.loads(payload.decode("utf-8"))
+            items = [TransferItem(**value) for value in values]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            self._notify("File transfer", "The dragged files could not be read.", False)
+            return
+        self._transfer(
+            items,
+            move=move,
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+        )
+
+    def accept_local_paths(
+        self,
+        paths: list[Path],
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        remote, resolved_path = self._resolved_drop_destination(
+            destination_remote,
+            destination_path,
+        )
+        if not paths or remote is None or self._remote_operation_pending(remote.name):
+            return
+        invalidate = {(remote.name, resolved_path)}
+        self._run_operation(
+            f"Uploading {len(paths)} item{'s' if len(paths) != 1 else ''}…",
+            lambda: self.backend.copy_local_paths(paths, remote, resolved_path),
+            invalidate_keys=invalidate,
+        )
+
+    def _resolved_drop_destination(
+        self,
+        remote: core.RemoteInfo | None,
+        path: str | None,
+    ) -> tuple[core.RemoteInfo | None, str]:
+        destination = remote or self.remote
+        if destination is None:
+            return None, ""
+        current_path = self.path if path is None else path
+        current_path = normalize_browser_path(current_path)
+        if destination.backend_type.casefold() != "gphotos":
+            return destination, current_path
+        parts = PurePosixPath(current_path).parts
+        if len(parts) >= 2 and parts[0].casefold() == "album":
+            return destination, current_path
+        return destination, "upload"
+
+    def _drop_destination_path(self, event: Any) -> str:
+        try:
+            position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            item = self.tree.itemAt(position)
+            if item is not None:
+                entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+                if isinstance(entry, BrowserEntry) and entry.is_dir:
+                    return entry.path
+        except (AttributeError, RuntimeError, TypeError):
+            pass
+        return getattr(self, "path", "")
+
+    def _mime_drop_supported(self, mime: Any) -> bool:
+        if not self._edits_enabled():
+            return False
+        if mime.hasFormat(MIME_TYPE):
+            return True
+        if not mime.hasUrls():
+            return False
+        for url in mime.urls():
+            with suppress(Exception):
+                if url.isLocalFile() and bool(url.toLocalFile()):
+                    return True
+        return False
+
+    def _drop_event_supported(
+        self,
+        event: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+    ) -> bool:
+        destination = destination_remote or self.remote
+        if destination is None or self._remote_operation_pending(destination.name):
+            return False
+        return self._mime_drop_supported(event.mimeData())
+
+    def _drop_action(self, event: Any) -> Any:
+        mime = event.mimeData()
+        if mime.hasFormat(MIME_TYPE):
+            modifiers = event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()
+            if modifiers & self.qt.Qt.KeyboardModifier.ShiftModifier:
+                return self.qt.Qt.DropAction.MoveAction
+        return self.qt.Qt.DropAction.CopyAction
+
+    def _accept_drag_event(self, event: Any) -> None:
+        event.setDropAction(self._drop_action(event))
+        event.accept()
+
+    def preview_drop(
+        self,
+        event: Any,
+        widget: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> bool:
+        """Update all visual drop feedback through one shared path."""
+        if not self._drop_event_supported(event, destination_remote=destination_remote):
+            if widget is getattr(self, "tree", None):
+                self._clear_tree_drop_hover()
+            with suppress(Exception):
+                event.ignore()
+            return False
+        if destination_path is None and widget is getattr(self, "tree", None):
+            destination_path = self._drop_destination_path(event)
+            self._set_tree_drop_hover(event)
+        self._accept_drag_event(event)
+        self._show_drop_tooltip(
+            event,
+            widget,
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+        )
+        return True
+
+    def leave_drop(self) -> None:
+        self._clear_tree_drop_hover()
+        self._hide_drop_tooltip()
+
+    def perform_drop(
+        self,
+        event: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> bool:
+        """Execute an internal or external drop through one shared path."""
+        if not self._drop_event_supported(event, destination_remote=destination_remote):
+            self.leave_drop()
+            with suppress(Exception):
+                event.ignore()
+            return False
+        if destination_path is None:
+            destination_path = self._drop_destination_path(event)
+        mime = event.mimeData()
+        if mime.hasFormat(MIME_TYPE):
+            self.accept_drop(
+                bytes(mime.data(MIME_TYPE)),
+                move=self._drop_action(event) == self.qt.Qt.DropAction.MoveAction,
+                destination_remote=destination_remote,
+                destination_path=destination_path,
+            )
+        else:
+            local_paths = self._local_paths_from_mime(mime)
+            if not local_paths:
+                self.leave_drop()
+                with suppress(Exception):
+                    event.ignore()
+                return False
+            self.accept_local_paths(
+                local_paths,
+                destination_remote=destination_remote,
+                destination_path=destination_path,
+            )
+        self._accept_drag_event(event)
+        self.leave_drop()
+        return True
+
+    def _set_tree_drop_hover(self, event: Any) -> None:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return
+        item = None
+        with suppress(AttributeError, RuntimeError, TypeError):
+            position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            item = tree.itemAt(position)
+        previous = getattr(self, "_drop_hover_item", None)
+        if previous is item:
+            return
+        self._clear_tree_drop_hover()
+        if item is None:
+            return
+        self._drop_hover_item = item
+        brush = self._item_brush("#dcfce7")
+        with suppress(RuntimeError):
+            for column in range(tree.columnCount()):
+                item.setBackground(column, brush)
+            tree.viewport().update()
+
+    def _clear_tree_drop_hover(self) -> None:
+        tree = getattr(self, "tree", None)
+        item = getattr(self, "_drop_hover_item", None)
+        self._drop_hover_item = None
+        if tree is None or item is None:
+            return
+        clear_brush = self._item_brush("")
+        with suppress(RuntimeError):
+            for column in range(tree.columnCount()):
+                item.setBackground(column, clear_brush)
+        # Restore the normal selected-row brush if this was also selected.
+        self._painted_selected_items = set()
+        self._refresh_selection_backgrounds()
+        with suppress(RuntimeError):
+            tree.viewport().update()
+
+    def _drop_item_label(self, mime: Any) -> str:
+        names: list[str] = []
+        if mime.hasFormat(MIME_TYPE):
+            with suppress(Exception):
+                values = json.loads(bytes(mime.data(MIME_TYPE)).decode("utf-8"))
+                names = [str(value.get("name") or "").strip() for value in values]
+        elif mime.hasUrls():
+            for url in mime.urls():
+                with suppress(Exception):
+                    if url.isLocalFile() and url.toLocalFile():
+                        names.append(Path(url.toLocalFile()).name)
+        names = [name for name in names if name]
+        if len(names) == 1:
+            return names[0]
+        if names:
+            return f"{len(names)} items"
+        return "items"
+
+    def drop_tooltip_text(
+        self,
+        mime: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+        move: bool = False,
+    ) -> str:
+        remote, resolved_path = self._resolved_drop_destination(destination_remote, destination_path)
+        if remote is None:
+            return ""
+        item_label = self._drop_item_label(mime)
+        if remote.backend_type.casefold() == "gphotos" and resolved_path == "upload":
+            return f"Upload {item_label} to Google Photos"
+        if resolved_path:
+            folder_name = PurePosixPath(resolved_path).name
+        else:
+            folder_name = f"{remote.alias} root"
+        verb = "Move" if move else ("Copy" if mime.hasFormat(MIME_TYPE) else "Upload")
+        return f"{verb} {item_label} to {folder_name}"
+
+    def _show_drop_tooltip(
+        self,
+        event: Any,
+        widget: Any,
+        *,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
+        if destination_path is None and widget is self.tree:
+            destination_path = self._drop_destination_path(event)
+        move = self._drop_action(event) == self.qt.Qt.DropAction.MoveAction
+        text = self.drop_tooltip_text(
+            event.mimeData(),
+            destination_remote=destination_remote,
+            destination_path=destination_path,
+            move=move,
+        )
+        if not text:
+            self._hide_drop_tooltip()
+            return
+        key = (text, id(widget))
+        if getattr(self, "_drop_tooltip_key", None) == key:
+            return
+        self._drop_tooltip_key = key
+        self.qt.QToolTip.showText(self.qt.QCursor.pos(), text, widget)
+
+    def _hide_drop_tooltip(self) -> None:
+        self._drop_tooltip_key = None
+        with suppress(Exception):
+            self.qt.QToolTip.hideText()
+
+    def _handle_drop_event(self, event: Any) -> bool:
+        return self.perform_drop(event)
+
+    def _local_paths_from_mime(self, mime: Any) -> list[Path]:
+        if not mime.hasUrls():
+            return []
+        paths: list[Path] = []
+        for url in mime.urls():
+            with suppress(Exception):
+                if not url.isLocalFile():
+                    continue
+                path = Path(url.toLocalFile())
+                if path.exists():
+                    paths.append(path)
+        return paths
+
+    def _transfer(
+        self,
+        items: list[TransferItem],
+        *,
+        move: bool,
+        destination_remote: core.RemoteInfo | None = None,
+        destination_path: str | None = None,
+    ) -> None:
+        if not self._edits_enabled():
+            self._edit_disabled()
+            return
+        destination, resolved_path = self._resolved_drop_destination(
+            destination_remote,
+            destination_path,
+        )
+        if not items or destination is None or self._remote_operation_pending(destination.name):
+            return
+        if move and any(self._remote_operation_pending(item.remote_name) for item in items):
+            return
+        remotes = {remote.name: remote for remote in self._remotes()}
+        if move and any(
+            source is not None
+            and source.backend_type.casefold() == "gphotos"
+            and (
+                item.is_dir
+                or len(PurePosixPath(normalize_browser_path(item.path)).parts) < 3
+                or PurePosixPath(normalize_browser_path(item.path)).parts[0].casefold() != "album"
+            )
+            for item in items
+            if (source := remotes.get(item.remote_name)) is not None
+        ):
+            self._notify(
+                "Google Photos",
+                "Media outside rclone-created albums can be copied, but not moved.",
+                False,
+            )
+            return
+        verb = "Moving" if move else "Copying"
+        invalidate = {(destination.name, resolved_path)}
+        if move:
+            invalidate.update((item.remote_name, parent_browser_path(item.path)) for item in items)
+        self._run_operation(
+            f"{verb} {len(items)} item{'s' if len(items) != 1 else ''}…",
+            lambda: self.backend.transfer(items, remotes, destination, resolved_path, move=move),
+            clear_clipboard=move,
+            invalidate_keys=invalidate,
+            remote_names={
+                destination.name,
+                *(item.remote_name for item in items if move),
+            },
+        )
+
+    def toggle_offline(self) -> None:
+        entries = self._selected_entries()
+        if not entries or self.remote is None or self._current_remote_operation_pending():
+            return
+        remote = self.remote
+        entries = [
+            entry
+            for entry in entries
+            if not self.backend.is_offline(remote.name, entry.path, is_dir=entry.is_dir)
+        ]
+        if not entries:
+            return
+        if any(self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download") for entry in entries):
+            return
+
+        def action() -> None:
+            for entry in entries:
+                self.backend.make_offline(remote, entry)
+
+        def discover_paths() -> list[BrowserEntry]:
+            discovered: list[BrowserEntry] = []
+            seen: set[str] = set()
+            for entry in entries:
+                path = normalize_browser_path(entry.path)
+                if path and path not in seen:
+                    seen.add(path)
+                    discovered.append(entry)
+                for discovered_entry in self.backend.list_entries_recursive(remote, entry):
+                    path = normalize_browser_path(discovered_entry.path)
+                    if path and path not in seen:
+                        seen.add(path)
+                        discovered.append(discovered_entry)
+            return discovered
+
+        self._queue_offline_job(
+            "Downloading for offline use…",
+            action,
+            working_paths=[],
+            working_kind="download",
+            discover_paths=discover_paths,
+        )
+
+    def _run_operation(
+        self,
+        message: str,
+        action: Callable[[], object],
+        *,
+        clear_clipboard: bool = False,
+        invalidate_keys: set[tuple[str, str]] | None = None,
+        working_paths: list[str] | None = None,
+        working_kind: str = "",
+        remote_names: set[str] | None = None,
+    ) -> None:
+        origin_remote = self.remote.name if self.remote is not None else ""
+        operation_keys = set(invalidate_keys or ())
+        owned_remotes = set(remote_names or ())
+        if not owned_remotes:
+            owned_remotes.update(key[0] for key in operation_keys)
+        if not owned_remotes and origin_remote:
+            owned_remotes.add(origin_remote)
+        if origin_remote and origin_remote in owned_remotes:
+            operation_keys.add((origin_remote, self.path))
+        operation_id = getattr(self, "_next_operation_id", 1)
+        self._next_operation_id = operation_id + 1
+        pending = getattr(self, "_pending_operations", None)
+        if pending is None:
+            pending = {}
+            self._pending_operations = pending
+        normalized_working_paths = [normalize_browser_path(path) for path in (working_paths or [])]
+        pending[operation_id] = {
+            "remote_names": owned_remotes,
+            "cache_keys": operation_keys,
+            "clear_clipboard": clear_clipboard,
+            "working_remote": origin_remote,
+            "working_paths": normalized_working_paths,
+            "working_kind": working_kind,
+        }
+        if origin_remote and normalized_working_paths and working_kind:
+            self._start_working_paths(origin_remote, normalized_working_paths, working_kind)
+        if origin_remote in owned_remotes:
+            self.status.setText(message)
+            self._update_actions()
+
+        def worker() -> None:
+            try:
+                action()
+            except Exception as exc:
+                self._bridge.operation_finished.emit(operation_id, False, str(exc))
+                return
+            self._bridge.operation_finished.emit(operation_id, True, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _any_operation_pending(self) -> bool:
+        pending = getattr(self, "_pending_operations", None)
+        if pending is not None:
+            return bool(pending)
+        return bool(getattr(self, "_operation_pending", False))
+
+    def _remote_operation_pending(self, remote_name: str) -> bool:
+        pending = getattr(self, "_pending_operations", None)
+        if pending is None:
+            return bool(getattr(self, "_operation_pending", False))
+        return any(
+            remote_name in set(context.get("remote_names", set()))
+            for context in pending.values()
+        )
+
+    def _current_remote_operation_pending(self) -> bool:
+        remote = getattr(self, "remote", None)
+        return bool(remote and self._remote_operation_pending(remote.name))
+
+    def _queue_offline_job(
+        self,
+        message: str,
+        action: Callable[[], object],
+        *,
+        working_paths: list[str] | None = None,
+        working_kind: str = "",
+        discover_paths: Callable[[], list[BrowserEntry]] | None = None,
+    ) -> None:
+        remote_name = self.remote.name if self.remote is not None else ""
+        normalized_paths = [normalize_browser_path(path) for path in (working_paths or [])]
+        mark_immediately = working_kind != "remove"
+        if mark_immediately and remote_name and normalized_paths and working_kind:
+            self._start_working_paths(remote_name, normalized_paths, working_kind)
+        self._offline_job_queue.append((remote_name, message, action, normalized_paths, working_kind, discover_paths))
+        if self._offline_jobs_running >= OFFLINE_JOB_CONCURRENCY:
+            self.status.setText("Queued offline file work…")
+            self._update_actions()
+        self._start_offline_jobs()
+
+    def _start_offline_jobs(self) -> None:
+        while self._offline_job_queue:
+            next_index = self._next_runnable_offline_job_index(
+                allow_download=self._offline_jobs_running < OFFLINE_JOB_CONCURRENCY
+            )
+            if next_index is None:
+                return
+            remote_name, message, action, working_paths, working_kind, discover_paths = self._offline_job_queue.pop(next_index)
+            if working_kind == "remove":
+                self._start_local_remove_job(remote_name, working_paths, action)
+                continue
+            self._offline_jobs_running += 1
+            self.status.setText(message)
+            self._update_actions()
+
+            def worker(
+                job_remote_name: str = remote_name,
+                job_paths: list[str] = list(working_paths),
+                job_kind: str = working_kind,
+                job_discover_paths: Callable[[], list[BrowserEntry]] | None = discover_paths,
+                job_action: Callable[[], object] = action,
+            ) -> None:
+                discovered_paths: list[str] = list(job_paths)
+                discovery_error = ""
+
+                def discover() -> None:
+                    nonlocal discovered_paths, discovery_error
+                    if job_discover_paths is None:
+                        return
+                    try:
+                        discovered_entries = job_discover_paths()
+                    except Exception as exc:
+                        discovery_error = str(exc)
+                        return
+                    discovered_paths = [
+                        normalize_browser_path(entry.path)
+                        for entry in discovered_entries
+                        if not entry.is_dir and normalize_browser_path(entry.path)
+                    ]
+                    self._bridge.offline_job_paths_ready.emit(job_remote_name, discovered_entries, job_kind)
+
+                discovery_thread: threading.Thread | None = None
+                if job_discover_paths is not None:
+                    discovery_thread = threading.Thread(target=discover, daemon=True)
+                    discovery_thread.start()
+                try:
+                    job_action()
+                except Exception as exc:
+                    if discovery_thread is not None:
+                        discovery_thread.join()
+                    self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, False, str(exc))
+                    return
+                if discovery_thread is not None:
+                    discovery_thread.join()
+                if discovery_error and not discovered_paths:
+                    self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, False, discovery_error)
+                    return
+                self._bridge.offline_job_finished.emit(job_remote_name, discovered_paths, job_kind, True, "")
+
+            threading.Thread(target=worker, daemon=True).start()
+
+    def _next_runnable_offline_job_index(self, *, allow_download: bool = True) -> int | None:
+        for index, (remote_name, _message, _action, paths, kind, _discover_paths) in enumerate(self._offline_job_queue):
+            if kind != "remove" and not allow_download:
+                continue
+            if kind == "remove" and self._operation_paths_overlap(remote_name, paths, "download"):
+                continue
+            return index
+        return None
+
+    def _offline_job_paths_ready(self, remote_name: str, paths: object, kind: str) -> None:
+        if not isinstance(paths, list):
+            return
+        if all(isinstance(path, BrowserEntry) for path in paths):
+            entries = [path for path in paths if isinstance(path, BrowserEntry)]
+            self._cache_recursive_entries(remote_name, entries)
+            normalized_paths = [normalize_browser_path(entry.path) for entry in entries if not entry.is_dir]
+        else:
+            normalized_paths = [normalize_browser_path(str(path)) for path in paths if normalize_browser_path(str(path))]
+        if remote_name and normalized_paths and kind:
+            self._start_working_paths(remote_name, normalized_paths, kind)
+            self._request_working_state_scan()
+            self._refresh_entry_icons()
+
+    def _cache_recursive_entries(self, remote_name: str, entries: list[BrowserEntry]) -> None:
+        by_parent: dict[str, dict[str, BrowserEntry]] = {}
+        directory_paths = {
+            normalize_browser_path(entry.path)
+            for entry in entries
+            if entry.is_dir and normalize_browser_path(entry.path)
+        }
+        for directory_path in directory_paths:
+            by_parent.setdefault(directory_path, {})
+        for entry in entries:
+            normalized = normalize_browser_path(entry.path)
+            if not normalized:
+                continue
+            parent = parent_browser_path(normalized)
+            by_parent.setdefault(parent, {})[normalized] = BrowserEntry(
+                name=entry.name,
+                path=normalized,
+                is_dir=entry.is_dir,
+                size=entry.size,
+                modified=entry.modified,
+            )
+            current_parent = parent
+            while current_parent:
+                ancestor_parent = parent_browser_path(current_parent)
+                by_parent.setdefault(ancestor_parent, {}).setdefault(
+                    current_parent,
+                    BrowserEntry(
+                        name=current_parent.rsplit("/", 1)[-1],
+                        path=current_parent,
+                        is_dir=True,
+                    ),
+                )
+                current_parent = ancestor_parent
+        for parent, children in by_parent.items():
+            existing = self._folder_cache.get((remote_name, parent))
+            if existing is not None:
+                merged = {entry.path: entry for entry in existing}
+                merged.update(children)
+                children = merged
+            elif parent not in directory_paths:
+                continue
+            self._folder_cache[(remote_name, parent)] = sorted(
+                children.values(),
+                key=lambda entry: (not entry.is_dir, entry.name.casefold()),
+            )
+
+    def _offline_job_finished(
+        self,
+        remote_name: str,
+        paths: object,
+        kind: str,
+        success: bool,
+        message: str,
+    ) -> None:
+        if kind != "remove":
+            self._offline_jobs_running = max(0, self._offline_jobs_running - 1)
+        if remote_name and isinstance(paths, list):
+            self._finish_working_paths(remote_name, [str(path) for path in paths], kind)
+        if kind == "remove":
+            self._folder_cache = {
+                key: entries for key, entries in getattr(self, "_folder_cache", {}).items() if key[0] != remote_name
+            }
+        if not success:
+            self._notify("Offline files", message or "The operation failed.", False)
+        self._local_files_changed()
+        self.refresh(force=True)
+        self._start_offline_jobs()
+
+    def _operation_finished(self, operation_id: int, success: bool, message: str) -> None:
+        context = getattr(self, "_pending_operations", {}).pop(operation_id, None)
+        if context is None:
+            return
+        working_remote = str(context.get("working_remote") or "")
+        working_paths = [str(path) for path in context.get("working_paths", [])]
+        working_kind = str(context.get("working_kind") or "")
+        if working_remote and working_paths and working_kind:
+            self._finish_working_paths(working_remote, working_paths, working_kind)
+        if success and bool(context.get("clear_clipboard")):
+            self.clipboard = None
+        changed_keys = set(context.get("cache_keys", set()))
+        if success:
+            remotes_callback = getattr(self, "_remotes", None)
+            available_remotes = remotes_callback() if callable(remotes_callback) else []
+            photo_remote_names = {
+                remote.name
+                for remote in available_remotes
+                if remote.backend_type.casefold() == "gphotos"
+            }
+            touched_photo_remotes = photo_remote_names.intersection(
+                set(context.get("remote_names", set()))
+            )
+            if touched_photo_remotes:
+                self._folder_cache = {
+                    key: entries
+                    for key, entries in self._folder_cache.items()
+                    if key[0] not in touched_photo_remotes
+                }
+        for changed_key in changed_keys:
+            self._folder_cache.pop(changed_key, None)
+        if not success:
+            self._notify("File operation", message or "The operation failed.", False)
+        self._local_files_changed()
+        current_key = (self.remote.name, self.path) if self.remote is not None else None
+        if current_key is not None and current_key in changed_keys:
+            self.refresh(force=True)
+        else:
+            self._update_actions()
+
+    def _selection_changed(self) -> None:
+        if getattr(self, "_rendering_entries", False):
+            return
+        self._refresh_selection_backgrounds()
+        self._update_actions()
+
+    def _refresh_selection_backgrounds(self) -> None:
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return
+        selected: set[Any] = set()
+        with suppress(Exception):
+            selected = set(tree.selectedItems())
+        previous = set(getattr(self, "_painted_selected_items", set()))
+        changed = previous.symmetric_difference(selected)
+        self._painted_selected_items = selected
+        if not changed:
+            return
+        try:
+            selected_brush = tree.palette().brush(self.qt.QPalette.ColorRole.Highlight)
+        except Exception:
+            selected_brush = self._item_brush("#3daee9")
+        clear_brush = self._item_brush("")
+        with suppress(Exception):
+            for item in changed:
+                brush = selected_brush if item in selected else clear_brush
+                for column in range(tree.columnCount()):
+                    item.setBackground(column, brush)
+
+    def _item_brush(self, color: str) -> Any:
+        brush_factory = getattr(self.qt, "QBrush", None)
+        if not color:
+            if brush_factory is not None:
+                with suppress(Exception):
+                    return brush_factory()
+            color_factory = getattr(self.qt, "QColor", None)
+            return color_factory("transparent") if color_factory is not None else ""
+        color_factory = getattr(self.qt, "QColor", None)
+        if color_factory is None:
+            return color
+        qt_color = color_factory(color)
+        return brush_factory(qt_color) if brush_factory is not None else qt_color
+
+    def _update_actions(self) -> None:
+        if self._is_disposed():
+            return
+        try:
+            selected_entries = self._selected_entries() if hasattr(self, "tree") else []
+            selected = bool(selected_entries)
+            edits_enabled = self._edits_enabled()
+            operation_pending = self._current_remote_operation_pending()
+            drag_enabled = bool(getattr(self, "remote", None)) and not operation_pending
+            if getattr(self, "_tree_drag_enabled", None) != drag_enabled:
+                self._tree_drag_enabled = drag_enabled
+                self.tree.setDragEnabled(drag_enabled)
+        except RuntimeError:
+            return
+        edit_action_enabled = selected and edits_enabled and not operation_pending
+        edit_disabled_reason = self._edit_action_disabled_reason(
+            selected=selected,
+            edits_enabled=edits_enabled,
+            operation_pending=operation_pending,
+        )
+        destructive_enabled = edit_action_enabled and self._can_delete_entries(selected_entries)
+        for button, enabled, tooltip in (
+            (getattr(self, "copy_button", None), edit_action_enabled, "Copy selected items"),
+            (
+                getattr(self, "cut_button", None),
+                destructive_enabled,
+                "Cut selected items"
+                if destructive_enabled
+                else "Google Photos media cannot be moved from this view",
+            ),
+            (
+                getattr(self, "delete_button", None),
+                destructive_enabled,
+                "Delete selected items"
+                if destructive_enabled
+                else "Google Photos can remove media only from albums created through rclone",
+            ),
+        ):
+            if button is None:
+                continue
+            self._set_action_button_state(button, enabled, tooltip if edit_disabled_reason is None else edit_disabled_reason)
+        paste_button = getattr(self, "paste_button", None)
+        if paste_button is not None:
+            paste_enabled = edits_enabled and self.clipboard is not None and not operation_pending
+            paste_disabled_reason = self._paste_action_disabled_reason(
+                edits_enabled=edits_enabled,
+                operation_pending=operation_pending,
+            )
+            self._set_action_button_state(
+                paste_button,
+                paste_enabled,
+                "Paste into this folder" if paste_disabled_reason is None else paste_disabled_reason,
+            )
+        remote_sync_button = getattr(self, "remote_sync_button", None)
+        if remote_sync_button is not None:
+            remote_sync_enabled = bool(
+                self.remote
+                and self._sync_paths is not None
+                and not operation_pending
+                and not self._remote_has_operation(self.remote.name, "sync")
+                and self._remote_has_managed_files(self.remote.name)
+            )
+            self._set_action_button_state(
+                remote_sync_button,
+                remote_sync_enabled,
+                "Sync cached files for this remote" if remote_sync_enabled else "No cached or offline files to sync",
+            )
+        remote_remove_offline_button = getattr(self, "remote_remove_offline_button", None)
+        if remote_remove_offline_button is not None:
+            remote_state = self._remote_root_state()
+            remote_remove_enabled = bool(
+                self.remote
+                and not operation_pending
+                and remote_state[1]
+            )
+            self._set_action_button_state(
+                remote_remove_offline_button,
+                remote_remove_enabled,
+                "Remove offline files for this remote" if remote_remove_enabled else "No offline files for this remote",
+            )
+        remote_clear_cache_button = getattr(self, "remote_clear_cache_button", None)
+        if remote_clear_cache_button is not None:
+            remote_state = self._remote_root_state()
+            remote_clear_enabled = bool(
+                self.remote
+                and not operation_pending
+                and remote_state[2]
+            )
+            self._set_action_button_state(
+                remote_clear_cache_button,
+                remote_clear_enabled,
+                "Clear resolved cache for this remote" if remote_clear_enabled else "No temporary cache for this remote",
+            )
+        selection_sync_button = getattr(self, "selection_sync_button", None)
+        if selection_sync_button is not None:
+            selection_sync_enabled = bool(
+                self.remote
+                and self._sync_paths is not None
+                and selected_entries
+                and not operation_pending
+                and any(
+                    self._entry_has_cached_content(entry)
+                    for entry in selected_entries
+                )
+                and not any(
+                    self._entry_has_operation(self.remote.name, entry.path, is_dir=entry.is_dir, kind="sync")
+                    for entry in selected_entries
+                )
+            )
+            self._set_action_button_state(
+                selection_sync_button,
+                selection_sync_enabled,
+                "Sync selected local copies" if selection_sync_enabled else "Select cached or offline files first",
+            )
+        offline_enabled = selected and not operation_pending
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            selected_entries = []
+        selected_downloading = False
+        selected_remove_pending = False
+        selected_has_offline = False
+        selected_has_temporary_cache = False
+        selected_all_offline = False
+        if remote is not None:
+            selected_downloading = any(
+                self._entry_has_operation(remote.name, entry.path, is_dir=entry.is_dir, kind="download")
+                for entry in selected_entries
+            )
+            selected_remove_pending = any(
+                self._offline_remove_pending(remote.name, [entry.path])
+                for entry in selected_entries
+            )
+            selected_has_offline = any(
+                self._cached_entry_state(remote, entry)[1]
+                for entry in selected_entries
+            )
+            selected_has_temporary_cache = any(
+                self._cached_entry_state(remote, entry)[2]
+                for entry in selected_entries
+            )
+            selected_all_offline = bool(selected_entries) and all(
+                self._cached_entry_state(remote, entry)[0]
+                for entry in selected_entries
+            )
+        if offline_enabled and (selected_remove_pending or selected_all_offline):
+            offline_enabled = False
+        if offline_enabled and remote is not None and selected_downloading:
+            offline_enabled = False
+        offline_tooltip = (
+            "Wait for the current file operation to finish"
+            if operation_pending
+            else "Already available offline"
+            if selected_all_offline
+            else "Save a local snapshot"
+            if selected
+            else "Select files or folders to make them available offline"
+        )
+        self._set_action_button_state(
+            self.offline_button,
+            offline_enabled,
+            offline_tooltip,
+        )
+        self._update_snapshot_button_icon(offline_enabled)
+        if self.offline_button.text():
+            self.offline_button.setText("")
+        set_badge(self.offline_button, False, OFFLINE_SAVED_BADGE_COLOR)
+        remove_button = getattr(self, "selection_remove_offline_button", None)
+        if remove_button is not None:
+            remove_enabled = selected and selected_has_offline and not operation_pending and not selected_remove_pending
+            self._set_action_button_state(
+                remove_button,
+                remove_enabled,
+                "Remove offline copies for selected items"
+                if remove_enabled
+                else "Removal is already queued"
+                if selected_remove_pending
+                else "Select offline files or folders first",
+            )
+        clear_button = getattr(self, "selection_clear_cache_button", None)
+        if clear_button is not None:
+            clear_enabled = selected and selected_has_temporary_cache and not operation_pending
+            self._set_action_button_state(
+                clear_button,
+                clear_enabled,
+                "Clear resolved cache for selected items" if clear_enabled else "Select temporarily cached items first",
+            )
+        self._update_open_folder_button()
+
+    def _remote_root_state(self) -> tuple[bool, bool, bool, bool, bool]:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False, False, False, False, False
+        return self.cached_remote_root_state(remote.name)
+
+    def cached_remote_root_state(self, remote_name: str) -> tuple[bool, bool, bool, bool, bool]:
+        return getattr(self, "_entry_state_cache", {}).get(
+            (remote_name, "", True),
+            (False, False, False, False, False),
+        )
+
+    def _remote_has_managed_files(self, remote_name: str) -> bool:
+        cached = getattr(self, "_remote_managed_cache", {}).get(remote_name)
+        return bool(cached)
+
+    def _entry_has_cached_content(self, entry: BrowserEntry) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        state = self._cached_entry_state(remote, entry)
+        return bool(state[1] or state[2])
+
+    def _set_action_button_state(self, button: Any, enabled: bool, tooltip: str) -> None:
+        state = (bool(enabled), tooltip)
+        if getattr(button, "_mountlet_action_state", None) == state:
+            return
+        setattr(button, "_mountlet_action_state", state)
+        button.setEnabled(enabled)
+        button.setToolTip(tooltip)
+        with suppress(Exception):
+            if button.styleSheet():
+                button.setStyleSheet("")
+
+    def _edit_action_disabled_reason(
+        self,
+        *,
+        selected: bool,
+        edits_enabled: bool,
+        operation_pending: bool,
+    ) -> str | None:
+        if not selected:
+            return "Select files or folders first"
+        if not edits_enabled:
+            return "Enable integrated file edits in App settings first"
+        if operation_pending:
+            return "Wait for the current file operation to finish"
+        return None
+
+    def _can_delete_entries(self, entries: list[BrowserEntry]) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None or not entries:
+            return False
+        if remote.backend_type.casefold() != "gphotos":
+            return True
+        return all(
+            not entry.is_dir
+            and len(PurePosixPath(normalize_browser_path(entry.path)).parts) >= 3
+            and PurePosixPath(normalize_browser_path(entry.path)).parts[0].casefold() == "album"
+            for entry in entries
+        )
+
+    def _can_create_folder(self) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        if remote.backend_type.casefold() != "gphotos":
+            return True
+        parts = PurePosixPath(normalize_browser_path(getattr(self, "path", ""))).parts
+        return bool(parts and parts[0].casefold() == "album")
+
+    def _paste_action_disabled_reason(
+        self,
+        *,
+        edits_enabled: bool,
+        operation_pending: bool,
+    ) -> str | None:
+        if not edits_enabled:
+            return "Enable integrated file edits in App settings first"
+        if self.clipboard is None:
+            return "Copy or cut files first"
+        if operation_pending:
+            return "Wait for the current file operation to finish"
+        return None
+
+    def _update_snapshot_button_icon(self, enabled: bool) -> None:
+        icon = getattr(self, "_offline_base_icon", None)
+        if icon is None:
+            return
+        if getattr(self, "_offline_icon_enabled_state", None) == enabled:
+            return
+        self._offline_icon_enabled_state = enabled
+        if enabled:
+            self.offline_button.setIcon(icon)
+            return
+        dimmed = getattr(self, "_offline_dimmed_icon", None)
+        if dimmed is None:
+            dimmed = self._dimmed_icon(icon)
+            self._offline_dimmed_icon = dimmed
+        self.offline_button.setIcon(dimmed)
+
+    def refresh_theme_icons(self) -> None:
+        if self._is_disposed():
+            return
+        self._base_entry_icon_cache = {}
+        refresh_widget_icons(self.qt, getattr(self, "root", None))
+        self._refresh_search_icon(getattr(self, "search_field", None))
+        save_icon = self._offline_icon()
+        self._offline_base_icon = save_icon
+        self._offline_dimmed_icon = None
+        self._offline_icon_enabled_state = None
+        if save_icon is not None:
+            with suppress(Exception):
+                self.offline_button.setIcon(save_icon)
+            self._update_snapshot_button_icon(getattr(self.offline_button, "isEnabled", lambda: True)())
+        self._refresh_entry_icons()
+
+    def refresh_theme_ui(self, *, refresh_palette: bool = True) -> None:
+        if self._is_disposed():
+            return
+        if refresh_palette:
+            target = getattr(self, "root", None) if self._embedded else getattr(self, "window", None)
+            refresh_widget_palette(self.qt, target)
+        with suppress(Exception):
+            self.tree.setStyleSheet(FILE_BROWSER_SELECTION_STYLE)
+        self._painted_selected_items = set()
+        self._refresh_selection_backgrounds()
+        self.refresh_theme_icons()
+
+    def _schedule_theme_icon_refresh(self) -> None:
+        if self._is_disposed() or getattr(self, "_theme_icon_refresh_pending", False):
+            return
+        timer_type = getattr(getattr(self, "qt", None), "QTimer", None)
+        if timer_type is None:
+            return
+        self._theme_icon_refresh_pending = True
+
+        def refresh() -> None:
+            self._theme_icon_refresh_pending = False
+            self.refresh_theme_icons()
+
+        timer_type.singleShot(0, refresh)
+
+    def _refresh_search_icon(self, field: Any | None) -> None:
+        if field is None:
+            return
+        action_position = getattr(self.qt.QLineEdit, "ActionPosition", None)
+        leading_position = getattr(action_position, "LeadingPosition", None)
+        if leading_position is None:
+            return
+        old_action = getattr(field, "_mountlet_search_icon_action", None)
+        if old_action is not None:
+            with suppress(Exception):
+                field.removeAction(old_action)
+        icon = mountlet_icon(self.qt, "ui-search", size=16, color=self._widget_text_color(field))
+        if icon is None:
+            return
+        with suppress(Exception):
+            action = field.addAction(icon, leading_position)
+            setattr(field, "_mountlet_search_icon_action", action)
+
+    def _is_disposed(self) -> bool:
+        return bool(getattr(self, "_disposed", False))
+
+    def _dimmed_icon(self, icon: Any) -> Any:
+        try:
+            size = self.qt.QSize(22, 22)
+            source = icon.pixmap(size)
+            pixmap_type = getattr(self.qt, "QPixmap", None)
+            painter_type = getattr(self.qt, "QPainter", None)
+            global_color = getattr(getattr(self.qt, "Qt", object), "GlobalColor", object)
+            transparent = getattr(global_color, "transparent", None)
+            if transparent is None:
+                return self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled))
+            if pixmap_type is None or painter_type is None:
+                return self.qt.QIcon(icon.pixmap(size, self.qt.QIcon.Mode.Disabled))
+            dimmed = pixmap_type(size)
+            dimmed.fill(transparent)
+            painter = painter_type(dimmed)
+            painter.setOpacity(0.28)
+            painter.drawPixmap(0, 0, source)
+            painter.end()
+            return self.qt.QIcon(dimmed)
+        except Exception:
+            return icon
+
+    def _selected_offline_changed(self) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        return any(
+            self.backend.offline_changed(remote.name, entry.path, is_dir=entry.is_dir)
+            for entry in self._selected_entries()
+        )
+
+    def refresh_mount_state(self, remote_name: str) -> None:
+        remote = getattr(self, "remote", None)
+        if remote is None or remote.name != remote_name:
+            return
+        self._update_mount_switch()
+        self._display_entries(list(getattr(self, "entries", [])))
+
+    def finish_sync(self, remote_name: str) -> None:
+        self._finish_working_remote(remote_name, "sync")
+
+    def _finish_working_remote(self, remote_name: str, kind: str) -> None:
+        if not hasattr(self, "_working_paths"):
+            return
+        changed = False
+        for key in list(self._working_paths):
+            if key[0] == remote_name and self._working_paths.get(key) == kind:
+                self._working_paths.pop(key, None)
+                changed = True
+        if changed:
+            self._rebuild_working_directory_index()
+            self._refresh_entry_icons()
+
+    def _update_open_folder_button(self) -> None:
+        button = getattr(self, "open_folder_button", None)
+        if button is None:
+            return
+        remote = getattr(self, "remote", None)
+        cached_available = self._current_cached_folder_available()
+        if remote is not None and not self._remote_is_mounted(remote) and cached_available:
+            state_cache = getattr(self, "_entry_state_cache", None)
+            protected = (
+                bool(state_cache.get(
+                    (remote.name, normalize_browser_path(self.path), True),
+                    (False, False, False, False, False),
+                )[1])
+                if state_cache is not None
+                else self.backend.has_offline_content(remote.name, self.path, is_dir=True)
+            )
+            if protected:
+                tooltip = f"Open the offline snapshot folder in {self._file_manager_label()}"
+            else:
+                tooltip = f"Open the local cache folder in {self._file_manager_label()}"
+        else:
+            tooltip = f"Open this folder in {self._file_manager_label()}"
+        if getattr(button, "_mountlet_open_folder_tooltip", None) == tooltip:
+            return
+        setattr(button, "_mountlet_open_folder_tooltip", tooltip)
+        button.setStyleSheet("")
+        button.setToolTip(tooltip)
+
+    def _current_cached_folder_available(self) -> bool:
+        remote = getattr(self, "remote", None)
+        if remote is None:
+            return False
+        state_cache = getattr(self, "_entry_state_cache", None)
+        if state_cache is None:
+            offline = self.backend.offline_path(remote.name, self.path)
+            return offline.is_dir() or self.backend.has_cached_content(remote.name, self.path, is_dir=True)
+        state = state_cache.get(
+            (remote.name, normalize_browser_path(self.path), True),
+            (False, False, False, False, False),
+        )
+        return bool(state[1] or state[2])
+
+    def _edits_enabled(self) -> bool:
+        return bool(getattr(self, "_integrated_file_edits", False))
+
+    def apply_app_settings(self, app_settings: Any) -> None:
+        self._integrated_file_edits = bool(getattr(app_settings, "integrated_file_edits", False))
+        self._file_list_max_items = max(int(getattr(app_settings, "file_list_max_items", 0)), 0)
+        self._resize_to_rendered_items()
+        self._layout_changed()
+        self._update_actions()
+
+    def _edit_disabled(self) -> bool:
+        self._notify(
+            "Mountlet Files",
+            "Integrated file edits are disabled. Enable them in App settings, or use the system file manager.",
+            False,
+        )
+        return True
+
+    def _open_item(self, item: Any, _column: int = 0) -> None:
+        try:
+            entry = item.data(0, self.qt.Qt.ItemDataRole.UserRole)
+        except RuntimeError:
+            return
+        self._open_entry(entry)
+
+    def _open_entry(self, entry: object) -> None:
+        if not isinstance(entry, BrowserEntry) or self.remote is None:
+            return
+        if entry.is_dir:
+            self.path = entry.path
+            self.backend.remember_path(self.remote.name, self.path)
+            self.refresh()
+            return
+        # Files opened from Mountlet always use the managed cache. A FUSE path
+        # can disappear while an external editor still has it open, and native
+        # Google documents are exported by rclone but are not represented
+        # reliably by every FUSE/filesystem combination.
+        self._open_cached_file(entry)
+
+    def _open_cached_file(self, entry: BrowserEntry) -> None:
+        remote = self.remote
+        if remote is None:
+            return
+        cached = self.backend.offline_path(remote.name, entry.path)
+        if cached.is_file():
+            self._open_local_file(self.backend.prepare_offline_open(remote.name, entry.path))
+            return
+        self._start_working_paths(remote.name, [entry.path], "download")
+        self.status.setText("Downloading cached copy…")
+        self._update_actions()
+
+        def worker() -> None:
+            try:
+                local = self.backend.cache_file(remote, entry)
+            except Exception as exc:
+                self._bridge.cached_file_ready.emit(remote.name, entry.path, None, str(exc))
+                return
+            self._bridge.cached_file_ready.emit(remote.name, entry.path, local, "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _cached_file_ready(self, remote_name: str, path: str, local: object, error: str) -> None:
+        self._finish_working_paths(remote_name, [path])
+        if error:
+            self._notify("Open file", error, False)
+            self.status.setText(error)
+            self._update_actions()
+            return
+        if self.remote is None or self.remote.name != remote_name:
+            return
+        self._folder_cache.pop((remote_name, parent_browser_path(path)), None)
+        if isinstance(local, Path):
+            self._open_local_file(local)
+        self._local_files_changed()
+        self.refresh(force=True)
+
+    def _open_local_file(self, path: Path) -> None:
+        if self._open_file and self._open_file(path):
+            return
+        if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(path))):
+            return
+        self._notify("Open file", "Could not open this file.", False)
+
+    def go_up(self) -> None:
+        if self.remote is None:
+            return
+        previous_path = self.path
+        self.path = parent_browser_path(self.path)
+        self._pending_select_path = previous_path
+        self.backend.remember_path(self.remote.name, self.path)
+        self.refresh()
+
+    def go_root(self) -> None:
+        if self.remote is None:
+            return
+        self.path = ""
+        self.backend.remember_path(self.remote.name, self.path)
+        self.refresh()
+
+    def _open_current_mount(self) -> None:
+        self._open_external_folder(self.path)
+
+    def _open_external_folder(self, path: str) -> None:
+        if self.remote is None:
+            return
+        self._open_remote_folder(self.remote, path)
+
+    def open_remote_root(self, remote: core.RemoteInfo) -> None:
+        self._open_remote_folder(remote, "", create_cache_root=True)
+
+    def _open_remote_folder(self, remote: core.RemoteInfo, path: str, *, create_cache_root: bool = False) -> None:
+        if self._remote_is_mounted(remote):
+            self._open_mount(remote, path)
+            return
+        offline = self.backend.offline_path(remote.name, path)
+        if create_cache_root:
+            offline.mkdir(parents=True, exist_ok=True)
+        if offline.is_dir():
+            local_folder = self.backend.prepare_offline_open(remote.name, path)
+            if self._open_local_folder and self._open_local_folder(local_folder):
+                return
+            if self.qt.QDesktopServices.openUrl(self.qt.QUrl.fromLocalFile(str(local_folder))):
+                return
+        self._notify(
+            "Open folder",
+            "Open or cache a file in this folder before opening it in the system file manager.",
+            False,
+        )
+
+    def _remote_is_mounted(self, remote: core.RemoteInfo | None) -> bool:
+        if remote is None:
+            return False
+        callback = getattr(self, "_is_mounted", core.is_mounted)
+        return bool(callback(remote))
+
+    def _position(self, row: Any) -> None:
+        try:
+            main = self.main_window.frameGeometry()
+            row_top = row.mapToGlobal(self.qt.QPoint(0, 0)).y()
+            screen = self.main_window.screen() or self.qt.QApplication.primaryScreen()
+            available = screen.availableGeometry()
+            position = cascade_position(
+                (main.x(), main.y(), main.width(), main.height()),
+                row_top,
+                (available.x(), available.y(), available.width(), available.height()),
+                (self.window.width(), self.window.height()),
+            )
+            self._side = "left" if position[0] < main.x() else "right"
+            self.window.move(*position)
+        except Exception:
+            return
+
+    def side(self) -> str:
+        return self._side
+
+
+__all__ = ["MIME_TYPE", "CompactCloudBrowser", "cascade_position"]
