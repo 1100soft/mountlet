@@ -1,0 +1,244 @@
+name: tauri-verify
+description: Mountlet-specific packaging hook
+inputs:
+  matrix:
+    required: true
+    description: Shared package matrix entry as JSON
+runs:
+  using: composite
+  steps:
+  - name: Probe packaged executable
+    if: runner.os != 'Windows'
+    shell: bash
+    working-directory: app
+    run: |
+      version=$(node -p "require('./package.json').version")
+      executable="src-tauri/target/release/mountlet"
+      if [ "${{ runner.os }}" = "Windows" ]; then executable="${executable}.exe"; fi
+      test "$("$executable" --version)" = "Mountlet ${version}"
+  - name: Verify bundled-rclone variant
+    shell: bash
+    working-directory: app
+    run: |
+      if [ "${{ runner.os }}" = "macOS" ]; then
+        dmg=$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit)
+        mountpoint=$(mktemp -d)
+        hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
+        found=$(find "$mountpoint" -type f -name rclone -print -quit)
+        hdiutil detach "$mountpoint"
+        rmdir "$mountpoint"
+      elif [ "${{ runner.os }}" = "Windows" ]; then
+        installer=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' -print -quit)
+        found=$(7z l "$installer" | grep -i 'rclone.exe' || true)
+      else
+        found=$(find src-tauri/target/release/bundle -type f \( -name rclone -o -name rclone.exe \) -print -quit)
+      fi
+      if [ "${{ fromJSON(inputs.matrix).bundled }}" = "true" ]; then test -n "$found"; else test -z "$found"; fi
+  - name: Collect installer with stable release name
+    shell: bash
+    working-directory: app
+    run: |
+      case "${{ runner.os }}" in
+        Linux) source=$(find src-tauri/target/release/bundle/deb -type f -name '*.deb' -print -quit) ;;
+        Windows) source=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' -print -quit) ;;
+        macOS) source=$(find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -print -quit) ;;
+      esac
+      test -n "$source"
+      mkdir -p artifacts
+      cp "$source" "artifacts/${{ fromJSON(inputs.matrix).installer }}"
+  - name: Require Partner Center identity for Store releases
+    if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled && startsWith(github.ref, 'refs/tags/v')
+    shell: bash
+    env:
+      STORE_IDENTITY_NAME: ${{ vars.MOUNTLET_STORE_IDENTITY_NAME }}
+      STORE_PUBLISHER: ${{ vars.MOUNTLET_STORE_PUBLISHER }}
+      STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
+    run: |
+      test -n "$STORE_IDENTITY_NAME"
+      test -n "$STORE_PUBLISHER"
+      test -n "$STORE_PUBLISHER_DISPLAY_NAME"
+  - name: Package Windows MSIX for Microsoft Store
+    if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled
+    shell: pwsh
+    working-directory: app
+    env:
+      STORE_IDENTITY_NAME: ${{ vars.MOUNTLET_STORE_IDENTITY_NAME }}
+      STORE_PUBLISHER: ${{ vars.MOUNTLET_STORE_PUBLISHER }}
+      STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
+    run: |
+      $ErrorActionPreference = "Stop"
+      New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+      $identity = if ($env:STORE_IDENTITY_NAME) { $env:STORE_IDENTITY_NAME } else { "Mountlet.CI" }
+      $publisher = if ($env:STORE_PUBLISHER) { $env:STORE_PUBLISHER } else { "CN=Mountlet CI" }
+      $publisherDisplayName = if ($env:STORE_PUBLISHER_DISPLAY_NAME) { $env:STORE_PUBLISHER_DISPLAY_NAME } else { "Mountlet" }
+      $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+      & src-tauri/windows/pack-msix.ps1 `
+        -Output "artifacts/${{ fromJSON(inputs.matrix).msix }}" `
+        -Version $version `
+        -IdentityName $identity `
+        -Publisher $publisher `
+        -PublisherDisplayName $publisherDisplayName
+  - name: Verify bundled rclone in MSIX
+    if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled
+    shell: bash
+    working-directory: app
+    run: |
+      found=$(7z l "artifacts/${{ fromJSON(inputs.matrix).msix }}" | grep -i 'rclone.exe' || true)
+      test -n "$found"
+  - name: Run Windows App Certification Kit
+    if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled
+    shell: pwsh
+    working-directory: app
+    run: |
+      $ErrorActionPreference = "Stop"
+      $appCert = "${env:ProgramFiles(x86)}\Windows Kits\10\App Certification Kit\appcert.exe"
+      if (-not (Test-Path $appCert)) { throw "Windows App Certification Kit was not found" }
+      $package = (Resolve-Path "artifacts/${{ fromJSON(inputs.matrix).msix }}").Path
+      $report = Join-Path (Resolve-Path artifacts).Path "msix-wack-report.xml"
+      & $appCert reset
+      if ($LASTEXITCODE -ne 0) { throw "AppCert reset failed with exit code $LASTEXITCODE" }
+      & $appCert test -appxpackagepath $package -reportoutputpath $report
+      if ($LASTEXITCODE -ne 0) { throw "Windows App Certification Kit failed with exit code $LASTEXITCODE" }
+      if (-not (Test-Path $report)) { throw "Windows App Certification Kit did not write a report" }
+  - name: Smoke-test installed Linux package
+    if: runner.os == 'Linux'
+    shell: bash
+    working-directory: app
+    run: |
+      sudo dpkg --install "artifacts/${{ fromJSON(inputs.matrix).installer }}"
+      marker="$RUNNER_TEMP/mountlet-startup.json"
+      expected=$(node -p "require('./package.json').version")
+      rm -f "$marker"
+      dbus-run-session -- env MOUNTLET_STARTUP_SMOKE="$marker" xvfb-run -a /usr/bin/mountlet &
+      process=$!
+      for _ in $(seq 1 60); do
+        test -f "$marker" && break
+        kill -0 "$process" 2>/dev/null || break
+        sleep 1
+      done
+      test -f "$marker"
+      wait "$process"
+      node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.buildId||!value.frontendReady||!value.mainWindowReady||!value.mainWindowVisible||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
+  - name: Smoke-test installed Windows package
+    if: runner.os == 'Windows'
+    shell: powershell
+    working-directory: app
+    run: |
+      $installer = (Resolve-Path "artifacts/${{ fromJSON(inputs.matrix).installer }}").Path
+      $desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Mountlet.lnk"
+      Remove-Item $desktopShortcut -Force -ErrorAction SilentlyContinue
+      $install = Start-Process -FilePath $installer -ArgumentList "/S /NS" -Wait -PassThru
+      if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+      if (Test-Path $desktopShortcut) { throw "Installer created a desktop shortcut despite /NS" }
+      $executable = Join-Path $env:LOCALAPPDATA "Mountlet\mountlet.exe"
+      if (-not (Test-Path $executable)) { throw "Installed executable not found at $executable" }
+      $marker = Join-Path $env:RUNNER_TEMP "mountlet-startup.json"
+      $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
+      Remove-Item $marker -Force -ErrorAction SilentlyContinue
+      # Exercise startup with the kind of leftover mount tree found after
+      # an interrupted Windows session. Native command registration must
+      # not wait for mount-point housekeeping.
+      $staleMount = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Mountlet\mounted\ci-stale\nested"
+      New-Item -ItemType Directory -Path $staleMount -Force | Out-Null
+      Set-Content -Path (Join-Path $staleMount "leftover.txt") -Value "startup must remain responsive"
+      $appConfig = Join-Path $env:APPDATA "Mountlet\config.toml"
+      New-Item -ItemType Directory -Path (Split-Path $appConfig) -Force | Out-Null
+      Set-Content -Path $appConfig -Value "[ui]`nwindow_mode = `"multiple`"`ntheme = `"dark`""
+      Remove-Item Env:HOME -ErrorAction SilentlyContinue
+      $env:MOUNTLET_STARTUP_SMOKE = $marker
+      Add-Type @"
+      using System;
+      using System.Collections.Generic;
+      using System.Runtime.InteropServices;
+      using System.Text;
+      public static class MountletWindowProbe {
+        private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+        [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int count);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        public static uint[] VisibleConsoleProcessIds() {
+          var ids = new List<uint>();
+          EnumWindows((window, parameter) => {
+            var name = new StringBuilder(256);
+            if (IsWindowVisible(window) && GetClassName(window, name, name.Capacity) > 0 && name.ToString() == "ConsoleWindowClass") {
+              uint processId;
+              GetWindowThreadProcessId(window, out processId);
+              ids.Add(processId);
+            }
+            return true;
+          }, IntPtr.Zero);
+          return ids.ToArray();
+        }
+      }
+      "@
+      $existingConsoles = [MountletWindowProbe]::VisibleConsoleProcessIds()
+      $unexpectedConsoles = [System.Collections.Generic.HashSet[uint32]]::new()
+      $process = Start-Process -FilePath $executable -PassThru
+      try {
+        for ($attempt = 0; $attempt -lt 600 -and -not (Test-Path $marker); $attempt++) {
+          if ($process.HasExited) { break }
+          foreach ($consoleProcess in [MountletWindowProbe]::VisibleConsoleProcessIds()) {
+            if ($consoleProcess -notin $existingConsoles) { $null = $unexpectedConsoles.Add($consoleProcess) }
+          }
+          Start-Sleep -Milliseconds 100
+          $process.Refresh()
+        }
+        if (-not (Test-Path $marker)) { throw "Installed app did not report startup readiness" }
+        if ($unexpectedConsoles.Count -ne 0) { throw "Installed app spawned visible console windows owned by: $($unexpectedConsoles -join ', ')" }
+        if (-not $process.WaitForExit(10000)) { throw "Installed app did not exit after its startup probe" }
+        if ($process.ExitCode -ne 0) { throw "Installed app exited with $($process.ExitCode)" }
+        $result = Get-Content $marker -Raw | ConvertFrom-Json
+        if ($result.version -ne $expected -or -not $result.buildId -or -not $result.frontendReady -or -not $result.mainWindowReady -or -not $result.mainWindowVisible -or -not $result.remoteStateReady -or -not $result.behaviorComplete -or -not $result.offlineRootReady -or $result.windowMode -ne "multiple" -or $result.theme -ne "dark") {
+          throw "Installed app returned an invalid startup probe: $($result | ConvertTo-Json -Compress)"
+        }
+      } finally {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+      }
+  - name: Smoke-test installed Windows MSIX
+    if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled
+    shell: pwsh
+    working-directory: app
+    run: |
+      $ErrorActionPreference = "Stop"
+      $marker = Join-Path $env:RUNNER_TEMP "mountlet-msix-startup.json"
+      $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
+      & src-tauri/windows/smoke-msix.ps1 -Package "artifacts/${{ fromJSON(inputs.matrix).msix }}" -ExpectedVersion $expected -Marker $marker
+  - name: Smoke-test installed macOS package
+    if: runner.os == 'macOS'
+    shell: bash
+    working-directory: app
+    run: |
+      dmg="artifacts/${{ fromJSON(inputs.matrix).installer }}"
+      mountpoint=$(mktemp -d)
+      trap 'hdiutil detach "$mountpoint" >/dev/null 2>&1 || true; rmdir "$mountpoint" >/dev/null 2>&1 || true' EXIT
+      hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg"
+      marker="$RUNNER_TEMP/mountlet-startup.json"
+      expected=$(node -p "require('./package.json').version")
+      rm -f "$marker"
+      executable=$(find "$mountpoint" -type f -path '*/Contents/MacOS/mountlet' -print -quit)
+      test -n "$executable"
+      MOUNTLET_STARTUP_SMOKE="$marker" "$executable" &
+      process=$!
+      for _ in $(seq 1 60); do
+        test -f "$marker" && break
+        kill -0 "$process" 2>/dev/null || break
+        sleep 1
+      done
+      test -f "$marker"
+      wait "$process"
+      node -e "const value=require(process.argv[1]); if(value.version!==process.argv[2]||!value.buildId||!value.frontendReady||!value.mainWindowReady||!value.mainWindowVisible||!value.remoteStateReady||!value.behaviorComplete) process.exit(1)" "$marker" "$expected"
+      hdiutil detach "$mountpoint"
+      rmdir "$mountpoint"
+      trap - EXIT
+  - name: Upload Microsoft Store submission package
+    if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled
+    uses: actions/upload-artifact@v4
+    with:
+      name: microsoft-store-mountlet-x64
+      path: |
+        app/artifacts/${{ fromJSON(inputs.matrix).msix }}
+        app/artifacts/msix-wack-report.xml
+      if-no-files-found: error
+      retention-days: 30
+      compression-level: 0

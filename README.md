@@ -95,3 +95,5 @@ native artifacts.
 
 The source is available for non-commercial use under [LICENSE](LICENSE).
 Installer builds are covered by [the installer EULA](app/docs/EULA.md).
+
+CI architecture and shared workflow rollout: [docs/ci.md](docs/ci.md).
