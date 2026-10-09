@@ -39,6 +39,7 @@ jobs:
     with:
       app-directory: app
       artifact-prefix: mountlet
+      version-check-command: node scripts/check-version.mjs
       build-matrix: |
         {
           "include": [

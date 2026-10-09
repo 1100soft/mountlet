@@ -203,7 +203,24 @@ runs:
       $ErrorActionPreference = "Stop"
       $marker = Join-Path $env:RUNNER_TEMP "mountlet-msix-startup.json"
       $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
-      & src-tauri/windows/smoke-msix.ps1 -Package "artifacts/${{ fromJSON(inputs.matrix).msix }}" -ExpectedVersion $expected -Marker $marker
+      # Composite actions cannot declare the original step timeout-minutes.
+      # Bound the probe explicitly rather than waiting for the whole job limit.
+      $probe = Start-Job -ArgumentList (Get-Location).Path, "artifacts/${{ fromJSON(inputs.matrix).msix }}", $expected, $marker -ScriptBlock {
+        param($directory, $package, $version, $markerPath)
+        $ErrorActionPreference = "Stop"
+        Set-Location $directory
+        & src-tauri/windows/smoke-msix.ps1 -Package $package -ExpectedVersion $version -Marker $markerPath
+      }
+      try {
+        if (-not (Wait-Job $probe -Timeout 300)) {
+          Stop-Job $probe
+          throw "MSIX startup probe exceeded five minutes"
+        }
+        Receive-Job $probe -ErrorAction Stop
+        if ($probe.State -ne "Completed") { throw "MSIX startup probe failed" }
+      } finally {
+        Remove-Job $probe -Force
+      }
   - name: Smoke-test installed macOS package
     if: runner.os == 'macOS'
     shell: bash
