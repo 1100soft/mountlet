@@ -43,6 +43,9 @@ user's chosen endpoint.
 
 Use `Mountlet` as the public application name. Prepare a public Mountlet homepage,
 privacy-policy URL, and support email; providers may request these during review.
+Use `https://mountlet.app/` for the homepage and
+`https://mountlet.app/privacy` for the privacy policy after deploying the legal
+pages. The Terms of Service URL is `https://mountlet.app/terms`.
 Create credentials in your developer accounts, then save each pair here:
 
 1. Open the **`1100soft/mountlet` repository → Settings → Secrets and variables
@@ -86,9 +89,11 @@ approval, increase quota, or eliminate provider throttling.
    Desktop`, and click **Create**. No manually entered redirect URI is needed.
 8. In **`1100soft/mountlet` → Settings → Secrets and variables → Actions →
    Secrets**, create two **repository secrets**:
+
    - **Name:** `MOUNTLET_DRIVE_CLIENT_ID`; **Secret:** the Google **Client ID**.
    - **Name:** `MOUNTLET_DRIVE_CLIENT_SECRET`; **Secret:** the Google **Client
      secret**.
+
    Click **Add secret** for each. Do not put these in the Variables tab.
 9. Test sign-in, then use **Audience → Publish app** and submit verification
    through Google's verification interface. Prepare a video showing Mountlet's
@@ -149,8 +154,7 @@ Source checked: https://rclone.org/dropbox/#get-your-own-dropbox-app-id.
 ### Microsoft OneDrive
 
 These steps match rclone's documented flow, which uses a Web registration and
-secret. My earlier recommendation to use a desktop/public registration was not
-the documented rclone recipe.
+secret.
 
 1. Open https://portal.azure.com/ and go to **Microsoft Entra ID → App
    registrations → New registration**.

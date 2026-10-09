@@ -1,0 +1,30 @@
+name: tauri-prepare
+description: Mountlet-specific packaging hook
+inputs:
+  matrix:
+    required: true
+    description: Shared package matrix entry as JSON
+runs:
+  using: composite
+  steps:
+  - name: Stage official versioned rclone
+    if: fromJSON(inputs.matrix).bundled
+    shell: bash
+    working-directory: app
+    run: |
+      version=$(node -p "require('./package.json').version")
+      destination="src-tauri/vendor/rclone/${version}/${{ fromJSON(inputs.matrix).resource }}"
+      archive="$RUNNER_TEMP/rclone.zip"
+      extracted="$RUNNER_TEMP/rclone"
+      mkdir -p "$destination" "$extracted"
+      curl --fail --location --retry 3 "https://downloads.rclone.org/rclone-current-${{ fromJSON(inputs.matrix).rclone_os }}-${{ fromJSON(inputs.matrix).rclone_arch }}.zip" --output "$archive"
+      case "${{ runner.os }}" in
+        Windows) powershell.exe -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$extracted' -Force" ;;
+        *) unzip -q "$archive" -d "$extracted" ;;
+      esac
+      binary=$(find "$extracted" -type f -name 'rclone*' ! -name '*.1' -print -quit)
+      test -n "$binary"
+      case "${{ runner.os }}" in
+        Windows) cp "$binary" "$destination/rclone.exe" ;;
+        *) cp "$binary" "$destination/rclone"; chmod 755 "$destination/rclone" ;;
+      esac

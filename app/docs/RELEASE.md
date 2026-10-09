@@ -5,8 +5,11 @@ release and remains frozen under `legacy/python-0.6.8/`.
 
 ## Release invariants
 
-- Release from a clean commit that passed both **CI** and all eight jobs in
+- Release from a clean commit that passed both **App CI** and all eight jobs in
   **Native package CI**.
+- **Website integration** independently checks web APIs and release-file
+  compatibility. Native packaging and installer uploads do not depend on its
+  integration tests. Website changes must pass that workflow before deployment.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
   `app/src-tauri/tauri.conf.json` identical to the release tag.
 - A `wip` build is a preview build and uploads to preview R2. Production

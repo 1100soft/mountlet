@@ -1,50 +1,41 @@
 name: Website integration
-
-on:
+'on':
   pull_request:
     paths:
-      - ".github/workflows/web.yml"
-      - ".github/workflows/package.yml"
-      - "web/**"
-      - "functions/**"
-      - "package.json"
-      - "package-lock.json"
-      - "wrangler.toml"
-      - "!web/**/*.md"
+    - .github/workflows/web.yml
+    - .github/workflows/package.yml
+    - web/**
+    - functions/**
+    - package.json
+    - package-lock.json
+    - wrangler.toml
+    - '!web/**/*.md'
   push:
-    branches: [main, wip]
+    branches:
+    - main
+    - wip
     paths:
-      - ".github/workflows/web.yml"
-      - ".github/workflows/package.yml"
-      - "web/**"
-      - "functions/**"
-      - "package.json"
-      - "package-lock.json"
-      - "wrangler.toml"
-      - "!web/**/*.md"
-
+    - .github/workflows/web.yml
+    - .github/workflows/package.yml
+    - web/**
+    - functions/**
+    - package.json
+    - package-lock.json
+    - wrangler.toml
+    - '!web/**/*.md'
 permissions:
   contents: read
-
 concurrency:
   group: web-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   web:
     name: Website and release tooling
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - name: Validate website and release system
-        run: |
-          node --check web/script.js
-          npm run web:release:check
-          npm run web:release:test
-          npm run web:notices:test
-          npm run web:reports:test
+    uses: 1100soft/CI/.github/workflows/node-check.yml@859fc753347512c1e64d50f487251d41b0778925
+    with:
+      check-command: |
+        node --check web/script.js
+        npm run web:release:check
+        npm run web:release:test
+        npm run web:notices:test
+        npm run web:reports:test
