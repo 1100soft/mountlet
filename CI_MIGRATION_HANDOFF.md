@@ -96,3 +96,22 @@ requires no application feature changes or automatic publication.
   Confirm publication and private-repository access before pushing callers.
 - Hosted builds, PowerShell/Store probes, R2 uploads, and APT dispatch remain
   unverified. No push or remote configuration changes were made.
+
+## Package CI correction (2026-10-10)
+
+Run `38073990285` on `wip` at `e1860be30be977e7ccfb161156acd4252f2e020f`
+failed during workflow validation: the shared APT workflow at the original pin
+could not be fetched. GitHub returned no jobs or check runs; the original shared
+commit returned HTTP 404.
+
+The package and APT calls in `package.yml` now pin published shared revision
+`31cd08b2a9314c358ce2589a095b5cbeb8dcadf7`. Both workflow files and their caller
+input/secret contracts were verified at that immutable revision. Checks, hooks,
+matrices, permissions, and publication gates are unchanged. The intended
+integration destination for the isolated correction is `wip`. Other workflow
+pins still require publication or a separately reviewed update. Hosted native
+builds and publication remain pending GitHub validation after integration.
+
+Local validation passed: Actionlint 1.7.12, both reusable input/secret contracts,
+comparison confirming only the two workflow pins changed, all eight matrix
+entries, release filename checks, release layout/API tests, and `git diff --check`.

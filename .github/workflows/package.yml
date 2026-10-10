@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   package:
-    uses: 1100soft/CI/.github/workflows/tauri-package.yml@859fc753347512c1e64d50f487251d41b0778925
+    uses: 1100soft/CI/.github/workflows/tauri-package.yml@31cd08b2a9314c358ce2589a095b5cbeb8dcadf7
     with:
       app-directory: app
       artifact-prefix: mountlet
@@ -212,7 +212,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: 1100soft/CI/.github/workflows/apt-publish.yml@859fc753347512c1e64d50f487251d41b0778925
+    uses: 1100soft/CI/.github/workflows/apt-publish.yml@31cd08b2a9314c358ce2589a095b5cbeb8dcadf7
     with:
       artifact-inputs: '{"mountlet-linux-x64-standard": "apt-input/standard", "mountlet-linux-x64-lean": "apt-input/lean"}'
       prepare-command: |
