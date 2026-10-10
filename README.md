@@ -80,6 +80,7 @@ four package identities.
 ```bash
 cd app
 npm run build
+npm test
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```

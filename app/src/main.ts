@@ -1,4 +1,5 @@
 import "./style.css";
+import { authenticationFieldChanged, googleAccountValue, OAUTH_REMOTE_TYPES } from "./remote_auth.ts";
 import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, startupSmokeEnabled, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
@@ -1155,11 +1156,6 @@ const REMOTE_AUTH_FIELDS: Record<string, readonly string[]> = {
   mega: ["user", "pass", "2fa"],
 };
 
-function googleAccountValue(value: string): string {
-  const account = value.trim();
-  return account && !account.includes("@") ? `${account}@gmail.com` : account;
-}
-
 async function showRemoteConfig(remote: Remote): Promise<void> {
   let config;
   try { config = await loadRemoteConfig(remote.id); } catch (error) { await showError("Remote settings", error); return; }
@@ -1243,8 +1239,12 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
       const mountChanged = controls.get("alias")!.value.trim() !== config.alias || controls.get("mountPath")!.value.trim() !== config.mountPath
         || controls.get("remotePath")!.value.trim().replace(/^\/+|\/+$/g, "") !== config.remotePath || effectiveFlags.split(/\s+/).sort().join(" ") !== config.mountFlags.split(/\s+/).filter(Boolean).sort().join(" ");
       const authFields = new Set(REMOTE_AUTH_FIELDS[config.provider] ?? []);
+      if (OAUTH_REMOTE_TYPES.has(config.provider)) {
+        authFields.add("client_id");
+        authFields.add("client_secret");
+      }
       const authChanged = Object.entries(fields).some(([key, value]) => authFields.has(key)
-        && (config.secretFields.includes(key) ? Boolean(value && value !== "••••••") : ["", "false"].includes(value.trim().toLocaleLowerCase()) && ["", "false"].includes((config.fields[key] ?? "").trim().toLocaleLowerCase()) ? false : value.trim() !== (config.fields[key] ?? "").trim()));
+        && authenticationFieldChanged(value, config.fields[key] ?? "", config.secretFields.includes(key)));
       if (authChanged && !await confirmOwned("Authentication changed", "The authentication settings changed. Reauthenticate this remote after saving?", "Save and reauthenticate")) {
         close.disabled = false; return;
       }
@@ -1269,8 +1269,6 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
   document.body.append(layer);
   trapModalFocus(layer, dialog, cancel);
 }
-
-const OAUTH_REMOTE_TYPES = new Set(["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]);
 
 function finishAddRemoteTutorial(): void {
   addRemoteTutorialActive = false;

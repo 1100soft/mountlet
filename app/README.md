@@ -89,7 +89,8 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-`npm run build` includes strict TypeScript unused-code checks. The release CI
+`npm run build` includes strict TypeScript unused-code checks and the remote
+authentication regression tests (also available separately with `npm test`). The release CI
 runs these checks and builds all eight direct platform/variant installers plus
 the self-contained Windows x64 Store package.
 
