@@ -96,3 +96,22 @@ requires no application feature changes or automatic publication.
   Confirm publication and private-repository access before pushing callers.
 - Hosted builds, PowerShell/Store probes, R2 uploads, and APT dispatch remain
   unverified. No push or remote configuration changes were made.
+
+## Website CI correction (2026-10-10)
+
+Run `38073990264` for `.github/workflows/web.yml` failed on `wip` at
+`e1860be30be977e7ccfb161156acd4252f2e020f` before any jobs started. The original
+shared workflow pin returned HTTP 404 from GitHub. Run logs could not be
+retrieved: GitHub's logs endpoint requires repository admin rights.
+
+The website caller now pins published shared revision
+`31cd08b2a9314c358ce2589a095b5cbeb8dcadf7`. Its `node-check.yml` is identical
+to the original shared workflow in the local CI repository, including the
+input contract, Node 22, dependency installation, and check execution. Website
+checks remain independent from app packaging; no checks or filters changed.
+The intended integration destination for this isolated correction is `wip`.
+
+Local validation: JavaScript syntax, release filename checks, release layout/API
+tests, notice audience tests, report delivery tests, workflow lint, and
+`git diff --check`. Hosted execution remains pending integration and a new
+GitHub run; this correction is not pushed automatically.
