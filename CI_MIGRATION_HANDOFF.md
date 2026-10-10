@@ -83,3 +83,16 @@ validation for this workflow-only migration.
 
 Do not replace the shared pin with an unreviewed moving branch. This handoff
 requires no application feature changes or automatic publication.
+
+## Dedicated-agent review (2026-10-09)
+
+- Reviewed the pinned shared workflows, caller contracts, eight-entry matrix,
+  composite hooks, OAuth forwarding, R2 gates, and APT backfill validation.
+- Wired `version-check-command` to Mountlet's version script and added validation
+  of the shared `RELEASE_TAG` against all three app versions.
+- Restored the original five-minute MSIX probe limit using a bounded PowerShell
+  job; composite steps do not support `timeout-minutes`.
+- The shared SHA returned HTTP 404 through the current GitHub credentials.
+  Confirm publication and private-repository access before pushing callers.
+- Hosted builds, PowerShell/Store probes, R2 uploads, and APT dispatch remain
+  unverified. No push or remote configuration changes were made.

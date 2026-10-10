@@ -9,8 +9,8 @@ import {
   type OauthPortStatus,
 } from "./backend.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
+import { googleAccountValue, OAUTH_REMOTE_TYPES as OAUTH_TYPES } from "./remote_auth.ts";
 
-const OAUTH_TYPES = new Set(["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]);
 const S3_OPTIONS = [
   { label: "Cloudflare R2", provider: "Cloudflare", suffix: "Cloudflare R2", endpoint: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com", region: "auto", hideEndpoint: false, extra: { acl: "private", no_check_bucket: "true" } },
   { label: "MinIO / S3-compatible", provider: "Minio", suffix: "MinIO", endpoint: "http://127.0.0.1:9000", region: "us-east-1", hideEndpoint: false, extra: {} },
@@ -86,11 +86,6 @@ function select(options: ReadonlyArray<readonly [string, string]>): HTMLSelectEl
   const field = bindScaledSelect(node("select", "settings-input"));
   for (const [value, label] of options) field.append(new Option(label, value));
   return field;
-}
-
-function googleAccountValue(value: string): string {
-  const account = value.trim();
-  return account && !account.includes("@") ? `${account}@gmail.com` : account;
 }
 
 function nextcloudWebdavUrl(server: string, username: string): string {

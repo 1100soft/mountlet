@@ -568,7 +568,16 @@ sudo apt update</code></pre>
           <p>Some virtual views, especially date-based folders, can be slow. Downloaded media may differ from the original: location metadata is removed, images may use a different resolution, and videos may be compressed.</p>
           <p>Google Photos is not a normal filesystem. Media views are read-only; rclone can remove media only from albums it created and cannot permanently delete it from Google Photos.</p>
           <p>To conserve Google's restricted API quota, Mountlet does not recursively index Photos or poll cached Photos files for cloud changes. Folders refresh when visited; use Sync now for a manual cached-file check. Custom OAuth clients also need sufficient Photos Library API quota.</p>
-          <p>Uploads require the Google Photos Library API. Mountlet's built-in credentials are prepared for it; if you use your own Google OAuth client, enable the API before uploading. See the <a class="external-link" href="https://rclone.org/googlephotos/#limitations" target="_blank" rel="noopener">rclone Google Photos limitations</a>.</p>
+          <p>Uploads require the Google Photos Library API enabled for the OAuth client used by your remote. A different client may not see media uploaded using the previous client. See the <a class="external-link" href="https://rclone.org/googlephotos/#limitations" target="_blank" rel="noopener">rclone Google Photos limitations</a>.</p>
+        </details>
+        <details>
+          <summary>Do I need to register my own OAuth client?</summary>
+          <p>Choose <strong>Default client (Mountlet or rclone)</strong> when adding a remote. It uses Mountlet's application credentials when included in your build, otherwise rclone's defaults where available. Your storage provider still asks you to sign in and authorize access. Shared clients can be throttled or unavailable.</p>
+          <p>You can enter your own client ID and matching secret for Google Drive, Google Photos, Dropbox, OneDrive, Box, and pCloud. Google Drive can also reuse client credentials from an existing Drive remote. Changing a remote's client credentials prompts you to reauthenticate; updating Mountlet alone does not change existing remotes' credentials.</p>
+        </details>
+        <details>
+          <summary>Where are my credentials and files stored?</summary>
+          <p>Cloud credentials stay in your local rclone configuration. Settings, file indexes, logs, and cached or offline files are stored on your device. If you enable configuration sync, configuration is sent to the cloud destination you select. See the <a href="/privacy">privacy policy</a> for licensing and support data handling.</p>
         </details>
         <details>
           <summary>How does Open in web choose a Google account?</summary>
@@ -619,6 +628,7 @@ sudo apt update</code></pre>
         <details>
           <summary>How do I get help?</summary>
           <p>Search this FAQ first. If it does not answer your question, send a support request. Mountlet is independently maintained, so replies may take time.</p>
+          <p>Reports may become public GitHub issues, including the contact email and diagnostics you include. Review the report before sending and request a private channel before sharing confidential information. See our <a href="/privacy">privacy policy</a> and <a href="/terms">Terms of Service</a>.</p>
         </details>
       </section>
 

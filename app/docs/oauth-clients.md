@@ -218,3 +218,7 @@ the requested configuration and obtain pCloud's confirmation before shipping.
 After adding or rotating any secret, rebuild every platform installer. Existing
 rclone remotes retain the client credentials written when they were created;
 changing a release binary does not migrate them or refresh their OAuth tokens.
+Editing a remote's client ID or secret in Mountlet settings prompts for
+reauthentication for all six OAuth providers. An unchanged masked secret is
+preserved. The frontend shares OAuth provider membership, account normalization,
+and authentication-change comparison in `app/src/remote_auth.ts`.
