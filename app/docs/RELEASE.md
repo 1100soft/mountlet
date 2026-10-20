@@ -85,6 +85,9 @@ upgrade tests:
   restoration of the last focused window.
 - macOS arm64 and x64: launch the DMG application, verify tray-only lifecycle,
   both layouts, Finder opening, download/cache behavior, and quit.
+  The automated startup probe shows the main window before running its UI
+  checks, matching normal startup and avoiding hidden WebKit suspension. It
+  still requires the full behavior marker and a visible main window.
 - Standard builds must find their bundled rclone. Lean builds must report a
   missing system rclone cleanly and work after one is provided.
 
