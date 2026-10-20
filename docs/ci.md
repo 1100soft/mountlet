@@ -18,10 +18,13 @@ composite action steps cannot specify `timeout-minutes`.
 
 OAuth credentials are explicitly forwarded as JSON in the shared workflow's
 `build-environment` secret and reach only the installer build. The build channel
-is passed separately as nonsecret environment configuration. APT jobs alone add
-`actions: read` to download tested artifacts. Backfills validate their source run
-before invoking shared APT transport; the maintenance workflow still publishes
-only the missing lean package identity.
+is passed separately as nonsecret environment configuration. Optional OAuth
+secrets are normalized to strings before JSON encoding: absent credentials
+become empty strings instead of JSON null, satisfying the shared build step's
+object-of-strings validator. APT jobs alone add `actions: read` to download tested
+artifacts. Backfills validate their source run before invoking shared APT
+transport; the maintenance workflow still publishes only the missing lean package
+identity.
 
 Website checks remain independent from app packaging. Production R2 publication
 remains tag-only, with previews from `wip`; APT previews require manual opt-in.
