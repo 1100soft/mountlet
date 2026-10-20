@@ -31,6 +31,11 @@ provider or rclone authentication flow. Hiding the window leaves Mountlet in
 the tray. The app supports both its integrated, cached file browser and native
 mounted folders.
 
+Hover over a remote to preview its files without changing the active remote.
+Click to select it; leaving the remote list restores the active remote's files
+and remembered folder. Keyboard navigation also selects a remote. This works
+with both the integrated browser and the separate file-browser window.
+
 Integrated edits are disabled by default because cloud copy, move, upload,
 rename, and delete operations are direct and cannot be undone by Mountlet.
 Offline files and ordinary cached files live under the configured Mountlet app
@@ -61,6 +66,9 @@ npm run tauri:build
 
 The application intentionally uses tray-style windows rather than a normal
 taskbar window. Use the tray icon or **Open Mountlet** after hiding it.
+Reopening raises both windows and restores the last focused pane. On Linux X11,
+tray activation uses a fresh server timestamp rather than stale GTK input time;
+native Wayland foreground activation is still controlled by the compositor.
 
 ## Architecture and maintenance rules
 
