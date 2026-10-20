@@ -2684,6 +2684,9 @@ async function checkRemoteHoverSelection(mode: Preferences["mode"]): Promise<voi
 async function start(): Promise<void> {
   if (await startupSmokeEnabled() && !isBrowserWindow) {
     const checks: string[] = [];
+    // Match normal startup: WebKit can suspend a hidden macOS webview while
+    // the probe awaits native commands and timer-driven UI interactions.
+    await showStartupWindows(); checks.push("startup-window-visible");
     await appVersion(); checks.push("app-version");
     await listRemotes(); checks.push("remote-state");
     const smokePreferences = await loadPreferences(); checks.push("preferences");
@@ -2754,7 +2757,6 @@ async function start(): Promise<void> {
       throw new Error("The production frontend did not render its startup probe");
     }
     checks.push("frontend-render");
-    await showStartupWindows(); checks.push("startup-window-visible");
     await completeStartupSmoke(checks);
     return;
   }
