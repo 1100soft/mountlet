@@ -31,7 +31,7 @@ concurrency:
 jobs:
   web:
     name: Website and release tooling
-    uses: 1100soft/CI/.github/workflows/node-check.yml@859fc753347512c1e64d50f487251d41b0778925
+    uses: 1100soft/CI/.github/workflows/node-check.yml@31cd08b2a9314c358ce2589a095b5cbeb8dcadf7
     with:
       check-command: |
         node --check web/script.js

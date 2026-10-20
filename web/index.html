@@ -596,6 +596,10 @@ sudo apt update</code></pre>
           <p><button class="inline-link tab-action" type="button" data-tab="download" data-scroll-target="mount-dependencies">See platform installation instructions</button>.</p>
         </details>
         <details>
+          <summary>How does remote hover preview work?</summary>
+          <p>Hovering over a remote previews its files without selecting it. Click a remote to make it active. When the pointer leaves the remote list, the browser returns to the active remote and its remembered folder. Keyboard navigation also selects a remote. This works in both single-window and separate-browser modes.</p>
+        </details>
+        <details>
           <summary>How are edits handled when a remote is mounted?</summary>
           <p>Files opened from Mountlet still use its managed cache and conflict checks. Files opened from the mounted folder in Finder, Explorer, Dolphin, terminals, or other apps use the live rclone mount directly and bypass Mountlet's conflict resolver. Close those files before unmounting.</p>
         </details>

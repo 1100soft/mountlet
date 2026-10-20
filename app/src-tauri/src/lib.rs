@@ -3557,6 +3557,7 @@ fn complete_startup_smoke(
         "license",
         "report-preview",
         "tray-menu",
+        "remote-hover-selection",
         "add-remote-fields",
         "frontend-render",
         "startup-window-visible",
@@ -3572,6 +3573,7 @@ fn complete_startup_smoke(
         "license",
         "report-preview",
         "tray-menu",
+        "remote-hover-selection",
         "add-remote-fields",
         "frontend-render",
         "startup-window-visible",
@@ -6963,7 +6965,7 @@ fn activate_window_keyboard(window: &tauri::WebviewWindow) {
 
 #[cfg(all(target_os = "linux", not(target_os = "android")))]
 fn activate_linux_keyboard(window: &tauri::WebviewWindow) {
-    use gtk::prelude::{Cast, GtkWindowExt, WidgetExt};
+    use gtk::prelude::{Cast, WidgetExt};
     let Ok(gtk_window) = window.gtk_window() else {
         return;
     };
@@ -6971,7 +6973,7 @@ fn activate_linux_keyboard(window: &tauri::WebviewWindow) {
     // the first-show case: show() is queued and the window has never been mapped.
     // Present and grab WebKit focus synchronously on the GTK thread instead.
     gtk_window.show_all();
-    gtk_window.present();
+    present_linux_window(&gtk_window);
     grab_webkit_focus(gtk_window.upcast_ref());
     // `show_all` only queues the initial map. Activate again from GTK's next
     // idle turn, after the compositor has received the mapped surface. This is
@@ -6979,9 +6981,29 @@ fn activate_linux_keyboard(window: &tauri::WebviewWindow) {
     // tray opening, where WebKit otherwise has DOM focus but no key events.
     let mapped_window = gtk_window.clone();
     gtk::glib::idle_add_local_once(move || {
-        mapped_window.present();
+        present_linux_window(&mapped_window);
         grab_webkit_focus(mapped_window.upcast_ref());
     });
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "android")))]
+fn present_linux_window(window: &gtk::ApplicationWindow) {
+    use gtk::prelude::{Cast, GtkWindowExt, WidgetExt};
+    // StatusNotifierItem activation arrives over D-Bus, not as a GDK input
+    // event. `present()` may reuse an old user time, so focus-stealing
+    // prevention can reject every subsequent tray opening. Fetch the current
+    // X server time on the GTK thread, including when retrying after mapping.
+    if let Some(native) = window.window() {
+        if let Some(x11) = native.downcast_ref::<gdkx11::X11Window>() {
+            native.set_events(native.events() | gdk::EventMask::PROPERTY_CHANGE_MASK);
+            let timestamp = gdkx11::functions::x11_get_server_time(x11);
+            x11.set_user_time(timestamp);
+            window.present_with_time(timestamp);
+            return;
+        }
+    }
+    // Native Wayland activation remains subject to compositor policy.
+    window.present();
 }
 
 #[cfg(all(target_os = "linux", not(target_os = "android")))]
@@ -7116,6 +7138,20 @@ pub(crate) fn show_window_stack(app: &tauri::AppHandle) {
     if app_settings().window_mode == "multiple" {
         if let Some(browser) = app.get_webview_window("browser") {
             let _ = browser.show();
+            let _ = browser.unminimize();
+        }
+    }
+    // Present the whole stack, not only the pane that should receive keys.
+    // In two-window mode the parent can otherwise stay behind another app.
+    #[cfg(all(target_os = "linux", not(target_os = "android")))]
+    for label in ["main", "browser"] {
+        if label == "browser" && app_settings().window_mode != "multiple" {
+            continue;
+        }
+        if let Some(window) = app.get_webview_window(label) {
+            if let Ok(native) = window.gtk_window() {
+                present_linux_window(&native);
+            }
         }
     }
     let focus_window = app
@@ -7842,6 +7878,53 @@ mod tests {
         state.selections.write().await.insert(key.clone(), 2499);
         assert_eq!(state.selections.read().await.get(&key), Some(&2499));
         assert_eq!(state.folders.read().await.get(&key).unwrap().len(), 2500);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an isolated X11 display with a window manager"]
+    fn linux_tray_activation_refreshes_stale_user_time() {
+        use gtk::prelude::*;
+        gtk::init().expect("GTK needs an X11 display");
+        let app = gtk::Application::new(None::<&str>, Default::default());
+        app.register(None::<&gtk::gio::Cancellable>).unwrap();
+        let target = gtk::ApplicationWindow::new(&app);
+        let other = gtk::ApplicationWindow::new(&app);
+        target.set_title("Mountlet activation regression");
+        other.set_title("Competing window");
+        let wait_active = |window: &gtk::ApplicationWindow| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                while gtk::events_pending() {
+                    gtk::main_iteration_do(false);
+                }
+                if window.is_active() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!(
+                "{} did not become active",
+                window.title().unwrap_or_default()
+            );
+        };
+        for _ in 0..3 {
+            other.show_all();
+            present_linux_window(&other);
+            wait_active(&other);
+            target.show_all();
+            let native = target.window().unwrap();
+            let x11 = native
+                .downcast_ref::<gdkx11::X11Window>()
+                .expect("X11 required");
+            x11.set_user_time(1);
+            present_linux_window(&target);
+            wait_active(&target);
+            assert!(!native.state().contains(gdk::WindowState::ABOVE));
+            target.hide();
+        }
+        target.close();
+        other.close();
     }
 
     #[test]
