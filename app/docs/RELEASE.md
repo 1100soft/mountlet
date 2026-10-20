@@ -111,6 +111,10 @@ variables (values are case-sensitive):
 - `MOUNTLET_STORE_PUBLISHER` = Package/Identity/Publisher
 - `MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME` = Package/Properties/PublisherDisplayName
 
+The native package workflow forwards these repository variables through the shared
+workflow's `environment-json` input. The verification composite action reads the
+resulting environment values because the `vars` context is unavailable there.
+
 A tagged build deliberately fails its bundled Windows job if any identity value
 is absent. Mountlet `0.7.1` maps to Store package version `1.7.1.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth

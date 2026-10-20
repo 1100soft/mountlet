@@ -50,9 +50,9 @@ runs:
     if: runner.os == 'Windows' && fromJSON(inputs.matrix).bundled && startsWith(github.ref, 'refs/tags/v')
     shell: bash
     env:
-      STORE_IDENTITY_NAME: ${{ vars.MOUNTLET_STORE_IDENTITY_NAME }}
-      STORE_PUBLISHER: ${{ vars.MOUNTLET_STORE_PUBLISHER }}
-      STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
+      STORE_IDENTITY_NAME: ${{ env.MOUNTLET_STORE_IDENTITY_NAME }}
+      STORE_PUBLISHER: ${{ env.MOUNTLET_STORE_PUBLISHER }}
+      STORE_PUBLISHER_DISPLAY_NAME: ${{ env.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
     run: |
       test -n "$STORE_IDENTITY_NAME"
       test -n "$STORE_PUBLISHER"
@@ -62,9 +62,9 @@ runs:
     shell: pwsh
     working-directory: app
     env:
-      STORE_IDENTITY_NAME: ${{ vars.MOUNTLET_STORE_IDENTITY_NAME }}
-      STORE_PUBLISHER: ${{ vars.MOUNTLET_STORE_PUBLISHER }}
-      STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
+      STORE_IDENTITY_NAME: ${{ env.MOUNTLET_STORE_IDENTITY_NAME }}
+      STORE_PUBLISHER: ${{ env.MOUNTLET_STORE_PUBLISHER }}
+      STORE_PUBLISHER_DISPLAY_NAME: ${{ env.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME }}
     run: |
       $ErrorActionPreference = "Stop"
       New-Item -ItemType Directory -Path artifacts -Force | Out-Null
