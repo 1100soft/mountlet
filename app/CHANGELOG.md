@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.2 - 2026-10-21
+
+- Align desktop package versions with the `v0.7.2` release tag.
+
 ## 0.7.1 - 2026-09-01
 
 - Added a concise first-run tutorial for creating the first remote, with
