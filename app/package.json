@@ -1,12 +1,13 @@
 {
   "name": "mountlet-desktop",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "check": "node scripts/check-version.mjs && tsc --noEmit --noUnusedLocals --noUnusedParameters",
-    "build": "npm run check && vite build",
+    "test": "node scripts/test-remote-auth.mjs",
+    "build": "npm run check && npm test && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",

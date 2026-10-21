@@ -15,4 +15,9 @@ if (unique.size !== 1 || unique.has(undefined)) {
   throw new Error(`Mountlet versions do not match: ${[...versions].map(([file, version]) => `${file}=${version ?? "missing"}`).join(", ")}`);
 }
 
-console.log(`Mountlet version ${packageJson.version} is consistent.`);
+const releaseTag = process.env.RELEASE_TAG || "";
+if (releaseTag && releaseTag !== `v${packageJson.version}`) {
+  throw new Error(`Release tag ${releaseTag} does not match Mountlet version ${packageJson.version}.`);
+}
+
+console.log(`Mountlet version ${packageJson.version} is consistent${releaseTag ? ` with ${releaseTag}` : ""}.`);

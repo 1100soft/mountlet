@@ -80,6 +80,7 @@ four package identities.
 ```bash
 cd app
 npm run build
+npm test
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
@@ -95,3 +96,5 @@ native artifacts.
 
 The source is available for non-commercial use under [LICENSE](LICENSE).
 Installer builds are covered by [the installer EULA](app/docs/EULA.md).
+
+CI architecture and shared workflow rollout: [docs/ci.md](docs/ci.md).

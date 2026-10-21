@@ -5,8 +5,11 @@ release and remains frozen under `legacy/python-0.6.8/`.
 
 ## Release invariants
 
-- Release from a clean commit that passed both **CI** and all eight jobs in
+- Release from a clean commit that passed both **App CI** and all eight jobs in
   **Native package CI**.
+- **Website integration** independently checks web APIs and release-file
+  compatibility. Native packaging and installer uploads do not depend on its
+  integration tests. Website changes must pass that workflow before deployment.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
   `app/src-tauri/tauri.conf.json` identical to the release tag.
 - A `wip` build is a preview build and uploads to preview R2. Production
@@ -60,6 +63,19 @@ upgrade tests:
 
 - Linux X11: install the `.deb`, start from a desktop session, open both window
   modes, browse/download a file, mount/unmount, quit, and reopen from the tray.
+  Put a different normal window in front, hide/reopen Mountlet repeatedly, and
+  confirm both panes return to the foreground with the last keyboard focus.
+  Also test with pinned windows; reopening must not enable Mountlet's pin mode.
+- In both window modes, select remote A, hover B, then leave the remote list:
+  A stays selected while B is previewed, and A's remembered folder returns on
+  leave. Clicking B makes it active. Rapidly hover B/C and leave before loading
+  finishes; late responses must not replace the active remote's files. Verify
+  keyboard selection and remote shortcuts still target the active remote.
+  The production startup smoke probe covers row events and preview cancellation
+  in both layouts. On an isolated X11 display with a window manager, also run
+  `cargo test --locked --manifest-path app/src-tauri/Cargo.toml linux_tray_activation_refreshes_stale_user_time -- --ignored --test-threads=1`
+  from the repository root to check stale-timestamp activation against another
+  window without enabling always-on-top.
 - Windows: install over Python 0.6.8 with an existing expired trial, cached
   file, metadata database, non-default theme, and multi-window setting. Confirm
   that there is one Installed Apps entry, no default desktop shortcut, no
@@ -69,6 +85,9 @@ upgrade tests:
   restoration of the last focused window.
 - macOS arm64 and x64: launch the DMG application, verify tray-only lifecycle,
   both layouts, Finder opening, download/cache behavior, and quit.
+  The automated startup probe shows the main window before running its UI
+  checks, matching normal startup and avoiding hidden WebKit suspension. It
+  still requires the full behavior marker and a visible main window.
 - Standard builds must find their bundled rclone. Lean builds must report a
   missing system rclone cleanly and work after one is provided.
 
@@ -94,6 +113,10 @@ variables (values are case-sensitive):
 - `MOUNTLET_STORE_IDENTITY_NAME` = Package/Identity/Name
 - `MOUNTLET_STORE_PUBLISHER` = Package/Identity/Publisher
 - `MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME` = Package/Properties/PublisherDisplayName
+
+The native package workflow forwards these repository variables through the shared
+workflow's `environment-json` input. The verification composite action reads the
+resulting environment values because the `vars` context is unavailable there.
 
 A tagged build deliberately fails its bundled Windows job if any identity value
 is absent. Mountlet `0.7.1` maps to Store package version `1.7.1.0`: the major

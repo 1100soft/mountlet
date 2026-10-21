@@ -1780,7 +1780,15 @@ fn safe_rclone_keys(provider: &str) -> &'static [&'static str] {
             "include_archived",
             "start_year",
         ],
-        "onedrive" => &["description", "drive_type", "region", "drive_id"],
+        "dropbox" | "box" | "pcloud" => &["description", "client_id", "client_secret"],
+        "onedrive" => &[
+            "description",
+            "client_id",
+            "client_secret",
+            "drive_type",
+            "region",
+            "drive_id",
+        ],
         "webdav" => &[
             "description",
             "url",
@@ -3549,6 +3557,7 @@ fn complete_startup_smoke(
         "license",
         "report-preview",
         "tray-menu",
+        "remote-hover-selection",
         "add-remote-fields",
         "frontend-render",
         "startup-window-visible",
@@ -3564,6 +3573,7 @@ fn complete_startup_smoke(
         "license",
         "report-preview",
         "tray-menu",
+        "remote-hover-selection",
         "add-remote-fields",
         "frontend-render",
         "startup-window-visible",
@@ -4220,15 +4230,13 @@ fn create_remote(
             if let (Some(client_id), Some(client_secret)) =
                 (section.get("client_id"), section.get("client_secret"))
             {
-                fields
-                    .entry("client_id".into())
-                    .or_insert_with(|| client_id.clone());
-                fields
-                    .entry("client_secret".into())
-                    .or_insert_with(|| client_secret.clone());
+                if request.provider == "drive" {
+                    apply_oauth_credentials(&mut fields, (Some(client_id), Some(client_secret)));
+                }
             }
         }
     }
+    apply_embedded_oauth_credentials(&request.provider, &mut fields);
     let mut command = Command::new(rclone);
     command.args(["--config"]).arg(config).args([
         "config",
@@ -4283,6 +4291,62 @@ fn create_remote(
     )?;
     refresh_remote_state(&state)?;
     Ok(remote_id)
+}
+
+fn embedded_oauth_credentials(provider: &str) -> (Option<&'static str>, Option<&'static str>) {
+    match provider {
+        "drive" => (
+            option_env!("MOUNTLET_DRIVE_CLIENT_ID"),
+            option_env!("MOUNTLET_DRIVE_CLIENT_SECRET"),
+        ),
+        "gphotos" => (
+            option_env!("MOUNTLET_GPHOTOS_CLIENT_ID"),
+            option_env!("MOUNTLET_GPHOTOS_CLIENT_SECRET"),
+        ),
+        "dropbox" => (
+            option_env!("MOUNTLET_DROPBOX_CLIENT_ID"),
+            option_env!("MOUNTLET_DROPBOX_CLIENT_SECRET"),
+        ),
+        "onedrive" => (
+            option_env!("MOUNTLET_ONEDRIVE_CLIENT_ID"),
+            option_env!("MOUNTLET_ONEDRIVE_CLIENT_SECRET"),
+        ),
+        "box" => (
+            option_env!("MOUNTLET_BOX_CLIENT_ID"),
+            option_env!("MOUNTLET_BOX_CLIENT_SECRET"),
+        ),
+        "pcloud" => (
+            option_env!("MOUNTLET_PCLOUD_CLIENT_ID"),
+            option_env!("MOUNTLET_PCLOUD_CLIENT_SECRET"),
+        ),
+        _ => (None, None),
+    }
+}
+
+fn apply_embedded_oauth_credentials(provider: &str, fields: &mut HashMap<String, String>) {
+    apply_oauth_credentials(fields, embedded_oauth_credentials(provider));
+}
+
+fn apply_oauth_credentials(
+    fields: &mut HashMap<String, String>,
+    credentials: (Option<&str>, Option<&str>),
+) {
+    // Credentials belong to one registration: never fill half of a custom pair.
+    if ["client_id", "client_secret"].iter().any(|key| {
+        fields
+            .get(*key)
+            .is_some_and(|value| !value.trim().is_empty())
+    }) {
+        return;
+    }
+    let Some(client_id) = credentials.0.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    fields.insert("client_id".into(), client_id.into());
+    fields.insert(
+        "client_secret".into(),
+        credentials.1.unwrap_or_default().into(),
+    );
 }
 
 #[tauri::command]
@@ -6901,7 +6965,7 @@ fn activate_window_keyboard(window: &tauri::WebviewWindow) {
 
 #[cfg(all(target_os = "linux", not(target_os = "android")))]
 fn activate_linux_keyboard(window: &tauri::WebviewWindow) {
-    use gtk::prelude::{Cast, GtkWindowExt, WidgetExt};
+    use gtk::prelude::{Cast, WidgetExt};
     let Ok(gtk_window) = window.gtk_window() else {
         return;
     };
@@ -6909,7 +6973,7 @@ fn activate_linux_keyboard(window: &tauri::WebviewWindow) {
     // the first-show case: show() is queued and the window has never been mapped.
     // Present and grab WebKit focus synchronously on the GTK thread instead.
     gtk_window.show_all();
-    gtk_window.present();
+    present_linux_window(&gtk_window);
     grab_webkit_focus(gtk_window.upcast_ref());
     // `show_all` only queues the initial map. Activate again from GTK's next
     // idle turn, after the compositor has received the mapped surface. This is
@@ -6917,9 +6981,29 @@ fn activate_linux_keyboard(window: &tauri::WebviewWindow) {
     // tray opening, where WebKit otherwise has DOM focus but no key events.
     let mapped_window = gtk_window.clone();
     gtk::glib::idle_add_local_once(move || {
-        mapped_window.present();
+        present_linux_window(&mapped_window);
         grab_webkit_focus(mapped_window.upcast_ref());
     });
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "android")))]
+fn present_linux_window(window: &gtk::ApplicationWindow) {
+    use gtk::prelude::{Cast, GtkWindowExt, WidgetExt};
+    // StatusNotifierItem activation arrives over D-Bus, not as a GDK input
+    // event. `present()` may reuse an old user time, so focus-stealing
+    // prevention can reject every subsequent tray opening. Fetch the current
+    // X server time on the GTK thread, including when retrying after mapping.
+    if let Some(native) = window.window() {
+        if let Some(x11) = native.downcast_ref::<gdkx11::X11Window>() {
+            native.set_events(native.events() | gdk::EventMask::PROPERTY_CHANGE_MASK);
+            let timestamp = gdkx11::functions::x11_get_server_time(x11);
+            x11.set_user_time(timestamp);
+            window.present_with_time(timestamp);
+            return;
+        }
+    }
+    // Native Wayland activation remains subject to compositor policy.
+    window.present();
 }
 
 #[cfg(all(target_os = "linux", not(target_os = "android")))]
@@ -7054,6 +7138,20 @@ pub(crate) fn show_window_stack(app: &tauri::AppHandle) {
     if app_settings().window_mode == "multiple" {
         if let Some(browser) = app.get_webview_window("browser") {
             let _ = browser.show();
+            let _ = browser.unminimize();
+        }
+    }
+    // Present the whole stack, not only the pane that should receive keys.
+    // In two-window mode the parent can otherwise stay behind another app.
+    #[cfg(all(target_os = "linux", not(target_os = "android")))]
+    for label in ["main", "browser"] {
+        if label == "browser" && app_settings().window_mode != "multiple" {
+            continue;
+        }
+        if let Some(window) = app.get_webview_window(label) {
+            if let Ok(native) = window.gtk_window() {
+                present_linux_window(&native);
+            }
         }
     }
     let focus_window = app
@@ -7726,6 +7824,39 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oauth_defaults_preserve_registration_boundaries() {
+        use super::apply_oauth_credentials;
+        use std::collections::HashMap;
+        for explicit in [
+            vec![("client_id", "custom")],
+            vec![("client_secret", "custom-secret")],
+            vec![("client_id", "custom"), ("client_secret", "custom-secret")],
+            vec![("client_id", "custom"), ("client_secret", "")],
+        ] {
+            let mut fields: HashMap<String, String> = explicit
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect();
+            let original = fields.clone();
+            apply_oauth_credentials(&mut fields, (Some("embedded"), Some("embedded-secret")));
+            assert_eq!(fields, original);
+        }
+        let mut fields = HashMap::from([("client_id".into(), "  ".into())]);
+        apply_oauth_credentials(&mut fields, (None, Some("orphan-secret")));
+        assert!(!fields.contains_key("client_secret"));
+        apply_oauth_credentials(&mut fields, (Some("embedded"), Some("embedded-secret")));
+        assert_eq!(fields["client_id"], "embedded");
+        assert_eq!(fields["client_secret"], "embedded-secret");
+        apply_oauth_credentials(&mut fields, (Some("other"), Some("other-secret")));
+        assert_eq!(fields["client_id"], "embedded");
+        assert_eq!(fields["client_secret"], "embedded-secret");
+        let mut public_client = HashMap::new();
+        apply_oauth_credentials(&mut public_client, (Some("public"), None));
+        assert_eq!(public_client["client_id"], "public");
+        assert_eq!(public_client["client_secret"], "");
+    }
+
     use super::*;
 
     #[test]
@@ -7747,6 +7878,53 @@ mod tests {
         state.selections.write().await.insert(key.clone(), 2499);
         assert_eq!(state.selections.read().await.get(&key), Some(&2499));
         assert_eq!(state.folders.read().await.get(&key).unwrap().len(), 2500);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an isolated X11 display with a window manager"]
+    fn linux_tray_activation_refreshes_stale_user_time() {
+        use gtk::prelude::*;
+        gtk::init().expect("GTK needs an X11 display");
+        let app = gtk::Application::new(None::<&str>, Default::default());
+        app.register(None::<&gtk::gio::Cancellable>).unwrap();
+        let target = gtk::ApplicationWindow::new(&app);
+        let other = gtk::ApplicationWindow::new(&app);
+        target.set_title("Mountlet activation regression");
+        other.set_title("Competing window");
+        let wait_active = |window: &gtk::ApplicationWindow| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                while gtk::events_pending() {
+                    gtk::main_iteration_do(false);
+                }
+                if window.is_active() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!(
+                "{} did not become active",
+                window.title().unwrap_or_default()
+            );
+        };
+        for _ in 0..3 {
+            other.show_all();
+            present_linux_window(&other);
+            wait_active(&other);
+            target.show_all();
+            let native = target.window().unwrap();
+            let x11 = native
+                .downcast_ref::<gdkx11::X11Window>()
+                .expect("X11 required");
+            x11.set_user_time(1);
+            present_linux_window(&target);
+            wait_active(&target);
+            assert!(!native.state().contains(gdk::WindowState::ABOVE));
+            target.hide();
+        }
+        target.close();
+        other.close();
     }
 
     #[test]

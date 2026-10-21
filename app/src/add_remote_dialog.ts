@@ -9,8 +9,8 @@ import {
   type OauthPortStatus,
 } from "./backend.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
+import { googleAccountValue, OAUTH_REMOTE_TYPES as OAUTH_TYPES } from "./remote_auth.ts";
 
-const OAUTH_TYPES = new Set(["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]);
 const S3_OPTIONS = [
   { label: "Cloudflare R2", provider: "Cloudflare", suffix: "Cloudflare R2", endpoint: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com", region: "auto", hideEndpoint: false, extra: { acl: "private", no_check_bucket: "true" } },
   { label: "MinIO / S3-compatible", provider: "Minio", suffix: "MinIO", endpoint: "http://127.0.0.1:9000", region: "us-east-1", hideEndpoint: false, extra: {} },
@@ -88,11 +88,6 @@ function select(options: ReadonlyArray<readonly [string, string]>): HTMLSelectEl
   return field;
 }
 
-function googleAccountValue(value: string): string {
-  const account = value.trim();
-  return account && !account.includes("@") ? `${account}@gmail.com` : account;
-}
-
 function nextcloudWebdavUrl(server: string, username: string): string {
   const trimmed = server.trim().replace(/\/+$/, "");
   if (trimmed.toLowerCase().includes("/remote.php/")) return `${trimmed}/`;
@@ -117,13 +112,13 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   const name = input("Personal Drive");
   const credentialSource = select([
     ...sources.map(source => [source.remoteId, `Use ${source.label} credentials`] as const),
-    ["builtin", "Built-in rclone client (retires in 2026)"] as const,
+    ["builtin", "Default client (Mountlet or rclone)"] as const,
     ["custom", "Enter client ID and secret"] as const,
   ]);
   if (sources.length) credentialSource.value = sources[0].remoteId;
   else credentialSource.value = "builtin";
-  const clientId = input("Optional", "text", "Google OAuth client ID. Leave blank to let rclone use its built-in client.");
-  const clientSecret = input("Optional", "password", "Google OAuth client secret. Use the secret that matches the client ID.");
+  const clientId = input("Client ID", "text", "OAuth client ID. This overrides the default client.");
+  const clientSecret = input("Client secret", "password", "OAuth client secret matching the client ID.");
   const account = input("Optional, for example name@gmail.com", "text", "Used to suggest the right Google account during sign-in.");
   const gphotosReadOnly = node("input");
   gphotosReadOnly.type = "checkbox";
@@ -180,7 +175,7 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   gphotosLink.type = "button";
   gphotosLink.addEventListener("click", () => void openExternal("https://rclone.org/googlephotos/"));
   gphotosHelp.append(document.createTextNode(" "), gphotosLink);
-  const driveClientHelp = node("p", "add-remote-help drive-client-help", "For reliable long-term access, create your own Google OAuth client. ");
+  const driveClientHelp = node("p", "add-remote-help drive-client-help", "The default uses Mountlet credentials when included in this build, otherwise rclone’s client. You can supply your own. ");
   const rcloneClientGuide = node("button", "link-button", "Setup guide");
   const googleOauthGuide = node("button", "link-button", "Google OAuth help");
   rcloneClientGuide.type = googleOauthGuide.type = "button";
@@ -190,7 +185,7 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
 
   const rows = {
     name: labeled("Remote name", name),
-    credentials: labeled("Google client", credentialSource),
+    credentials: labeled("OAuth client", credentialSource),
     driveClientHelp,
     clientId: labeled("Client ID", clientId),
     clientSecret: labeled("Client secret", clientSecret),
@@ -255,13 +250,12 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   };
   const applyCredentials = () => {
     const custom = credentialSource.value === "custom";
-    const drive = provider.value === "drive";
-    const gphotos = provider.value === "gphotos";
-    const showClient = gphotos || (drive && custom);
+    const oauth = OAUTH_TYPES.has(provider.value);
+    const showClient = oauth && custom;
     setVisible([rows.clientId, rows.clientSecret], showClient);
     clientId.disabled = !showClient;
     clientSecret.disabled = !showClient;
-    if (drive && !custom) {
+    if (oauth && !custom) {
       clientId.value = "";
       clientSecret.value = "";
     }
@@ -270,12 +264,20 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     const type = provider.value;
     name.placeholder = NAME_PLACEHOLDERS[type] || "Cloud storage";
     const isDrive = type === "drive";
+    for (const option of credentialSource.options) {
+      const reuse = option.value !== "builtin" && option.value !== "custom";
+      option.hidden = option.disabled = reuse && !isDrive;
+    }
+    if (!isDrive && credentialSource.value !== "builtin" && credentialSource.value !== "custom") {
+      credentialSource.value = "builtin";
+    }
     const isGphotos = type === "gphotos";
     const isS3 = type === "s3";
     const isWebdav = type === "webdav" || type === "nextcloud";
     const isExternal = type === "__external__";
     setVisible([rows.name, rows.mount], !isExternal);
-    setVisible([rows.credentials, rows.driveClientHelp], isDrive);
+    setVisible([rows.credentials], OAUTH_TYPES.has(type));
+    setVisible([rows.driveClientHelp], isDrive || isGphotos);
     setVisible([rows.account], isDrive || isGphotos);
     setVisible([rows.gphotosReadOnly, rows.gphotosHelp], isGphotos);
     setVisible([rows.driveKind, rows.sharedDriveId], isDrive);
@@ -350,9 +352,11 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
       const fields: Record<string, string> = {};
       let suffix = PROVIDERS.find(item => item[1] === type)?.[2] ?? type;
       const backend = type === "nextcloud" ? "webdav" : type;
-      if (type === "drive" || type === "gphotos") {
+      if (OAUTH_TYPES.has(type)) {
         if (clientId.value.trim()) fields.client_id = clientId.value.trim();
         if (clientSecret.value.trim()) fields.client_secret = clientSecret.value.trim();
+      }
+      if (type === "drive" || type === "gphotos") {
         if (type === "drive" && credentialSource.value !== "builtin" && credentialSource.value !== "custom") {
           fields.reuse_client_from = credentialSource.value;
         }
@@ -452,7 +456,11 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     const detailRows = (): HTMLElement[] => {
       const byProvider: Record<string, HTMLElement[]> = {
         drive: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
-        gphotos: [rows.clientId, rows.clientSecret, rows.auth], dropbox: [rows.auth], onedrive: [rows.auth], box: [rows.auth], pcloud: [rows.auth],
+        gphotos: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
+        dropbox: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
+        onedrive: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
+        box: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
+        pcloud: [rows.credentials, ...(credentialSource.value === "custom" ? [rows.clientId, rows.clientSecret] : []), rows.auth],
         s3: [rows.s3Provider, rows.s3Access, rows.s3Secret, rows.s3Path],
         nextcloud: [rows.webdavUrl, rows.webdavUser, rows.webdavPass],
         webdav: [rows.webdavVendor, rows.webdavUrl, rows.webdavUser, rows.webdavPass],
@@ -467,7 +475,7 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
       ...detailRows().map(target => ({
         target,
         text: target === rows.credentials
-          ? "Choose your own client for reliable long-term access. Use Setup guide below."
+          ? "Choose the default client or enter your own OAuth credentials."
           : `Set ${target.querySelector(".settings-label")?.textContent?.toLowerCase() || "the connection details"}.`,
       })),
       { target: rows.mount, text: "Choose whether to mount it now." },

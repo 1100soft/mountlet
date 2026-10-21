@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy — Mountlet</title>
+    <meta name="description" content="How Mountlet handles cloud accounts, local files, licensing, payments, and support reports." />
+    <link rel="canonical" href="https://mountlet.app/privacy" />
+    <link rel="icon" href="/assets/mountlet-icon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="privacy-page">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Mountlet home"><img src="/assets/mountlet-icon.png" alt="" /><span>Mountlet</span></a>
+      <nav aria-label="Website sections"><a href="/#support">Contact and support</a></nav>
+    </header>
+    <main class="privacy-content">
+      <h1>Privacy policy</h1>
+      <p class="note">Last updated: October 7, 2026</p>
+      <p>This policy covers the Mountlet desktop application, mountlet.app, and Mountlet's licensing and support services. Eric Holt, Mountlet's publisher, is responsible for personal information processed by those services. For privacy questions or requests, use the <a href="/#support">Mountlet support form</a> and identify your message as a privacy request. Do not send passwords, tokens, or full payment-card details.</p>
+
+      <h2>Your cloud accounts and files</h2>
+      <p>Mountlet uses rclone on your device to connect to storage providers you choose. Depending on the provider and permissions you grant, it accesses account information, file and folder names, paths, sizes, timestamps, storage usage, and file contents to browse, search, mount, open, transfer, and synchronize your files. Google Photos access is limited by Google's API and the app-created media permissions you authorize.</p>
+      <p>Cloud authentication happens with your provider. OAuth tokens, account credentials, remote settings, and optional account email hints are stored in your local rclone configuration. Mountlet also stores settings, a searchable file-metadata index, diagnostic logs, and cached or offline file copies on your device. Local configuration files may contain sensitive information; protect your device and backups.</p>
+      <p>Ordinary cloud file operations run between your device and your chosen providers. Mountlet's licensing and support servers do not receive your cloud credentials or file contents as part of those operations. If you enable configuration synchronization, your configuration is sent to the cloud destination you select. You control transfers between providers and any files or information you deliberately include in a support report.</p>
+
+      <h2>Google user data</h2>
+      <p>Mountlet uses Google data only to provide the file-management features you request. Mountlet does not sell Google user data, use it for advertising, or use it to train generalized artificial-intelligence models. Mountlet's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements.</p>
+      <p>Mountlet's maintainers do not routinely inspect your cloud files. If you choose to provide specific data for troubleshooting, it is used for that request. You can revoke Mountlet's authorization in your Google account or another provider's connected-app settings at any time.</p>
+
+      <h2>Licensing and payments</h2>
+      <p>When you activate, validate, renew, or manage a license, our service processes your license key, plan and subscription status, device identifier, device label, operating-system platform, application version, and activation or last-contact timestamps. Device identifiers and license keys are hashed for lookup; payment fulfillment records can also retain the generated license key. These records enforce device limits, deliver licenses, and maintain subscription access.</p>
+      <p>Stripe processes checkout and billing information, including the contact and payment details you give Stripe. Mountlet retains Stripe customer, checkout-session, and subscription identifiers as needed to fulfill purchases and manage subscriptions. Mountlet does not receive your full payment-card number. If license email delivery is enabled, the checkout email address and license details are processed by our email-delivery provider, Resend. The license database does not store a separate customer email field.</p>
+
+      <h2>Support, bug reports, and crash reports</h2>
+      <p>When you submit a request, we process its text, optional contact email, and relevant metadata. Desktop reports include the app version, build, operating system, architecture, and a device/host name when available. If you include diagnostics, reports can contain runtime and rclone logs, error messages, remote names, and file paths. Review the report preview and remove private information before sending. Credential redaction reduces exposure but cannot identify every sensitive value.</p>
+      <p>Reports may be forwarded to GitHub as issues and to the maintainer through Resend email delivery. <strong>If the receiving GitHub repository is public, the report, its contact email, and included diagnostics may be publicly visible.</strong> Public copies may persist outside our control. Use the support form without sensitive details to request a private channel before sharing confidential information. Reports are sent when you submit them; recording a local crash log does not itself send that log.</p>
+
+      <h2>Website and service requests</h2>
+      <p>Cloudflare hosts the website and service infrastructure. Visiting the site, downloading software, or contacting an API exposes normal connection information such as IP address, request time, requested URL, and browser or client information to the infrastructure handling the request. This information may be processed to deliver services, troubleshoot failures, and protect against abuse. The website does not include advertising trackers or third-party analytics scripts. Payment and other external sites may use their own cookies and storage under their own policies.</p>
+
+      <h2>Why we process information</h2>
+      <p>Where European data-protection law applies, we rely on performance of our agreement with you to deliver paid licenses and requested services; legitimate interests to secure and maintain the service and respond to support requests; and legal obligations for required financial or regulatory records. Optional cloud authorization and report submission are choices you control. When processing relies on consent, you may withdraw that consent without affecting prior lawful processing.</p>
+
+      <h2>Service providers and international processing</h2>
+      <p>Information is shared only as needed with your selected storage providers, Cloudflare for hosting and infrastructure, Stripe for payments, GitHub for issue handling, and Resend for email delivery when configured. These services may process information outside your country, including outside the European Economic Area, subject to their applicable transfer safeguards and privacy terms. We may also disclose information when legally required or necessary to investigate abuse and protect rights. We do not sell personal information.</p>
+      <p>Provider policies: <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a>, <a href="https://stripe.com/privacy">Stripe</a>, <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub</a>, and <a href="https://resend.com/legal/privacy-policy">Resend</a>.</p>
+
+      <h2>Retention and deletion</h2>
+      <p>Local configuration, indexes, logs, and offline copies remain on your device until removed by you or the application's cleanup functions. Uninstalling the application may leave its data directory behind. Removing a remote does not revoke its provider authorization; revoke that separately in the provider's account settings.</p>
+      <p>License and payment records are retained while needed to operate the license, administer subscriptions, address disputes, prevent abuse, or meet legal obligations. Support messages and issues remain while useful for resolving requests and maintaining the software; there is currently no automatic fixed deletion schedule for these records. Hosting logs and provider backups follow the relevant service's retention settings. You can request deletion of information we control, subject to records we must retain and copies held independently by others.</p>
+
+      <h2>Your choices and rights</h2>
+      <p>You can disconnect cloud accounts, revoke permissions, remove local caches, choose whether to include logs, and omit your contact email from reports. Depending on applicable law, you may request access, correction, deletion, restriction, or portability of personal information, and object to processing based on legitimate interests. Contact us through the <a href="/#support">support form</a>; we may ask for proportionate proof of identity before disclosing or changing records. You may complain to your local data-protection authority, including <a href="https://www.datatilsynet.no/en/">Datatilsynet</a> in Norway.</p>
+
+      <h2>Changes to this policy</h2>
+      <p>We will update this page when Mountlet's data practices change and revise the date above. Material changes will be communicated through the website or application as appropriate.</p>
+    </main>
+    <footer class="site-footer"><span>© 2026 Mountlet</span><a href="/">Home</a><a href="/#support">Support</a><a href="/privacy" aria-current="page">Privacy policy</a><a href="/terms">Terms of Service</a></footer>
+  </body>
+</html>

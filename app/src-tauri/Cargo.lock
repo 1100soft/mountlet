@@ -2222,11 +2222,12 @@ dependencies = [
 
 [[package]]
 name = "mountlet-desktop"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "gdk",
+ "gdkx11",
  "gtk",
  "hex",
  "hmac",

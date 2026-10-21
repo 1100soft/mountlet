@@ -1,5 +1,13 @@
 # Mountlet Website
 
+The public legal pages are `/privacy` (`web/privacy.html`) and `/terms`
+(`web/terms.html`). They use the shared stylesheet and are linked from the
+homepage footer and pricing section. Deploy them together with the website.
+
+The **Website integration** workflow runs web/API and release-file compatibility
+checks independently of **App CI** and **Native package CI**. Installer uploads
+do not run website integration tests.
+
 Static commercial download site for Cloudflare Pages.
 
 ## Cloudflare Pages

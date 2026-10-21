@@ -1,4 +1,5 @@
 import "./style.css";
+import { authenticationFieldChanged, googleAccountValue, OAUTH_REMOTE_TYPES } from "./remote_auth.ts";
 import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, startupSmokeEnabled, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
@@ -27,7 +28,11 @@ const preferences: Preferences = {
 };
 
 let remotes: readonly Remote[] = [];
-let selectedRemote = "";
+let selectedRemote = ""; // Remote displayed by the file browser, including previews.
+// The browser can temporarily display a hover preview without changing selection.
+let activeRemote = "";
+let remoteSelectionTarget = "";
+let remoteSelectionRequest: Promise<void> = Promise.resolve();
 let currentPath = "";
 let snapshot: FolderSnapshot | null = null;
 let remoteFilter = "";
@@ -359,7 +364,7 @@ async function layoutNativeWindows(): Promise<void> {
   }
   await applyWindowLayout({
     mode: licenseLocked() ? "single" : preferences.mode,
-    selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
+    selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === activeRemote)),
     remoteCount: remotes.length,
     browserItems: preferences.fileListMaxItems > 0
       ? Math.min(snapshot?.entries.length ?? 0, preferences.fileListMaxItems)
@@ -1022,11 +1027,11 @@ function usage(remote: Remote): HTMLElement {
 }
 
 function remoteCard(remote: Remote): HTMLElement {
-  const card = element("button", `remote-card${remote.id === selectedRemote ? " selected" : ""}`);
+  const card = element("button", `remote-card${remote.id === activeRemote ? " selected" : ""}`);
   card.type = "button";
   card.disabled = licenseLocked();
   card.dataset.remoteId = remote.id;
-  card.setAttribute("aria-current", remote.id === selectedRemote ? "true" : "false");
+  card.setAttribute("aria-current", remote.id === activeRemote ? "true" : "false");
   card.draggable = sortMode === "manual" && !sortReverse;
   const state = element("img", `mount-state${remote.mounted ? " mounted" : ""}${pendingMounts.has(remote.id) ? " working" : ""}${remoteErrors.has(remote.id) ? " error" : ""}`) as HTMLImageElement;
   state.src = remote.mounted ? "/assets/status-mounted.svg" : "/assets/status-cloud.svg";
@@ -1049,8 +1054,7 @@ function remoteCard(remote: Remote): HTMLElement {
     void showRemoteConfig(remote);
   });
   card.addEventListener("contextmenu", event => {
-    selectedRemote = remote.id;
-    renderRemoteList();
+    void selectRemote(remote.id);
     const index = visibleRemotes().findIndex(candidate => candidate.id === remote.id);
     showContextMenu(event, [
       { label: remote.mounted ? "Unmount" : "Mount", run: () => void changeRemoteMount(remote.id) },
@@ -1065,9 +1069,10 @@ function remoteCard(remote: Remote): HTMLElement {
     ]);
   });
   card.addEventListener("pointerenter", () => {
-    if (!remoteHoverArmed || remote.id === selectedRemote) return;
-    void selectRemote(remote.id);
+    if (!remoteHoverArmed || remote.id === remoteSelectionTarget) return;
+    void selectRemote(remote.id, true);
   });
+  card.addEventListener("click", () => void selectRemote(remote.id));
   card.addEventListener("focus", () => void selectRemote(remote.id));
   card.addEventListener("dragstart", event => {
     draggedRemote = remote.id;
@@ -1155,11 +1160,6 @@ const REMOTE_AUTH_FIELDS: Record<string, readonly string[]> = {
   mega: ["user", "pass", "2fa"],
 };
 
-function googleAccountValue(value: string): string {
-  const account = value.trim();
-  return account && !account.includes("@") ? `${account}@gmail.com` : account;
-}
-
 async function showRemoteConfig(remote: Remote): Promise<void> {
   let config;
   try { config = await loadRemoteConfig(remote.id); } catch (error) { await showError("Remote settings", error); return; }
@@ -1221,8 +1221,11 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
     if (!await confirmOwned("Delete remote?", `Delete ${remote.name} (${remote.providerLabel}) from rclone and Mountlet?`, "Delete")) return;
     try {
       await deleteRemote(remote.id); layer.remove(); remotes = await listRemotes();
-      selectedRemote = remotes[0]?.id ?? ""; currentPath = ""; snapshot = null; render();
-      if (selectedRemote) await selectRemote(selectedRemote);
+      activeRemote = ""; selectedRemote = ""; currentPath = ""; snapshot = null;
+      remoteSelectionTarget = ""; ++selectionGeneration; ++requestGeneration;
+      const nextRemote = remotes[0]?.id ?? "";
+      render();
+      if (nextRemote) await selectRemote(nextRemote);
     } catch (error) { await showError("Delete remote", error); }
   });
   const close = element("button", "primary", "Save");
@@ -1243,8 +1246,12 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
       const mountChanged = controls.get("alias")!.value.trim() !== config.alias || controls.get("mountPath")!.value.trim() !== config.mountPath
         || controls.get("remotePath")!.value.trim().replace(/^\/+|\/+$/g, "") !== config.remotePath || effectiveFlags.split(/\s+/).sort().join(" ") !== config.mountFlags.split(/\s+/).filter(Boolean).sort().join(" ");
       const authFields = new Set(REMOTE_AUTH_FIELDS[config.provider] ?? []);
+      if (OAUTH_REMOTE_TYPES.has(config.provider)) {
+        authFields.add("client_id");
+        authFields.add("client_secret");
+      }
       const authChanged = Object.entries(fields).some(([key, value]) => authFields.has(key)
-        && (config.secretFields.includes(key) ? Boolean(value && value !== "••••••") : ["", "false"].includes(value.trim().toLocaleLowerCase()) && ["", "false"].includes((config.fields[key] ?? "").trim().toLocaleLowerCase()) ? false : value.trim() !== (config.fields[key] ?? "").trim()));
+        && authenticationFieldChanged(value, config.fields[key] ?? "", config.secretFields.includes(key)));
       if (authChanged && !await confirmOwned("Authentication changed", "The authentication settings changed. Reauthenticate this remote after saving?", "Save and reauthenticate")) {
         close.disabled = false; return;
       }
@@ -1258,7 +1265,7 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
         autoMount: controls.get("autoMount")!.value === "" ? null : controls.get("autoMount")!.value === "true", fields });
       if (authChanged) await runRemoteConfigWizard(newId);
       if (remount) await toggleRemoteMount(newId);
-      remotes = await listRemotes(); selectedRemote = newId; layer.remove(); renderRemoteList(); await selectRemote(newId);
+      remotes = await listRemotes(); layer.remove(); renderRemoteList(); await selectRemote(newId);
     } catch (error) { await showError("Remote settings", error); close.disabled = false; }
   });
   actions.append(remove, web, folder, cancel, close);
@@ -1269,8 +1276,6 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
   document.body.append(layer);
   trapModalFocus(layer, dialog, cancel);
 }
-
-const OAUTH_REMOTE_TYPES = new Set(["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]);
 
 function finishAddRemoteTutorial(): void {
   addRemoteTutorialActive = false;
@@ -1308,7 +1313,8 @@ async function showAddRemote(tutorial = addRemoteTutorialActive): Promise<void> 
     if (tutorial) finishAddRemoteTutorial();
     return;
   }
-  selectedRemote = result.remoteId;
+  remoteSelectionTarget = ""; ++selectionGeneration;
+  activeRemote = selectedRemote = result.remoteId;
   render();
   const created = remotes.find(remote => remote.id === result.remoteId);
   if (OAUTH_REMOTE_TYPES.has(result.provider)) {
@@ -1327,7 +1333,7 @@ function selectAdjacentRemote(delta: number): void {
   suppressRemoteHover();
   const visible = visibleRemotes();
   if (!visible.length) return;
-  const current = visible.findIndex(remote => remote.id === selectedRemote);
+  const current = visible.findIndex(remote => remote.id === activeRemote);
   const index = Math.min(visible.length - 1, Math.max(0, (current < 0 ? 0 : current) + delta));
   const card = document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(visible[index].id)}"]`);
   card?.focus({ preventScroll: true });
@@ -1336,7 +1342,7 @@ function selectAdjacentRemote(delta: number): void {
 
 function moveSelectedRemote(delta: number): void {
   if (sortMode !== "manual" || sortReverse) return;
-  const from = remotes.findIndex(remote => remote.id === selectedRemote);
+  const from = remotes.findIndex(remote => remote.id === activeRemote);
   const to = Math.min(remotes.length - 1, Math.max(0, from + delta));
   if (from < 0 || from === to) return;
   const reordered = [...remotes];
@@ -1345,7 +1351,7 @@ function moveSelectedRemote(delta: number): void {
   remotes = reordered;
   persistRemoteOrder();
   renderGlobalResults();
-  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(selectedRemote)}"]`)?.focus({ preventScroll: true });
+  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(activeRemote)}"]`)?.focus({ preventScroll: true });
   scheduleNativeLayout(0);
 }
 
@@ -1355,7 +1361,7 @@ function focusRemoteList(): void {
     return;
   }
   suppressRemoteHover();
-  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(selectedRemote)}"]`)?.focus({ preventScroll: true });
+  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(activeRemote)}"]`)?.focus({ preventScroll: true });
 }
 
 function focusBrowserList(): void {
@@ -1445,6 +1451,7 @@ function renderRemotePane(): HTMLElement {
   const list = element("div", "remote-list");
   list.id = "remote-list";
   list.setAttribute("aria-label", "Configured remotes");
+  list.addEventListener("pointerleave", () => void selectRemote(activeRemote, true));
   pane.append(list);
   const footer = element("footer", "main-footer");
   footer.id = "main-footer";
@@ -1525,7 +1532,9 @@ function setGlobalSearchSelection(index: number): void {
 
 async function revealSearchResult(result: SearchEntry, focusBrowser: boolean): Promise<void> {
   const generation = ++globalPreviewGeneration;
-  selectedRemote = result.remoteId;
+  ++selectionGeneration;
+  remoteSelectionTarget = result.remoteId;
+  activeRemote = selectedRemote = result.remoteId;
   currentPath = result.parentPath;
   localStorage.setItem(`mountlet-path:${result.remoteId}`, result.parentPath);
   localStorage.setItem(`mountlet-selection:${result.remoteId}:${result.parentPath}`, result.path);
@@ -2298,10 +2307,26 @@ function queueRemoteMetadataReconcile(result: FolderSnapshot, generation: number
   }, 500);
 }
 
-async function selectRemote(remoteId: string): Promise<void> {
-  if (remoteId === selectedRemote) return;
-  const generation = ++selectionGeneration;
+function selectRemote(remoteId: string, preview = false): Promise<void> {
+  if (!preview) activeRemote = remoteId;
+  // Change the highlight in place: replacing hovered cards generates synthetic
+  // pointer/focus transitions and can turn a preview into a selection.
+  document.querySelectorAll<HTMLElement>(".remote-card").forEach(card => {
+    const active = card.dataset.remoteId === activeRemote;
+    card.classList.toggle("selected", active);
+    card.setAttribute("aria-current", String(active));
+  });
+  if (!remoteId) return Promise.resolve();
+  if (remoteId === remoteSelectionTarget) return remoteSelectionRequest;
+  remoteSelectionTarget = remoteId;
+  remoteSelectionRequest = displayRemote(remoteId, ++selectionGeneration);
+  return remoteSelectionRequest;
+}
+
+async function displayRemote(remoteId: string, generation: number): Promise<void> {
   await syncBrowserMemory();
+  if (generation !== selectionGeneration) return;
+  ++requestGeneration;
   selectedRemote = remoteId;
   currentPath = rememberedFolderPath(remoteId);
   const selectedPath = currentPath;
@@ -2313,9 +2338,9 @@ async function selectRemote(remoteId: string): Promise<void> {
     remoteSearchResults = [];
     scheduleSearch("remote");
   }
-  renderRemoteList();
   if (preferences.mode === "single") applyBrowserFolderView({ reveal: true });
   else await emitBrowserState(selectedRemote, currentPath);
+  if (generation !== selectionGeneration) return;
   scheduleNativeLayout(0);
   scheduleFolderPoll();
   await loadSnapshot();
@@ -2419,7 +2444,7 @@ document.addEventListener("keydown", event => {
   if (!editing && matchesShortcut(event, "common_context_menu")) {
     const candidate = (isBrowserWindow || inBrowser)
       ? document.querySelector<HTMLElement>(`.file-row[data-index="${fileList?.currentIndex() ?? -1}"]`) ?? document.querySelector<HTMLElement>(".file-viewport")
-      : document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(selectedRemote)}"]`);
+      : document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(activeRemote)}"]`);
     if (candidate) {
       const rect = candidate.getBoundingClientRect();
       candidate.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + Math.min(24, rect.width / 2), clientY: rect.top + Math.min(24, rect.height / 2) }));
@@ -2472,13 +2497,13 @@ document.addEventListener("keydown", event => {
     focusBrowserList(); event.preventDefault(); return;
   }
   if (!isBrowserWindow && !editing && !inBrowser && matchesShortcut(event, "remote_toggle_mount")) {
-    if (selectedRemote) void changeRemoteMount(selectedRemote); event.preventDefault(); return;
+    if (activeRemote) void changeRemoteMount(activeRemote); event.preventDefault(); return;
   }
   if (!isBrowserWindow && !editing && !inBrowser && matchesShortcut(event, "remote_config")) {
-    const remote = remotes.find(candidate => candidate.id === selectedRemote); if (remote) void showRemoteConfig(remote); event.preventDefault(); return;
+    const remote = remotes.find(candidate => candidate.id === activeRemote); if (remote) void showRemoteConfig(remote); event.preventDefault(); return;
   }
   if (!isBrowserWindow && !editing && !inBrowser && matchesShortcut(event, "remote_open_browser")) {
-    if (selectedRemote) void openRemoteWeb(selectedRemote); event.preventDefault(); return;
+    if (activeRemote) void openRemoteWeb(activeRemote); event.preventDefault(); return;
   }
   if (matchesShortcut(event, "common_zoom_in")) { setZoom(1); event.preventDefault(); return; }
   if (matchesShortcut(event, "common_zoom_out")) { setZoom(-1); event.preventDefault(); return; }
@@ -2591,9 +2616,77 @@ async function ensurePrerequisites(): Promise<boolean> {
   });
 }
 
+/** Exercise real row events and asynchronous preview cancellation without cloud accounts. */
+async function checkRemoteHoverSelection(mode: Preferences["mode"]): Promise<void> {
+  preferences.mode = mode;
+  remotes = ["a", "b", "c"].map(id => ({
+    id: `mountlet-smoke-${id}`, name: `Smoke ${id}`, provider: "drive", providerLabel: "Drive",
+    mounted: false, usedBytes: null, totalBytes: null,
+  }));
+  const [a, b, c] = remotes.map(remote => remote.id);
+  for (const remote of remotes) await persistBrowserPath(remote.id, `folder-${remote.id}`);
+  activeRemote = selectedRemote = a;
+  currentPath = rememberedFolderPath(a);
+  render();
+  await Promise.resolve();
+  const list = document.querySelector<HTMLElement>("#remote-list")!;
+  const card = (id: string) => list.querySelector<HTMLButtonElement>(`[data-remote-id="${id}"]`)!;
+  const settle = async (id: string) => {
+    if (remoteSelectionTarget !== id) throw new Error(`Remote event did not request ${id}`);
+    await bounded(remoteSelectionRequest, 8000, `Remote preview did not settle on ${id}`);
+    if (selectedRemote !== id || browserLoading) throw new Error(`Remote preview did not finish on ${id}`);
+    if (mode === "multiple") {
+      const state = await getBrowserState();
+      if (state?.remoteId !== id || state.path !== currentPath) throw new Error("Separate browser preview did not follow the remote list");
+    }
+  };
+  const assertState = (active: string, displayed: string) => {
+    if (activeRemote !== active || selectedRemote !== displayed || currentPath !== `folder-${displayed}`
+      || list.querySelector(".selected")?.getAttribute("data-remote-id") !== active
+      || card(active).getAttribute("aria-current") !== "true") {
+      throw new Error(`Remote selection mismatch: expected ${active}/${displayed}, got ${activeRemote}/${selectedRemote}`);
+    }
+  };
+  remoteHoverArmed = true;
+  card(b).dispatchEvent(new PointerEvent("pointerenter"));
+  await settle(b);
+  assertState(a, b);
+  card(b).click();
+  assertState(b, b);
+  card(c).dispatchEvent(new PointerEvent("pointerenter"));
+  await settle(c);
+  assertState(b, c);
+  list.dispatchEvent(new PointerEvent("pointerleave"));
+  await settle(b);
+  assertState(b, b);
+  // Leave before memory loading completes: the late preview must not win.
+  card(c).dispatchEvent(new PointerEvent("pointerenter"));
+  list.dispatchEvent(new PointerEvent("pointerleave"));
+  await selectRemote(b, true);
+  await settle(b);
+  assertState(b, b);
+  // Return to the already displayed remote before the next preview starts.
+  card(c).dispatchEvent(new PointerEvent("pointerenter"));
+  card(b).dispatchEvent(new PointerEvent("pointerenter"));
+  await settle(b);
+  assertState(b, b);
+  // Keyboard selection remains explicit and independent of mouse hover.
+  card(a).focus();
+  await settle(a);
+  assertState(a, a);
+  window.clearTimeout(folderPollTimer);
+  remotes = [];
+  activeRemote = selectedRemote = remoteSelectionTarget = "";
+  currentPath = "";
+  snapshot = null;
+}
+
 async function start(): Promise<void> {
-  if (await startupSmokeEnabled()) {
+  if (await startupSmokeEnabled() && !isBrowserWindow) {
     const checks: string[] = [];
+    // Match normal startup: WebKit can suspend a hidden macOS webview while
+    // the probe awaits native commands and timer-driven UI interactions.
+    await showStartupWindows(); checks.push("startup-window-visible");
     await appVersion(); checks.push("app-version");
     await listRemotes(); checks.push("remote-state");
     const smokePreferences = await loadPreferences(); checks.push("preferences");
@@ -2613,6 +2706,9 @@ async function start(): Promise<void> {
       checks.push("prerequisites");
     }
     await refreshNativeTrayMenu(); checks.push("tray-menu");
+    await checkRemoteHoverSelection("single");
+    await checkRemoteHoverSelection("multiple");
+    checks.push("remote-hover-selection");
     const addRemoteResult = openAddRemoteDialog();
     let addRemoteDialog: HTMLElement | null = null;
     for (let attempt = 0; attempt < 400 && !addRemoteDialog; attempt += 1) {
@@ -2627,7 +2723,7 @@ async function start(): Promise<void> {
       return match;
     };
     const providerField = row("Provider").querySelector("select") as HTMLSelectElement;
-    const credentialField = row("Google client").querySelector("select") as HTMLSelectElement;
+    const credentialField = row("OAuth client").querySelector("select") as HTMLSelectElement;
     const clientIdRow = row("Client ID");
     const clientSecretRow = row("Client secret");
     const s3ProviderRow = row("S3 provider");
@@ -2636,8 +2732,23 @@ async function start(): Promise<void> {
     if (getComputedStyle(clientIdRow).display === "none" || getComputedStyle(clientSecretRow).display === "none") throw new Error("Custom Drive client fields stayed hidden");
     credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
     if (getComputedStyle(clientIdRow).display !== "none" || getComputedStyle(clientSecretRow).display !== "none") throw new Error("Existing Drive client showed custom credential fields");
+    const reuseOption = new Option("Smoke test Drive credentials", "smoke-drive-source");
+    credentialField.add(reuseOption);
+    for (const type of ["gphotos", "dropbox", "onedrive", "box", "pcloud"]) {
+      credentialField.value = reuseOption.value;
+      providerField.value = type; providerField.dispatchEvent(new Event("change"));
+      if (credentialField.value !== "builtin" || !reuseOption.disabled || !reuseOption.hidden) throw new Error(`${type} offered Drive credential reuse`);
+      if (row("OAuth client").hidden) throw new Error(`${type} hid its OAuth client selector`);
+      credentialField.value = "custom"; credentialField.dispatchEvent(new Event("change"));
+      if (clientIdRow.hidden || clientSecretRow.hidden) throw new Error(`${type} hid custom credentials`);
+      credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
+      if (!clientIdRow.hidden || !clientSecretRow.hidden) throw new Error(`${type} showed default client credentials`);
+    }
+    providerField.value = "drive"; providerField.dispatchEvent(new Event("change"));
+    if (reuseOption.disabled || reuseOption.hidden) throw new Error("Drive credential reuse stayed disabled");
+    reuseOption.remove();
     providerField.value = "s3"; providerField.dispatchEvent(new Event("change"));
-    if (getComputedStyle(s3ProviderRow).display === "none" || getComputedStyle(row("Google client")).display !== "none") throw new Error("S3 provider fields were not isolated");
+    if (getComputedStyle(s3ProviderRow).display === "none" || getComputedStyle(row("OAuth client")).display !== "none") throw new Error("S3 provider fields were not isolated");
     (addRemoteDialog.querySelector(".dialog-actions button") as HTMLButtonElement).click();
     await addRemoteResult;
     checks.push("add-remote-fields");
@@ -2646,7 +2757,6 @@ async function start(): Promise<void> {
       throw new Error("The production frontend did not render its startup probe");
     }
     checks.push("frontend-render");
-    await showStartupWindows(); checks.push("startup-window-visible");
     await completeStartupSmoke(checks);
     return;
   }
@@ -2763,18 +2873,21 @@ async function start(): Promise<void> {
     });
   }
   remotes = await listRemotes();
-  selectedRemote = remotes[0]?.id ?? "";
+  activeRemote = selectedRemote = remotes[0]?.id ?? "";
   currentPath = rememberedFolderPath(selectedRemote);
   if (isBrowserWindow) {
     const initial = await getBrowserState();
     if (initial) {
-      selectedRemote = initial.remoteId;
+      activeRemote = selectedRemote = initial.remoteId;
       currentPath = initial.path;
     }
     await listenBrowserState(async state => {
       const focus = Boolean(state.focus);
+      const generation = ++selectionGeneration;
       await syncBrowserMemory();
-      selectedRemote = state.remoteId;
+      if (generation !== selectionGeneration) return;
+      ++requestGeneration;
+      activeRemote = selectedRemote = state.remoteId;
       currentPath = state.path || rememberedFolderPath(state.remoteId);
       snapshot = folderSnapshots.get(`${selectedRemote}:${currentPath}`) ?? null;
       browserLoading = !snapshot;
@@ -2787,6 +2900,7 @@ async function start(): Promise<void> {
       }
       scheduleNativeLayout(0);
       await loadSnapshot();
+      if (generation !== selectionGeneration) return;
       applyBrowserFolderView({ reveal: true, keepFocus: focus });
       if (focus) fileList?.focus();
       scheduleNativeLayout(0);

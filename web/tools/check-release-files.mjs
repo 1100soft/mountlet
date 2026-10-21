@@ -22,7 +22,7 @@ if (duplicates.length) {
 }
 
 for (const fileName of expectedFiles) {
-  if (!packageWorkflow.includes(`installer: ${fileName}`)) {
+  if (!packageWorkflow.includes(`"installer": ${JSON.stringify(fileName)}`)) {
     fail(`Package workflow does not build release file: ${fileName}`);
   }
 }
