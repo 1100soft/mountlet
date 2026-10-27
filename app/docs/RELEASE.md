@@ -71,7 +71,7 @@ upgrade tests:
   leave. Clicking B makes it active. Rapidly hover B/C and leave before loading
   finishes; late responses must not replace the active remote's files. Verify
   keyboard selection and remote shortcuts still target the active remote.
-  Confirm a dashed outline and Preview badge identify B while A retains its
+  Confirm a dashed outline identifies B while A retains its
   selection highlight. In separate-browser mode, the browser must move beside B
   during preview, then back beside A on leave; clicking B removes its preview
   indicator and makes it the selected row.

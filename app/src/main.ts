@@ -1059,7 +1059,7 @@ function remoteCard(remote: Remote): HTMLElement {
   provider.title = `Open ${remote.providerLabel} in web`;
   provider.addEventListener("click", event => { event.stopPropagation(); void openRemoteWeb(remote.id); });
   const titleGroup = element("span", "remote-title-group");
-  titleGroup.append(provider, element("span", "remote-name", remote.name), element("span", "remote-preview-indicator", "Preview"));
+  titleGroup.append(provider, element("span", "remote-name", remote.name));
   card.append(state, titleGroup, usage(remote));
   card.title = `Double-click to configure ${remote.name} (${remote.providerLabel}). Drag to move this remote.`;
   card.addEventListener("dblclick", event => {
@@ -2660,7 +2660,7 @@ async function checkRemoteHoverSelection(mode: Preferences["mode"]): Promise<voi
     if (active === displayed ? previewCard !== null : previewCard?.dataset.remoteId !== displayed) {
       throw new Error("Remote preview indicator did not match the displayed remote");
     }
-    if (previewCard && (getComputedStyle(previewCard.querySelector(".remote-preview-indicator")!).display === "none"
+    if (previewCard && (getComputedStyle(previewCard).outlineStyle !== "dashed"
       || !previewCard.hasAttribute("aria-description"))) throw new Error("Remote preview indicator is not visible or described");
   };
   remoteHoverArmed = true;

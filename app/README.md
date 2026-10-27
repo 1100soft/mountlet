@@ -35,7 +35,7 @@ Hover over a remote to preview its files without changing the active remote.
 Click to select it; leaving the remote list restores the active remote's files
 and remembered folder. Keyboard navigation also selects a remote. This works
 with both the integrated browser and the separate file-browser window.
-The previewed row has a dashed outline and a **Preview** badge, while the active
+The previewed row has a dashed outline, while the active
 remote keeps its selection highlight. In separate-browser mode, the browser
 also moves alongside the previewed row and returns to the active row on leave.
 
