@@ -90,6 +90,11 @@ upgrade tests:
   still requires the full behavior marker and a visible main window.
 - Standard builds must find their bundled rclone. Lean builds must report a
   missing system rclone cleanly and work after one is provided.
+- With an expired trial or deactivated license, open License and paste a key
+  using its Paste button. Confirm the key is trimmed, Copy and Activate become
+  enabled, and keyboard paste/device-name editing/Close remain usable. A failed
+  clipboard read must show an error and allow retry without erasing the key.
+  An activated license remains read-only until this device is deactivated.
 
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "check": "node scripts/check-version.mjs && tsc --noEmit --noUnusedLocals --noUnusedParameters",
-    "test": "node scripts/test-remote-auth.mjs",
+    "test": "node scripts/test-remote-auth.mjs && node scripts/test-license-key-paste.mjs",
     "build": "npm run check && npm test && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
