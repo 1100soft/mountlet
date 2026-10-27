@@ -1,4 +1,5 @@
 import "./style.css";
+import { bindLicenseKeyPaste } from "./license_key_paste.ts";
 import { authenticationFieldChanged, googleAccountValue, OAUTH_REMOTE_TYPES } from "./remote_auth.ts";
 import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, startupSmokeEnabled, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
@@ -611,7 +612,8 @@ async function showLicense(): Promise<void> {
     const onCopy = () => window.setTimeout(() => void updateCopyState(), 50); document.addEventListener("copy", onCopy);
     const clipboardTimer = window.setInterval(() => { if (document.hasFocus()) void updateCopyState(); }, 400);
     const copyObserver = new MutationObserver(() => { if (!copy.isConnected) { window.removeEventListener("focus", onWindowFocus); document.removeEventListener("copy", onCopy); window.clearInterval(clipboardTimer); copyObserver.disconnect(); } }); copyObserver.observe(content, { childList: true });
-    const paste = actionIcon("", "Paste"); paste.classList.add("license-key-button"); paste.disabled = key.readOnly; paste.title = key.readOnly ? "Deactivate this device before changing the license key." : "Paste a license key from the clipboard."; paste.addEventListener("click", async () => { key.value = (await navigator.clipboard.readText()).trim(); activate.disabled = !key.value; await updateCopyState(); });
+    const paste = actionIcon("", "Paste"); paste.classList.add("license-key-button"); paste.disabled = key.readOnly; paste.title = key.readOnly ? "Deactivate this device before changing the license key." : "Paste a license key from the clipboard.";
+    bindLicenseKeyPaste(key, paste, clipboardText, error => showError("Paste license key", error));
     keyControls.append(key, copy, paste); keyRow.append(keyControls);
     const deviceRow = element("label", "dialog-field"); deviceRow.append(element("span", "", "Device name")); const device = element("input", "") as HTMLInputElement; device.value = status.deviceLabel || defaultDeviceLabel; device.placeholder = defaultDeviceLabel; device.disabled = status.state === "licensed"; deviceRow.append(device);
     const controls = element("div", "license-controls");
