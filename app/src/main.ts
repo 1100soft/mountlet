@@ -365,7 +365,8 @@ async function layoutNativeWindows(): Promise<void> {
   }
   await applyWindowLayout({
     mode: licenseLocked() ? "single" : preferences.mode,
-    selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === activeRemote)),
+    // The detached browser follows the displayed remote, including previews.
+    selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
     remoteCount: remotes.length,
     browserItems: preferences.fileListMaxItems > 0
       ? Math.min(snapshot?.entries.length ?? 0, preferences.fileListMaxItems)
@@ -1028,12 +1029,22 @@ function usage(remote: Remote): HTMLElement {
   return box;
 }
 
+function updateRemoteCardState(card: HTMLElement): void {
+  const active = card.dataset.remoteId === activeRemote;
+  const previewing = !active && card.dataset.remoteId === remoteSelectionTarget;
+  card.classList.toggle("selected", active);
+  card.classList.toggle("previewing", previewing);
+  card.setAttribute("aria-current", String(active));
+  if (previewing) card.setAttribute("aria-description", "Previewing files without changing the active remote.");
+  else card.removeAttribute("aria-description");
+}
+
 function remoteCard(remote: Remote): HTMLElement {
-  const card = element("button", `remote-card${remote.id === activeRemote ? " selected" : ""}`);
+  const card = element("button", "remote-card");
   card.type = "button";
   card.disabled = licenseLocked();
   card.dataset.remoteId = remote.id;
-  card.setAttribute("aria-current", remote.id === activeRemote ? "true" : "false");
+  updateRemoteCardState(card);
   card.draggable = sortMode === "manual" && !sortReverse;
   const state = element("img", `mount-state${remote.mounted ? " mounted" : ""}${pendingMounts.has(remote.id) ? " working" : ""}${remoteErrors.has(remote.id) ? " error" : ""}`) as HTMLImageElement;
   state.src = remote.mounted ? "/assets/status-mounted.svg" : "/assets/status-cloud.svg";
@@ -1048,7 +1059,7 @@ function remoteCard(remote: Remote): HTMLElement {
   provider.title = `Open ${remote.providerLabel} in web`;
   provider.addEventListener("click", event => { event.stopPropagation(); void openRemoteWeb(remote.id); });
   const titleGroup = element("span", "remote-title-group");
-  titleGroup.append(provider, element("span", "remote-name", remote.name));
+  titleGroup.append(provider, element("span", "remote-name", remote.name), element("span", "remote-preview-indicator", "Preview"));
   card.append(state, titleGroup, usage(remote));
   card.title = `Double-click to configure ${remote.name} (${remote.providerLabel}). Drag to move this remote.`;
   card.addEventListener("dblclick", event => {
@@ -2311,16 +2322,13 @@ function queueRemoteMetadataReconcile(result: FolderSnapshot, generation: number
 
 function selectRemote(remoteId: string, preview = false): Promise<void> {
   if (!preview) activeRemote = remoteId;
+  const targetChanged = Boolean(remoteId && remoteId !== remoteSelectionTarget);
+  if (targetChanged) remoteSelectionTarget = remoteId;
   // Change the highlight in place: replacing hovered cards generates synthetic
   // pointer/focus transitions and can turn a preview into a selection.
-  document.querySelectorAll<HTMLElement>(".remote-card").forEach(card => {
-    const active = card.dataset.remoteId === activeRemote;
-    card.classList.toggle("selected", active);
-    card.setAttribute("aria-current", String(active));
-  });
+  document.querySelectorAll<HTMLElement>(".remote-card").forEach(updateRemoteCardState);
   if (!remoteId) return Promise.resolve();
-  if (remoteId === remoteSelectionTarget) return remoteSelectionRequest;
-  remoteSelectionTarget = remoteId;
+  if (!targetChanged) return remoteSelectionRequest;
   remoteSelectionRequest = displayRemote(remoteId, ++selectionGeneration);
   return remoteSelectionRequest;
 }
@@ -2648,6 +2656,12 @@ async function checkRemoteHoverSelection(mode: Preferences["mode"]): Promise<voi
       || card(active).getAttribute("aria-current") !== "true") {
       throw new Error(`Remote selection mismatch: expected ${active}/${displayed}, got ${activeRemote}/${selectedRemote}`);
     }
+    const previewCard = list.querySelector<HTMLElement>(".previewing");
+    if (active === displayed ? previewCard !== null : previewCard?.dataset.remoteId !== displayed) {
+      throw new Error("Remote preview indicator did not match the displayed remote");
+    }
+    if (previewCard && (getComputedStyle(previewCard.querySelector(".remote-preview-indicator")!).display === "none"
+      || !previewCard.hasAttribute("aria-description"))) throw new Error("Remote preview indicator is not visible or described");
   };
   remoteHoverArmed = true;
   card(b).dispatchEvent(new PointerEvent("pointerenter"));
