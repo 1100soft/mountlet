@@ -71,6 +71,10 @@ upgrade tests:
   leave. Clicking B makes it active. Rapidly hover B/C and leave before loading
   finishes; late responses must not replace the active remote's files. Verify
   keyboard selection and remote shortcuts still target the active remote.
+  Confirm a dashed outline identifies B while A retains its
+  selection highlight. In separate-browser mode, the browser must move beside B
+  during preview, then back beside A on leave; clicking B removes its preview
+  indicator and makes it the selected row.
   The production startup smoke probe covers row events and preview cancellation
   in both layouts. On an isolated X11 display with a window manager, also run
   `cargo test --locked --manifest-path app/src-tauri/Cargo.toml linux_tray_activation_refreshes_stale_user_time -- --ignored --test-threads=1`
@@ -90,11 +94,24 @@ upgrade tests:
   still requires the full behavior marker and a visible main window.
 - Standard builds must find their bundled rclone. Lean builds must report a
   missing system rclone cleanly and work after one is provided.
+- For each OAuth provider, confirm creation defaults to Mountlet only when its
+  client ID was included in the build. Verify separate rclone and Custom choices
+  in creation and settings, Drive-only reuse, masked custom secrets, and source
+  persistence. Changing source must clear the previous token and reauthenticate;
+  unrelated edits must preserve the saved credentials. Never log client secrets.
 - With an expired trial or deactivated license, open License and paste a key
   using its Paste button. Confirm the key is trimmed, Copy and Activate become
   enabled, and keyboard paste/device-name editing/Close remain usable. A failed
   clipboard read must show an error and allow retry without erasing the key.
   An activated license remains read-only until this device is deactivated.
+- Activate, quit, and restart: the saved key and valid activation must remain.
+  Repeat with a token requiring a cached signing key. An expired daily beta
+  token must renew in the background; offline renewal failure must retain the
+  key and remain locked, not reset the trial or erase activation state.
+- Settings must use the creation provider form with saved values, no Open
+  actions, and icon-only Save/Delete/Cancel. Rename each provider and confirm
+  unchanged authentication and mount fields are preserved. The startup probe
+  exercises all 12 provider forms using in-memory save callbacks only.
 
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.

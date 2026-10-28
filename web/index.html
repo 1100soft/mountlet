@@ -572,7 +572,7 @@ sudo apt update</code></pre>
         </details>
         <details>
           <summary>Do I need to register my own OAuth client?</summary>
-          <p>Choose <strong>Default client (Mountlet or rclone)</strong> when adding a remote. It uses Mountlet's application credentials when included in your build, otherwise rclone's defaults where available. Your storage provider still asks you to sign in and authorize access. Shared clients can be throttled or unavailable.</p>
+          <p>The OAuth client selector in creation and settings offers <strong>Mountlet</strong>, <strong>rclone</strong>, and <strong>Custom</strong>. New remotes use Mountlet when its credentials are included in your installed build, otherwise rclone's defaults where available. Your storage provider still asks you to sign in and authorize access. Shared clients can be throttled or unavailable.</p>
           <p>You can enter your own client ID and matching secret for Google Drive, Google Photos, Dropbox, OneDrive, Box, and pCloud. Google Drive can also reuse client credentials from an existing Drive remote. Changing a remote's client credentials prompts you to reauthenticate; updating Mountlet alone does not change existing remotes' credentials.</p>
         </details>
         <details>

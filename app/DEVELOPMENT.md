@@ -3,6 +3,20 @@
 The archived Python 0.6.8 application is the historical behavioral baseline.
 Refactoring is not a reason to weaken a behavior reproduced by the current app.
 
+## Licensing and remote dialogs
+
+- Activation persists both key and signed token. Local status must verify cached
+  signing keys without HTTP, retain expired keys/tokens, and never reset the
+  trial merely because an activation token expired. Renew separately in the
+  background; failed renewal stays locked without deleting the key. Only
+  explicit deactivation removes the saved activation.
+- Creation and settings use the same provider form and field serialization in
+  `add_remote_dialog.ts`. Editing preloads existing values; unrelated edits must
+  preserve credentials, defaults, advanced fields, and mount options verbatim.
+  Settings actions are Delete/Cancel/Save icons with accessible names, not Open
+  actions. Keep additional options collapsed rather than replacing provider UI
+  with a generic field dump.
+
 ## Responsiveness
 
 - Remote selection must synchronously swap the cached immutable snapshot. It

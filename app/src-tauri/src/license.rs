@@ -22,6 +22,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 const API: &str = "https://mountlet.app/api/license";
 const TRIAL_SECONDS: f64 = 7.0 * 24.0 * 60.0 * 60.0;
 const TRIAL_SALT: &[u8] = b"mountlet trial state v1";
+static LICENSE_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // Public verification material is safe to distribute. Bundling it keeps local
 // license checks independent of DNS, TLS and the availability of the website.
 // The endpoint is still used as a rotation fallback when a signature does not
@@ -416,14 +417,6 @@ fn write_trial(record: &Value, hint: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn reset_trial() -> Result<Value, String> {
-    let hint = machine_hint();
-    let mut random = [0u8; 24];
-    OsRng.fill_bytes(&mut random);
-    let record = json!({"version":2,"install_id":URL_SAFE_NO_PAD.encode(random),"machine_hint":hint,"started_at":now(),"last_seen_at":now()});
-    write_trial(&record, &hint)?;
-    Ok(record)
-}
 fn unverified_payload(token: &str) -> Value {
     token
         .split('.')
@@ -479,14 +472,10 @@ fn public_key() -> Result<VerifyingKey, String> {
     parse_public_key(&pem)
 }
 
-fn verify_with_rotated_key(signed: &[u8], signature: &Signature) -> Result<bool, String> {
+fn verify_with_cached_key(signed: &[u8], signature: &Signature) -> bool {
     let cached = read_first("license-public.pem");
-    if !cached.is_empty()
+    !cached.is_empty()
         && parse_public_key(&cached).is_ok_and(|key| key.verify(signed, signature).is_ok())
-    {
-        return Ok(true);
-    }
-    Ok(fetch_public_key()?.verify(signed, signature).is_ok())
 }
 // Alias keeps the long reqwest response type out of diagnostics and generated command metadata.
 mod get_reqwest {
@@ -556,7 +545,10 @@ fn verify_signature(
         .unwrap_or_default()
         .trim()
         .is_empty();
-    if allow_network && !configured && verify_with_rotated_key(signed, signature)? {
+    if !configured && verify_with_cached_key(signed, signature) {
+        return Ok(());
+    }
+    if allow_network && !configured && fetch_public_key()?.verify(signed, signature).is_ok() {
         return Ok(());
     }
     Err("License token signature is not valid.".into())
@@ -655,33 +647,8 @@ pub fn status() -> Result<Status, String> {
             Ok(payload) => return Ok(from_payload(&payload, read_first("license-key.txt"))),
             Err(error) => {
                 if error.to_ascii_lowercase().contains("expired") {
-                    let payload = unverified_payload(&token);
                     let key = read_first("license-key.txt");
-                    if payload["licenseKind"].as_str() == Some("beta")
-                        || key.to_ascii_uppercase().starts_with("MTB-")
-                    {
-                        // Status is a local query and must never make startup
-                        // wait for the network. A user can explicitly activate
-                        // the stored key again from the License dialog.
-                        clear("license-token.jwt");
-                        clear("license-key.txt");
-                        return Ok(Status {
-                            state: "expired".into(),
-                            summary: "Public beta access has ended. Buy a license to continue."
-                                .into(),
-                            trial_days_remaining: 0,
-                            license_key: String::new(),
-                            licensed_email: String::new(),
-                            plan: String::new(),
-                            license_kind: "beta".into(),
-                            max_devices: 0,
-                            device_label: String::new(),
-                            expires_at: String::new(),
-                        });
-                    }
-                    clear("license-token.jwt");
-                    clear("license-key.txt");
-                    let _ = reset_trial()?;
+                    return Ok(needs_renewal(key, "License needs renewal.".into()));
                 } else {
                     return Ok(Status {
                         state: "expired".into(),
@@ -698,6 +665,10 @@ pub fn status() -> Result<Status, String> {
                 }
             }
         }
+    }
+    let key = read_first("license-key.txt");
+    if !key.is_empty() {
+        return Ok(needs_renewal(key, "License needs renewal.".into()));
     }
     let record = trial()?;
     let last_seen = record["last_seen_at"].as_f64().unwrap_or(0.0);
@@ -756,7 +727,44 @@ pub fn status() -> Result<Status, String> {
         })
     }
 }
+
+fn needs_renewal(key: String, summary: String) -> Status {
+    Status {
+        state: "expired".into(),
+        summary,
+        license_key: key,
+        trial_days_remaining: 0,
+        licensed_email: String::new(),
+        plan: String::new(),
+        license_kind: String::new(),
+        max_devices: 0,
+        device_label: String::new(),
+        expires_at: String::new(),
+    }
+}
+
+/// Explicit background renewal; local status never blocks startup on HTTP.
+pub fn refresh() -> Result<Status, String> {
+    let _write = LICENSE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "License state is unavailable")?;
+    let current = status()?;
+    if current.state == "licensed" || current.license_key.is_empty() {
+        return Ok(current);
+    }
+    let label = unverified_payload(&read_first("license-token.jwt"))["deviceLabel"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    activate_saved(&current.license_key, &label)
+}
 pub fn activate(key: &str, label: &str) -> Result<Status, String> {
+    let _write = LICENSE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "License state is unavailable")?;
+    activate_saved(key, label)
+}
+fn activate_saved(key: &str, label: &str) -> Result<Status, String> {
     if key.trim().is_empty() {
         return Err("Enter a license key.".into());
     }
@@ -778,6 +786,9 @@ pub fn activate(key: &str, label: &str) -> Result<Status, String> {
     Ok(from_payload(&payload, key.trim().into()))
 }
 pub fn devices() -> Result<Value, String> {
+    let _write = LICENSE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "License state is unavailable")?;
     let token = read_first("license-token.jwt");
     if token.is_empty() {
         return Err("Activate Mountlet before listing devices.".into());
@@ -790,6 +801,9 @@ pub fn devices() -> Result<Value, String> {
     Ok(value)
 }
 pub fn deactivate(device_id: &str) -> Result<(), String> {
+    let _write = LICENSE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "License state is unavailable")?;
     let token = read_first("license-token.jwt");
     if token.is_empty() {
         return Ok(());
@@ -876,6 +890,181 @@ pub fn write_diagnostics(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_survives_process_restarts_and_expired_tokens_keep_the_key() {
+        use p256::{
+            ecdsa::{signature::Signer, SigningKey},
+            pkcs8::{EncodePublicKey, LineEnding},
+        };
+        let signing = SigningKey::random(&mut OsRng);
+        let pem = signing
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let make_token = |expiry: &str| {
+            let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256"}"#);
+            let payload = URL_SAFE_NO_PAD.encode(
+                serde_json::to_vec(
+                    &json!({"licenseKind":"beta", "deviceLabel":"Fixture", "expiresAt":expiry}),
+                )
+                .unwrap(),
+            );
+            let signed = format!("{header}.{payload}");
+            let signature: Signature = signing.sign(signed.as_bytes());
+            format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+        };
+        let token = make_token("2099-01-01T00:00:00Z");
+        let expired = make_token("2000-01-01T00:00:00Z");
+        let root = env::temp_dir().join(format!(
+            "mountlet-license-restart-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let child = |action: &str, endpoint: &str| {
+            let output = std::process::Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "license::tests::persisted_license_restart_fixture",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("HOME", &root)
+                .env("USERPROFILE", &root)
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .env("XDG_STATE_HOME", root.join("state"))
+                .env("APPDATA", root.join("appdata"))
+                .env("LOCALAPPDATA", root.join("localappdata"))
+                .env("MOUNTLET_LICENSE_RESTART_ACTION", action)
+                .env("MOUNTLET_LICENSE_TEST_TOKEN", &token)
+                .env("MOUNTLET_LICENSE_TEST_EXPIRED", &expired)
+                .env("MOUNTLET_LICENSE_TEST_PUBLIC_KEY", &pem)
+                .env_remove("MOUNTLET_LICENSE_PUBLIC_KEY")
+                .env("MOUNTLET_LICENSE_API_URL", endpoint)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "restart fixture {action}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        child("save", "http://127.0.0.1:9");
+        child("read", "http://127.0.0.1:9");
+        child("expire", "http://127.0.0.1:9");
+        child("expired-read", "http://127.0.0.1:9");
+        child("key-only", "http://127.0.0.1:9");
+        child("renew-failure", "http://127.0.0.1:9");
+
+        // Exercise real renewal HTTP against a local fixture, never production.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let response = json!({"token": token}).to_string();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let deadline = Instant::now() + std::time::Duration::from_secs(15);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10))
+                    }
+                    Err(error) => panic!("renewal fixture: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let length = stream.read(&mut chunk).unwrap();
+                assert!(length > 0);
+                bytes.extend_from_slice(&chunk[..length]);
+                let request = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = request.split_once("\r\n\r\n") {
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        assert!(headers.starts_with("POST /activate "));
+                        assert_eq!(
+                            serde_json::from_str::<Value>(body).unwrap()["licenseKey"],
+                            "MTB-restart-fixture"
+                        );
+                        break;
+                    }
+                }
+            }
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
+        });
+        child("renew", &endpoint);
+        server.join().unwrap();
+        child("read", "http://127.0.0.1:9");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "child-process fixture, invoked by the restart test"]
+    fn persisted_license_restart_fixture() {
+        let Ok(action) = env::var("MOUNTLET_LICENSE_RESTART_ACTION") else {
+            return;
+        };
+        if action == "save" {
+            store("license-key.txt", "MTB-restart-fixture").unwrap();
+            store(
+                "license-token.jwt",
+                &env::var("MOUNTLET_LICENSE_TEST_TOKEN").unwrap(),
+            )
+            .unwrap();
+            store(
+                "license-public.pem",
+                &env::var("MOUNTLET_LICENSE_TEST_PUBLIC_KEY").unwrap(),
+            )
+            .unwrap();
+        } else if action == "expire" {
+            store(
+                "license-token.jwt",
+                &env::var("MOUNTLET_LICENSE_TEST_EXPIRED").unwrap(),
+            )
+            .unwrap();
+        } else if action == "key-only" {
+            clear("license-token.jwt");
+        }
+        if action == "renew-failure" {
+            assert!(refresh().is_err());
+        }
+        let status = if action == "renew" {
+            refresh().unwrap()
+        } else {
+            status().unwrap()
+        };
+        assert_eq!(
+            status.state,
+            if action.contains("expire") || matches!(action.as_str(), "key-only" | "renew-failure")
+            {
+                "expired"
+            } else {
+                "licensed"
+            }
+        );
+        assert_eq!(status.license_key, "MTB-restart-fixture");
+        assert_eq!(read_first("license-key.txt"), "MTB-restart-fixture");
+        if action.contains("expire") {
+            assert!(!read_first("license-token.jwt").is_empty());
+        }
+    }
 
     #[test]
     fn trial_migration_keeps_the_oldest_valid_clock() {

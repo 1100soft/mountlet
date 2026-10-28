@@ -22,13 +22,28 @@ binary. Restrict the provider registrations by redirect URI, scopes, application
 review, and provider-side quota controls. Never use credentials that grant
 application-only or service-account access to user data.
 
-Mountlet uses explicitly entered credentials first, then credentials reused from a
-Google remote for Drive, then these build-time values. Client IDs and secrets are
-selected together from one source; a custom ID without a secret never receives
-the embedded client’s secret. A build-time secret without a client ID is ignored.
-If no build-time client ID exists, the default falls back to rclone’s client where
-rclone still provides one. The dialog labels this choice “Default client
-(Mountlet or rclone)” because build-time credentials are optional.
+Creation and settings both offer **Mountlet**, **rclone**, and **Custom** OAuth
+clients. New remotes default to Mountlet when that provider's client ID is
+compiled into the installed build, otherwise rclone. Mountlet is marked
+unavailable when the build has no matching ID; choosing rclone explicitly never
+injects Mountlet credentials. Rclone's own default may not exist for every provider.
+Drive also offers credential reuse from an existing Drive remote in both dialogs.
+Client IDs and secrets always come from the same source; a custom ID never
+receives an embedded client's secret. A build-time secret without an ID is ignored.
+
+Adding GitHub secrets does not update an installed binary: rebuild and install
+the app before those registrations can be selected. Availability reflects the
+installed build, not provider verification or production approval. Existing
+remotes retain their source and credentials until explicitly changed. Imported
+remotes are classified by their saved client ID, without exposing secrets to
+the source dropdown. A client-source change clears the old OAuth token and
+requires reauthentication; unrelated settings edits do not rotate credentials.
+
+GitHub Actions preview (`wip`) and production packages use the same repository
+OAuth secrets. Local desktop builds do not load the root `.dev.vars` file;
+OAuth values must be exported into the build environment to be embedded locally.
+Use an Actions-built preview package to test the saved GitHub registrations
+without configuring local build credentials.
 
 All browser-based providers must permit rclone's loopback callback. Depending on
 the provider, register `http://localhost:53682/` or

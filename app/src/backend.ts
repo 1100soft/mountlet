@@ -88,9 +88,11 @@ export interface RemoteConfigData {
   autoMount: boolean | null;
   fields: Record<string, string>;
   secretFields: string[];
+  oauthClient: string | null;
 }
 
 export interface SaveRemoteConfigRequest {
+  oauthClient?: string;
   remoteId: string;
   alias: string;
   mountPath: string;
@@ -98,6 +100,10 @@ export interface SaveRemoteConfigRequest {
   mountFlags: string;
   autoMount: boolean | null;
   fields: Record<string, string>;
+}
+
+export async function oauthClientAvailability(): Promise<Record<string, boolean>> {
+  return inTauri ? invoke<Record<string, boolean>>("oauth_client_availability") : {};
 }
 
 export async function loadRemoteConfig(remoteId: string): Promise<RemoteConfigData> {
@@ -317,8 +323,8 @@ export interface ConfigWizardStep {
   result: string;
 }
 
-export async function configWizardStep(remoteId: string, state = "", result = ""): Promise<ConfigWizardStep> {
-  return invoke<ConfigWizardStep>("config_wizard_step", { request: { remoteId, state, result } });
+export async function configWizardStep(remoteId: string, state = "", result = "", configIsLocal?: boolean): Promise<ConfigWizardStep> {
+  return invoke<ConfigWizardStep>("config_wizard_step", { request: { remoteId, state, result, configIsLocal } });
 }
 
 export async function rcloneOutput(): Promise<string> {
@@ -358,6 +364,7 @@ export interface LicenseStatus {
 }
 
 export async function licenseStatus(): Promise<LicenseStatus> { return invoke<LicenseStatus>("license_status"); }
+export async function refreshLicense(): Promise<LicenseStatus> { return invoke<LicenseStatus>("refresh_license"); }
 export async function activateLicense(key: string, deviceLabel: string): Promise<LicenseStatus> { return invoke<LicenseStatus>("activate_license", { key, deviceLabel }); }
 export async function licenseDevices(): Promise<Record<string, unknown>> { return invoke<Record<string, unknown>>("license_devices"); }
 export async function deactivateLicenseDevice(deviceId = ""): Promise<void> { await invoke("deactivate_license_device", { deviceId }); }
