@@ -119,9 +119,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .license-device span { display: grid; gap: calc(2px * var(--zoom)); }
 .license-device small { color: var(--muted); }
 .license-lock-banner { padding: calc(5px * var(--zoom)) var(--layout-margin); font-weight: 700; color: var(--text); }
-.remote-config-form { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: calc(6px * var(--zoom)) calc(10px * var(--zoom)); }
-.remote-config-form label { text-align: right; }
-.remote-config-form input, .remote-config-form select { min-width: 0; width: 100%; }
 .output-dialog { width: min(calc(760px * var(--zoom)), 100%); height: min(calc(560px * var(--zoom)), 100%); display: flex; flex-direction: column; }
 .rclone-output { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: calc(8px * var(--zoom)); border: 1px solid var(--border); background: var(--base); color: var(--text); white-space: pre-wrap; user-select: text; }
 .remote-summary { display: grid; grid-template-columns: max-content 1fr; gap: calc(6px * var(--zoom)) calc(12px * var(--zoom)); margin: 0 0 calc(16px * var(--zoom)); }
@@ -129,7 +126,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .remote-summary dd { margin: 0; overflow-wrap: anywhere; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: calc(8px * var(--zoom)); }
 .dialog-actions button { min-height: calc(30px * var(--zoom)); padding: 0 calc(10px * var(--zoom)); }
+.dialog-actions .icon-button { padding: 0; }
+.dialog-actions .danger { margin-inline-end: auto; border-color: var(--danger); }
 .dialog-actions .primary { color: var(--on-highlight); background: var(--highlight); }
+.dialog-actions .primary .action-icon { filter: brightness(0) invert(1); }
 .app-settings-dialog { width: min(calc(560px * var(--zoom)), 100%); min-height: min(calc(430px * var(--zoom)), 100%); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .settings-tabs { display: flex; border-bottom: 1px solid var(--border); }
 .settings-tab { min-height: var(--chrome-row); padding: 0 calc(9px * var(--zoom)); border: 0; border-bottom: calc(2px * var(--zoom)) solid transparent; background: transparent; }
@@ -170,6 +170,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .context-action:hover, .context-action:focus-visible, .context-action.active { background: var(--highlight-soft); }
 .select-menu { z-index: 1300; max-height: min(50vh, calc(280px * var(--zoom))); overflow: auto; }
 .add-remote-form { display: grid; gap: calc(8px * var(--zoom)); }
+.remote-advanced { border-top: 1px solid var(--border); padding-top: calc(6px * var(--zoom)); }
+.remote-advanced summary { cursor: pointer; color: var(--muted); }
+.remote-advanced > .settings-row { margin-top: calc(6px * var(--zoom)); }
 .add-remote-help, .add-remote-status { margin: 0; color: var(--muted); }
 .add-remote-port { display: grid; gap: calc(6px * var(--zoom)); }
 .tutorial-highlight { position: relative; z-index: 1401; border-radius: calc(6px * var(--zoom)); animation: tutorial-pulse 1.25s ease-in-out infinite; }

@@ -307,6 +307,8 @@ struct ConfigWizardStep {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfigWizardRequest {
+    #[serde(default)]
+    config_is_local: Option<bool>,
     remote_id: String,
     state: String,
     result: String,
@@ -1844,6 +1846,17 @@ fn secret_rclone_key(key: &str) -> bool {
             | "password"
             | "otp_secret_key"
             | "mailbox_password"
+            | "bearer_token"
+            | "session_token"
+            | "trust_token"
+            | "cookies"
+    )
+}
+
+fn password_rclone_key(key: &str) -> bool {
+    matches!(
+        key,
+        "pass" | "password" | "otp_secret_key" | "mailbox_password"
     )
 }
 
@@ -3229,7 +3242,7 @@ fn load_remote_config(
         .ok_or("rclone configuration is unavailable")?;
     let raw = read_rclone_section(config, &remote.id)?;
     let keys = safe_rclone_keys(&remote.provider);
-    let fields = keys
+    let mut fields: HashMap<String, String> = keys
         .iter()
         .map(|key| {
             (
@@ -3245,6 +3258,14 @@ fn load_remote_config(
             )
         })
         .collect();
+    if is_oauth_provider(&remote.provider) {
+        fields.insert(
+            "config_is_local".into(),
+            raw.get("mountlet_oauth_local")
+                .cloned()
+                .unwrap_or_else(|| "true".into()),
+        );
+    }
     let mount = mount_settings().remove(&remote.id).unwrap_or_default();
     Ok(RemoteConfigData {
         oauth_client: is_oauth_provider(&remote.provider).then(|| {
@@ -3563,6 +3584,7 @@ fn complete_startup_smoke(
         "license",
         "report-preview",
         "tray-menu",
+        "remote-settings-fields",
         "remote-hover-selection",
         "add-remote-fields",
         "frontend-render",
@@ -3579,6 +3601,7 @@ fn complete_startup_smoke(
         "license",
         "report-preview",
         "tray-menu",
+        "remote-settings-fields",
         "remote-hover-selection",
         "add-remote-fields",
         "frontend-render",
@@ -3959,6 +3982,13 @@ async fn license_status() -> Result<license::Status, String> {
 }
 
 #[tauri::command]
+async fn refresh_license() -> Result<license::Status, String> {
+    tauri::async_runtime::spawn_blocking(license::refresh)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn activate_license(key: String, device_label: String) -> Result<license::Status, String> {
     tauri::async_runtime::spawn_blocking(move || license::activate(&key, &device_label))
         .await
@@ -4152,7 +4182,7 @@ fn save_remote_config(
         }
         updates.insert(
             (*key).into(),
-            if secret_rclone_key(key) {
+            if password_rclone_key(key) {
                 obscure_secret(
                     state.rclone.as_deref().ok_or("rclone is unavailable")?,
                     &value,
@@ -4163,6 +4193,13 @@ fn save_remote_config(
         );
     }
     if is_oauth_provider(&remote.provider) {
+        if let Some(local) = request
+            .fields
+            .get("config_is_local")
+            .filter(|s| matches!(s.as_str(), "true" | "false"))
+        {
+            updates.insert("mountlet_oauth_local".into(), local.clone());
+        }
         let source = request.oauth_client.as_deref().unwrap_or("custom");
         let mut submitted = request.fields.clone();
         let reused = source.starts_with("reuse:");
@@ -4247,6 +4284,7 @@ fn create_remote(
     }
     let rclone = state.rclone.as_deref().ok_or("rclone is unavailable")?;
     let mut fields = request.fields.clone();
+    let local_auth = fields.get("config_is_local").cloned();
     let source = fields.remove("mountlet_oauth_client");
     let mut selected_source = None;
     if is_oauth_provider(&request.provider) {
@@ -4313,12 +4351,11 @@ fn create_remote(
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     if let Some(source) = selected_source {
-        write_rclone_section(
-            config,
-            &remote_id,
-            &remote_id,
-            &HashMap::from([("mountlet_oauth_client".into(), source)]),
-        )?;
+        let mut metadata = HashMap::from([("mountlet_oauth_client".into(), source)]);
+        if let Some(local) = local_auth {
+            metadata.insert("mountlet_oauth_local".into(), local);
+        }
+        write_rclone_section(config, &remote_id, &remote_id, &metadata)?;
     }
     if !request.google_account.trim().is_empty()
         && matches!(request.provider.as_str(), "drive" | "gphotos")
@@ -6963,6 +7000,7 @@ async fn config_wizard_step(
     let remote_id = request.remote_id;
     let wizard_state = request.state;
     let result = request.result;
+    let config_is_local = request.config_is_local;
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut command = Command::new(rclone);
         command.args(["--config"]).arg(config).args([
@@ -6973,6 +7011,8 @@ async fn config_wizard_step(
         ]);
         if !wizard_state.is_empty() {
             command.args(["--continue", "--state", &wizard_state, "--result", &result]);
+        } else if let Some(local) = config_is_local {
+            command.args(["config_is_local", if local { "true" } else { "false" }]);
         }
         command.output().map_err(|error| error.to_string())
     })
@@ -7942,6 +7982,7 @@ pub fn run() {
             mark_crash_reported,
             refresh_tray_menu,
             license_status,
+            refresh_license,
             activate_license,
             license_devices,
             deactivate_license_device,
@@ -8016,6 +8057,24 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sensitive_tokens_and_application_secrets_are_not_rclone_passwords() {
+        for key in [
+            "client_secret",
+            "secret_access_key",
+            "bearer_token",
+            "session_token",
+            "trust_token",
+            "cookies",
+        ] {
+            assert!(secret_rclone_key(key));
+            assert!(!password_rclone_key(key));
+        }
+        for key in ["pass", "password", "otp_secret_key", "mailbox_password"] {
+            assert!(secret_rclone_key(key));
+            assert!(password_rclone_key(key));
+        }
+    }
     #[test]
     fn oauth_source_changes_persist_and_reuse_only_drive_credentials() {
         let path =

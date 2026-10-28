@@ -1,6 +1,6 @@
 import "./style.css";
 import { bindLicenseKeyPaste } from "./license_key_paste.ts";
-import { authenticationFieldChanged, defaultOAuthClient, googleAccountValue, OAUTH_CLIENT_OPTIONS, OAUTH_REMOTE_TYPES, updateOAuthClientOptions } from "./remote_auth.ts";
+import { authenticationFieldChanged, defaultOAuthClient, OAUTH_REMOTE_TYPES } from "./remote_auth.ts";
 import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, startupSmokeEnabled, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
@@ -8,8 +8,9 @@ import { detectRemoteCacheChanges } from "./backend.ts";
 import { configSyncStatus } from "./backend.ts";
 import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
-import { activateLicense, clipboardText, deactivateLicenseDevice, driveOauthSources, oauthClientAvailability, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
+import { activateLicense, clipboardText, deactivateLicenseDevice, oauthClientAvailability, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, refreshLicense, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
+import { checkRemoteSettingsForm } from "./remote_dialog_smoke.ts";
 import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, startInitialMetadataIndex, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
 import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
 import { applyMetricVariables, metricsAt, scaledMetric } from "./geometry.ts";
@@ -17,7 +18,7 @@ import { MAX_ZOOM_STEP, MIN_ZOOM_STEP, formatBytes, parentPath, zoomFactor, type
 import { openAppSettingsDialog } from "./settings_dialog.ts";
 import { openShortcutDialog } from "./shortcuts_dialog.ts";
 import { matchesShortcut as shortcutMatches, resolveShortcutSettings } from "./shortcuts.ts";
-import { confirmOwned, promptOwned, promptWizardOption, showError, trapModalFocus, bindScaledSelect } from "./dialogs.ts";
+import { confirmOwned, promptOwned, promptWizardOption, showError, trapModalFocus } from "./dialogs.ts";
 
 const isBrowserWindow = new URLSearchParams(location.search).has("browser");
 const preferences: Preferences = {
@@ -120,6 +121,43 @@ function applyLicense(status: LicenseStatus | null): void {
   currentLicense = status;
   render();
   scheduleNativeLayout(0);
+}
+
+let licenseRenewalPending = false;
+let browsingStarted = false;
+
+async function resumeLicensedUi(): Promise<void> {
+  if (!isBrowserWindow && preferences.mode === "multiple") {
+    await setDetachedBrowser(true);
+    if (selectedRemote) await emitBrowserState(selectedRemote, currentPath);
+  }
+  await startRemoteBrowsing();
+  scheduleFolderPoll();
+}
+
+async function renewStoredLicense(): Promise<void> {
+  if (isBrowserWindow || licenseRenewalPending) return;
+  licenseRenewalPending = true;
+  try {
+    const local = await licenseStatus();
+    if (local.state !== "expired" || !local.licenseKey || local.licenseKey !== currentLicense?.licenseKey) return;
+    const key = local.licenseKey;
+    applyLicense(local);
+    window.clearTimeout(folderPollTimer);
+    const keyInput = document.querySelector<HTMLInputElement>(".license-key-controls input");
+    if (keyInput && (keyInput.value.trim() !== key || document.activeElement?.closest(".license-form"))) return;
+    const renewed = await refreshLicense();
+    // A user may have activated a different key or deactivated while HTTP was
+    // pending. Do not replace that newer dialog/application state.
+    if (currentLicense?.licenseKey !== key || currentLicense.state === "licensed") return;
+    applyLicense(renewed);
+    if (renewed.state === "licensed") await resumeLicensedUi();
+    if (document.querySelector(".license-dialog")) void showLicense();
+  } catch {
+    // Remain locked, retaining the key so offline/server failures are retryable.
+    const keyInput = document.querySelector<HTMLInputElement>(".license-key-controls input");
+    if (keyInput && keyInput.value.trim() === currentLicense?.licenseKey && !document.activeElement?.closest(".license-form")) void showLicense();
+  } finally { licenseRenewalPending = false; }
 }
 
 function bounded<T>(operation: Promise<T>, milliseconds: number, message: string): Promise<T> {
@@ -622,7 +660,7 @@ async function showLicense(): Promise<void> {
     activate.dataset.dialogConfirm = "true";
     key.addEventListener("input", () => { copy.disabled = !key.value; activate.disabled = !key.value || status.state === "licensed"; void updateCopyState(); });
     void updateCopyState();
-    activate.addEventListener("click", async () => { activate.disabled = true; try { const next = await activateLicense(key.value, device.value); currentLicense = next; render(); if (preferences.mode === "multiple") { await setDetachedBrowser(true); await emitBrowserState(selectedRemote, currentPath); } scheduleNativeLayout(0); await renderLicense(next, device.value || defaultDeviceLabel); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
+    activate.addEventListener("click", async () => { activate.disabled = true; try { const next = await activateLicense(key.value, device.value); currentLicense = next; render(); await resumeLicensedUi(); scheduleNativeLayout(0); await renderLicense(next, device.value || defaultDeviceLabel); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
     const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing"));
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
@@ -873,11 +911,11 @@ function scheduleFolderPoll(): void {
   }, Math.max(1, seconds) * 1000);
 }
 
-async function runRemoteConfigWizard(remoteId: string): Promise<boolean> {
+async function runRemoteConfigWizard(remoteId: string, localAuth?: boolean): Promise<boolean> {
   let state = "";
   let result = "";
   for (let count = 0; count < 64; count += 1) {
-    const step = await configWizardStep(remoteId, state, result);
+    const step = await configWizardStep(remoteId, state, result, localAuth);
     if (step.error) throw new Error(step.error);
     if (!step.state) return true;
     state = step.state;
@@ -1152,19 +1190,6 @@ async function changeRemoteMount(remoteId: string): Promise<void> {
   if (retryAfterAuthentication) void changeRemoteMount(remoteId);
 }
 
-const REMOTE_FIELD_LABELS: Record<string, string> = {
-  description: "Description", mountlet_google_account: "Google account", client_id: "Client ID",
-  client_secret: "Client secret", shared_with_me: "Shared with me", root_folder_id: "Root folder ID",
-  team_drive: "Shared drive ID", scope: "Access scope", read_only: "Read only", read_size: "Read sizes",
-  include_archived: "Include archived", start_year: "Start year", drive_type: "Drive type", region: "Region",
-  drive_id: "Drive ID", url: "URL", vendor: "Vendor", user: "Username", pass: "Password",
-  bearer_token: "Bearer token", provider: "Provider", endpoint: "Endpoint", env_auth: "Use environment credentials",
-  access_key_id: "Access key ID", secret_access_key: "Secret access key", session_token: "Session token",
-  storage_class: "Storage class", acl: "ACL", password: "Password", mountid: "Mount ID", username: "Username",
-  "2fa": "2FA code", otp_secret_key: "OTP secret", mailbox_password: "Mailbox password",
-  enable_caching: "Enable backend cache", service: "Service", apple_id: "Apple ID", trust_token: "Trust token",
-  cookies: "Cookies",
-};
 const REMOTE_AUTH_FIELDS: Record<string, readonly string[]> = {
   drive: ["client_id", "client_secret", "scope"], gphotos: ["client_id", "client_secret", "read_only"],
   onedrive: ["region", "drive_id", "drive_type"], s3: ["provider", "region", "env_auth", "endpoint", "access_key_id", "secret_access_key", "session_token"],
@@ -1176,149 +1201,42 @@ const REMOTE_AUTH_FIELDS: Record<string, readonly string[]> = {
 async function showRemoteConfig(remote: Remote): Promise<void> {
   let config;
   try { config = await loadRemoteConfig(remote.id); } catch (error) { await showError("Remote settings", error); return; }
-  document.querySelector(".modal-layer")?.remove();
-  const layer = element("div", "modal-layer");
-  const dialog = element("section", "modal-dialog remote-config-dialog");
-  dialog.setAttribute("role", "dialog");
-  dialog.setAttribute("aria-modal", "true");
-  dialog.append(element("h2", "", `${remote.name} (${remote.providerLabel}) settings`));
-  const form = element("form", "remote-config-form");
-  const controls = new Map<string, HTMLInputElement | HTMLSelectElement>();
-  const addText = (key: string, label: string, value: string, password = false, tooltip = "") => {
-    const input = document.createElement("input"); input.type = password ? "password" : "text"; input.value = value;
-    if (password) input.placeholder = "Leave blank to keep the saved value";
-    if (tooltip) { input.title = tooltip; }
-    controls.set(key, input); form.append(element("label", "", label), input);
-  };
-  const addBoolean = (key: string, label: string, value: string) => {
-    const input = document.createElement("input"); input.type = "checkbox";
-    input.checked = ["1", "true", "yes", "on"].includes(value.trim().toLocaleLowerCase());
-    controls.set(key, input); form.append(element("label", "", label), input);
-  };
-  const addSelect = (key: string, label: string, value: string, options: readonly (readonly [string, string])[]) => {
-    const select = bindScaledSelect(document.createElement("select"));
-    for (const [candidate, text] of options) select.add(new Option(text, candidate));
-    if (value && !options.some(([candidate]) => candidate === value)) select.add(new Option(value, value));
-    select.value = value; controls.set(key, select); form.append(element("label", "", label), select);
-  };
-  addText("alias", "Remote name", config.alias);
-  addText("mountPath", "Local folder name", config.mountPath, false, "Folder under Mountlet's mounted folder. An absolute path is also accepted.");
-  addText("remotePath", "Remote path", config.remotePath, false, "Optional folder within this remote to expose as its root.");
-  const auto = bindScaledSelect(document.createElement("select"));
-  [["", "Use app default"], ["true", "Enabled"], ["false", "Disabled"]].forEach(([value, label]) => auto.add(new Option(label, value)));
-  auto.value = config.autoMount === null ? "" : String(config.autoMount); controls.set("autoMount", auto);
-  form.append(element("label", "", "Auto-mount"), auto);
-  const savedFlags = config.mountFlags.split(/\s+/).filter(Boolean);
-  const readOnly = document.createElement("input"); readOnly.type = "checkbox"; readOnly.checked = savedFlags.includes("--read-only"); controls.set("readOnly", readOnly);
-  const allowOther = document.createElement("input"); allowOther.type = "checkbox"; allowOther.checked = savedFlags.includes("--allow-other"); controls.set("allowOther", allowOther);
-  form.append(element("label", "", "Read-only mount"), readOnly, element("label", "", "Allow other users"), allowOther);
-  addText("mountFlags", "Custom mount flags", savedFlags.filter(flag => !["--read-only", "--allow-other"].includes(flag)).join(" "));
-  const hasOAuth = OAUTH_REMOTE_TYPES.has(config.provider);
-  if (hasOAuth) {
-    const [availability, sources] = await Promise.all([oauthClientAvailability(), config.provider === "drive" ? driveOauthSources() : Promise.resolve([])]);
-    addSelect("oauthClient", "OAuth client", config.oauthClient ?? "custom", [
-      ...OAUTH_CLIENT_OPTIONS,
-      ...sources.filter(source => source.remoteId !== config.id).map(source => [`reuse:${source.remoteId}`, `Use ${source.label} credentials`] as const),
-    ]);
-    updateOAuthClientOptions(controls.get("oauthClient") as HTMLSelectElement, config.provider, availability);
-  }
-  Object.entries(config.fields).forEach(([key, value]) => {
-    if (["shared_with_me", "env_auth", "enable_caching", "read_only"].includes(key)) addBoolean(`field:${key}`, REMOTE_FIELD_LABELS[key] ?? key, value);
-    else if (key === "scope") addSelect(`field:${key}`, "Access scope", value, [["drive", "Full Drive access"], ["drive.readonly", "Read-only Drive access"], ["drive.file", "Files created or opened by rclone"], ["drive.appfolder", "Rclone application data folder"], ["drive.metadata.readonly", "Read-only names and metadata"]]);
-    else if (key === "drive_type") addSelect(`field:${key}`, "Drive type", value, [["personal", "Personal"], ["business", "Business"], ["documentLibrary", "SharePoint document library"]]);
-    else addText(`field:${key}`, REMOTE_FIELD_LABELS[key] ?? key.replaceAll("_", " "), key === "mountlet_google_account" && value.toLocaleLowerCase().endsWith("@gmail.com") ? value.slice(0, -10) : value, config.secretFields.includes(key),
-      key === "mountlet_google_account" ? "Used only to open Google Drive or Photos with the corresponding browser account. Enter the full address for Google Workspace accounts." : "");
-  });
-  if (hasOAuth) {
-    const selector = controls.get("oauthClient")!;
-    if (config.oauthClient !== "custom") {
-      controls.get("field:client_id")!.value = "";
-      controls.get("field:client_secret")!.value = "";
-    }
-    const applyClient = () => {
-      const custom = selector.value === "custom";
-      for (const key of ["client_id", "client_secret"]) {
-        const input = controls.get(`field:${key}`)!;
-        input.hidden = !custom;
-        if (input.previousElementSibling instanceof HTMLElement) input.previousElementSibling.hidden = !custom;
-      }
-    };
-    selector.addEventListener("change", applyClient);
-    applyClient();
-  }
-  dialog.append(form);
-  const actions = element("div", "dialog-actions");
-  const web = element("button", "", "Open in web");
-  web.addEventListener("click", () => void openRemoteWeb(remote.id));
-  const folder = element("button", "", "Open mounted folder");
-  folder.disabled = !remote.mounted;
-  folder.addEventListener("click", () => void openMountedFolder(remote.id, ""));
-  const cancel = element("button", "", "Cancel");
-  cancel.addEventListener("click", () => layer.remove());
-  const remove = element("button", "danger", "Delete remote");
-  remove.addEventListener("click", async () => {
-    if (!await confirmOwned("Delete remote?", `Delete ${remote.name} (${remote.providerLabel}) from rclone and Mountlet?`, "Delete")) return;
-    try {
-      await deleteRemote(remote.id); layer.remove(); remotes = await listRemotes();
-      activeRemote = ""; selectedRemote = ""; currentPath = ""; snapshot = null;
-      remoteSelectionTarget = ""; ++selectionGeneration; ++requestGeneration;
-      const nextRemote = remotes[0]?.id ?? "";
-      render();
-      if (nextRemote) await selectRemote(nextRemote);
-    } catch (error) { await showError("Delete remote", error); }
-  });
-  const close = element("button", "primary", "Save");
-  close.disabled = true;
-  const snapshotValues = () => JSON.stringify([...controls].map(([key, input]) => [key, input instanceof HTMLInputElement && input.type === "checkbox" ? input.checked : input.value]));
-  const baseline = snapshotValues();
-  const updateDirty = () => { close.disabled = snapshotValues() === baseline; };
-  form.addEventListener("input", updateDirty);
-  form.addEventListener("change", updateDirty);
-  close.addEventListener("click", async event => {
-    event.preventDefault(); close.disabled = true;
-    const fields = Object.fromEntries([...controls].filter(([key]) => key.startsWith("field:")).map(([key, input]) => {
-      const field = key.slice(6); const value = input instanceof HTMLInputElement && input.type === "checkbox" ? (input.checked ? "true" : "") : input.value;
-      return [field, field === "mountlet_google_account" ? googleAccountValue(value) : value];
-    }));
-    try {
-      const oauthClient = controls.get("oauthClient")?.value;
-      if (hasOAuth && oauthClient === "custom" && !fields.client_id?.trim()) throw new Error("Enter a custom client ID.");
-      const effectiveFlags = [controls.get("mountFlags")!.value.trim(), (controls.get("readOnly") as HTMLInputElement).checked ? "--read-only" : "", (controls.get("allowOther") as HTMLInputElement).checked ? "--allow-other" : ""].filter(Boolean).join(" ");
-      const mountChanged = controls.get("alias")!.value.trim() !== config.alias || controls.get("mountPath")!.value.trim() !== config.mountPath
-        || controls.get("remotePath")!.value.trim().replace(/^\/+|\/+$/g, "") !== config.remotePath || effectiveFlags.split(/\s+/).sort().join(" ") !== config.mountFlags.split(/\s+/).filter(Boolean).sort().join(" ");
+  const result = await openAddRemoteDialog({ edit: {
+    config,
+    save: async request => {
+      const hasOAuth = OAUTH_REMOTE_TYPES.has(config.provider);
+      if (hasOAuth && request.oauthClient === "custom" && !request.fields.client_id?.trim()) throw new Error("Enter a custom client ID.");
+      const mountChanged = request.alias.trim() !== config.alias || request.mountPath.trim() !== config.mountPath
+        || request.remotePath.trim().replace(/^\/+|\/+$/g, "") !== config.remotePath
+        || request.mountFlags.split(/\s+/).filter(Boolean).sort().join(" ") !== config.mountFlags.split(/\s+/).filter(Boolean).sort().join(" ");
       const authFields = new Set(REMOTE_AUTH_FIELDS[config.provider] ?? []);
-      if (OAUTH_REMOTE_TYPES.has(config.provider)) {
-        authFields.add("client_id");
-        authFields.add("client_secret");
-      }
-      const authChanged = (hasOAuth && oauthClient !== config.oauthClient) || Object.entries(fields).some(([key, value]) => authFields.has(key)
-        && (!hasOAuth || !["client_id", "client_secret"].includes(key) || oauthClient === "custom")
+      if (hasOAuth) for (const key of ["client_id", "client_secret", "config_is_local", "team_drive"]) authFields.add(key);
+      const authChanged = (hasOAuth && request.oauthClient !== config.oauthClient) || Object.entries(request.fields).some(([key, value]) => authFields.has(key)
+        && (!hasOAuth || !["client_id", "client_secret"].includes(key) || request.oauthClient === "custom")
         && authenticationFieldChanged(value, config.fields[key] ?? "", config.secretFields.includes(key)));
-      if (authChanged && !await confirmOwned("Authentication changed", "The authentication settings changed. Reauthenticate this remote after saving?", "Save and reauthenticate")) {
-        close.disabled = false; return;
-      }
+      if (authChanged && !await confirmOwned("Authentication changed", "Save and reauthenticate this remote?", "Continue")) return null;
       const remount = remote.mounted && (mountChanged || authChanged);
-      if (remount && !await confirmOwned("Remount remote?", "Mount settings changed. Unmount this remote, save the settings, and mount it again?", "Remount")) {
-        close.disabled = false; return;
-      }
+      if (remount && !await confirmOwned("Remount remote?", "Unmount, save, and mount this remote again?", "Continue")) return null;
       if (remount) await toggleRemoteMount(remote.id);
-      const newId = await saveRemoteConfig({ remoteId: config.id, alias: controls.get("alias")!.value, mountPath: controls.get("mountPath")!.value,
-        remotePath: controls.get("remotePath")!.value, mountFlags: effectiveFlags,
-        autoMount: controls.get("autoMount")!.value === "" ? null : controls.get("autoMount")!.value === "true", fields, oauthClient });
-      if (authChanged) await runRemoteConfigWizard(newId);
+      const newId = await saveRemoteConfig(request);
+      if (authChanged) await runRemoteConfigWizard(newId, request.fields.config_is_local !== "false");
       if (remount) await toggleRemoteMount(newId);
-      remotes = await listRemotes(); layer.remove(); renderRemoteList(); await selectRemote(newId);
-    } catch (error) { await showError("Remote settings", error); close.disabled = false; }
-  });
-  actions.append(remove, web, folder, cancel, close);
-  dialog.append(actions);
-  layer.append(dialog);
-  layer.addEventListener("mousedown", event => { if (event.target === layer) layer.remove(); });
-  layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
-  document.body.append(layer);
-  trapModalFocus(layer, dialog, cancel);
+      remotes = await listRemotes(); renderRemoteList();
+      return newId;
+    },
+    remove: async () => {
+      if (!await confirmOwned("Delete remote?", "Remove this remote from Mountlet? Cloud files are not deleted.", "Delete")) return false;
+      if (remote.mounted) await toggleRemoteMount(remote.id);
+      await deleteRemote(remote.id);
+      remotes = await listRemotes();
+      activeRemote = selectedRemote = remoteSelectionTarget = ""; ++selectionGeneration; ++requestGeneration;
+      currentPath = ""; snapshot = null; render();
+      if (remotes[0]) await selectRemote(remotes[0].id);
+      return true;
+    },
+  } });
+  if (result && result !== "external") await selectRemote(result.remoteId);
 }
-
 function finishAddRemoteTutorial(): void {
   addRemoteTutorialActive = false;
   localStorage.setItem(TUTORIAL_SEEN_KEY, "true");
@@ -1360,7 +1278,7 @@ async function showAddRemote(tutorial = addRemoteTutorialActive): Promise<void> 
   render();
   const created = remotes.find(remote => remote.id === result.remoteId);
   if (OAUTH_REMOTE_TYPES.has(result.provider)) {
-    await runRemoteConfigWizard(result.remoteId).catch(error => showError("Authenticate remote", error));
+    await runRemoteConfigWizard(result.remoteId, result.localAuth).catch(error => showError("Authenticate remote", error));
   } else if (created) {
     await showRemoteConfig(created);
   }
@@ -2751,6 +2669,7 @@ async function start(): Promise<void> {
       checks.push("prerequisites");
     }
     await refreshNativeTrayMenu(); checks.push("tray-menu");
+    await checkRemoteSettingsForm(); checks.push("remote-settings-fields");
     await checkRemoteHoverSelection("single");
     await checkRemoteHoverSelection("multiple");
     checks.push("remote-hover-selection");
@@ -2959,6 +2878,7 @@ async function start(): Promise<void> {
   }
   render();
   if (!isBrowserWindow && !localStorage.getItem(TUTORIAL_SEEN_KEY)) queueMicrotask(startAddRemoteTutorial);
+  if (!isBrowserWindow) window.setInterval(() => void renewStoredLicense(), 60_000);
   if (!isBrowserWindow && preferences.mode === "multiple" && !licenseLocked()) {
     await setDetachedBrowser(true);
     await emitBrowserState(selectedRemote, currentPath);
@@ -2966,8 +2886,15 @@ async function start(): Promise<void> {
     void setDetachedBrowser(false);
     void showLicense();
     void layoutNativeWindows().then(() => showStartupWindows());
+    void renewStoredLicense();
     return;
   }
+  await startRemoteBrowsing();
+}
+
+async function startRemoteBrowsing(): Promise<void> {
+  if (browsingStarted) return;
+  browsingStarted = true;
   if (selectedRemote) {
     await loadSnapshot();
     if (preferences.mode === "single" || isBrowserWindow) renderBrowserOnly();

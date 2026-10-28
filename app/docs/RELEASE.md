@@ -104,6 +104,14 @@ upgrade tests:
   enabled, and keyboard paste/device-name editing/Close remain usable. A failed
   clipboard read must show an error and allow retry without erasing the key.
   An activated license remains read-only until this device is deactivated.
+- Activate, quit, and restart: the saved key and valid activation must remain.
+  Repeat with a token requiring a cached signing key. An expired daily beta
+  token must renew in the background; offline renewal failure must retain the
+  key and remain locked, not reset the trial or erase activation state.
+- Settings must use the creation provider form with saved values, no Open
+  actions, and icon-only Save/Delete/Cancel. Rename each provider and confirm
+  unchanged authentication and mount fields are preserved. The startup probe
+  exercises all 12 provider forms using in-memory save callbacks only.
 
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.
