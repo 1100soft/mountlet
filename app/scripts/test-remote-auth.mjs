@@ -7,11 +7,22 @@ const source = await readFile(new URL("../src/remote_auth.ts", import.meta.url),
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { authenticationFieldChanged, googleAccountValue, OAUTH_REMOTE_TYPES } = await import(
+const { authenticationFieldChanged, defaultOAuthClient, updateOAuthClientOptions, googleAccountValue, OAUTH_REMOTE_TYPES } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`
 );
 
 assert.deepEqual([...OAUTH_REMOTE_TYPES].sort(), ["box", "drive", "dropbox", "gphotos", "onedrive", "pcloud"]);
+for (const provider of OAUTH_REMOTE_TYPES) {
+  assert.equal(defaultOAuthClient(provider, {}), "rclone");
+  assert.equal(defaultOAuthClient(provider, { [provider]: true }), "mountlet");
+  const select = { options: [{ value: "mountlet" }, { value: "rclone" }, { value: "custom" }, { value: "reuse:drive-source" }] };
+  updateOAuthClientOptions(select, provider, {});
+  assert.equal(select.options[0].disabled, true);
+  assert.equal(select.options[1].disabled, false);
+  assert.equal(select.options[3].disabled, provider !== "drive");
+  updateOAuthClientOptions(select, provider, { [provider]: true });
+  assert.equal(select.options[0].disabled, false);
+}
 assert.equal(googleAccountValue(" user "), "user@gmail.com");
 assert.equal(googleAccountValue(" user@example.com "), "user@example.com");
 assert.equal(googleAccountValue(" "), "");

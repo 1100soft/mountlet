@@ -94,6 +94,11 @@ upgrade tests:
   still requires the full behavior marker and a visible main window.
 - Standard builds must find their bundled rclone. Lean builds must report a
   missing system rclone cleanly and work after one is provided.
+- For each OAuth provider, confirm creation defaults to Mountlet only when its
+  client ID was included in the build. Verify separate rclone and Custom choices
+  in creation and settings, Drive-only reuse, masked custom secrets, and source
+  persistence. Changing source must clear the previous token and reauthenticate;
+  unrelated edits must preserve the saved credentials. Never log client secrets.
 - With an expired trial or deactivated license, open License and paste a key
   using its Paste button. Confirm the key is trimmed, Copy and Activate become
   enabled, and keyboard paste/device-name editing/Close remain usable. A failed

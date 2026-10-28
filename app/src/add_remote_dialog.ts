@@ -1,6 +1,7 @@
 import {
   createRemote,
   driveOauthSources,
+  oauthClientAvailability,
   oauthPortStatus,
   openExternal,
   openRcloneConfigTerminal,
@@ -9,7 +10,7 @@ import {
   type OauthPortStatus,
 } from "./backend.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
-import { googleAccountValue, OAUTH_REMOTE_TYPES as OAUTH_TYPES } from "./remote_auth.ts";
+import { defaultOAuthClient, googleAccountValue, OAUTH_CLIENT_OPTIONS, OAUTH_REMOTE_TYPES as OAUTH_TYPES, updateOAuthClientOptions } from "./remote_auth.ts";
 
 const S3_OPTIONS = [
   { label: "Cloudflare R2", provider: "Cloudflare", suffix: "Cloudflare R2", endpoint: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com", region: "auto", hideEndpoint: false, extra: { acl: "private", no_check_bucket: "true" } },
@@ -100,7 +101,7 @@ function setVisible(rows: HTMLElement[], visible: boolean): void {
 
 export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}): Promise<AddRemoteResult | "external" | null> {
   document.querySelector(".modal-layer")?.remove();
-  const sources = await driveOauthSources().catch(() => [] as DriveOauthSource[]);
+  const [sources, availability] = await Promise.all([driveOauthSources().catch(() => [] as DriveOauthSource[]), oauthClientAvailability()]);
   const layer = node("div", "modal-layer");
   const dialog = node("section", "modal-dialog remote-config-dialog");
   dialog.setAttribute("role", "dialog");
@@ -111,12 +112,10 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   const provider = select(PROVIDERS.map(([label, type]) => [type, label] as const));
   const name = input("Personal Drive");
   const credentialSource = select([
-    ...sources.map(source => [source.remoteId, `Use ${source.label} credentials`] as const),
-    ["builtin", "Default client (Mountlet or rclone)"] as const,
-    ["custom", "Enter client ID and secret"] as const,
+    ...OAUTH_CLIENT_OPTIONS,
+    ...sources.map(source => [`reuse:${source.remoteId}`, `Use ${source.label} credentials`] as const),
   ]);
-  if (sources.length) credentialSource.value = sources[0].remoteId;
-  else credentialSource.value = "builtin";
+  credentialSource.value = defaultOAuthClient(provider.value, availability);
   const clientId = input("Client ID", "text", "OAuth client ID. This overrides the default client.");
   const clientSecret = input("Client secret", "password", "OAuth client secret matching the client ID.");
   const account = input("Optional, for example name@gmail.com", "text", "Used to suggest the right Google account during sign-in.");
@@ -260,17 +259,17 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
       clientSecret.value = "";
     }
   };
+  let credentialProvider = provider.value;
   const applyProvider = () => {
     const type = provider.value;
+    if (credentialProvider !== type) {
+      credentialSource.value = defaultOAuthClient(type, availability);
+      credentialProvider = type;
+    }
     name.placeholder = NAME_PLACEHOLDERS[type] || "Cloud storage";
     const isDrive = type === "drive";
-    for (const option of credentialSource.options) {
-      const reuse = option.value !== "builtin" && option.value !== "custom";
-      option.hidden = option.disabled = reuse && !isDrive;
-    }
-    if (!isDrive && credentialSource.value !== "builtin" && credentialSource.value !== "custom") {
-      credentialSource.value = "builtin";
-    }
+    updateOAuthClientOptions(credentialSource, type, availability);
+    if (credentialSource.selectedOptions[0]?.disabled) credentialSource.value = defaultOAuthClient(type, availability);
     const isGphotos = type === "gphotos";
     const isS3 = type === "s3";
     const isWebdav = type === "webdav" || type === "nextcloud";
@@ -353,13 +352,11 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
       let suffix = PROVIDERS.find(item => item[1] === type)?.[2] ?? type;
       const backend = type === "nextcloud" ? "webdav" : type;
       if (OAUTH_TYPES.has(type)) {
+        fields.mountlet_oauth_client = credentialSource.value;
         if (clientId.value.trim()) fields.client_id = clientId.value.trim();
         if (clientSecret.value.trim()) fields.client_secret = clientSecret.value.trim();
       }
       if (type === "drive" || type === "gphotos") {
-        if (type === "drive" && credentialSource.value !== "builtin" && credentialSource.value !== "custom") {
-          fields.reuse_client_from = credentialSource.value;
-        }
         if (type === "drive") {
           fields.scope = "drive";
           fields.config_team_drive = sharedTeam.checked ? "true" : "false";

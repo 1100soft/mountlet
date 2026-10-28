@@ -315,6 +315,7 @@ struct ConfigWizardRequest {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteConfigData {
+    oauth_client: Option<String>,
     id: String,
     alias: String,
     provider: String,
@@ -330,6 +331,8 @@ struct RemoteConfigData {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveRemoteConfigRequest {
+    #[serde(default)]
+    oauth_client: Option<String>,
     remote_id: String,
     alias: String,
     mount_path: String,
@@ -3244,6 +3247,9 @@ fn load_remote_config(
         .collect();
     let mount = mount_settings().remove(&remote.id).unwrap_or_default();
     Ok(RemoteConfigData {
+        oauth_client: is_oauth_provider(&remote.provider).then(|| {
+            oauth_client_source(&raw, embedded_oauth_credentials(&remote.provider)).into()
+        }),
         id: remote.id,
         alias: remote.name,
         provider: remote.provider,
@@ -4137,6 +4143,9 @@ fn save_remote_config(
     let old_values = read_rclone_section(config, &remote.id)?;
     let mut updates = HashMap::new();
     for key in safe_rclone_keys(&remote.provider) {
+        if is_oauth_provider(&remote.provider) && matches!(*key, "client_id" | "client_secret") {
+            continue;
+        }
         let value = request.fields.get(*key).cloned().unwrap_or_default();
         if secret_rclone_key(key) && (value.is_empty() || value == SECRET_FIELD_MASK) {
             continue;
@@ -4152,6 +4161,19 @@ fn save_remote_config(
                 value
             },
         );
+    }
+    if is_oauth_provider(&remote.provider) {
+        let source = request.oauth_client.as_deref().unwrap_or("custom");
+        let mut submitted = request.fields.clone();
+        let reused = source.starts_with("reuse:");
+        let source = resolve_oauth_reuse(&remote.provider, source, config, &mut submitted)?;
+        let new_client = HashMap::new();
+        updates.extend(oauth_client_updates(
+            &source,
+            if reused { &new_client } else { &old_values },
+            &submitted,
+            embedded_oauth_credentials(&remote.provider),
+        )?);
     }
     if matches!(remote.provider.as_str(), "drive" | "gphotos") {
         let account = updates
@@ -4225,7 +4247,34 @@ fn create_remote(
     }
     let rclone = state.rclone.as_deref().ok_or("rclone is unavailable")?;
     let mut fields = request.fields.clone();
-    if let Some(source) = fields.remove("reuse_client_from") {
+    let source = fields.remove("mountlet_oauth_client");
+    let mut selected_source = None;
+    if is_oauth_provider(&request.provider) {
+        if let Some(source) = source {
+            let choice = resolve_oauth_reuse(&request.provider, &source, config, &mut fields)?;
+            let current = HashMap::new();
+            if choice == "rclone" {
+                fields.remove("client_id");
+                fields.remove("client_secret");
+            }
+            fields.extend(oauth_client_updates(
+                &choice,
+                &current,
+                &fields.clone(),
+                embedded_oauth_credentials(&request.provider),
+            )?);
+            fields.remove("mountlet_oauth_client");
+            selected_source = Some(if source.starts_with("reuse:") {
+                "custom".to_string()
+            } else {
+                source
+            });
+        }
+    }
+    if let Some(source) = fields
+        .remove("reuse_client_from")
+        .filter(|_| selected_source.is_none())
+    {
         if let Ok(section) = read_rclone_section(config, source.trim()) {
             if let (Some(client_id), Some(client_secret)) =
                 (section.get("client_id"), section.get("client_secret"))
@@ -4236,7 +4285,9 @@ fn create_remote(
             }
         }
     }
-    apply_embedded_oauth_credentials(&request.provider, &mut fields);
+    if selected_source.is_none() {
+        apply_embedded_oauth_credentials(&request.provider, &mut fields);
+    }
     let mut command = Command::new(rclone);
     command.args(["--config"]).arg(config).args([
         "config",
@@ -4260,6 +4311,14 @@ fn create_remote(
     let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    if let Some(source) = selected_source {
+        write_rclone_section(
+            config,
+            &remote_id,
+            &remote_id,
+            &HashMap::from([("mountlet_oauth_client".into(), source)]),
+        )?;
     }
     if !request.google_account.trim().is_empty()
         && matches!(request.provider.as_str(), "drive" | "gphotos")
@@ -4321,6 +4380,138 @@ fn embedded_oauth_credentials(provider: &str) -> (Option<&'static str>, Option<&
         ),
         _ => (None, None),
     }
+}
+
+fn is_oauth_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "drive" | "gphotos" | "dropbox" | "onedrive" | "box" | "pcloud"
+    )
+}
+
+#[tauri::command]
+fn oauth_client_availability() -> HashMap<&'static str, bool> {
+    ["drive", "gphotos", "dropbox", "onedrive", "box", "pcloud"]
+        .into_iter()
+        .map(|provider| {
+            (
+                provider,
+                embedded_oauth_credentials(provider)
+                    .0
+                    .is_some_and(|id| !id.trim().is_empty()),
+            )
+        })
+        .collect()
+}
+
+fn oauth_client_source<'a>(
+    values: &'a HashMap<String, String>,
+    embedded: (Option<&str>, Option<&str>),
+) -> &'a str {
+    if let Some(source) = values
+        .get("mountlet_oauth_client")
+        .filter(|s| matches!(s.as_str(), "mountlet" | "rclone" | "custom"))
+    {
+        return source;
+    }
+    let id = values
+        .get("client_id")
+        .map(|s| s.trim())
+        .unwrap_or_default();
+    if !id.is_empty() && embedded.0.is_some_and(|value| value.trim() == id) {
+        "mountlet"
+    } else if !id.is_empty() || values.get("client_secret").is_some_and(|s| !s.is_empty()) {
+        "custom"
+    } else {
+        "rclone"
+    }
+}
+
+fn resolve_oauth_reuse(
+    provider: &str,
+    source: &str,
+    config: &Path,
+    fields: &mut HashMap<String, String>,
+) -> Result<String, String> {
+    let Some(remote_id) = source.strip_prefix("reuse:") else {
+        return Ok(source.into());
+    };
+    if provider != "drive" {
+        return Err("Client reuse is only supported for Google Drive.".into());
+    }
+    let saved = read_rclone_section(config, remote_id)?;
+    if saved.get("type").map(String::as_str) != Some("drive")
+        || saved.get("client_id").is_none_or(|id| id.trim().is_empty())
+    {
+        return Err("The source Drive remote has no client credentials.".into());
+    }
+    for key in ["client_id", "client_secret"] {
+        fields.insert(key.into(), saved.get(key).cloned().unwrap_or_default());
+    }
+    Ok("custom".into())
+}
+
+fn oauth_client_updates(
+    source: &str,
+    current: &HashMap<String, String>,
+    submitted: &HashMap<String, String>,
+    embedded: (Option<&str>, Option<&str>),
+) -> Result<HashMap<String, String>, String> {
+    let old_source = oauth_client_source(current, embedded);
+    let mut updates = HashMap::from([("mountlet_oauth_client".into(), source.into())]);
+    match source {
+        "mountlet" | "rclone" if source == old_source => {}
+        "mountlet" => {
+            let id = embedded
+                .0
+                .filter(|id| !id.trim().is_empty())
+                .ok_or("This build does not include a Mountlet client for this provider.")?;
+            updates.insert("client_id".into(), id.into());
+            updates.insert(
+                "client_secret".into(),
+                embedded.1.unwrap_or_default().into(),
+            );
+        }
+        "rclone" => {
+            updates.insert("client_id".into(), String::new());
+            updates.insert("client_secret".into(), String::new());
+        }
+        "custom" => {
+            let id = submitted
+                .get("client_id")
+                .map(|s| s.trim())
+                .unwrap_or_default();
+            if id.is_empty() {
+                return Err("Enter a custom client ID.".into());
+            }
+            let secret = submitted
+                .get("client_secret")
+                .map(String::as_str)
+                .unwrap_or_default();
+            let id_changed = current
+                .get("client_id")
+                .map(|s| s.trim())
+                .unwrap_or_default()
+                != id;
+            updates.insert("client_id".into(), id.into());
+            if !secret.is_empty() && secret != SECRET_FIELD_MASK {
+                updates.insert("client_secret".into(), secret.into());
+            } else if old_source != "custom" || id_changed {
+                updates.insert("client_secret".into(), String::new());
+            }
+        }
+        _ => return Err("Unknown OAuth client source.".into()),
+    }
+    if source != old_source
+        || ["client_id", "client_secret"].iter().any(|key| {
+            updates
+                .get(*key)
+                .is_some_and(|value| value != current.get(*key).unwrap_or(&String::new()))
+        })
+    {
+        updates.insert("token".into(), String::new());
+    }
+    Ok(updates)
 }
 
 fn apply_embedded_oauth_credentials(provider: &str, fields: &mut HashMap<String, String>) {
@@ -7738,6 +7929,7 @@ pub fn run() {
             load_remote_config,
             save_remote_config,
             create_remote,
+            oauth_client_availability,
             delete_remote,
             rclone_output,
             app_version,
@@ -7824,6 +8016,100 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oauth_source_changes_persist_and_reuse_only_drive_credentials() {
+        let path =
+            env::temp_dir().join(format!("mountlet-oauth-source-{}.conf", std::process::id()));
+        fs::write(&path, "[source]\ntype = drive\nclient_id = saved-id\nclient_secret = saved-secret\ntoken = old-token\n").unwrap();
+        let old = read_rclone_section(&path, "source").unwrap();
+        let mut fields = HashMap::new();
+        assert!(resolve_oauth_reuse("dropbox", "reuse:source", &path, &mut fields).is_err());
+        assert_eq!(
+            resolve_oauth_reuse("drive", "reuse:source", &path, &mut fields).unwrap(),
+            "custom"
+        );
+        assert_eq!(fields["client_secret"], "saved-secret");
+        assert!(!fields.contains_key("token"));
+        let updates = oauth_client_updates(
+            "rclone",
+            &old,
+            &HashMap::new(),
+            (Some("embedded-id"), Some("embedded-secret")),
+        )
+        .unwrap();
+        write_rclone_section(&path, "source", "source", &updates).unwrap();
+        let saved = read_rclone_section(&path, "source").unwrap();
+        assert_eq!(saved["mountlet_oauth_client"], "rclone");
+        assert_eq!(saved["type"], "drive");
+        for key in ["client_id", "client_secret", "token"] {
+            assert!(!saved.contains_key(key));
+        }
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn explicit_oauth_sources_clear_credentials_without_mixing_registrations() {
+        let embedded = (Some("mountlet-id"), Some("mountlet-secret"));
+        let current = HashMap::from([
+            ("client_id".into(), "custom-id".into()),
+            ("client_secret".into(), "custom-secret".into()),
+            ("token".into(), "old-token".into()),
+        ]);
+        assert_eq!(oauth_client_source(&current, embedded), "custom");
+        let rclone = oauth_client_updates("rclone", &current, &HashMap::new(), embedded).unwrap();
+        assert_eq!(rclone["client_id"], "");
+        assert_eq!(rclone["client_secret"], "");
+        assert_eq!(rclone["token"], "");
+        let mountlet =
+            oauth_client_updates("mountlet", &current, &HashMap::new(), embedded).unwrap();
+        assert_eq!(mountlet["client_id"], "mountlet-id");
+        assert_eq!(mountlet["client_secret"], "mountlet-secret");
+        assert_eq!(mountlet["token"], "");
+        assert!(oauth_client_updates("mountlet", &current, &HashMap::new(), (None, None)).is_err());
+        assert!(oauth_client_updates("unknown", &current, &HashMap::new(), embedded).is_err());
+        assert!(oauth_client_updates("custom", &current, &HashMap::new(), embedded).is_err());
+
+        let masked = HashMap::from([
+            ("client_id".into(), "custom-id".into()),
+            ("client_secret".into(), SECRET_FIELD_MASK.into()),
+        ]);
+        let unchanged = oauth_client_updates("custom", &current, &masked, embedded).unwrap();
+        assert!(!unchanged.contains_key("client_secret"));
+        assert!(!unchanged.contains_key("token"));
+        let mut changed = masked;
+        changed.insert("client_id".into(), "new-custom-id".into());
+        let updated = oauth_client_updates("custom", &current, &changed, embedded).unwrap();
+        assert_eq!(updated["client_secret"], "");
+        assert_eq!(updated["token"], "");
+        changed.insert("client_secret".into(), "new-secret".into());
+        assert_eq!(
+            oauth_client_updates("custom", &current, &changed, embedded).unwrap()["client_secret"],
+            "new-secret"
+        );
+    }
+
+    #[test]
+    fn existing_mountlet_clients_do_not_rotate_on_unrelated_edits() {
+        let saved = HashMap::from([
+            ("mountlet_oauth_client".into(), "mountlet".into()),
+            ("client_id".into(), "old-mountlet-id".into()),
+            ("client_secret".into(), "old-mountlet-secret".into()),
+        ]);
+        let updates = oauth_client_updates(
+            "mountlet",
+            &saved,
+            &HashMap::new(),
+            (Some("new-id"), Some("new-secret")),
+        )
+        .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates["mountlet_oauth_client"], "mountlet");
+        assert_eq!(
+            oauth_client_updates("mountlet", &saved, &HashMap::new(), (None, None)).unwrap(),
+            updates
+        );
+    }
+
     #[test]
     fn oauth_defaults_preserve_registration_boundaries() {
         use super::apply_oauth_credentials;

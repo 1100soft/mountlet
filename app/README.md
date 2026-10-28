@@ -39,6 +39,11 @@ The previewed row has a dashed outline, while the active
 remote keeps its selection highlight. In separate-browser mode, the browser
 also moves alongside the previewed row and returns to the active row on leave.
 
+OAuth remotes offer Mountlet, rclone, and Custom clients in both creation and
+settings. Mountlet is the default when its provider credentials are included in
+the installed build; adding GitHub secrets requires a rebuild and installation.
+Existing remotes keep their saved client until changed and reauthenticated.
+
 Integrated edits are disabled by default because cloud copy, move, upload,
 rename, and delete operations are direct and cannot be undone by Mountlet.
 Offline files and ordinary cached files live under the configured Mountlet app

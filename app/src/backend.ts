@@ -88,9 +88,11 @@ export interface RemoteConfigData {
   autoMount: boolean | null;
   fields: Record<string, string>;
   secretFields: string[];
+  oauthClient: string | null;
 }
 
 export interface SaveRemoteConfigRequest {
+  oauthClient?: string;
   remoteId: string;
   alias: string;
   mountPath: string;
@@ -98,6 +100,10 @@ export interface SaveRemoteConfigRequest {
   mountFlags: string;
   autoMount: boolean | null;
   fields: Record<string, string>;
+}
+
+export async function oauthClientAvailability(): Promise<Record<string, boolean>> {
+  return inTauri ? invoke<Record<string, boolean>>("oauth_client_availability") : {};
 }
 
 export async function loadRemoteConfig(remoteId: string): Promise<RemoteConfigData> {

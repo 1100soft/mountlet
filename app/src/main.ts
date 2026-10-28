@@ -1,6 +1,6 @@
 import "./style.css";
 import { bindLicenseKeyPaste } from "./license_key_paste.ts";
-import { authenticationFieldChanged, googleAccountValue, OAUTH_REMOTE_TYPES } from "./remote_auth.ts";
+import { authenticationFieldChanged, defaultOAuthClient, googleAccountValue, OAUTH_CLIENT_OPTIONS, OAUTH_REMOTE_TYPES, updateOAuthClientOptions } from "./remote_auth.ts";
 import { completeStartupSmoke, exportConfigBundle, importConfigBundle, markCrashReported, pullConfigSync, pushConfigSync, startupSmokeEnabled, submitBugReport, unreportedCrash } from "./backend.ts";
 import { changedOfflineRemotes } from "./backend.ts";
 import { refreshNativeTrayMenu } from "./backend.ts";
@@ -8,7 +8,7 @@ import { detectRemoteCacheChanges } from "./backend.ts";
 import { configSyncStatus } from "./backend.ts";
 import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
-import { activateLicense, clipboardText, deactivateLicenseDevice, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
+import { activateLicense, clipboardText, deactivateLicenseDevice, driveOauthSources, oauthClientAvailability, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
 import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, startInitialMetadataIndex, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
 import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
@@ -1213,13 +1213,39 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
   const allowOther = document.createElement("input"); allowOther.type = "checkbox"; allowOther.checked = savedFlags.includes("--allow-other"); controls.set("allowOther", allowOther);
   form.append(element("label", "", "Read-only mount"), readOnly, element("label", "", "Allow other users"), allowOther);
   addText("mountFlags", "Custom mount flags", savedFlags.filter(flag => !["--read-only", "--allow-other"].includes(flag)).join(" "));
+  const hasOAuth = OAUTH_REMOTE_TYPES.has(config.provider);
+  if (hasOAuth) {
+    const [availability, sources] = await Promise.all([oauthClientAvailability(), config.provider === "drive" ? driveOauthSources() : Promise.resolve([])]);
+    addSelect("oauthClient", "OAuth client", config.oauthClient ?? "custom", [
+      ...OAUTH_CLIENT_OPTIONS,
+      ...sources.filter(source => source.remoteId !== config.id).map(source => [`reuse:${source.remoteId}`, `Use ${source.label} credentials`] as const),
+    ]);
+    updateOAuthClientOptions(controls.get("oauthClient") as HTMLSelectElement, config.provider, availability);
+  }
   Object.entries(config.fields).forEach(([key, value]) => {
-    if (["shared_with_me", "env_auth", "enable_caching"].includes(key)) addBoolean(`field:${key}`, REMOTE_FIELD_LABELS[key] ?? key, value);
+    if (["shared_with_me", "env_auth", "enable_caching", "read_only"].includes(key)) addBoolean(`field:${key}`, REMOTE_FIELD_LABELS[key] ?? key, value);
     else if (key === "scope") addSelect(`field:${key}`, "Access scope", value, [["drive", "Full Drive access"], ["drive.readonly", "Read-only Drive access"], ["drive.file", "Files created or opened by rclone"], ["drive.appfolder", "Rclone application data folder"], ["drive.metadata.readonly", "Read-only names and metadata"]]);
     else if (key === "drive_type") addSelect(`field:${key}`, "Drive type", value, [["personal", "Personal"], ["business", "Business"], ["documentLibrary", "SharePoint document library"]]);
     else addText(`field:${key}`, REMOTE_FIELD_LABELS[key] ?? key.replaceAll("_", " "), key === "mountlet_google_account" && value.toLocaleLowerCase().endsWith("@gmail.com") ? value.slice(0, -10) : value, config.secretFields.includes(key),
       key === "mountlet_google_account" ? "Used only to open Google Drive or Photos with the corresponding browser account. Enter the full address for Google Workspace accounts." : "");
   });
+  if (hasOAuth) {
+    const selector = controls.get("oauthClient")!;
+    if (config.oauthClient !== "custom") {
+      controls.get("field:client_id")!.value = "";
+      controls.get("field:client_secret")!.value = "";
+    }
+    const applyClient = () => {
+      const custom = selector.value === "custom";
+      for (const key of ["client_id", "client_secret"]) {
+        const input = controls.get(`field:${key}`)!;
+        input.hidden = !custom;
+        if (input.previousElementSibling instanceof HTMLElement) input.previousElementSibling.hidden = !custom;
+      }
+    };
+    selector.addEventListener("change", applyClient);
+    applyClient();
+  }
   dialog.append(form);
   const actions = element("div", "dialog-actions");
   const web = element("button", "", "Open in web");
@@ -1255,6 +1281,8 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
       return [field, field === "mountlet_google_account" ? googleAccountValue(value) : value];
     }));
     try {
+      const oauthClient = controls.get("oauthClient")?.value;
+      if (hasOAuth && oauthClient === "custom" && !fields.client_id?.trim()) throw new Error("Enter a custom client ID.");
       const effectiveFlags = [controls.get("mountFlags")!.value.trim(), (controls.get("readOnly") as HTMLInputElement).checked ? "--read-only" : "", (controls.get("allowOther") as HTMLInputElement).checked ? "--allow-other" : ""].filter(Boolean).join(" ");
       const mountChanged = controls.get("alias")!.value.trim() !== config.alias || controls.get("mountPath")!.value.trim() !== config.mountPath
         || controls.get("remotePath")!.value.trim().replace(/^\/+|\/+$/g, "") !== config.remotePath || effectiveFlags.split(/\s+/).sort().join(" ") !== config.mountFlags.split(/\s+/).filter(Boolean).sort().join(" ");
@@ -1263,7 +1291,8 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
         authFields.add("client_id");
         authFields.add("client_secret");
       }
-      const authChanged = Object.entries(fields).some(([key, value]) => authFields.has(key)
+      const authChanged = (hasOAuth && oauthClient !== config.oauthClient) || Object.entries(fields).some(([key, value]) => authFields.has(key)
+        && (!hasOAuth || !["client_id", "client_secret"].includes(key) || oauthClient === "custom")
         && authenticationFieldChanged(value, config.fields[key] ?? "", config.secretFields.includes(key)));
       if (authChanged && !await confirmOwned("Authentication changed", "The authentication settings changed. Reauthenticate this remote after saving?", "Save and reauthenticate")) {
         close.disabled = false; return;
@@ -1275,7 +1304,7 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
       if (remount) await toggleRemoteMount(remote.id);
       const newId = await saveRemoteConfig({ remoteId: config.id, alias: controls.get("alias")!.value, mountPath: controls.get("mountPath")!.value,
         remotePath: controls.get("remotePath")!.value, mountFlags: effectiveFlags,
-        autoMount: controls.get("autoMount")!.value === "" ? null : controls.get("autoMount")!.value === "true", fields });
+        autoMount: controls.get("autoMount")!.value === "" ? null : controls.get("autoMount")!.value === "true", fields, oauthClient });
       if (authChanged) await runRemoteConfigWizard(newId);
       if (remount) await toggleRemoteMount(newId);
       remotes = await listRemotes(); layer.remove(); renderRemoteList(); await selectRemote(newId);
@@ -2746,18 +2775,19 @@ async function start(): Promise<void> {
     if (getComputedStyle(s3ProviderRow).display !== "none") throw new Error("Drive showed S3 fields");
     credentialField.value = "custom"; credentialField.dispatchEvent(new Event("change"));
     if (getComputedStyle(clientIdRow).display === "none" || getComputedStyle(clientSecretRow).display === "none") throw new Error("Custom Drive client fields stayed hidden");
-    credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
+    credentialField.value = "rclone"; credentialField.dispatchEvent(new Event("change"));
     if (getComputedStyle(clientIdRow).display !== "none" || getComputedStyle(clientSecretRow).display !== "none") throw new Error("Existing Drive client showed custom credential fields");
-    const reuseOption = new Option("Smoke test Drive credentials", "smoke-drive-source");
+    const reuseOption = new Option("Smoke test Drive credentials", "reuse:smoke-drive-source");
+    const availability = await oauthClientAvailability();
     credentialField.add(reuseOption);
     for (const type of ["gphotos", "dropbox", "onedrive", "box", "pcloud"]) {
       credentialField.value = reuseOption.value;
       providerField.value = type; providerField.dispatchEvent(new Event("change"));
-      if (credentialField.value !== "builtin" || !reuseOption.disabled || !reuseOption.hidden) throw new Error(`${type} offered Drive credential reuse`);
+      if (credentialField.value !== defaultOAuthClient(type, availability) || !reuseOption.disabled || !reuseOption.hidden) throw new Error(`${type} offered Drive credential reuse`);
       if (row("OAuth client").hidden) throw new Error(`${type} hid its OAuth client selector`);
       credentialField.value = "custom"; credentialField.dispatchEvent(new Event("change"));
       if (clientIdRow.hidden || clientSecretRow.hidden) throw new Error(`${type} hid custom credentials`);
-      credentialField.value = "builtin"; credentialField.dispatchEvent(new Event("change"));
+      credentialField.value = "rclone"; credentialField.dispatchEvent(new Event("change"));
       if (!clientIdRow.hidden || !clientSecretRow.hidden) throw new Error(`${type} showed default client credentials`);
     }
     providerField.value = "drive"; providerField.dispatchEvent(new Event("change"));
