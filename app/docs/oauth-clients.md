@@ -39,6 +39,12 @@ remotes are classified by their saved client ID, without exposing secrets to
 the source dropdown. A client-source change clears the old OAuth token and
 requires reauthentication; unrelated settings edits do not rotate credentials.
 
+GitHub Actions preview (`wip`) and production packages use the same repository
+OAuth secrets. Local desktop builds do not load the root `.dev.vars` file;
+OAuth values must be exported into the build environment to be embedded locally.
+Use an Actions-built preview package to test the saved GitHub registrations
+without configuring local build credentials.
+
 All browser-based providers must permit rclone's loopback callback. Depending on
 the provider, register `http://localhost:53682/` or
 `http://127.0.0.1:53682/` exactly as its rclone documentation specifies.
