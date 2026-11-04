@@ -91,8 +91,8 @@ Website checks remain available from the repository root with
 
 Before publishing, follow the complete [production release checklist](app/docs/RELEASE.md).
 Preview and production installers use different R2 buckets: `wip` publishes
-preview artifacts, and a push to `main` or a version tag publishes production
-native artifacts.
+preview artifacts. Only a `vX.Y.Z` version tag publishes production native
+artifacts; `main` builds validate packages without uploading installers.
 
 The source is available for non-commercial use under [LICENSE](LICENSE).
 Installer builds are covered by [the installer EULA](app/docs/EULA.md).
