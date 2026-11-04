@@ -219,6 +219,9 @@ from preview:
    updates the release index, and retains the configured five versions. Also
    wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
+   Only the tested Linux artifacts are required for APT; Windows/macOS failures
+   do not block it. The publishing job waits for the matrix to finish, but does
+   not require the entire matrix to pass. Cancelled runs do not publish.
    The source workflow validates and uploads one `apt-packages` artifact
    containing both `mountlet` and `mountlet-lean`, while the central workflow
    signs and publishes them. The lean package declares `rclone` as an APT
@@ -227,8 +230,11 @@ from preview:
 ## Preview APT package
 
 For a deliberately selected preview, run **Native package CI** manually on the
-`wip` branch and enable `publish_apt_preview`. After the complete native matrix
-passes, the workflow rebuilds the bundled Linux package metadata as
+`wip` branch and enable `publish_apt_preview`. After the native matrix finishes,
+the publisher requires both tested Linux artifacts (bundled and system-rclone),
+but Windows or macOS failures do not block APT publication. Cancelled runs do
+not publish, and missing Linux artifacts fail before any publication dispatch.
+The workflow rebuilds the bundled Linux package metadata as
 `mountlet-preview`, gives it a unique version based on the workflow run number
 and commit, and sends it to the central APT publisher.
 
