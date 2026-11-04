@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.4
+
+- Align desktop manifests and lockfiles with the `v0.7.4` release tag.
+- The captured development source has the same application tree as `v0.7.3`;
+  this release corrects version metadata and release documentation and adds no
+  application behavior changes relative to that release.
+- Upgrade using the normal installer or the same APT package identity. No new
+  data migration is introduced; retain existing configuration, license, trial,
+  rclone, metadata, and offline/cache data.
+
 ## 0.7.2 - 2026-10-21
 
 - Align desktop package versions with the `v0.7.2` release tag.
