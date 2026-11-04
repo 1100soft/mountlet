@@ -11,7 +11,8 @@ release and remains frozen under `legacy/python-0.6.8/`.
   compatibility. Native packaging and installer uploads do not depend on its
   integration tests. Website changes must pass that workflow before deployment.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
-  `app/src-tauri/tauri.conf.json` identical to the release tag.
+  `app/src-tauri/tauri.conf.json` identical to the release tag. Update the
+  corresponding npm and Cargo lockfile entries together.
 - A `wip` build is a preview build and uploads to preview R2. Production
   installers are uploaded to production R2 only by a `vX.Y.Z` tag. Pushes and
   manual workflow runs on `main` validate packages but must never publish them.
@@ -33,7 +34,16 @@ release and remains frozen under `legacy/python-0.6.8/`.
 
 ## 1. Freeze and validate the candidate
 
-1. Update the version and changelog, then run from the repository root:
+1. Update the version, lockfiles, changelog, and affected release/upgrade notes.
+   For `v0.7.4`, the captured source matches the `v0.7.3` application tree;
+   the preparation corrects version metadata without introducing a data migration.
+   Run the project version check with the exact requested tag, then validate:
+
+   ```bash
+   RELEASE_TAG=v0.7.4 node app/scripts/check-version.mjs
+   ```
+
+   Run the remaining checks from the repository root:
 
    ```bash
    cd app
@@ -53,7 +63,8 @@ release and remains frozen under `legacy/python-0.6.8/`.
    a successful aggregate job while one platform/variant job is cancelled or
    skipped unexpectedly.
 3. Download installers by artifact name or use the uniquely versioned preview
-   filenames. Do not identify a preview solely by the displayed `0.7.1`.
+   filenames. Do not identify a preview solely by the displayed application
+   version.
 
 ## 2. Exercise preview installers
 
@@ -141,7 +152,7 @@ workflow's `environment-json` input. The verification composite action reads the
 resulting environment values because the `vars` context is unavailable there.
 
 A tagged build deliberately fails its bundled Windows job if any identity value
-is absent. Mountlet `0.7.1` maps to Store package version `1.7.1.0`: the major
+is absent. Mountlet `0.7.4` maps to Store package version `1.7.4.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth
 component remains zero because Microsoft reserves it. Application-visible
 versions remain normal SemVer.
@@ -183,26 +194,34 @@ from preview:
 
 ## 4. Promote and publish
 
-1. Merge the tested `wip` commit to `main` without adding untested changes.
-2. Wait for Native package CI on `main`: all eight package jobs must pass. The
+1. Prepare the exact requested version on a `correction/release-*` branch based
+   on the captured `wip` source. Record the verified release plan, update version
+   metadata and release documentation together, and commit for Review.
+2. After Review, Integrate the preparation into `wip` and Publish that reviewed
+   development commit to its configured upstream. Reverify the original source
+   ancestry, previous `main` tip, remote URL, version tag, and provenance tag.
+   A source or target race requires renewed verification and review.
+3. Only the authorized final Release publication stage may append one release
+   commit to the previous `main` tip using the exact reviewed prepared tree and
+   atomically publish the new immutable `vX.Y.Z` and
+   `cerberus/source/vX.Y.Z` tags. The provenance tag identifies the reviewed
+   prepared source commit. Never move existing tags or rerun a manual Release
+   request to bypass preparation. Release publication does not push `wip`.
+4. Wait for Native package CI on `main`: all eight package jobs must pass. The
    main-branch run deliberately does not upload production installers.
-3. Wait for the production Pages deployment, then initialize/upgrade D1 and
-   run the deployment check described in `web/README.md`.
-4. Confirm `/api/health` reports healthy licensing, GitHub reporting, D1, and
-   R2 bindings. Exercise a live-mode-safe license status check and a controlled
-   report test.
-5. Tag the exact tested `main` commit as an immutable release point:
-
-   ```bash
-   git tag -a vX.Y.Z -m "Mountlet X.Y.Z"
-   git push origin vX.Y.Z
-   ```
+5. Wait for the production Pages deployment, then initialize/upgrade D1 and
+   run the deployment check described in `web/README.md`. Confirm `/api/health`
+   reports healthy licensing, GitHub reporting, D1, and R2 bindings. Exercise a
+   live-mode-safe license status check and a controlled report test.
 
 6. Wait for the tagged Native package CI run. Its **Upload installers to R2**
    job validates `web/release-files.json`, writes versioned production objects,
    updates the release index, and retains the configured five versions. Also
    wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
+   Only the tested Linux artifacts are required for APT; Windows/macOS failures
+   do not block it. The publishing job waits for the matrix to finish, but does
+   not require the entire matrix to pass. Cancelled runs do not publish.
    The source workflow validates and uploads one `apt-packages` artifact
    containing both `mountlet` and `mountlet-lean`, while the central workflow
    signs and publishes them. The lean package declares `rclone` as an APT
@@ -211,8 +230,11 @@ from preview:
 ## Preview APT package
 
 For a deliberately selected preview, run **Native package CI** manually on the
-`wip` branch and enable `publish_apt_preview`. After the complete native matrix
-passes, the workflow rebuilds the bundled Linux package metadata as
+`wip` branch and enable `publish_apt_preview`. After the native matrix finishes,
+the publisher requires both tested Linux artifacts (bundled and system-rclone),
+but Windows or macOS failures do not block APT publication. Cancelled runs do
+not publish, and missing Linux artifacts fail before any publication dispatch.
+The workflow rebuilds the bundled Linux package metadata as
 `mountlet-preview`, gives it a unique version based on the workflow run number
 and commit, and sends it to the central APT publisher.
 
