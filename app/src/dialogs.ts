@@ -6,27 +6,36 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", tex
 }
 
 const FOCUSABLE = "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+let closeScaledSelect: (() => void) | null = null;
 
 export function bindScaledSelect(select: HTMLSelectElement): HTMLSelectElement {
   if (select.dataset.scaledSelect === "true") return select;
   select.dataset.scaledSelect = "true";
   const open = () => {
     if (select.disabled) return;
+    closeScaledSelect?.();
     document.querySelector(".select-menu")?.remove();
     const menu = node("div", "select-menu context-menu");
     const rect = select.getBoundingClientRect();
     menu.style.left = `${rect.left}px`;
     menu.style.top = `${rect.bottom}px`;
     menu.style.minWidth = `${Math.max(rect.width, 120)}px`;
-    let active = select.selectedIndex;
+    const options = [...select.options].filter(option => !option.hidden);
+    let active = options.findIndex(option => option.index === select.selectedIndex && !option.disabled);
+    if (active < 0) active = options.findIndex(option => !option.disabled);
     const items: HTMLButtonElement[] = [];
+    let observer: MutationObserver | null = null;
     const close = () => {
+      observer?.disconnect();
       menu.remove();
+      if (closeScaledSelect === close) closeScaledSelect = null;
       window.removeEventListener("mousedown", onPointer, true);
       window.removeEventListener("keydown", onKey, true);
     };
+    closeScaledSelect = close;
     const choose = (index: number) => {
-      select.selectedIndex = index;
+      if (!options[index] || options[index].disabled) return;
+      select.selectedIndex = options[index].index;
       select.dispatchEvent(new Event("input", { bubbles: true }));
       select.dispatchEvent(new Event("change", { bubbles: true }));
       close();
@@ -41,32 +50,40 @@ export function bindScaledSelect(select: HTMLSelectElement): HTMLSelectElement {
       close();
     };
     const onKey = (event: KeyboardEvent) => {
+      if (["Escape", "ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) event.stopPropagation();
       if (event.key === "Escape") {
         event.preventDefault();
         close();
         select.focus();
       } else if (event.key === "ArrowDown") {
         event.preventDefault();
-        active = Math.min(items.length - 1, active + 1);
+        const next = options.findIndex((option, index) => index > active && !option.disabled);
+        if (next >= 0) active = next;
         paint();
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
-        active = Math.max(0, active - 1);
+        for (let index = active - 1; index >= 0; index -= 1) {
+          if (!options[index].disabled) { active = index; break; }
+        }
         paint();
       } else if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         choose(active);
       }
     };
-    for (const [index, option] of [...select.options].entries()) {
-      const item = node("button", `context-action${index === select.selectedIndex ? " active" : ""}`, option.text);
+    for (const [index, option] of options.entries()) {
+      const item = node("button", `context-action${index === active ? " active" : ""}`, option.text);
       item.type = "button";
+      item.disabled = option.disabled;
       item.addEventListener("click", () => choose(index));
       menu.append(item);
       items.push(item);
     }
     document.body.append(menu);
+    observer = new MutationObserver(() => { if (!menu.isConnected || !select.isConnected) close(); });
+    observer.observe(document.body, { childList: true, subtree: true });
     window.setTimeout(() => {
+      if (!menu.isConnected) return;
       window.addEventListener("mousedown", onPointer, true);
       window.addEventListener("keydown", onKey, true);
     }, 0);

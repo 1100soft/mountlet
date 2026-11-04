@@ -23,6 +23,7 @@ const actionAssets: Record<string, string> = {
   "Use multiple windows": "ui-layout-multiple.svg", "Use single window": "ui-layout-single.svg",
   "Parent folder": "ui-parent.svg", "Remote root": "ui-home.svg", "Open mounted folder": "ui-folder-open.svg",
   Copy: "ui-copy.svg", Cut: "ui-cut.svg", Paste: "ui-paste.svg", Delete: "ui-delete.svg",
+  Save: "ui-save.svg", Cancel: "ui-window-close.svg",
   Download: "ui-entry-download.svg", "Save offline": "ui-save-offline.svg", Sync: "ui-sync.svg",
 };
 

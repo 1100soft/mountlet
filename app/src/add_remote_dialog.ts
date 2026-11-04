@@ -1,15 +1,19 @@
 import {
   createRemote,
   driveOauthSources,
+  oauthClientAvailability,
   oauthPortStatus,
   openExternal,
   openRcloneConfigTerminal,
   terminateOauthRclone,
   type DriveOauthSource,
   type OauthPortStatus,
+  type RemoteConfigData,
+  type SaveRemoteConfigRequest,
 } from "./backend.ts";
+import { actionIcon } from "./icons.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
-import { googleAccountValue, OAUTH_REMOTE_TYPES as OAUTH_TYPES } from "./remote_auth.ts";
+import { defaultOAuthClient, googleAccountValue, OAUTH_CLIENT_OPTIONS, OAUTH_REMOTE_TYPES as OAUTH_TYPES, updateOAuthClientOptions } from "./remote_auth.ts";
 
 const S3_OPTIONS = [
   { label: "Cloudflare R2", provider: "Cloudflare", suffix: "Cloudflare R2", endpoint: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com", region: "auto", hideEndpoint: false, extra: { acl: "private", no_check_bucket: "true" } },
@@ -54,11 +58,17 @@ export interface AddRemoteResult {
   remoteId: string;
   provider: string;
   mountAfter: boolean;
+  localAuth?: boolean;
 }
 
 export interface AddRemoteDialogOptions {
   tutorial?: boolean;
   onTutorialSkip?: () => void;
+  edit?: {
+    config: RemoteConfigData;
+    save: (request: SaveRemoteConfigRequest) => Promise<string | null>;
+    remove: () => Promise<boolean>;
+  };
 }
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = ""): HTMLElementTagNameMap[K] {
@@ -100,23 +110,28 @@ function setVisible(rows: HTMLElement[], visible: boolean): void {
 
 export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}): Promise<AddRemoteResult | "external" | null> {
   document.querySelector(".modal-layer")?.remove();
-  const sources = await driveOauthSources().catch(() => [] as DriveOauthSource[]);
+  const [sources, availability] = await Promise.all([driveOauthSources().catch(() => [] as DriveOauthSource[]), oauthClientAvailability()]);
+  const editing = options.edit;
+  const saved = editing?.config;
   const layer = node("div", "modal-layer");
   const dialog = node("section", "modal-dialog remote-config-dialog");
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.append(node("h2", "", "Add remote"));
+  dialog.append(node("h2", "", saved ? `${saved.alias} settings` : "Add remote"));
   const form = node("form", "add-remote-form");
 
   const provider = select(PROVIDERS.map(([label, type]) => [type, label] as const));
+  if (saved) {
+    provider.value = saved.provider === "webdav" && saved.fields.vendor === "nextcloud" ? "nextcloud" : saved.provider;
+    if (!provider.value) provider.add(new Option(saved.providerLabel, saved.provider, true, true));
+    provider.disabled = true;
+  }
   const name = input("Personal Drive");
   const credentialSource = select([
-    ...sources.map(source => [source.remoteId, `Use ${source.label} credentials`] as const),
-    ["builtin", "Default client (Mountlet or rclone)"] as const,
-    ["custom", "Enter client ID and secret"] as const,
+    ...OAUTH_CLIENT_OPTIONS,
+    ...sources.filter(source => source.remoteId !== saved?.id).map(source => [`reuse:${source.remoteId}`, `Use ${source.label} credentials`] as const),
   ]);
-  if (sources.length) credentialSource.value = sources[0].remoteId;
-  else credentialSource.value = "builtin";
+  credentialSource.value = defaultOAuthClient(provider.value, availability);
   const clientId = input("Client ID", "text", "OAuth client ID. This overrides the default client.");
   const clientSecret = input("Client secret", "password", "OAuth client secret matching the client ID.");
   const account = input("Optional, for example name@gmail.com", "text", "Used to suggest the right Google account during sign-in.");
@@ -175,7 +190,8 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   gphotosLink.type = "button";
   gphotosLink.addEventListener("click", () => void openExternal("https://rclone.org/googlephotos/"));
   gphotosHelp.append(document.createTextNode(" "), gphotosLink);
-  const driveClientHelp = node("p", "add-remote-help drive-client-help", "The default uses Mountlet credentials when included in this build, otherwise rclone’s client. You can supply your own. ");
+  const driveClientHelp = node("p", "add-remote-help drive-client-help");
+  driveClientHelp.title = "Mountlet uses the credentials included in this build. Custom credentials must belong to the same registration.";
   const rcloneClientGuide = node("button", "link-button", "Setup guide");
   const googleOauthGuide = node("button", "link-button", "Google OAuth help");
   rcloneClientGuide.type = googleOauthGuide.type = "button";
@@ -220,6 +236,79 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     koofrPass: labeled("Password", koofrPass),
     mount: mountRow,
   };
+  const mountPath = input("Default folder");
+  const remotePath = input("Optional remote folder");
+  const autoMount = select([["", "App default"], ["true", "Enabled"], ["false", "Disabled"]]);
+  const mountFlags = input("Additional rclone flags");
+  const readOnlyMount = node("input"); readOnlyMount.type = "checkbox";
+  const allowOther = node("input"); allowOther.type = "checkbox";
+  const advanced = node("details", "remote-advanced");
+  advanced.append(node("summary", "", "Options"));
+  const advancedFields = new Map<string, HTMLInputElement | HTMLSelectElement>();
+  if (saved) {
+    name.value = saved.alias;
+    credentialSource.value = saved.oauthClient ?? "custom";
+    clientId.value = saved.oauthClient === "custom" ? saved.fields.client_id ?? "" : "";
+    clientSecret.value = saved.oauthClient === "custom" ? saved.fields.client_secret ?? "" : "";
+    account.value = saved.fields.mountlet_google_account ?? "";
+    gphotosReadOnly.checked = saved.fields.read_only === "true";
+    sharedTeam.checked = Boolean(saved.fields.team_drive); sharedMine.checked = !sharedTeam.checked;
+    sharedDriveId.value = saved.fields.team_drive ?? ""; sharedDriveId.disabled = !sharedTeam.checked;
+    s3Provider.value = saved.fields.provider ?? S3_OPTIONS[0].provider;
+    if (!s3Provider.value && saved.fields.provider) s3Provider.add(new Option(saved.fields.provider, saved.fields.provider, true, true));
+    s3Endpoint.value = saved.fields.endpoint ?? ""; s3Region.value = saved.fields.region ?? "";
+    s3Access.value = saved.fields.access_key_id ?? ""; s3Secret.value = saved.fields.secret_access_key ?? "";
+    s3Path.value = saved.remotePath;
+    webdavVendor.value = saved.fields.vendor ?? "other";
+    if (!webdavVendor.value && saved.fields.vendor) webdavVendor.add(new Option(saved.fields.vendor, saved.fields.vendor, true, true));
+    webdavUrl.value = saved.fields.url ?? "";
+    if (provider.value === "nextcloud") webdavUrl.value = webdavUrl.value.replace(/\/remote\.php\/(?:dav\/files\/[^/]+|webdav)\/?$/i, "");
+    webdavUser.value = saved.fields.user ?? ""; webdavPass.value = saved.fields.pass ?? "";
+    icloudService.value = saved.fields.service ?? "drive"; icloudUser.value = saved.fields.apple_id ?? ""; icloudPass.value = saved.fields.password ?? "";
+    megaUser.value = saved.fields.user ?? ""; megaPass.value = saved.fields.pass ?? "";
+    protonUser.value = saved.fields.username ?? ""; protonPass.value = saved.fields.password ?? "";
+    protonMailbox.value = saved.fields.mailbox_password ?? "";
+    koofrUser.value = saved.fields.user ?? ""; koofrPass.value = saved.fields.password ?? "";
+    mountPath.value = saved.mountPath; remotePath.value = saved.remotePath;
+    autoMount.value = saved.autoMount === null ? "" : String(saved.autoMount);
+    const flags = saved.mountFlags.split(/\s+/).filter(Boolean);
+    readOnlyMount.checked = flags.includes("--read-only"); allowOther.checked = flags.includes("--allow-other");
+    mountFlags.value = flags.filter(flag => !["--read-only", "--allow-other"].includes(flag)).join(" ");
+    advanced.append(labeled("Local folder", mountPath));
+    if (saved.provider !== "s3") advanced.append(labeled("Remote path", remotePath));
+    advanced.append(labeled("Auto-mount", autoMount), labeled("Read-only mount", readOnlyMount), labeled("Allow other users", allowOther), labeled("Mount flags", mountFlags));
+    localAuth.checked = saved.fields.config_is_local !== "false"; pasteAuth.checked = !localAuth.checked;
+    const primary = new Set<string>();
+    const primaryByProvider: Record<string, readonly string[]> = {
+      drive: ["client_id", "client_secret", "mountlet_google_account", "config_is_local", "team_drive"],
+      gphotos: ["client_id", "client_secret", "mountlet_google_account", "config_is_local", "read_only"],
+      dropbox: ["client_id", "client_secret", "config_is_local"], onedrive: ["client_id", "client_secret", "config_is_local"],
+      box: ["client_id", "client_secret", "config_is_local"], pcloud: ["client_id", "client_secret", "config_is_local"],
+      s3: ["provider", "endpoint", "region", "access_key_id", "secret_access_key"], webdav: ["vendor", "url", "user", "pass"],
+      iclouddrive: ["service", "apple_id", "password"], mega: ["user", "pass"], protondrive: ["username", "password", "mailbox_password"],
+      koofr: ["user", "password"],
+    };
+    for (const key of primaryByProvider[saved.provider] ?? []) primary.add(key);
+    for (const [key, value] of Object.entries(saved.fields)) {
+      if (primary.has(key)) continue;
+      const choices: Record<string, ReadonlyArray<readonly [string, string]>> = {
+        scope: [["", "Default"], ["drive", "Full Drive access"], ["drive.readonly", "Read only"], ["drive.file", "App files"], ["drive.appfolder", "App folder"], ["drive.metadata.readonly", "Names and metadata"]],
+        drive_type: [["", "Default"], ["personal", "Personal"], ["business", "Business"], ["documentLibrary", "SharePoint library"]],
+      };
+      const field = choices[key] ? select(choices[key]) : input("", saved.secretFields.includes(key) ? "password" : "text");
+      if (field instanceof HTMLSelectElement && ![...field.options].some(option => option.value === value)) field.add(new Option(value, value));
+      field.value = value;
+      if (field instanceof HTMLInputElement && ["shared_with_me", "env_auth", "enable_caching", "read_size", "include_archived"].includes(key)) {
+        field.type = "checkbox"; field.checked = ["true", "1", "yes", "on"].includes(value.toLowerCase());
+      }
+      advancedFields.set(key, field);
+      advanced.append(labeled(key.replaceAll("_", " "), field));
+    }
+    for (const field of [clientSecret, s3Secret, webdavPass, icloudPass, megaPass, protonPass, protonMailbox, koofrPass]) {
+      field.placeholder = "Leave blank to keep saved value";
+    }
+    rows.mount.hidden = true;
+  }
   rows.port.append(portStatus, killRclone);
   form.append(
     labeled("Provider", provider), rows.name, rows.credentials, rows.driveClientHelp, rows.clientId, rows.clientSecret, rows.account,
@@ -231,6 +320,7 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     rows.protonUser, rows.protonPass, rows.proton2fa, rows.protonMailbox,
     rows.koofrUser, rows.koofrPass, rows.mount,
   );
+  if (saved) form.append(advanced);
 
   const applyS3 = () => {
     const option = S3_OPTIONS.find(item => item.provider === s3Provider.value) ?? S3_OPTIONS[0];
@@ -252,6 +342,9 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     const custom = credentialSource.value === "custom";
     const oauth = OAUTH_TYPES.has(provider.value);
     const showClient = oauth && custom;
+    if (custom && saved?.oauthClient === "custom" && !clientId.value && !clientSecret.value) {
+      clientId.value = saved.fields.client_id ?? ""; clientSecret.value = saved.fields.client_secret ?? "";
+    }
     setVisible([rows.clientId, rows.clientSecret], showClient);
     clientId.disabled = !showClient;
     clientSecret.disabled = !showClient;
@@ -260,26 +353,28 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
       clientSecret.value = "";
     }
   };
+  let credentialProvider = provider.value;
   const applyProvider = () => {
     const type = provider.value;
+    if (credentialProvider !== type) {
+      credentialSource.value = defaultOAuthClient(type, availability);
+      credentialProvider = type;
+    }
     name.placeholder = NAME_PLACEHOLDERS[type] || "Cloud storage";
     const isDrive = type === "drive";
-    for (const option of credentialSource.options) {
-      const reuse = option.value !== "builtin" && option.value !== "custom";
-      option.hidden = option.disabled = reuse && !isDrive;
-    }
-    if (!isDrive && credentialSource.value !== "builtin" && credentialSource.value !== "custom") {
-      credentialSource.value = "builtin";
-    }
+    updateOAuthClientOptions(credentialSource, type, availability);
+    if (!saved && credentialSource.selectedOptions[0]?.disabled) credentialSource.value = defaultOAuthClient(type, availability);
     const isGphotos = type === "gphotos";
     const isS3 = type === "s3";
     const isWebdav = type === "webdav" || type === "nextcloud";
     const isExternal = type === "__external__";
     setVisible([rows.name, rows.mount], !isExternal);
+    if (saved) rows.mount.hidden = true;
     setVisible([rows.credentials], OAUTH_TYPES.has(type));
     setVisible([rows.driveClientHelp], isDrive || isGphotos);
     setVisible([rows.account], isDrive || isGphotos);
     setVisible([rows.gphotosReadOnly, rows.gphotosHelp], isGphotos);
+    if (saved) { rows.driveClientHelp.hidden = true; rows.gphotosHelp.hidden = true; }
     setVisible([rows.driveKind, rows.sharedDriveId], isDrive);
     setVisible([rows.auth, rows.port], OAUTH_TYPES.has(type));
     setVisible([rows.s3Provider, rows.s3Region, rows.s3Access, rows.s3Secret, rows.s3Path], isS3);
@@ -324,8 +419,18 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   portTimer = window.setInterval(() => void refreshPort(), 1500);
 
   const actions = node("div", "dialog-actions");
-  const cancel = node("button", "", "Cancel");
-  const create = node("button", "primary", "Create remote");
+  const cancel = actionIcon("", "Cancel");
+  const create = actionIcon("", saved ? "Save" : "Add remote");
+  create.classList.add("primary");
+  create.dataset.dialogConfirm = "true";
+  form.addEventListener("submit", event => { event.preventDefault(); if (!create.disabled) create.click(); });
+  if (saved) {
+    const state = () => JSON.stringify([...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select")].map(field => field instanceof HTMLInputElement && ["checkbox", "radio"].includes(field.type) ? field.checked : field.value));
+    const baseline = state();
+    create.disabled = true;
+    const updateDirty = () => { create.disabled = state() === baseline; };
+    form.addEventListener("input", updateDirty); form.addEventListener("change", updateDirty);
+  }
   cancel.type = "button"; create.type = "button";
   let finish: (result: AddRemoteResult | "external" | null) => void = () => undefined;
   const closed = new Promise<AddRemoteResult | "external" | null>(resolve => { finish = resolve; });
@@ -337,6 +442,79 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   cancel.addEventListener("click", () => close(null));
   layer.addEventListener("mousedown", event => { if (event.target === layer) close(null); });
   layer.addEventListener("keydown", event => { if (event.key === "Escape") close(null); });
+  const collectFields = () => {
+    const type = provider.value;
+    const fields: Record<string, string> = saved ? { ...saved.fields } : {};
+    for (const [key, field] of advancedFields) fields[key] = field instanceof HTMLInputElement && field.type === "checkbox" ? String(field.checked) : field.value;
+    let suffix = PROVIDERS.find(item => item[1] === type)?.[2] ?? type;
+    const backend = type === "nextcloud" ? "webdav" : type;
+    if (OAUTH_TYPES.has(type)) {
+      fields.mountlet_oauth_client = credentialSource.value;
+      if (clientId.value.trim()) fields.client_id = clientId.value.trim();
+      if (clientSecret.value.trim()) fields.client_secret = clientSecret.value.trim();
+    }
+    if (type === "drive" || type === "gphotos") {
+      if (type === "drive") {
+        fields.scope = fields.scope || "drive";
+        fields.config_team_drive = sharedTeam.checked ? "true" : "false";
+        fields.team_drive = sharedTeam.checked ? sharedDriveId.value.trim() : "";
+      }
+      if (type === "gphotos") {
+        fields.read_only = gphotosReadOnly.checked ? "true" : "false";
+        fields.read_size = fields.read_size || "true";
+        fields.config_edit_advanced = "false";
+      }
+    }
+    if (OAUTH_TYPES.has(type)) fields.config_is_local = localAuth.checked ? "true" : "false";
+    let selectedPath = saved ? remotePath.value.trim() : "";
+    if (type === "s3") {
+      const option = S3_OPTIONS.find(item => item.provider === s3Provider.value) ?? S3_OPTIONS[0];
+      suffix = option.suffix;
+      fields.provider = s3Provider.value;
+      fields.access_key_id = s3Access.value.trim();
+      fields.secret_access_key = s3Secret.value;
+      fields.region = s3Region.value.trim();
+      fields.endpoint = s3Endpoint.value.trim();
+      if (!saved) Object.assign(fields, option.extra);
+      selectedPath = s3Path.value.trim().replace(/^\/+|\/+$/g, "");
+    }
+    if (type === "webdav" || type === "nextcloud") {
+      const option = WEBDAV_VENDORS.find(item => item.vendor === webdavVendor.value) ?? WEBDAV_VENDORS[0];
+      const vendor = type === "nextcloud" ? "nextcloud" : webdavVendor.value;
+      suffix = type === "nextcloud" ? "Nextcloud" : option.suffix;
+      const url = type === "nextcloud"
+        ? nextcloudWebdavUrl(webdavUrl.value, webdavUser.value)
+        : webdavUrl.value.trim();
+      fields.url = url;
+      fields.vendor = vendor;
+      fields.user = webdavUser.value.trim();
+      if (webdavPass.value) fields.pass = webdavPass.value;
+    }
+    if (type === "iclouddrive") {
+      fields.service = icloudService.value;
+      fields.apple_id = icloudUser.value.trim();
+      fields.password = icloudPass.value;
+    }
+    if (type === "mega") {
+      fields.user = megaUser.value.trim();
+      fields.pass = megaPass.value;
+      if (mega2fa.value.trim()) fields["2fa"] = mega2fa.value.trim();
+    }
+    if (type === "protondrive") {
+      fields.username = protonUser.value.trim();
+      fields.password = protonPass.value;
+      fields.enable_caching = fields.enable_caching || "false";
+      if (proton2fa.value.trim()) fields["2fa"] = proton2fa.value.trim();
+      if (protonMailbox.value) fields.mailbox_password = protonMailbox.value;
+    }
+    if (type === "koofr") {
+      fields.provider = fields.provider || "koofr";
+      fields.user = koofrUser.value.trim();
+      fields.password = koofrPass.value;
+    }
+    return { fields, suffix, backend, selectedPath };
+  };
+  const baselineFields = saved ? collectFields().fields : undefined;
   create.addEventListener("click", async event => {
     event.preventDefault();
     const type = provider.value;
@@ -349,74 +527,27 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     if (!alias) { name.focus(); return; }
     create.disabled = true;
     try {
-      const fields: Record<string, string> = {};
-      let suffix = PROVIDERS.find(item => item[1] === type)?.[2] ?? type;
-      const backend = type === "nextcloud" ? "webdav" : type;
-      if (OAUTH_TYPES.has(type)) {
-        if (clientId.value.trim()) fields.client_id = clientId.value.trim();
-        if (clientSecret.value.trim()) fields.client_secret = clientSecret.value.trim();
-      }
-      if (type === "drive" || type === "gphotos") {
-        if (type === "drive" && credentialSource.value !== "builtin" && credentialSource.value !== "custom") {
-          fields.reuse_client_from = credentialSource.value;
+      if (/[:@/\\\r\n]/.test(alias)) throw new Error("Use a name without ':', '@', line breaks, or path separators.");
+      const { fields, suffix, backend, selectedPath } = collectFields();
+      if (editing && saved) {
+        delete fields.mountlet_oauth_client;
+        if (OAUTH_TYPES.has(backend)) { fields.client_id = clientId.value.trim(); fields.client_secret = clientSecret.value; }
+        if (["drive", "gphotos"].includes(backend)) fields.mountlet_google_account = googleAccountValue(account.value);
+        // Preserve saved representations/defaults for controls the user did not
+        // change; a rename must not silently reconfigure provider credentials.
+        for (const [key, value] of Object.entries(fields)) {
+          if (["client_id", "client_secret"].includes(key) && credentialSource.value !== saved.oauthClient) continue;
+          if (baselineFields && value === baselineFields[key]) {
+            if (Object.hasOwn(saved.fields, key)) fields[key] = saved.fields[key];
+            else delete fields[key];
+          }
         }
-        if (type === "drive") {
-          fields.scope = "drive";
-          fields.config_team_drive = sharedTeam.checked ? "true" : "false";
-          if (sharedTeam.checked && sharedDriveId.value.trim()) fields.team_drive = sharedDriveId.value.trim();
-        }
-        if (type === "gphotos") {
-          fields.read_only = gphotosReadOnly.checked ? "true" : "false";
-          fields.read_size = "true";
-          fields.config_edit_advanced = "false";
-        }
-      }
-      if (OAUTH_TYPES.has(type)) fields.config_is_local = localAuth.checked ? "true" : "false";
-      let remotePath = "";
-      if (type === "s3") {
-        const option = S3_OPTIONS.find(item => item.provider === s3Provider.value) ?? S3_OPTIONS[0];
-        suffix = option.suffix;
-        fields.provider = option.provider;
-        fields.access_key_id = s3Access.value.trim();
-        fields.secret_access_key = s3Secret.value;
-        if (s3Region.value.trim()) fields.region = s3Region.value.trim();
-        if (s3Endpoint.value.trim()) fields.endpoint = s3Endpoint.value.trim();
-        Object.assign(fields, option.extra);
-        remotePath = s3Path.value.trim().replace(/^\/+|\/+$/g, "");
-      }
-      if (type === "webdav" || type === "nextcloud") {
-        const option = WEBDAV_VENDORS.find(item => item.vendor === webdavVendor.value) ?? WEBDAV_VENDORS[0];
-        const vendor = type === "nextcloud" ? "nextcloud" : option.vendor;
-        suffix = type === "nextcloud" ? "Nextcloud" : option.suffix;
-        const url = type === "nextcloud"
-          ? nextcloudWebdavUrl(webdavUrl.value, webdavUser.value)
-          : webdavUrl.value.trim();
-        fields.url = url;
-        fields.vendor = vendor;
-        if (webdavUser.value.trim()) fields.user = webdavUser.value.trim();
-        if (webdavPass.value) fields.pass = webdavPass.value;
-      }
-      if (type === "iclouddrive") {
-        fields.service = icloudService.value;
-        fields.apple_id = icloudUser.value.trim();
-        fields.password = icloudPass.value;
-      }
-      if (type === "mega") {
-        fields.user = megaUser.value.trim();
-        fields.pass = megaPass.value;
-        if (mega2fa.value.trim()) fields["2fa"] = mega2fa.value.trim();
-      }
-      if (type === "protondrive") {
-        fields.username = protonUser.value.trim();
-        fields.password = protonPass.value;
-        fields.enable_caching = "false";
-        if (proton2fa.value.trim()) fields["2fa"] = proton2fa.value.trim();
-        if (protonMailbox.value) fields.mailbox_password = protonMailbox.value;
-      }
-      if (type === "koofr") {
-        fields.provider = "koofr";
-        fields.user = koofrUser.value.trim();
-        fields.password = koofrPass.value;
+        const remoteId = await editing.save({ remoteId: saved.id, alias, mountPath: mountPath.value, remotePath: selectedPath,
+          mountFlags: [mountFlags.value.trim(), readOnlyMount.checked ? "--read-only" : "", allowOther.checked ? "--allow-other" : ""].filter(Boolean).join(" "), autoMount: autoMount.value === "" ? null : autoMount.value === "true", fields,
+          oauthClient: OAUTH_TYPES.has(backend) ? credentialSource.value : undefined });
+        if (remoteId) close({ remoteId, provider: backend, mountAfter: false });
+        else create.disabled = false;
+        return;
       }
       const remoteId = await createRemote({
         alias,
@@ -425,14 +556,24 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
         fields,
         googleAccount: googleAccountValue(account.value),
         mountAfter: mountAfter.checked,
-        remotePath,
+        remotePath: selectedPath,
       });
-      close({ remoteId, provider: backend, mountAfter: mountAfter.checked });
+      close({ remoteId, provider: backend, mountAfter: mountAfter.checked, localAuth: localAuth.checked });
     } catch (error) {
-      await showError("Add remote", error);
+      await showError(saved ? "Remote settings" : "Add remote", error);
       create.disabled = false;
     }
   });
+  if (editing) {
+    const remove = actionIcon("", "Delete"); remove.classList.add("danger");
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      try { if (await editing.remove()) close(null); }
+      catch (error) { await showError("Delete remote", error); }
+      finally { remove.disabled = false; }
+    });
+    actions.append(remove);
+  }
   actions.append(cancel, create);
   dialog.append(form, actions);
   layer.append(dialog);
