@@ -487,6 +487,10 @@ The report endpoint can share a private GitHub issue repository with other apps.
 Set `REPORT_GITHUB_REPO=1100soft/1100-shared-feedback` and
 `REPORT_GITHUB_PROJECT_LABEL=Mountlet` in both **Production and Preview** under
 Cloudflare Pages → Mountlet → Settings → Variables and Secrets, then redeploy.
+While production serves the older intake implementation, also keep
+`REPORT_GITHUB_LABELS=Mountlet`: it reads routing from that setting rather than
+the newer dedicated project-label setting. Both Production and Preview must use
+the resolved label, and changed Pages variables require a fresh deployment.
 `Mountlet` is the currently resolved GitHub label in Cerberus's project
 configuration, not a label derived from its friendly feedback name. After a
 feedback-name change, read the saved mapping again and update server intake;
