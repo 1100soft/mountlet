@@ -478,3 +478,14 @@ shown in the app:
   }
 ]
 ```
+
+### Shared feedback repository
+
+The report endpoint can share a private GitHub issue repository with other apps.
+`REPORT_GITHUB_PROJECT_LABEL` identifies this project (default `mountlet-report`,
+preserving existing production reports). Create that label in the target repo and
+use the same label in Cerberus project feedback settings. `REPORT_GITHUB_LABELS`
+adds optional classification labels; a validation retry retains the mandatory
+project label and never silently creates an unscoped report. Keep the report token
+on the server with access only to the feedback repository. Browser/desktop clients
+continue using the existing report endpoint and never receive GitHub credentials.

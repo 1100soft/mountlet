@@ -28,8 +28,10 @@ compiled into the installed build, otherwise rclone. Mountlet is marked
 unavailable when the build has no matching ID; choosing rclone explicitly never
 injects Mountlet credentials. Rclone's own default may not exist for every provider.
 Google settings has one shared client choice for Drive and Photos. Separate
-service choices and manual client IDs/secrets are advanced options. Another
-configured Google account can supply its client registrations: Drive uses its
+service choices and manual client IDs/secrets are under Advanced options; all
+normal service settings remain visible. Choose Mountlet, rclone, or Custom.
+Custom offers other Google cards with custom registrations. Missing service
+registrations can be entered through the Advanced options link. Drive uses its
 Drive client and Photos its Photos client, never the other service's token.
 Unrelated edits preserve these copied credentials and the saved category.
 Client IDs and secrets always come from the same source; a custom ID never

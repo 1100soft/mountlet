@@ -48,9 +48,12 @@ Google setup includes Drive and Photos under one card, with independent sign-in
 for each service. Each card icon opens that service on the web; the browser's
 icon toggle switches content while retaining each service's folder, selection,
 and cached tree. Settings uses one Google account form with shared name, account,
-sign-in method, and client category. Drive/Photos client overrides, manual IDs
-and secrets, and service-specific fields are under Options. Reusing another
-Google account resolves that account's own client registration for each service.
+sign-in method, auto-mount setting, and client category. Service icons identify
+Drive/Photos option groups. Drive/Photos client overrides, manual IDs
+and secrets are under Advanced options; normal service settings remain visible.
+The primary client choices are Mountlet, rclone, and Custom. Custom offers
+registrations from other Google cards, with a link to Advanced options for
+missing registrations. Each service reuses its own client, not the other service's.
 At launch, existing
 Drive and Photos remotes with the same saved Google account email are linked
 automatically. A missing service is provisioned with Mountlet's embedded client,

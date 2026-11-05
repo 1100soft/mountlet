@@ -1,5 +1,6 @@
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
 import { openGoogleAccountDialog } from "./google_account_dialog.ts";
+import { bindScaledSelect } from "./dialogs.ts";
 import type { RemoteConfigData, SaveRemoteConfigRequest } from "./backend.ts";
 
 /** Shared form regression probe. Callbacks never mutate actual remote configs. */
@@ -67,10 +68,17 @@ export async function checkRemoteSettingsForm(): Promise<void> {
   ensure(dialog!.querySelector(".google-service-toggle") === null, "Google settings must not use service pages");
   ensure(!dialog!.querySelector<HTMLDetailsElement>("details")!.open, "Service overrides must be advanced");
   ensure(dialog!.querySelectorAll("[data-google-service-client]").length === 2, "Both service overrides must be available");
+  ensure(dialog!.querySelectorAll("[data-google-auto-mount]").length === 1, "Auto-mount must be shared by the Google card");
+  ensure(dialog!.querySelectorAll("fieldset legend .provider-icon").length === 4, "Service option groups must use provider icons");
+  ensure(dialog!.querySelectorAll("fieldset:not(details fieldset)").length === 2, "Normal service settings must remain visible outside Advanced");
+  ensure([...dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!.options].map(option => option.value).join(",") === "mountlet,rclone,custom", "Primary client choices must be categories only");
   const alias = dialog!.querySelector<HTMLInputElement>("input")!;
+  const auto = dialog!.querySelector<HTMLSelectElement>("[data-google-auto-mount]")!;
+  auto.value = "true"; auto.dispatchEvent(new Event("change", { bubbles: true }));
   alias.value = "Renamed Google"; alias.dispatchEvent(new Event("input", { bubbles: true }));
   dialog!.querySelector<HTMLButtonElement>('button[aria-label="Save"]')!.click(); await closed;
   ensure(captured.length === 2 && captured.every(request => request.alias === "Renamed Google"), "Shared alias did not reach both services");
+  ensure(captured.every(request => request.autoMount === true), "Shared auto-mount must persist to both services");
   for (const request of captured) {
     const original = configs.find(config => config.id === request.remoteId)!;
     ensure(Object.entries(original.fields).every(([key, value]) => request.fields[key] === value), "Google rename changed authentication or service fields");
@@ -80,8 +88,10 @@ export async function checkRemoteSettingsForm(): Promise<void> {
   dialog = null;
   for (let attempt = 0; attempt < 200 && !dialog; attempt += 1) { await new Promise(resolve => window.setTimeout(resolve, 10)); dialog = document.querySelector<HTMLElement>(".google-account-dialog"); }
   const shared = dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!;
-  shared.add(new Option("Other Google account", "reuse:fixture-other"));
-  shared.value = "reuse:fixture-other"; shared.dispatchEvent(new Event("change", { bubbles: true }));
+  shared.value = "custom"; shared.dispatchEvent(new Event("change", { bubbles: true }));
+  const reuse = dialog!.querySelector<HTMLSelectElement>("[data-google-custom-source]")!;
+  reuse.add(new Option("Other Google account", "reuse:fixture-other"));
+  reuse.value = "reuse:fixture-other"; reuse.dispatchEvent(new Event("change", { bubbles: true }));
   ensure(!dialog!.querySelector<HTMLDetailsElement>("details")!.open, "Selecting a shared client exposed advanced overrides");
   const photos = dialog!.querySelector<HTMLSelectElement>('[data-google-service-client="gphotos"]')!;
   photos.value = "custom"; photos.dispatchEvent(new Event("change", { bubbles: true }));
@@ -93,7 +103,35 @@ export async function checkRemoteSettingsForm(): Promise<void> {
   const third = openGoogleAccountDialog(reloaded, { save: async () => null, remove: async () => false });
   dialog = null;
   for (let attempt = 0; attempt < 200 && !dialog; attempt += 1) { await new Promise(resolve => window.setTimeout(resolve, 10)); dialog = document.querySelector<HTMLElement>(".google-account-dialog"); }
-  ensure(dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!.value === "reuse:fixture-other", "Reload lost the shared category");
+  ensure(dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!.value === "custom", "Reload lost the shared category");
+  ensure(dialog!.querySelector<HTMLSelectElement>("[data-google-custom-source]")!.value === "reuse:fixture-other", "Reload lost the custom registration source");
   ensure(dialog!.querySelector<HTMLSelectElement>('[data-google-service-client="gphotos"]')!.value === "custom", "Reload lost the Photos override");
   dialog!.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')!.click(); await third;
+  const defaults = configs.map(config => ({ ...config, oauthClient: "rclone", fields: { ...config.fields, client_id: "", client_secret: "" } }));
+  const fourth = openGoogleAccountDialog(defaults, { save: async () => null, remove: async () => false });
+  dialog = null;
+  for (let attempt = 0; attempt < 200 && !dialog; attempt += 1) { await new Promise(resolve => window.setTimeout(resolve, 10)); dialog = document.querySelector<HTMLElement>(".google-account-dialog"); }
+  const category = dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!;
+  category.value = "custom"; category.dispatchEvent(new Event("change", { bubbles: true }));
+  const guidance = dialog!.querySelector<HTMLButtonElement>("button.add-remote-help")!;
+  ensure(!guidance.hidden && guidance.textContent!.includes("Drive and Photos"), "Missing custom registrations must point to Advanced options");
+  ensure(!dialog!.querySelector<HTMLDetailsElement>("details")!.open, "Custom must not automatically expand Advanced");
+  guidance.click();
+  ensure(dialog!.querySelector<HTMLDetailsElement>("details")!.open, "Missing-client link must reveal Advanced");
+  dialog!.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')!.click(); await fourth;
+  const dropdown = bindScaledSelect(document.createElement("select"));
+  dropdown.style.cssText = "position:fixed;bottom:8px;right:8px;width:140px";
+  for (let index = 0; index < 40; index += 1) dropdown.add(new Option(`Option ${index}`, String(index)));
+  document.body.append(dropdown);
+  try {
+    dropdown.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true }));
+    const menu = document.querySelector<HTMLElement>(".select-menu")!;
+    const bounds = menu.getBoundingClientRect(), anchor = dropdown.getBoundingClientRect();
+    ensure(bounds.top >= 0 && bounds.bottom <= window.innerHeight, "Dropdown must fit vertically in the viewport");
+    ensure(bounds.left >= 0 && bounds.right <= window.innerWidth, "Dropdown must fit horizontally in the viewport");
+    ensure(bounds.bottom <= anchor.top + 1, "Dropdown near the bottom must open upwards");
+    ensure(menu.scrollHeight > menu.clientHeight, "Long dropdown must scroll rather than hide options");
+    menu.querySelectorAll<HTMLButtonElement>("button")[39].click();
+    ensure(dropdown.value === "39", "Last dropdown option must remain selectable");
+  } finally { dropdown.remove(); document.querySelector(".select-menu")?.remove(); }
 }

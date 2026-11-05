@@ -1,5 +1,5 @@
 import { driveOauthSources, oauthClientAvailability, type RemoteConfigData, type SaveRemoteConfigRequest } from "./backend.ts";
-import { actionIcon } from "./icons.ts";
+import { actionIcon, providerIcon } from "./icons.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
 import { googleAccountValue } from "./remote_auth.ts";
 
@@ -20,12 +20,9 @@ export async function openGoogleAccountDialog(configs: readonly RemoteConfigData
   document.querySelector(".modal-layer")?.remove();
   const [availability, sources] = await Promise.all([oauthClientAvailability(), driveOauthSources()]);
   const primary = configs.find(config => config.provider === "drive") ?? configs[0];
-  const choices: Array<readonly [string, string]> = [["mountlet", "Mountlet"], ["rclone", "rclone"],
-    ...sources.filter(source => !configs.some(config => config.id === source.remoteId)).map(source => [`reuse:${source.remoteId}`, source.label] as const),
-    ["custom", "Custom"]];
+  const choices: Array<readonly [string, string]> = [["mountlet", "Mountlet"], ["rclone", "rclone"], ["custom", "Custom"]];
   const initial = primary.googleSharedClient ?? (configs.every(config => config.oauthClient === primary.oauthClient) ? primary.oauthClient ?? "rclone" : "saved");
-  if (initial === "saved") choices.unshift(["saved", "Saved clients"]);
-  if (initial.startsWith("reuse:") && !choices.some(([value]) => value === initial)) choices.push([initial, "Saved Google account"]);
+  const customSources = sources.filter(source => !configs.some(config => config.id === source.remoteId) && (source.driveCustom || source.photosCustom));
   const layer = node("div"); layer.className = "modal-layer";
   const dialog = node("section"); dialog.className = "modal-dialog remote-config-dialog google-account-dialog";
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
@@ -33,27 +30,45 @@ export async function openGoogleAccountDialog(configs: readonly RemoteConfigData
   const form = node("form"); form.className = "add-remote-form";
   const alias = input(primary.alias);
   const account = input(primary.fields.mountlet_google_account ?? "");
-  const source = select(choices, initial); source.dataset.googleSharedClient = "true";
+  const source = select(choices, initial === "saved" || initial.startsWith("reuse:") ? "custom" : initial); source.dataset.googleSharedClient = "true";
+  const reuse = select([["custom", "This account"], ...customSources.map(item => [`reuse:${item.remoteId}`, item.label] as const)], initial.startsWith("reuse:") ? initial : "custom");
+  reuse.dataset.googleCustomSource = "true";
+  if (initial.startsWith("reuse:") && ![...reuse.options].some(option => option.value === initial)) { reuse.add(new Option("Saved custom clients", initial)); reuse.value = initial; }
+  const reuseRow = row("Custom clients", reuse);
+  const sharedChoice = () => source.value === "custom" ? reuse.value : source.value;
+  let clientChanged = false;
   const mountlet = [...source.options].find(option => option.value === "mountlet")!;
   mountlet.disabled = !configs.every(config => availability[config.provider]);
   if (mountlet.disabled) mountlet.text = "Mountlet (unavailable)";
   const authInitial = configs.every(config => (config.fields.config_is_local ?? "true") === (primary.fields.config_is_local ?? "true")) ? primary.fields.config_is_local ?? "true" : "saved";
   const auth = select([["saved", "Saved settings"], ["true", "Browser"], ["false", "Paste token"]], authInitial);
-  form.append(row("Remote name", alias), row("Google account", account), row("OAuth client", source), row("Sign in", auth));
+  const auto = select([["", "App default"], ["true", "Enabled"], ["false", "Disabled"]], primary.autoMount === null ? "" : String(primary.autoMount));
+  auto.dataset.googleAutoMount = "true";
+  form.append(row("Remote name", alias), row("Google account", account), row("OAuth client", source), reuseRow, row("Sign in", auth), row("Auto-mount", auto));
   const notice = node("p", "Google Photos can download only media uploaded through the app's rclone client. Album writes stay inside the album folder."); notice.className = "add-remote-help"; form.append(notice);
-  const advanced = node("details"); advanced.className = "remote-advanced"; advanced.append(node("summary", "Options")); form.append(advanced);
+  const advanced = node("details"); advanced.className = "remote-advanced"; advanced.append(node("summary", "Advanced options"));
+  const guidance = node("button"); guidance.type = "button"; guidance.className = "add-remote-help";
+  guidance.addEventListener("click", () => { advanced.open = true; advanced.scrollIntoView({ block: "nearest" }); });
+  form.append(guidance);
   const controls = configs.map(config => {
-    const section = node("fieldset"); section.append(node("legend", config.provider === "drive" ? "Drive" : "Photos"));
+    const serviceGroup = () => {
+      const group = node("fieldset"), legend = node("legend");
+      const label = config.provider === "drive" ? "Drive" : "Photos";
+      legend.setAttribute("aria-label", label); legend.title = label;
+      legend.append(providerIcon(config.provider === "drive" ? "drive" : "gphotos")); group.append(legend); return group;
+    };
+    const section = serviceGroup(), credentials = serviceGroup();
     const client = select([["", "Shared choice"], ...choices.filter(([value]) => value !== "saved")], "");
     if (config.oauthClient && ![...client.options].some(option => option.value === config.oauthClient)) client.add(new Option("Saved client", config.oauthClient));
-    if (initial !== "saved" && config.oauthClient !== initial) client.value = config.oauthClient ?? "rclone";
+    if (initial === "saved" || config.oauthClient !== initial) client.value = config.oauthClient ?? "rclone";
     client.dataset.googleServiceClient = config.provider;
     const embedded = [...client.options].find(option => option.value === "mountlet")!; embedded.disabled = !availability[config.provider];
-    const id = input(config.fields.client_id ?? ""); const secret = input(config.fields.client_secret ?? "", true);
+    const hasCustom = config.oauthClient === "custom" || config.oauthClient?.startsWith("reuse:");
+    const id = input(hasCustom ? config.fields.client_id ?? "" : ""); const secret = input(hasCustom ? config.fields.client_secret ?? "" : "", true);
     const idRow = row("Client ID", id); const secretRow = row("Client secret", secret);
     const path = input(config.mountPath), remotePath = input(config.remotePath), flags = input(config.mountFlags);
-    const auto = select([["", "App default"], ["true", "Enabled"], ["false", "Disabled"]], config.autoMount === null ? "" : String(config.autoMount));
-    section.append(row("OAuth client", client), idRow, secretRow, row("Local folder", path), row("Remote path", remotePath), row("Auto-mount", auto), row("Mount flags", flags));
+    credentials.append(row("OAuth client", client), idRow, secretRow);
+    section.append(row("Local folder", path), row("Remote path", remotePath), row("Mount flags", flags));
     const fields = new Map<string, HTMLInputElement>();
     for (const [key, value] of Object.entries(config.fields)) {
       if (["client_id", "client_secret", "mountlet_google_account", "config_is_local"].includes(key)) continue;
@@ -62,13 +77,28 @@ export async function openGoogleAccountDialog(configs: readonly RemoteConfigData
       fields.set(key, field); section.append(row(key.replaceAll("_", " "), field));
     }
     const initialFields = new Map([...fields].map(([key, field]) => [key, field.type === "checkbox" ? String(field.checked) : field.value]));
-    const effective = () => client.value || (source.value === "saved" ? config.oauthClient ?? "rclone" : source.value);
+    const effective = () => {
+      if (client.value) return client.value;
+      const shared = sharedChoice();
+      const selected = customSources.find(item => `reuse:${item.remoteId}` === shared);
+      if (selected && !(config.provider === "drive" ? selected.driveCustom : selected.photosCustom)) return "custom";
+      return shared;
+    };
     const update = () => { idRow.hidden = secretRow.hidden = effective() !== "custom"; };
-    client.addEventListener("change", update); source.addEventListener("change", () => { client.value = ""; update(); }); update();
-    advanced.append(section);
+    client.addEventListener("change", update);
+    const changeShared = () => { clientChanged = true; client.value = ""; update(); };
+    source.addEventListener("change", changeShared); reuse.addEventListener("change", changeShared); update();
+    form.append(section); advanced.append(credentials);
     return { config, client, id, secret, path, remotePath, flags, auto, fields, initialFields, effective };
   });
-  source.addEventListener("change", () => { if (source.value === "custom") advanced.open = true; });
+  const updateCustom = () => {
+    reuseRow.hidden = source.value !== "custom";
+    const missing = controls.filter(control => control.effective() === "custom" && !control.id.value.trim()).map(control => control.config.provider === "drive" ? "Drive" : "Photos");
+    guidance.hidden = source.value !== "custom" || missing.length === 0;
+    guidance.textContent = `Configure ${missing.join(" and ")} custom client in Advanced options`;
+  };
+  source.addEventListener("change", updateCustom); reuse.addEventListener("change", updateCustom); form.addEventListener("input", updateCustom); form.addEventListener("change", updateCustom); updateCustom();
+  form.append(advanced);
   const actions = node("div"); actions.className = "dialog-actions";
   const remove = actionIcon("", "Delete"), cancel = actionIcon("", "Cancel"), save = actionIcon("", "Save");
   remove.classList.add("danger"); save.classList.add("primary"); save.dataset.dialogConfirm = "true";
@@ -93,8 +123,8 @@ export async function openGoogleAccountDialog(configs: readonly RemoteConfigData
         if (account.value !== (primary.fields.mountlet_google_account ?? "")) fields.mountlet_google_account = googleAccountValue(account.value);
         if (auth.value !== "saved" && auth.value !== authInitial) fields.config_is_local = auth.value;
         const oauthClient = control.effective();
-        if (oauthClient === "custom") { fields.client_id = control.id.value.trim(); fields.client_secret = control.secret.value; if (!fields.client_id) throw Error(`Enter the ${config.provider === "drive" ? "Drive" : "Photos"} client ID in Options.`); }
-        return { remoteId: config.id, alias: alias.value === primary.alias ? config.alias : alias.value.trim(), mountPath: control.path.value, remotePath: control.remotePath.value, mountFlags: control.flags.value, autoMount: control.auto.value === "" ? null : control.auto.value === "true", oauthClient, googleSharedClient: source.value === "saved" ? undefined : source.value, fields } satisfies SaveRemoteConfigRequest;
+        if (oauthClient === "custom") { fields.client_id = control.id.value.trim(); fields.client_secret = control.secret.value; if (!fields.client_id) throw Error(`Enter the ${config.provider === "drive" ? "Drive" : "Photos"} client ID in Advanced options.`); }
+        return { remoteId: config.id, alias: alias.value === primary.alias ? config.alias : alias.value.trim(), mountPath: control.path.value, remotePath: control.remotePath.value, mountFlags: control.flags.value, autoMount: control.auto.value === "" ? null : control.auto.value === "true", oauthClient, googleSharedClient: !clientChanged && initial === "saved" ? undefined : sharedChoice(), fields } satisfies SaveRemoteConfigRequest;
       });
       const id = await handlers.save(requests); busy = false; if (id) close(id);
     } catch (error) { advanced.open = true; await showError("Google settings", error); }

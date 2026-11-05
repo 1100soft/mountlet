@@ -3225,8 +3225,18 @@ fn auto_mount_remote_ids(state: tauri::State<'_, AppState>) -> Vec<String> {
             remotes
                 .iter()
                 .filter(|remote| {
+                    // The Drive representative owns the shared Google-card policy,
+                    // including older pairs with conflicting per-service settings.
+                    let owner = remotes
+                        .iter()
+                        .find(|candidate| {
+                            remote.google_group.is_some()
+                                && candidate.google_group == remote.google_group
+                                && candidate.provider == "drive"
+                        })
+                        .unwrap_or(remote);
                     settings
-                        .get(&remote.id)
+                        .get(&owner.id)
                         .and_then(|value| value.auto_mount)
                         .unwrap_or(defaults.auto_mount)
                         && remote_mount_path(&remote.id)
@@ -7916,22 +7926,29 @@ fn drive_oauth_sources(state: tauri::State<'_, AppState>) -> Vec<DriveOauthSourc
     let Ok(sections) = parse_rclone_config(config) else {
         return Vec::new();
     };
+    google_oauth_sources(&sections)
+}
+
+fn google_oauth_sources(sections: &[RcloneSection]) -> Vec<DriveOauthSource> {
     let mut sources = Vec::new();
-    for (name, values) in &sections {
-        if values.get("type").map(String::as_str) != Some("drive")
-            || !platform::remote_section_is_configured("drive", &values)
-        {
+    for (name, values) in sections {
+        if values.get("type").map(String::as_str) != Some("drive") {
             continue;
         }
-        let label = google_account(&values).unwrap_or_else(|| name.clone());
+        let label = google_account(values).unwrap_or_else(|| name.clone());
         let custom = |provider: &str, fields: &HashMap<String, String>| {
-            oauth_client_source(fields, embedded_oauth_client(provider)) == "custom"
-                && fields.get("client_id").is_some_and(|id| !id.trim().is_empty())
+            oauth_client_source(fields, embedded_oauth_credentials(provider)) == "custom"
+                && fields
+                    .get("client_id")
+                    .is_some_and(|id| !id.trim().is_empty())
         };
         let photos_custom = sections.iter().any(|(_, photos)| {
             photos.get("type").map(String::as_str) == Some("gphotos")
                 && values.get("mountlet_google_group").map_or_else(
-                    || google_account(values).is_some_and(|account| google_account(photos) == Some(account)),
+                    || {
+                        google_account(values)
+                            .is_some_and(|account| google_account(photos) == Some(account))
+                    },
                     |group| photos.get("mountlet_google_group") == Some(group),
                 )
                 && custom("gphotos", photos)
@@ -8511,6 +8528,46 @@ mod tests {
             "fixture-secret"
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn google_custom_sources_include_partial_clients_without_tokens() {
+        let section = |name: &str, provider: &str, group: &str, source: &str| {
+            (
+                name.into(),
+                HashMap::from([
+                    ("type".into(), provider.into()),
+                    ("mountlet_google_group".into(), group.into()),
+                    (
+                        "mountlet_google_account".into(),
+                        "fixture@example.com".into(),
+                    ),
+                    ("mountlet_oauth_client".into(), source.into()),
+                    ("client_id".into(), "fixture-id".into()),
+                ]),
+            )
+        };
+        let mut sections = vec![
+            section("drive", "drive", "one", "custom"),
+            section("photos", "gphotos", "one", "mountlet"),
+            section("other-photos", "gphotos", "two", "custom"),
+        ];
+        let sources = google_oauth_sources(&sections);
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].drive_custom);
+        assert!(
+            !sources[0].photos_custom,
+            "same email must not cross group boundaries"
+        );
+        sections[1]
+            .1
+            .insert("mountlet_oauth_client".into(), "custom".into());
+        assert!(google_oauth_sources(&sections)[0].photos_custom);
+        sections[0]
+            .1
+            .insert("mountlet_oauth_client".into(), "rclone".into());
+        assert!(!google_oauth_sources(&sections)[0].drive_custom);
+        assert!(google_oauth_sources(&sections)[0].photos_custom);
     }
 
     #[test]

@@ -53,10 +53,12 @@ export async function createReportIssue(env, report) {
   if (!githubState.enabled) {
     throw new HttpError(409, githubConfigurationError(githubState));
   }
+  const projectLabel = reportProjectLabel(env);
   const labels = reportLabels(env, report.kind);
   let response = await postGitHubIssue(githubState.token, githubState.repo, report, labels);
-  if (response.status === 422 && labels.length > 0) {
-    response = await postGitHubIssue(githubState.token, githubState.repo, report, []);
+  if (response.status === 422 && labels.some((label) => label !== projectLabel)) {
+    // Optional classification labels may be rejected; never drop project scope.
+    response = await postGitHubIssue(githubState.token, githubState.repo, report, [projectLabel]);
   }
   const body = await response.text();
   if (!response.ok) {
@@ -207,12 +209,19 @@ function issueBody(report) {
   return body.slice(0, MAX_ISSUE_BODY_CHARS);
 }
 
+function reportProjectLabel(env) {
+  const value = String(env.REPORT_GITHUB_PROJECT_LABEL || "mountlet-report").trim();
+  if (!value || value.length > 50 || /[\x00-\x1f\x7f,]/.test(value)) {
+    throw new HttpError(409, "REPORT_GITHUB_PROJECT_LABEL must be one valid project label.");
+  }
+  return value;
+}
+
 function reportLabels(env, kind) {
   const configured = String(env.REPORT_GITHUB_LABELS || env.GITHUB_REPORT_LABELS || "").trim();
   const labels = configured.split(",").map((label) => label.trim()).filter(Boolean);
-  if (labels.length === 0) {
-    return [];
-  }
+  const projectLabel = reportProjectLabel(env);
+  if (!labels.includes(projectLabel)) labels.push(projectLabel);
   if (kind === "crash" && !labels.includes("crash")) {
     labels.push("crash");
   } else if (kind === "bug" && !labels.includes("bug")) {

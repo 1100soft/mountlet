@@ -135,6 +135,12 @@ upgrade tests:
   config rewrites. Unknown accounts must not merge by card name. Preserve IDs,
   credentials, cached trees, and locations. Test both web icons, the unified
   account settings form, shared client categories, and advanced service overrides,
+  keeping ordinary fields visible. Custom must list only cards with custom
+  registrations and direct missing Drive/Photos clients to Advanced options.
+  Verify one shared auto-mount control saves to both services, service groups
+  use Drive/Photos icons, and long dropdowns near the bottom open upward with
+  every option reachable by scrolling and keyboard.
+  Verify partially configured custom registrations without requiring OAuth first
   and repeated browser service switches in both window modes. The hover startup
   probe also checks grouped rows and independent service locations. Photos API
   limitations remain visible; no shared-storage explanatory badge is needed.

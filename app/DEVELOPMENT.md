@@ -28,7 +28,15 @@ Refactoring is not a reason to weaken a behavior reproduced by the current app.
 - Google configuration is a single account form, not service pages. Persist the
   shared client category separately from advanced service overrides. Reuse maps
   each service to its matching registration and never copies OAuth tokens.
+  Keep regular service fields visible. Only per-service client overrides and
+  manual credentials belong under Advanced options. The primary categories are
+  Mountlet, rclone, and Custom; Custom offers other cards with custom clients,
+  including partially configured cards, and directs missing clients to Advanced.
   Preserve reuse provenance without rotating registrations on unrelated edits.
+  Google auto-mount is shared: display one control and save it to both services.
+  Startup uses the Drive representative's policy for legacy conflicting settings.
+  Use provider icons for service-specific option groups. Scaled dropdowns must
+  fit the viewport, flip above their control when needed, and scroll internally.
 - Handle rclone's shared-client confirmation and saved client-ID/secret answers
   internally. OAuth must not fall into manual registration prompts after a
   default client was selected; report an unavailable registration in settings.

@@ -35,6 +35,18 @@ try {
   assert.equal(delivered.status, 200);
   assert.equal(body.issueUrl, "https://github.com/owner/repo/issues/42");
   assert.equal(body.id, "42");
+  // Optional label failures may retry, but project routing must never disappear.
+  const issueLabels=[];let attempt=0;
+  globalThis.fetch=async(url,options)=>{
+    if(!String(url).includes("api.github.com"))return new Response(JSON.stringify({id:"email"}),{status:200});
+    issueLabels.push(JSON.parse(options.body).labels);
+    return ++attempt===1?new Response(JSON.stringify({message:"Invalid label"}),{status:422}):new Response(JSON.stringify({number:43,html_url:"https://github.com/owner/repo/issues/43"}),{status:201});
+  };
+  const fallback=await onRequestPost({request:request(),env:{...env,REPORT_GITHUB_LABELS:"unavailable-label"}});
+  assert.equal(fallback.status,200);assert.ok(issueLabels[0].includes("mountlet-report"));assert.deepEqual(issueLabels[1],["mountlet-report"]);
+  issueLabels.length=0;attempt=0;
+  const custom=await onRequestPost({request:request(),env:{...env,REPORT_GITHUB_PROJECT_LABEL:"project:mountlet"}});
+  assert.equal(custom.status,200);assert.ok(issueLabels.every(labels=>labels.includes("project:mountlet")));
 } finally {
   globalThis.fetch = originalFetch;
 }
