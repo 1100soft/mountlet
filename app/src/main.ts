@@ -2765,6 +2765,8 @@ async function checkRemoteHoverSelection(mode: Preferences["mode"]): Promise<voi
     ...remote, provider: index === 0 ? "drive" : "gphotos", googleGroup: "smoke-google", configured: true,
   } : remote);
   render();
+  // renderRemotePane populates the new list in a microtask after attachment.
+  await Promise.resolve();
   if (document.querySelectorAll(".remote-card").length !== 2
     || document.querySelectorAll(`.remote-card[data-remote-id="${a}"] .provider-icon`).length !== 2) {
     throw new Error("Google services did not share a card with two web icons");

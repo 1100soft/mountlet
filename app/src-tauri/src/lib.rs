@@ -4397,11 +4397,14 @@ fn ensure_google_pair(
         ensure_google_pair_in_config(config, remote_id, companion_id, &candidates)?;
     if created {
         let id = &ids[1];
+        let shared_auto_mount = mount_settings()
+            .get(&ids[0])
+            .and_then(|settings| settings.auto_mount);
         update_mount_section(
             id,
             id,
             &RemoteMountSettings {
-                auto_mount: Some(false),
+                auto_mount: shared_auto_mount,
                 ..RemoteMountSettings::default()
             },
         )?;
@@ -6401,7 +6404,7 @@ async fn run_rclone_mutation(
     };
     append_rclone_log(state, format!("$ rclone {operation} {source}"));
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut command = Command::new(&rclone);
+        let mut command = Command::new(rclone);
         command
             .args(["--config"])
             .arg(config)

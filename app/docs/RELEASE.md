@@ -141,7 +141,9 @@ upgrade tests:
   use Drive/Photos icons, and long dropdowns near the bottom open upward with
   every option reachable by scrolling and keyboard.
   Verify partially configured custom registrations without requiring OAuth first
-  and repeated browser service switches in both window modes. The hover startup
+  and repeated browser service switches in both window modes. Grouped-card
+  assertions must await the microtask that populates the newly attached remote
+  list after rendering. The hover startup
   probe also checks grouped rows and independent service locations. Photos API
   limitations remain visible; no shared-storage explanatory badge is needed.
 - First-time OAuth with Mountlet/rclone/reused registrations must not prompt for
