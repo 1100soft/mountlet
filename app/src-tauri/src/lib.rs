@@ -53,6 +53,8 @@ fn build_id() -> String {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Remote {
+    pub(crate) google_group: Option<String>,
+    pub(crate) configured: bool,
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) provider: String,
@@ -510,6 +512,8 @@ fn sample_state() -> AppState {
     .into_iter()
     .map(
         |(id, name, provider, provider_label, mounted, used_bytes, total_bytes)| Remote {
+            google_group: None,
+            configured: true,
             id: id.into(),
             name: name.into(),
             provider: provider.into(),
@@ -3013,7 +3017,10 @@ fn discover_state() -> Option<AppState> {
             (current.as_mut(), line.split_once('='))
         {
             let key = key.trim();
-            if matches!(key, "type" | "provider" | "vendor") {
+            if matches!(
+                key,
+                "type" | "provider" | "vendor" | "mountlet_google_group"
+            ) {
                 values.insert(key.into(), value.trim().into());
             }
         }
@@ -3049,6 +3056,11 @@ fn discover_state() -> Option<AppState> {
                 remote_settings.order,
                 index,
                 Remote {
+                    google_group: values
+                        .get("mountlet_google_group")
+                        .filter(|_| matches!(backend.as_str(), "drive" | "gphotos"))
+                        .cloned(),
+                    configured: remote_is_configured(&name, &backend),
                     id: name,
                     name: alias,
                     provider: backend,
@@ -3109,8 +3121,11 @@ async fn list_remotes(state: tauri::State<'_, AppState>) -> Result<Vec<Remote>, 
     tauri::async_runtime::spawn_blocking(move || {
         remotes
             .into_iter()
-            .filter(|remote| remote_is_configured(&remote.id, &remote.provider))
+            .filter(|remote| {
+                remote.google_group.is_some() || remote_is_configured(&remote.id, &remote.provider)
+            })
             .map(|mut remote| {
+                remote.configured = remote_is_configured(&remote.id, &remote.provider);
                 remote.mounted = remote_mount_path(&remote.id)
                     .map(|path| path_is_mounted(&path))
                     .unwrap_or(false);
@@ -3160,6 +3175,7 @@ async fn refresh_remote_usage(
     let total = value.get("total").and_then(|item| item.as_u64());
     save_usage_value(&remote_id, used, total)?;
     let mut updated = remote;
+    updated.configured = remote_is_configured(&remote_id, &updated.provider);
     updated.mounted = remote_mount_path(&remote_id)
         .map(|path| path_is_mounted(&path))
         .unwrap_or(false);
@@ -4248,6 +4264,142 @@ fn save_remote_config(
     rename_persistent_remote(&remote.id, &new_id, alias)?;
     refresh_remote_state(&state)?;
     Ok(new_id)
+}
+
+#[tauri::command]
+fn ensure_google_pair(
+    remote_id: String,
+    companion_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let config = state
+        .rclone_config
+        .as_ref()
+        .ok_or("rclone configuration is unavailable")?;
+    let source = read_rclone_section(config, &remote_id)?;
+    let provider = source.get("type").map(String::as_str).unwrap_or_default();
+    let other = match provider {
+        "drive" => "gphotos",
+        "gphotos" => "drive",
+        _ => return Err("Only Google Drive and Photos can be paired.".into()),
+    };
+    let group = source
+        .get("mountlet_google_group")
+        .cloned()
+        .unwrap_or_else(|| format!("google-{}-{}", std::process::id(), rand::random::<u64>()));
+    let existing = state
+        .remotes
+        .read()
+        .map_err(|_| "Remote state is unavailable")?
+        .iter()
+        .find(|remote| remote.provider == other && remote.google_group.as_deref() == Some(&group))
+        .map(|remote| remote.id.clone());
+    let companion = if let Some(id) = existing {
+        id
+    } else if let Some(id) = companion_id {
+        if id == remote_id {
+            return Err("Choose the other Google service.".into());
+        }
+        let saved = read_rclone_section(config, &id)?;
+        if saved.get("type").map(String::as_str) != Some(other)
+            || saved.contains_key("mountlet_google_group")
+        {
+            return Err(
+                "The companion must be an unpaired remote for the other Google service.".into(),
+            );
+        }
+        id
+    } else {
+        let alias = remote_id
+            .rsplit_once("__")
+            .map(|(alias, _)| alias)
+            .unwrap_or(&remote_id)
+            .replace('@', " ");
+        let label = if other == "drive" {
+            "Drive"
+        } else {
+            "Google Photos"
+        };
+        let mut suffix = label.to_string();
+        let mut number = 2;
+        while !read_rclone_section(config, &format!("{alias}__{suffix}"))?.is_empty() {
+            suffix = format!("{label} {number}");
+            number += 1;
+        }
+        let client = if embedded_oauth_credentials(other)
+            .0
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            "mountlet"
+        } else {
+            "rclone"
+        };
+        create_remote(
+            CreateRemoteRequest {
+                alias,
+                provider: other.into(),
+                provider_label: suffix,
+                fields: HashMap::from([
+                    ("mountlet_oauth_client".into(), client.into()),
+                    (
+                        "config_is_local".into(),
+                        source
+                            .get("mountlet_oauth_local")
+                            .cloned()
+                            .unwrap_or_else(|| "true".into()),
+                    ),
+                ]),
+                google_account: source
+                    .get("mountlet_google_account")
+                    .cloned()
+                    .unwrap_or_default(),
+                mount_after: false,
+                remote_path: String::new(),
+            },
+            state.clone(),
+        )?
+    };
+    link_google_sections(config, &remote_id, &companion, &group)?;
+    refresh_remote_state(&state)?;
+    Ok(vec![remote_id, companion])
+}
+
+fn link_google_sections(
+    config: &Path,
+    source: &str,
+    companion: &str,
+    group: &str,
+) -> Result<(), String> {
+    let first = read_rclone_section(config, source)?;
+    let second = read_rclone_section(config, companion)?;
+    if !matches!(
+        (
+            first.get("type").map(String::as_str),
+            second.get("type").map(String::as_str)
+        ),
+        (Some("drive"), Some("gphotos")) | (Some("gphotos"), Some("drive"))
+    ) {
+        return Err("A Google card requires one Drive and one Photos remote.".into());
+    }
+    if group.is_empty()
+        || [&first, &second].iter().any(|values| {
+            values
+                .get("mountlet_google_group")
+                .is_some_and(|saved| saved != group)
+        })
+    {
+        return Err("A Google service is already linked to another card.".into());
+    }
+    // Pairing never infers identity from labels or copies tokens/registrations.
+    for id in [source, companion] {
+        write_rclone_section(
+            config,
+            id,
+            id,
+            &HashMap::from([("mountlet_google_group".into(), group.into())]),
+        )?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -7969,6 +8121,7 @@ pub fn run() {
             load_remote_config,
             save_remote_config,
             create_remote,
+            ensure_google_pair,
             oauth_client_availability,
             delete_remote,
             rclone_output,
@@ -8057,6 +8210,35 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn google_pairing_preserves_service_credentials_and_rejects_regrouping() {
+        let path = env::temp_dir().join(format!(
+            "mountlet-google-pair-{}-{}.conf",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::write(&path, "[drive]\ntype = drive\nclient_id = drive-client\nclient_secret = drive-secret\ntoken = drive-token\nroot_folder_id = saved-root\n\n[photos]\ntype = gphotos\nclient_id = photos-client\nclient_secret = photos-secret\ntoken = photos-token\n\n[unrelated]\ntype = drive\n").unwrap();
+        let first = read_rclone_section(&path, "drive").unwrap();
+        let second = read_rclone_section(&path, "photos").unwrap();
+        assert!(link_google_sections(&path, "drive", "unrelated", "group").is_err());
+        assert!(link_google_sections(&path, "drive", "missing", "group").is_err());
+        assert!(link_google_sections(&path, "drive", "photos", "").is_err());
+        link_google_sections(&path, "drive", "photos", "group").unwrap();
+        for (id, original) in [("drive", first), ("photos", second)] {
+            let mut linked = read_rclone_section(&path, id).unwrap();
+            assert_eq!(
+                linked.remove("mountlet_google_group").as_deref(),
+                Some("group")
+            );
+            assert_eq!(linked, original);
+        }
+        link_google_sections(&path, "photos", "drive", "group").unwrap();
+        let linked = fs::read_to_string(&path).unwrap();
+        assert!(link_google_sections(&path, "drive", "photos", "different-group").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), linked);
+        fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn sensitive_tokens_and_application_secrets_are_not_rclone_passwords() {
         for key in [

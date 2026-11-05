@@ -3,6 +3,8 @@ export type Provider =
   | "protondrive" | "iclouddrive" | "pcloud" | "box" | "koofr" | "s3" | "webdav";
 
 export interface Remote {
+  googleGroup?: string | null;
+  configured?: boolean;
   id: string;
   name: string;
   provider: Provider;

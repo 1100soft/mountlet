@@ -44,6 +44,22 @@ settings. Mountlet is the default when its provider credentials are included in
 the installed build; adding GitHub secrets requires a rebuild and installation.
 Existing remotes keep their saved client until changed and reauthenticated.
 
+Google setup includes Drive and Photos under one card, with independent sign-in
+for each service. Each card icon opens that service on the web; the browser's
+icon toggle switches content while retaining each service's folder, selection,
+and cached tree. Settings has the same service switch. Opening settings for an
+older Google remote offers to link an existing counterpart explicitly or create
+one; matching names or account hints alone never merge remotes. Save pending
+settings before switching tabs. Failed or cancelled sign-in does not remove the
+working service; select the other service to retry. Photos remains restricted
+by Google's API and is not recursively indexed.
+Deleting a linked Google card removes both service configurations after
+unmounting them; it does not delete cloud files.
+
+Daily beta tokens renew during startup before an expired-license dialog is
+shown. While renewal runs, access stays locked with a checking indicator. A
+failed renewal retains the key for retry without resetting the trial.
+
 Integrated edits are disabled by default because cloud copy, move, upload,
 rename, and delete operations are direct and cannot be undone by Mountlet.
 Offline files and ordinary cached files live under the configured Mountlet app

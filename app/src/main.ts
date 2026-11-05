@@ -10,6 +10,9 @@ import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { activateLicense, clipboardText, deactivateLicenseDevice, oauthClientAvailability, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, refreshLicense, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
+import { ensureGooglePair, listenGoogleService, requestGoogleService } from "./backend.ts";
+import { googleCards, isGoogle, sameRemoteCard } from "./google_remotes.ts";
+import { resolveStartupLicense } from "./license_startup.ts";
 import { checkRemoteSettingsForm } from "./remote_dialog_smoke.ts";
 import { appVersion, applyWindowLayout, autoMountRemoteIds, bugReportPreview, checkPrerequisites, clearResolvedCache, configWizardStep, createRemoteFile, createRemoteFolder, deleteNotification, deleteRemote, deleteRemoteEntry, desktopHints, emitBrowserState, emitUiPreferences, focusNativeWindow, getBrowserState, invalidateFolder, listFileManagers, listFolder, listRemotes, listenBrowserState, listenFolderUpdated, listenNativeFileDrop, listenNativeLayout, listenRemoteUsageDirty, listenRestoreKeyboardFocus, listenTrayAnchor, listenTrayCommand, listenUiPreferences, loadAppSettings, loadBrowserMemory, loadPreferences, loadRemoteConfig, loadShortcuts, makeRemoteEntryOffline, markNotificationSeen, markNotificationsSeen, notificationHistory, openConfigBackupFolder, openConfigFile, openExternal, openMountedFolder, openRemoteEntry, openRemoteWeb, persistBrowserMemory, pickConfigBundlePath, pollNotifications, quitApp, refreshRemoteUsage, resolveOfflineConflict, rcloneOutput, rememberBrowserState, rememberSelection, remoteRegistrationOrder, removeOfflineCopies, removeRemoteEntryOffline, renameRemoteEntry, reorderRemotes, saveAppSettings, saveRemoteConfig, searchIndex, setDetachedBrowser, setWindowPinned, showDesktopNotification, showStartupWindows, startInitialMetadataIndex, syncOffline, toggleRemoteMount, transferRemoteEntry, uploadLocalPaths, type BrowserMemory, type DesktopHints, type OfflineConflict, type SearchEntry } from "./backend.ts";
 import { actionIcon, chromeIcon, fileIcon, providerIcon, refreshTintedIcons } from "./icons.ts";
@@ -115,9 +118,13 @@ function requireIntegratedEdits(): boolean {
   showToast("Integrated file edits are disabled. Enable them in App settings, or use the system file manager.");
   return false;
 }
-function licenseLocked(): boolean { return currentLicense?.state === "expired"; }
+let licenseChecking = false;
+let startupLicenseRequest: Promise<LicenseStatus | null> | null = null;
+let licenseRevision = 0;
+function licenseLocked(): boolean { return licenseChecking || currentLicense?.state === "expired"; }
 
 function applyLicense(status: LicenseStatus | null): void {
+  if (currentLicense?.state !== status?.state || currentLicense?.licenseKey !== status?.licenseKey) ++licenseRevision;
   currentLicense = status;
   render();
   scheduleNativeLayout(0);
@@ -145,14 +152,14 @@ async function renewStoredLicense(): Promise<void> {
     applyLicense(local);
     window.clearTimeout(folderPollTimer);
     const keyInput = document.querySelector<HTMLInputElement>(".license-key-controls input");
-    if (keyInput && (keyInput.value.trim() !== key || document.activeElement?.closest(".license-form"))) return;
+    const revision = licenseRevision;
     const renewed = await refreshLicense();
     // A user may have activated a different key or deactivated while HTTP was
     // pending. Do not replace that newer dialog/application state.
-    if (currentLicense?.licenseKey !== key || currentLicense.state === "licensed") return;
+    if (licenseRevision !== revision || currentLicense?.licenseKey !== key || currentLicense.state === "licensed") return;
     applyLicense(renewed);
     if (renewed.state === "licensed") await resumeLicensedUi();
-    if (document.querySelector(".license-dialog")) void showLicense();
+    if (document.querySelector(".license-dialog") && (!keyInput || keyInput.value.trim() === key)) void showLicense();
   } catch {
     // Remain locked, retaining the key so offline/server failures are retryable.
     const keyInput = document.querySelector<HTMLInputElement>(".license-key-controls input");
@@ -404,8 +411,8 @@ async function layoutNativeWindows(): Promise<void> {
   await applyWindowLayout({
     mode: licenseLocked() ? "single" : preferences.mode,
     // The detached browser follows the displayed remote, including previews.
-    selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => remote.id === selectedRemote)),
-    remoteCount: remotes.length,
+    selectedIndex: Math.max(0, visibleRemotes().findIndex(remote => sameRemoteCard(remote, remotes.find(item => item.id === selectedRemote)))),
+    remoteCount: visibleRemotes().length,
     browserItems: preferences.fileListMaxItems > 0
       ? Math.min(snapshot?.entries.length ?? 0, preferences.fileListMaxItems)
       : snapshot?.entries.length ?? 0,
@@ -617,6 +624,7 @@ async function syncConfiguration(direction: "push" | "pull"): Promise<void> {
 }
 
 async function showLicense(): Promise<void> {
+  if (licenseChecking && startupLicenseRequest) await startupLicenseRequest;
   document.querySelector(".modal-layer")?.remove();
   const layer = element("div", "modal-layer"); const dialog = element("section", "modal-dialog license-dialog");
   dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
@@ -626,7 +634,8 @@ async function showLicense(): Promise<void> {
   layer.addEventListener("keydown", event => { if (event.key === "Escape") layer.remove(); });
   const defaultDeviceLabelPromise = bounded(licenseDefaultDeviceLabel(), 5000, "Could not identify this device.").catch(() => "This device");
   const renderLicense = async (status: LicenseStatus, defaultDeviceLabel: string) => {
-    currentLicense = status; render(); scheduleNativeLayout(0); content.replaceChildren();
+    if (!layer.isConnected) return;
+    applyLicense(status); content.replaceChildren();
     content.append(element("p", `license-summary${status.state === "expired" ? " error" : ""}`, status.summary));
     const expiry = status.licenseKind === "beta" && status.state === "licensed"
       ? "Public beta access renews daily and can end when the beta closes."
@@ -660,7 +669,7 @@ async function showLicense(): Promise<void> {
     activate.dataset.dialogConfirm = "true";
     key.addEventListener("input", () => { copy.disabled = !key.value; activate.disabled = !key.value || status.state === "licensed"; void updateCopyState(); });
     void updateCopyState();
-    activate.addEventListener("click", async () => { activate.disabled = true; try { const next = await activateLicense(key.value, device.value); currentLicense = next; render(); await resumeLicensedUi(); scheduleNativeLayout(0); await renderLicense(next, device.value || defaultDeviceLabel); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
+    activate.addEventListener("click", async () => { activate.disabled = true; try { const next = await activateLicense(key.value, device.value); applyLicense(next); await resumeLicensedUi(); scheduleNativeLayout(0); await renderLicense(next, device.value || defaultDeviceLabel); showToast("Mountlet is activated on this device."); } catch (error) { await showError("License activation", error); } finally { activate.disabled = false; } });
     const buy = element("button", "", "Buy license"); buy.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing"));
     controls.append(activate); if (status.state !== "licensed") controls.append(buy);
     form.append(keyRow, deviceRow, controls); content.append(form);
@@ -687,12 +696,13 @@ async function showLicense(): Promise<void> {
   };
   const cached = currentLicense;
   if (cached) await renderLicense(cached, cached.deviceLabel || "This device");
+  const revision = licenseRevision;
   try {
     const [status, defaultDeviceLabel] = await Promise.all([
       bounded(licenseStatus(), 15000, "License status timed out. Please try again."),
       defaultDeviceLabelPromise,
     ]);
-    await renderLicense(status, defaultDeviceLabel);
+    if (revision === licenseRevision) await renderLicense(status, defaultDeviceLabel);
   }
   catch (error) {
     if (!content.querySelector(".license-summary")) {
@@ -1033,25 +1043,13 @@ async function showAppSettings(initialPage?: string): Promise<void> {
   }, { fileManagers: managers, wayland: Boolean(currentHints?.wayland), initialPage });
 }
 
-function driveUsageNote(remote: Remote): HTMLElement | null {
-  if (remote.provider !== "drive") return null;
-  const note = element("span", "usage-note", "ⓘ");
-  note.title = "Google Drive usage excludes Photos and other Google account data.";
-  note.setAttribute("aria-label", note.title);
-  note.classList.add("row-control");
-  note.addEventListener("click", event => event.stopPropagation());
-  return note;
-}
-
 function usage(remote: Remote): HTMLElement {
   const box = element("div", "usage");
-  const note = driveUsageNote(remote);
   if (remote.usedBytes == null || remote.totalBytes == null) {
     const info = element("span", "usage-info", "ⓘ");
     info.title = "This provider does not expose storage usage information.";
     const line = element("span", "usage-line");
     line.append(info);
-    if (note) line.append(note);
     box.append(line);
     return box;
   }
@@ -1062,14 +1060,14 @@ function usage(remote: Remote): HTMLElement {
   meter.append(fill);
   const line = element("span", "usage-line");
   line.append(element("span", "usage-text", `${formatBytes(remote.usedBytes)}/${formatBytes(remote.totalBytes)}`));
-  if (note) line.append(note);
   box.append(meter, line);
   return box;
 }
 
 function updateRemoteCardState(card: HTMLElement): void {
-  const active = card.dataset.remoteId === activeRemote;
-  const previewing = !active && card.dataset.remoteId === remoteSelectionTarget;
+  const representative = remotes.find(remote => remote.id === card.dataset.remoteId);
+  const active = sameRemoteCard(representative, remotes.find(remote => remote.id === activeRemote));
+  const previewing = !active && sameRemoteCard(representative, remotes.find(remote => remote.id === remoteSelectionTarget));
   card.classList.toggle("selected", active);
   card.classList.toggle("previewing", previewing);
   card.setAttribute("aria-current", String(active));
@@ -1077,11 +1075,12 @@ function updateRemoteCardState(card: HTMLElement): void {
   else card.removeAttribute("aria-description");
 }
 
-function remoteCard(remote: Remote): HTMLElement {
+function remoteCard(representative: Remote): HTMLElement {
+  const remote = googleCardService(representative);
   const card = element("button", "remote-card");
   card.type = "button";
   card.disabled = licenseLocked();
-  card.dataset.remoteId = remote.id;
+  card.dataset.remoteId = representative.id;
   updateRemoteCardState(card);
   card.draggable = sortMode === "manual" && !sortReverse;
   const state = element("img", `mount-state${remote.mounted ? " mounted" : ""}${pendingMounts.has(remote.id) ? " working" : ""}${remoteErrors.has(remote.id) ? " error" : ""}`) as HTMLImageElement;
@@ -1094,11 +1093,21 @@ function remoteCard(remote: Remote): HTMLElement {
   if (remote.mounted) state.addEventListener("click", event => { event.stopPropagation(); void openMountedFolder(remote.id, ""); });
   const provider = providerIcon(remote.provider, remote.providerLabel);
   provider.classList.add("row-control");
+  provider.addEventListener("mousedown", event => event.preventDefault());
   provider.title = `Open ${remote.providerLabel} in web`;
   provider.addEventListener("click", event => { event.stopPropagation(); void openRemoteWeb(remote.id); });
   const titleGroup = element("span", "remote-title-group");
-  titleGroup.append(provider, element("span", "remote-name", remote.name));
-  card.append(state, titleGroup, usage(remote));
+  if (remote.googleGroup) {
+    for (const service of googleServices(remote)) {
+      const icon = providerIcon(service.provider, service.providerLabel);
+      icon.classList.add("row-control"); icon.title = `Open ${service.providerLabel} in web`;
+      icon.addEventListener("mousedown", event => event.preventDefault());
+      icon.addEventListener("click", event => { event.stopPropagation(); void openRemoteWeb(service.id); });
+      titleGroup.append(icon);
+    }
+  } else titleGroup.append(provider);
+  titleGroup.append(element("span", "remote-name", representative.name));
+  card.append(state, titleGroup, usage(googleServices(remote).find(service => service.provider === "drive") ?? remote));
   card.title = `Double-click to configure ${remote.name} (${remote.providerLabel}). Drag to move this remote.`;
   card.addEventListener("dblclick", event => {
     if ((event.target as HTMLElement).closest(".row-control")) return;
@@ -1106,7 +1115,7 @@ function remoteCard(remote: Remote): HTMLElement {
   });
   card.addEventListener("contextmenu", event => {
     void selectRemote(remote.id);
-    const index = visibleRemotes().findIndex(candidate => candidate.id === remote.id);
+    const index = visibleRemotes().findIndex(candidate => sameRemoteCard(candidate, remote));
     showContextMenu(event, [
       { label: remote.mounted ? "Unmount" : "Mount", run: () => void changeRemoteMount(remote.id) },
       { label: "Open in file manager", enabled: remote.mounted, run: () => void openMountedFolder(remote.id, "") },
@@ -1141,13 +1150,14 @@ function remoteCard(remote: Remote): HTMLElement {
     event.preventDefault();
     card.classList.remove("drop-target");
     const source = draggedRemote || event.dataTransfer?.getData("text/plain") || "";
-    const from = remotes.findIndex(candidate => candidate.id === source);
-    const to = remotes.findIndex(candidate => candidate.id === remote.id);
+    const cards = [...visibleRemotes()];
+    const from = cards.findIndex(candidate => sameRemoteCard(candidate, remotes.find(item => item.id === source)));
+    const to = cards.findIndex(candidate => sameRemoteCard(candidate, remote));
     if (from >= 0 && to >= 0 && from !== to) {
-      const reordered = [...remotes];
+      const reordered = cards;
       const [moved] = reordered.splice(from, 1);
       reordered.splice(to, 0, moved);
-      remotes = reordered;
+      remotes = reordered.flatMap(card => googleServices(card));
       persistRemoteOrder();
       renderRemoteList();
       scheduleNativeLayout(0);
@@ -1198,11 +1208,56 @@ const REMOTE_AUTH_FIELDS: Record<string, readonly string[]> = {
   mega: ["user", "pass", "2fa"],
 };
 
+async function prepareGoogleAccount(remoteId: string): Promise<void> {
+  const source = remotes.find(remote => remote.id === remoteId);
+  const config = await loadRemoteConfig(remoteId);
+  const other = config.provider === "drive" ? "gphotos" : "drive";
+  const candidates = remotes.filter(remote => remote.provider === other && !remote.googleGroup);
+  let companionId: string | undefined;
+  if (!source?.googleGroup && candidates.length) {
+    const chosen = await promptWizardOption("Google account", "Choose the other service for the same Google account. Existing remotes are linked only with your confirmation.", "new", false,
+      [{ value: "new", label: "Set up the other service" }, ...candidates.map(remote => ({ value: remote.id, label: remote.name }))]);
+    if (chosen === null) return;
+    if (chosen !== "new") companionId = chosen;
+  }
+  const ids = await ensureGooglePair(remoteId, companionId);
+  remotes = await listRemotes();
+  renderRemoteList();
+  for (const id of ids) {
+    const service = remotes.find(remote => remote.id === id);
+    if (service?.configured !== false) continue;
+    const settings = await loadRemoteConfig(id);
+    try { if (!await runRemoteConfigWizard(id, settings.fields.config_is_local !== "false")) break; }
+    catch (error) { await showError("Google sign-in", error); }
+    remotes = await listRemotes();
+  }
+}
+
+async function switchGoogleService(remote: Remote): Promise<void> {
+  if (isBrowserWindow) { await requestGoogleService(remote.id); return; }
+  if (licenseLocked()) return;
+  try {
+    if (remote.configured === false) {
+      const config = await loadRemoteConfig(remote.id);
+      if (!await runRemoteConfigWizard(remote.id, config.fields.config_is_local !== "false")) return;
+      remotes = await listRemotes();
+    }
+    await selectRemote(remote.id);
+    renderRemoteList(); renderBrowserOnly();
+  } catch (error) { await showError("Google service", error); }
+}
+
 async function showRemoteConfig(remote: Remote): Promise<void> {
+  if (isGoogle(remote)) {
+    try { await prepareGoogleAccount(remote.id); remote = remotes.find(item => item.id === remote.id) ?? remote; }
+    catch (error) { await showError("Google setup", error); return; }
+  }
   let config;
   try { config = await loadRemoteConfig(remote.id); } catch (error) { await showError("Remote settings", error); return; }
   const result = await openAddRemoteDialog({ edit: {
     config,
+    services: remote.googleGroup ? googleServices(remote) : undefined,
+    switchService: id => { const service = remotes.find(item => item.id === id); if (service) void showRemoteConfig(service); },
     save: async request => {
       const hasOAuth = OAUTH_REMOTE_TYPES.has(config.provider);
       if (hasOAuth && request.oauthClient === "custom" && !request.fields.client_id?.trim()) throw new Error("Enter a custom client ID.");
@@ -1225,9 +1280,12 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
       return newId;
     },
     remove: async () => {
-      if (!await confirmOwned("Delete remote?", "Remove this remote from Mountlet? Cloud files are not deleted.", "Delete")) return false;
-      if (remote.mounted) await toggleRemoteMount(remote.id);
-      await deleteRemote(remote.id);
+      const services = googleServices(remote);
+      if (!await confirmOwned("Delete remote?", remote.googleGroup ? "Remove this Google account's Drive and Photos from Mountlet? Cloud files are not deleted." : "Remove this remote from Mountlet? Cloud files are not deleted.", "Delete")) return false;
+      // Unmount all members before deleting any config, so a failed unmount
+      // cannot leave half of the account's settings removed.
+      for (const service of services) if (service.mounted) await toggleRemoteMount(service.id);
+      for (const service of services) await deleteRemote(service.id);
       remotes = await listRemotes();
       activeRemote = selectedRemote = remoteSelectionTarget = ""; ++selectionGeneration; ++requestGeneration;
       currentPath = ""; snapshot = null; render();
@@ -1278,14 +1336,16 @@ async function showAddRemote(tutorial = addRemoteTutorialActive): Promise<void> 
   render();
   const created = remotes.find(remote => remote.id === result.remoteId);
   if (OAUTH_REMOTE_TYPES.has(result.provider)) {
-    await runRemoteConfigWizard(result.remoteId, result.localAuth).catch(error => showError("Authenticate remote", error));
+    if (result.provider === "drive" || result.provider === "gphotos") {
+      await prepareGoogleAccount(result.remoteId).catch(error => showError("Google setup", error));
+    } else await runRemoteConfigWizard(result.remoteId, result.localAuth).catch(error => showError("Authenticate remote", error));
   } else if (created) {
     await showRemoteConfig(created);
   }
   remotes = await listRemotes();
   render();
   if (remotes.some(remote => remote.id === result.remoteId)) await selectRemote(result.remoteId);
-  if (result.mountAfter) await changeRemoteMount(result.remoteId);
+  if (result.mountAfter && remotes.find(remote => remote.id === result.remoteId)?.configured !== false) await changeRemoteMount(result.remoteId);
   if (tutorial) finishAddRemoteTutorial();
 }
 
@@ -1293,7 +1353,7 @@ function selectAdjacentRemote(delta: number): void {
   suppressRemoteHover();
   const visible = visibleRemotes();
   if (!visible.length) return;
-  const current = visible.findIndex(remote => remote.id === activeRemote);
+  const current = visible.findIndex(remote => sameRemoteCard(remote, remotes.find(item => item.id === activeRemote)));
   const index = Math.min(visible.length - 1, Math.max(0, (current < 0 ? 0 : current) + delta));
   const card = document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(visible[index].id)}"]`);
   card?.focus({ preventScroll: true });
@@ -1302,16 +1362,16 @@ function selectAdjacentRemote(delta: number): void {
 
 function moveSelectedRemote(delta: number): void {
   if (sortMode !== "manual" || sortReverse) return;
-  const from = remotes.findIndex(remote => remote.id === activeRemote);
-  const to = Math.min(remotes.length - 1, Math.max(0, from + delta));
+  const cards = [...visibleRemotes()];
+  const from = cards.findIndex(remote => sameRemoteCard(remote, remotes.find(item => item.id === activeRemote)));
+  const to = Math.min(cards.length - 1, Math.max(0, from + delta));
   if (from < 0 || from === to) return;
-  const reordered = [...remotes];
-  const [moved] = reordered.splice(from, 1);
-  reordered.splice(to, 0, moved);
-  remotes = reordered;
+  const [moved] = cards.splice(from, 1);
+  cards.splice(to, 0, moved);
+  remotes = cards.flatMap(card => googleServices(card));
   persistRemoteOrder();
   renderGlobalResults();
-  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(activeRemote)}"]`)?.focus({ preventScroll: true });
+  focusRemoteList();
   scheduleNativeLayout(0);
 }
 
@@ -1321,7 +1381,8 @@ function focusRemoteList(): void {
     return;
   }
   suppressRemoteHover();
-  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(activeRemote)}"]`)?.focus({ preventScroll: true });
+  const cardId = visibleRemotes().find(remote => sameRemoteCard(remote, remotes.find(item => item.id === activeRemote)))?.id ?? activeRemote;
+  document.querySelector<HTMLElement>(`.remote-card[data-remote-id="${CSS.escape(cardId)}"]`)?.focus({ preventScroll: true });
 }
 
 function focusBrowserList(): void {
@@ -1360,7 +1421,7 @@ function scheduleFocusRestore(forceMain = false): void {
 
 function renderRemotePane(): HTMLElement {
   const pane = element("section", "remote-pane");
-  if (currentLicense && currentLicense.state !== "licensed") {
+  if (!licenseChecking && currentLicense && currentLicense.state !== "licensed") {
     const purchase = element("div", "purchase-row"); const button = element("button", "primary purchase-button", "Buy license");
     button.title = "Open the Mountlet license purchase page."; button.addEventListener("click", () => void openExternal("https://mountlet.app/#pricing")); purchase.append(button); pane.append(purchase);
   }
@@ -1404,7 +1465,7 @@ function renderRemotePane(): HTMLElement {
   const searchStatus = element("span", "global-search-status");
   searchRow.append(searchIcon, search, searchStatus);
   pane.append(searchRow);
-  if (licenseLocked()) pane.append(element("div", "license-lock-banner", currentLicense?.summary || "A license is required to continue."));
+  if (licenseLocked()) pane.append(element("div", "license-lock-banner", licenseChecking ? "Checking license…" : currentLicense?.summary || "A license is required to continue."));
   const results = element("div", "global-results");
   results.id = "global-results";
   pane.append(results);
@@ -1470,8 +1531,18 @@ function renderGlobalResults(): void {
   status.textContent = `${count}${capped ? "+" : ""} result${count === 1 ? "" : "s"}`;
 }
 
-function visibleRemotes(): readonly Remote[] {
-  return remotes;
+function visibleRemotes(): readonly Remote[] { return googleCards(remotes); }
+
+function googleServices(remote: Remote): readonly Remote[] {
+  return remote.googleGroup ? remotes.filter(candidate => sameRemoteCard(candidate, remote)).sort((a, b) => Number(b.provider === "drive") - Number(a.provider === "drive")) : [remote];
+}
+
+function googleCardService(remote: Remote): Remote {
+  if (!remote.googleGroup) return remote;
+  const active = remotes.find(service => service.id === activeRemote);
+  if (sameRemoteCard(active, remote)) return active!;
+  const saved = localStorage.getItem(`mountlet-google-service:${remote.googleGroup}`);
+  return googleServices(remote).find(service => service.id === saved) ?? remote;
 }
 
 function moveGlobalSearchSelection(delta: number): void {
@@ -1869,9 +1940,22 @@ async function scanOfflineChanges(): Promise<void> {
 function renderBrowserPane(): HTMLElement {
   const pane = element("section", "browser-pane");
   pane.id = "browser-pane";
+  pane.dataset.remoteId = selectedRemote;
   const remote = remotes.find(candidate => candidate.id === selectedRemote);
   const title = element("div", "browser-title");
   title.append(element("strong", "", remote ? `${remote.name} (${remote.providerLabel})` : "File browser"));
+  if (remote?.googleGroup) {
+    const toggle = element("span", "google-service-toggle");
+    toggle.setAttribute("role", "group"); toggle.setAttribute("aria-label", "Google service");
+    for (const service of googleServices(remote)) {
+      const button = element("button", "icon-button"); button.type = "button";
+      button.title = service.providerLabel; button.setAttribute("aria-label", service.providerLabel);
+      button.setAttribute("aria-pressed", String(service.id === remote.id));
+      button.append(providerIcon(service.provider, service.providerLabel));
+      button.addEventListener("click", () => void switchGoogleService(service)); toggle.append(button);
+    }
+    title.append(toggle);
+  }
   const mount = element("span", `mount-toggle ${remote?.mounted ? "on" : ""}`);
   mount.append(element("span", "mount-toggle-knob"));
   if (remote) mount.addEventListener("click", () => void changeRemoteMount(remote.id));
@@ -2268,6 +2352,8 @@ function queueRemoteMetadataReconcile(result: FolderSnapshot, generation: number
 }
 
 function selectRemote(remoteId: string, preview = false): Promise<void> {
+  const remote = remotes.find(item => item.id === remoteId);
+  if (!preview && remote?.googleGroup) localStorage.setItem(`mountlet-google-service:${remote.googleGroup}`, remoteId);
   if (!preview) activeRemote = remoteId;
   const targetChanged = Boolean(remoteId && remoteId !== remoteSelectionTarget);
   if (targetChanged) remoteSelectionTarget = remoteId;
@@ -2311,6 +2397,11 @@ async function displayRemote(remoteId: string, generation: number): Promise<void
 
 function applyBrowserFolderView(options: { keepFocus?: boolean; reveal?: boolean } = {}): void {
   const pane = document.querySelector("#browser-pane");
+  if (pane instanceof HTMLElement && pane.dataset.remoteId !== selectedRemote) {
+    renderBrowserOnly();
+    if (options.keepFocus) queueMicrotask(() => fileList?.focus());
+    return;
+  }
   if (!pane) {
     if (isBrowserWindow) render();
     else if (preferences.mode === "single") renderBrowserOnly();
@@ -2637,6 +2728,21 @@ async function checkRemoteHoverSelection(mode: Preferences["mode"]): Promise<voi
   card(a).focus();
   await settle(a);
   assertState(a, a);
+  // Explicit Google links collapse only the row, never service IDs or paths.
+  remotes = remotes.map((remote, index) => index < 2 ? {
+    ...remote, provider: index === 0 ? "drive" : "gphotos", googleGroup: "smoke-google", configured: true,
+  } : remote);
+  render();
+  if (document.querySelectorAll(".remote-card").length !== 2
+    || document.querySelectorAll(`.remote-card[data-remote-id="${a}"] .provider-icon`).length !== 2) {
+    throw new Error("Google services did not share a card with two web icons");
+  }
+  await switchGoogleService(remotes[1]);
+  if (selectedRemote !== b || currentPath !== `folder-${b}`) throw new Error("Photos did not restore its own location");
+  if (mode === "multiple" && (await getBrowserState())?.remoteId !== b) throw new Error("Detached browser did not switch Google services");
+  await switchGoogleService(remotes[0]);
+  if (selectedRemote !== a || currentPath !== `folder-${a}`) throw new Error("Drive did not restore its own location");
+  localStorage.removeItem("mountlet-google-service:smoke-google");
   window.clearTimeout(folderPollTimer);
   remotes = [];
   activeRemote = selectedRemote = remoteSelectionTarget = "";
@@ -2733,9 +2839,16 @@ async function start(): Promise<void> {
   // for seeing the application. The final layout pass below will resize and
   // reposition the already-visible window once settings have loaded.
   if (!isBrowserWindow) await showStartupWindows();
-  const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder()]);
   const licenseRequest = licenseStatus();
+  startupLicenseRequest = licenseRequest.then(status => {
+    licenseChecking = Boolean(status.state === "expired" && status.licenseKey);
+    return resolveStartupLicense(status, refreshLicense);
+  }).catch(() => null);
+  const [saved, savedSettings, savedBrowserMemory, savedShortcuts, savedRegistrationOrder] = await Promise.all([loadPreferences(), loadAppSettings(), loadBrowserMemory(), loadShortcuts(), remoteRegistrationOrder()]);
   const savedLicense = await bounded(licenseRequest, 15000, "License status timed out.").catch(() => null);
+  // Start daily renewal before prerequisites/listeners or any expired-license
+  // dialog. The saved activation is checking, not missing, while HTTP runs.
+  const startupLicense = startupLicenseRequest;
   registrationOrder = savedRegistrationOrder;
   completeSettings = savedSettings;
   browserMemory = savedBrowserMemory;
@@ -2743,7 +2856,12 @@ async function start(): Promise<void> {
   currentLicense = savedLicense;
   if (saved) Object.assign(preferences, saved);
   applyPreferences();
-  void licenseRequest.then(status => applyLicense(status)).catch(() => undefined);
+  if (licenseChecking) {
+    applyLicense(savedLicense);
+    const renewed = await startupLicense;
+    licenseChecking = false;
+    applyLicense(renewed);
+  }
   await listenNativeLayout(event => {
     cachedBrowserSide = event.browserSide === "left" ? "left" : "right";
     nativeBrowserInnerHeight = event.browserInnerHeight;
@@ -2781,7 +2899,8 @@ async function start(): Promise<void> {
       const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
       const targetCard = target?.closest<HTMLElement>(".remote-card");
       const targetRow = target?.closest<HTMLElement>(".file-row[data-entry-directory=true]");
-      const destinationRemote = targetCard?.dataset.remoteId || selectedRemote;
+      const cardRemote = remotes.find(remote => remote.id === targetCard?.dataset.remoteId);
+      const destinationRemote = cardRemote ? googleCardService(cardRemote).id : selectedRemote;
       const destinationPath = targetRow?.dataset.entryPath
         || (targetCard ? rememberedFolderPath(destinationRemote) : currentPath);
       const remote = remotes.find(candidate => candidate.id === destinationRemote);
@@ -2838,7 +2957,11 @@ async function start(): Promise<void> {
     });
   }
   remotes = await listRemotes();
-  activeRemote = selectedRemote = remotes[0]?.id ?? "";
+  activeRemote = selectedRemote = remotes[0] ? googleCardService(remotes[0]).id : "";
+  if (!isBrowserWindow) await listenGoogleService(id => {
+    const service = remotes.find(remote => remote.id === id && remote.googleGroup);
+    if (service) void switchGoogleService(service);
+  });
   currentPath = rememberedFolderPath(selectedRemote);
   if (isBrowserWindow) {
     const initial = await getBrowserState();
@@ -2847,8 +2970,11 @@ async function start(): Promise<void> {
       currentPath = initial.path;
     }
     await listenBrowserState(async state => {
-      const focus = Boolean(state.focus);
       const generation = ++selectionGeneration;
+      const refreshedRemotes = await listRemotes();
+      if (generation !== selectionGeneration) return;
+      remotes = refreshedRemotes;
+      const focus = Boolean(state.focus);
       await syncBrowserMemory();
       if (generation !== selectionGeneration) return;
       ++requestGeneration;
@@ -2886,7 +3012,6 @@ async function start(): Promise<void> {
     void setDetachedBrowser(false);
     void showLicense();
     void layoutNativeWindows().then(() => showStartupWindows());
-    void renewStoredLicense();
     return;
   }
   await startRemoteBrowsing();

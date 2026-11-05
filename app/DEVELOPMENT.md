@@ -16,6 +16,14 @@ Refactoring is not a reason to weaken a behavior reproduced by the current app.
   Settings actions are Delete/Cancel/Save icons with accessible names, not Open
   actions. Keep additional options collapsed rather than replacing provider UI
   with a generic field dump.
+- Google cards use explicit `mountlet_google_group` links in rclone config.
+  Preserve both remote IDs, authentication, mount state, indexes, and browser
+  memory; do not copy OAuth tokens between Drive and Photos or infer identity
+  from a name/email hint. The detached browser requests service changes through
+  the main window so active selection and window anchoring stay consistent.
+- Renew a saved expired token before deciding startup is unlicensed. Status
+  responses must not overwrite a newer activation/renewal; focus in the License
+  form must not defer background renewal to the next minute.
 
 ## Responsiveness
 
