@@ -32,8 +32,8 @@ const WEBDAV_VENDORS = [
   { label: "Other WebDAV", vendor: "other", suffix: "WebDAV", url: "https://cloud.example.com/webdav" },
 ] as const;
 const PROVIDERS = [
-  ["Google Drive", "drive", "Drive"],
-  ["Google Photos (limited)", "gphotos", "Google Photos"],
+  ["Google Drive / Photos", "drive", "Drive"],
+  ["Google Photos / Drive (limited)", "gphotos", "Google Photos"],
   ["Dropbox", "dropbox", "Dropbox"],
   ["Microsoft OneDrive", "onedrive", "OneDrive"],
   ["Box", "box", "Box"],
@@ -373,8 +373,9 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     setVisible([rows.credentials], OAUTH_TYPES.has(type));
     setVisible([rows.driveClientHelp], isDrive || isGphotos);
     setVisible([rows.account], isDrive || isGphotos);
-    setVisible([rows.gphotosReadOnly, rows.gphotosHelp], isGphotos);
-    if (saved) { rows.driveClientHelp.hidden = true; rows.gphotosHelp.hidden = true; }
+    setVisible([rows.gphotosReadOnly], isGphotos);
+    rows.gphotosHelp.hidden = !(isGphotos || isDrive);
+    if (saved) rows.driveClientHelp.hidden = true;
     setVisible([rows.driveKind, rows.sharedDriveId], isDrive);
     setVisible([rows.auth, rows.port], OAUTH_TYPES.has(type));
     setVisible([rows.s3Provider, rows.s3Region, rows.s3Access, rows.s3Secret, rows.s3Path], isS3);
@@ -419,6 +420,7 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   portTimer = window.setInterval(() => void refreshPort(), 1500);
 
   const actions = node("div", "dialog-actions");
+  let saving = false;
   const cancel = actionIcon("", "Cancel");
   const create = actionIcon("", saved ? "Save" : "Add remote");
   create.classList.add("primary");
@@ -525,6 +527,8 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     }
     const alias = name.value.trim();
     if (!alias) { name.focus(); return; }
+    if (saving) return;
+    saving = true;
     create.disabled = true;
     try {
       if (/[:@/\\\r\n]/.test(alias)) throw new Error("Use a name without ':', '@', line breaks, or path separators.");
@@ -562,11 +566,12 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     } catch (error) {
       await showError(saved ? "Remote settings" : "Add remote", error);
       create.disabled = false;
-    }
+    } finally { saving = false; }
   });
   if (editing) {
     const remove = actionIcon("", "Delete"); remove.classList.add("danger");
     remove.addEventListener("click", async () => {
+      if (saving) return;
       remove.disabled = true;
       try { if (await editing.remove()) close(null); }
       catch (error) { await showError("Delete remote", error); }

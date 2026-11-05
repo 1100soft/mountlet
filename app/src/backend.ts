@@ -61,6 +61,14 @@ export async function listRemotes(): Promise<Remote[]> {
   return inTauri ? invoke<Remote[]>("list_remotes") : mockRemotes();
 }
 
+export async function ensureGooglePair(remoteId: string, companionId?: string): Promise<string[]> {
+  return invoke<string[]>("ensure_google_pair", { remoteId, companionId: companionId ?? null });
+}
+
+export async function reconcileGoogleRemotes(): Promise<void> {
+  if (inTauri) await invoke("reconcile_google_remotes");
+}
+
 export async function refreshRemoteUsage(remoteId: string): Promise<Remote> {
   return inTauri ? invoke<Remote>("refresh_remote_usage", { remoteId }) : (await listRemotes()).find(remote => remote.id === remoteId)!;
 }
@@ -78,6 +86,7 @@ export async function refreshNativeTrayMenu(): Promise<void> {
 }
 
 export interface RemoteConfigData {
+  googleSharedClient?: string | null;
   id: string;
   alias: string;
   provider: string;
@@ -92,6 +101,7 @@ export interface RemoteConfigData {
 }
 
 export interface SaveRemoteConfigRequest {
+  googleSharedClient?: string;
   oauthClient?: string;
   remoteId: string;
   alias: string;
@@ -502,6 +512,18 @@ export async function listenBrowserState(handler: (value: { remoteId: string; pa
   return listen<{ remoteId: string; path: string; focus?: boolean }>("browser-state", event => handler(event.payload));
 }
 
+export async function requestGoogleService(remoteId: string): Promise<void> {
+  if (!inTauri) return;
+  const { emitTo } = await import("@tauri-apps/api/event");
+  await emitTo("main", "google-service", remoteId);
+}
+
+export async function listenGoogleService(handler: (remoteId: string) => void): Promise<() => void> {
+  if (!inTauri) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("google-service", event => handler(event.payload));
+}
+
 export async function emitUiPreferences(preferences: Preferences): Promise<void> {
   if (!inTauri) return;
   const { emitTo } = await import("@tauri-apps/api/event");
@@ -574,6 +596,8 @@ export interface OauthPortStatus {
 export interface DriveOauthSource {
   remoteId: string;
   label: string;
+  driveCustom?: boolean;
+  photosCustom?: boolean;
 }
 
 export interface FileManagerOption {

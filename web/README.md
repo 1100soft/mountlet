@@ -39,6 +39,7 @@ environment overrides.
 - Optional report recipient: `REPORT_TO`
 - GitHub report token: `REPORT_GITHUB_TOKEN`
 - GitHub report repository: `REPORT_GITHUB_REPO`
+- GitHub report project label: `REPORT_GITHUB_PROJECT_LABEL` (`Mountlet`)
 - Optional GitHub report labels: `REPORT_GITHUB_LABELS`
 - Stripe secret key: `STRIPE_SECRET_KEY`
 - Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
@@ -142,8 +143,9 @@ releases/v0.7.0/linux/x64/standard/mountlet-v0.7.0-linux-x64-standard.deb
 
 It publishes `releases/index.json` only after every installer succeeds. The
 index keeps the latest five app versions. Objects belonging only to retired
-versions are deleted after the new index becomes active. Re-publishing the same
-app version replaces that version instead of consuming another history slot.
+versions are deleted after the new index becomes active. The upload tool can
+replace an existing version entry without consuming another history slot, but
+that capability must not be used to overwrite a published release.
 The first versioned publication also removes the former flat installer objects
 after the new index is live.
 Omit `--remote` only when intentionally seeding Wrangler's local R2 simulator.
@@ -253,8 +255,11 @@ access. Wrangler's Cloudflare REST upload path requires broader account-level
 R2 permissions, so Mountlet uploads release artifacts through the
 S3-compatible API instead.
 
-The `wip` branch uploads to the preview bucket. `main` and version tags upload
-to the production bucket.
+The `wip` branch uploads to the preview bucket. Only `vX.Y.Z` version tags
+upload native installers to the production bucket; `main` validates packages
+without uploading them. Follow `app/docs/RELEASE.md` for reviewed preparation
+and publication. Existing release tags and published installer bytes must not
+be replaced.
 
 Packaged preview and production applications currently default to the
 production license and report APIs under `https://mountlet.app`. Build channel
@@ -320,16 +325,17 @@ Then set these environment variables:
 - `REPORT_GITHUB_TOKEN`: required fine-grained GitHub token for creating app
   bug and crash issues; grant Issues read/write only on the report repository.
 - `REPORT_GITHUB_REPO`: required GitHub repository target in `owner/repo`
-  format for app bug and crash reports.
+  format for app bug and crash reports: `1100soft/1100-shared-feedback`.
+- `REPORT_GITHUB_PROJECT_LABEL`: project queue label, `Mountlet` (the default).
 - `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
   those labels in GitHub first. Mountlet adds `bug`, `crash`, or `support` as
-  appropriate and retries without labels if GitHub rejects the labels.
+  appropriate. A label-validation retry drops optional labels only, never `Mountlet`.
 
 The report endpoint creates GitHub issues directly. A bug or crash submission
 returns an error unless GitHub accepted the issue; successful email delivery
 cannot mask GitHub failure. Email through Resend is only an optional secondary
-notification path. For GitHub reporting, create a private
-support repository, create a fine-grained personal access token limited to that
+notification path. For GitHub reporting, use the private
+`1100soft/1100-shared-feedback` repository and a fine-grained personal access token limited to that
 repository with Issues read/write permission, then set `REPORT_GITHUB_TOKEN` as
 a Pages secret and `REPORT_GITHUB_REPO` as an environment variable. The Function
 redacts obvious tokens and secrets, but app reports can still include paths and
@@ -478,3 +484,42 @@ shown in the app:
   }
 ]
 ```
+
+### Shared feedback repository
+
+The report endpoint can share a private GitHub issue repository with other apps.
+Set `REPORT_GITHUB_REPO=1100soft/1100-shared-feedback` and
+`REPORT_GITHUB_PROJECT_LABEL=Mountlet` in both **Production and Preview** under
+Cloudflare Pages → Mountlet → Settings → Variables and Secrets, then redeploy.
+While production serves the older intake implementation, also keep
+`REPORT_GITHUB_LABELS=Mountlet`: it reads routing from that setting rather than
+the newer dedicated project-label setting. Both Production and Preview must use
+the resolved label, and changed Pages variables require a fresh deployment.
+`Mountlet` is the currently resolved GitHub label in Cerberus's project
+configuration, not a label derived from its friendly feedback name. After a
+feedback-name change, read the saved mapping again and update server intake;
+legacy routing prefixes may remain part of the actual GitHub label. Do not
+construct or strip prefixes. Ensure the resolved label exists in the repository.
+Remove the former `mountlet-report` value from `REPORT_GITHUB_LABELS`.
+`REPORT_GITHUB_LABELS`
+adds optional classification labels; a validation retry retains the mandatory
+project label and never silently creates an unscoped report. Keep the report token
+on the server with access only to the feedback repository. Browser/desktop clients
+continue using the existing report endpoint and never receive GitHub credentials.
+Update the report token's repository access to the renamed shared repository
+with Issues read/write permission; do not rely on redirects for API writes.
+This change does not relabel existing issues. Any future listing or issue update
+must verify the `Mountlet` project label first; an issue number alone is not scope.
+See the [shared queue instructions](https://github.com/1100soft/1100-shared-feedback#project-queues).
+
+Troubleshooting a missing report:
+
+- `/api/health` checks configuration presence, not token validity or queue delivery.
+- Verify the deployed Pages variables, not just `.dev.vars`; local changes do not
+  update Production or Preview. Reauthenticate Wrangler if its login has expired.
+- A successful submission must return an `issueUrl`. Inspect that issue's labels:
+  an issue labeled only `mountlet-report` is invisible to the current `Mountlet`
+  queue even though GitHub accepted it. Correct the intake configuration before
+  retrying; check for the original issue first to avoid duplicates.
+- Keep the project label on optional-label retries. Verify a live submission's
+  repository and exact resolved label after redeployment, not just its HTTP status.

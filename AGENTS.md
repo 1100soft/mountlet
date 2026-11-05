@@ -13,7 +13,8 @@
 - Complete the current scope and update affected documentation before staging.
 - Run relevant formatting, lint, type, test, and build checks. Fix failures
   caused by the work and report checks that could not be run.
-- Review final status and the staged diff, then create a concise checkpoint
-  commit on `wip`. Do not push unless explicitly requested.
-- Report the commit hash and message, validation results, and any deliberately
-  uncommitted files with their reasons.
+- Review final status and diff. Create a checkpoint commit on `wip` only when
+  explicitly requested by the user; never commit automatically. Do not push
+  unless explicitly requested.
+- When committing, report the commit hash and message, validation results, and
+  any deliberately uncommitted files with their reasons.

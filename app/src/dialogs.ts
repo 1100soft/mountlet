@@ -25,12 +25,35 @@ export function bindScaledSelect(select: HTMLSelectElement): HTMLSelectElement {
     if (active < 0) active = options.findIndex(option => !option.disabled);
     const items: HTMLButtonElement[] = [];
     let observer: MutationObserver | null = null;
+    const position = () => {
+      if (!select.isConnected) { close(); return; }
+      const anchor = select.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const left = viewport?.offsetLeft ?? 0, top = viewport?.offsetTop ?? 0;
+      const width = viewport?.width ?? window.innerWidth, height = viewport?.height ?? window.innerHeight;
+      const margin = 6, bottom = top + height - margin;
+      const below = Math.max(0, bottom - anchor.bottom), above = Math.max(0, anchor.top - top - margin);
+      menu.style.minWidth = `${Math.min(Math.max(anchor.width, 120), Math.max(0, width - margin * 2))}px`;
+      menu.style.maxWidth = `${Math.max(0, width - margin * 2)}px`;
+      menu.style.maxHeight = "min(50vh, calc(280px * var(--zoom)))";
+      const desired = menu.getBoundingClientRect().height;
+      const upwards = desired > below && above > below;
+      menu.style.maxHeight = `${Math.min(desired, upwards ? above : below)}px`;
+      const size = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(left + margin, Math.min(anchor.left, left + width - size.width - margin))}px`;
+      menu.style.top = `${Math.max(top + margin, Math.min(upwards ? anchor.top - size.height : anchor.bottom, bottom - size.height))}px`;
+    };
+    const onScroll = (event: Event) => { if (!(event.target instanceof Node && menu.contains(event.target))) position(); };
     const close = () => {
       observer?.disconnect();
       menu.remove();
       if (closeScaledSelect === close) closeScaledSelect = null;
       window.removeEventListener("mousedown", onPointer, true);
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", position);
+      document.removeEventListener("scroll", onScroll, true);
+      window.visualViewport?.removeEventListener("resize", position);
+      window.visualViewport?.removeEventListener("scroll", position);
     };
     closeScaledSelect = close;
     const choose = (index: number) => {
@@ -80,6 +103,11 @@ export function bindScaledSelect(select: HTMLSelectElement): HTMLSelectElement {
       items.push(item);
     }
     document.body.append(menu);
+    position();
+    window.addEventListener("resize", position);
+    document.addEventListener("scroll", onScroll, true);
+    window.visualViewport?.addEventListener("resize", position);
+    window.visualViewport?.addEventListener("scroll", position);
     observer = new MutationObserver(() => { if (!menu.isConnected || !select.isConnected) close(); });
     observer.observe(document.body, { childList: true, subtree: true });
     window.setTimeout(() => {

@@ -27,7 +27,13 @@ clients. New remotes default to Mountlet when that provider's client ID is
 compiled into the installed build, otherwise rclone. Mountlet is marked
 unavailable when the build has no matching ID; choosing rclone explicitly never
 injects Mountlet credentials. Rclone's own default may not exist for every provider.
-Drive also offers credential reuse from an existing Drive remote in both dialogs.
+Google settings has one shared client choice for Drive and Photos. Separate
+service choices and manual client IDs/secrets are under Advanced options; all
+normal service settings remain visible. Choose Mountlet, rclone, or Custom.
+Custom offers other Google cards with custom registrations. Missing service
+registrations can be entered through the Advanced options link. Drive uses its
+Drive client and Photos its Photos client, never the other service's token.
+Unrelated edits preserve these copied credentials and the saved category.
 Client IDs and secrets always come from the same source; a custom ID never
 receives an embedded client's secret. A build-time secret without an ID is ignored.
 
@@ -38,6 +44,10 @@ remotes retain their source and credentials until explicitly changed. Imported
 remotes are classified by their saved client ID, without exposing secrets to
 the source dropdown. A client-source change clears the old OAuth token and
 requires reauthentication; unrelated settings edits do not rotate credentials.
+Authentication does not ask for IDs/secrets again. Mountlet handles rclone's
+shared-client warning internally when rclone was selected. If the selected
+registration is unavailable, change the client in settings; no credentials are
+invented and the flow does not fall back to manual client questions.
 
 GitHub Actions preview (`wip`) and production packages use the same repository
 OAuth secrets. Local desktop builds do not load the root `.dev.vars` file;

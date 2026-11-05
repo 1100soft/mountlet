@@ -11,3 +11,8 @@ LICENSE_SIGNING_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY
 
 STRIPE_SECRET_KEY="sk_test_replace"
 STRIPE_WEBHOOK_SECRET="whsec_replace"
+
+# Shared issue queue. Keep the GitHub token server-side.
+REPORT_GITHUB_REPO="1100soft/1100-shared-feedback"
+REPORT_GITHUB_PROJECT_LABEL="Mountlet"
+# REPORT_GITHUB_TOKEN="github_pat_replace"

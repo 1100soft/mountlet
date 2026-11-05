@@ -10,7 +10,7 @@ export function defaultOAuthClient(provider: string, availability: Record<string
 export function updateOAuthClientOptions(select: HTMLSelectElement, provider: string, availability: Record<string, boolean>): void {
   for (const option of select.options) {
     const reuse = option.value.startsWith("reuse:");
-    option.hidden = reuse && provider !== "drive";
+    option.hidden = reuse && provider !== "drive" && provider !== "gphotos";
     option.disabled = option.hidden || (option.value === "mountlet" && !availability[provider]);
     if (option.value === "mountlet") option.text = availability[provider] ? "Mountlet" : "Mountlet (unavailable)";
   }

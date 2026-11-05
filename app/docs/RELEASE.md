@@ -35,12 +35,13 @@ release and remains frozen under `legacy/python-0.6.8/`.
 ## 1. Freeze and validate the candidate
 
 1. Update the version, lockfiles, changelog, and affected release/upgrade notes.
-   For `v0.7.4`, the captured source matches the `v0.7.3` application tree;
-   the preparation corrects version metadata without introducing a data migration.
+   For `v0.7.5`, review the beta renewal and Google account upgrade checks
+   below, including automatic linking of existing Drive/Photos remotes. Preserve
+   existing user data; no manual configuration reset is required.
    Run the project version check with the exact requested tag, then validate:
 
    ```bash
-   RELEASE_TAG=v0.7.4 node app/scripts/check-version.mjs
+   RELEASE_TAG=v0.7.5 node app/scripts/check-version.mjs
    ```
 
    Run the remaining checks from the repository root:
@@ -107,7 +108,7 @@ upgrade tests:
   missing system rclone cleanly and work after one is provided.
 - For each OAuth provider, confirm creation defaults to Mountlet only when its
   client ID was included in the build. Verify separate rclone and Custom choices
-  in creation and settings, Drive-only reuse, masked custom secrets, and source
+  in creation and settings, per-service Google-account reuse, masked custom secrets, and source
   persistence. Changing source must clear the previous token and reauthenticate;
   unrelated edits must preserve the saved credentials. Never log client secrets.
 - With an expired trial or deactivated license, open License and paste a key
@@ -116,6 +117,10 @@ upgrade tests:
   clipboard read must show an error and allow retry without erasing the key.
   An activated license remains read-only until this device is deactivated.
 - Activate, quit, and restart: the saved key and valid activation must remain.
+  Delay beta renewal: only a neutral checking indicator should appear until the
+  response, with no premature expired-license dialog or purchase prompt. Test
+  failure/offline startup and a late dialog status response; retain the saved
+  key, stay locked on failed renewal, and never overwrite a newer activation.
   Repeat with a token requiring a cached signing key. An expired daily beta
   token must renew in the background; offline renewal failure must retain the
   key and remain locked, not reset the trial or erase activation state.
@@ -123,6 +128,33 @@ upgrade tests:
   actions, and icon-only Save/Delete/Cancel. Rename each provider and confirm
   unchanged authentication and mount fields are preserved. The startup probe
   exercises all 12 provider forms using in-memory save callbacks only.
+- Set up either Google service and confirm both are provisioned under one card
+  with separate authorization. Cancel one sign-in and confirm the other still
+  works. At launch, link older Drive/Photos remotes by their saved Google account
+  emails without a confirmation dialog; provision a missing service immediately,
+  without opening OAuth. Repeat launch and confirm no duplicate companions or
+  config rewrites. Unknown accounts must not merge by card name. Preserve IDs,
+  credentials, cached trees, and locations. Test both web icons, the unified
+  account settings form, shared client categories, and advanced service overrides,
+  keeping ordinary fields visible. Custom must list only cards with custom
+  registrations and direct missing Drive/Photos clients to Advanced options.
+  Verify one shared auto-mount control saves to both services, service groups
+  use Drive/Photos icons, and long dropdowns near the bottom open upward with
+  every option reachable by scrolling and keyboard.
+  Verify partially configured custom registrations without requiring OAuth first
+  and repeated browser service switches in both window modes. Grouped-card
+  assertions must await the microtask that populates the newly attached remote
+  list after rendering. The hover startup
+  probe also checks grouped rows and independent service locations. Photos API
+  limitations remain visible; no shared-storage explanatory badge is needed.
+- First-time OAuth with Mountlet/rclone/reused registrations must not prompt for
+  client IDs/secrets. Confirm the rclone shared-client warning advances using the
+  selected default, saved credentials stay unchanged, browser mode opens OAuth,
+  and paste mode stays in paste mode. Missing registrations show a settings error.
+  Verify the shared category and Photos-only override survive reopening settings,
+  and that renaming preserves both services' fields, locations, and credentials.
+  With rclone installed, the isolated no-browser fixture can be run with
+  `cargo test --locked --manifest-path app/src-tauri/Cargo.toml installed_rclone_oauth_skips_client_questions -- --ignored`.
 
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.
@@ -152,7 +184,7 @@ workflow's `environment-json` input. The verification composite action reads the
 resulting environment values because the `vars` context is unavailable there.
 
 A tagged build deliberately fails its bundled Windows job if any identity value
-is absent. Mountlet `0.7.4` maps to Store package version `1.7.4.0`: the major
+is absent. Mountlet `0.7.5` maps to Store package version `1.7.5.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth
 component remains zero because Microsoft reserves it. Application-visible
 versions remain normal SemVer.
@@ -219,6 +251,9 @@ from preview:
    updates the release index, and retains the configured five versions. Also
    wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
+   Only the tested Linux artifacts are required for APT; Windows/macOS failures
+   do not block it. The publishing job waits for the matrix to finish, but does
+   not require the entire matrix to pass. Cancelled runs do not publish.
    The source workflow validates and uploads one `apt-packages` artifact
    containing both `mountlet` and `mountlet-lean`, while the central workflow
    signs and publishes them. The lean package declares `rclone` as an APT
@@ -227,8 +262,11 @@ from preview:
 ## Preview APT package
 
 For a deliberately selected preview, run **Native package CI** manually on the
-`wip` branch and enable `publish_apt_preview`. After the complete native matrix
-passes, the workflow rebuilds the bundled Linux package metadata as
+`wip` branch and enable `publish_apt_preview`. After the native matrix finishes,
+the publisher requires both tested Linux artifacts (bundled and system-rclone),
+but Windows or macOS failures do not block APT publication. Cancelled runs do
+not publish, and missing Linux artifacts fail before any publication dispatch.
+The workflow rebuilds the bundled Linux package metadata as
 `mountlet-preview`, gives it a unique version based on the workflow run number
 and commit, and sends it to the central APT publisher.
 
