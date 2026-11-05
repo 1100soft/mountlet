@@ -978,6 +978,9 @@ mod tests {
                     Err(error) => panic!("renewal fixture: {error}"),
                 }
             };
+            // macOS can inherit the listener's nonblocking mode on accept.
+            // The request reader below uses blocking I/O with a bounded timeout.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
