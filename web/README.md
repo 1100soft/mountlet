@@ -39,6 +39,7 @@ environment overrides.
 - Optional report recipient: `REPORT_TO`
 - GitHub report token: `REPORT_GITHUB_TOKEN`
 - GitHub report repository: `REPORT_GITHUB_REPO`
+- GitHub report project label: `REPORT_GITHUB_PROJECT_LABEL` (`Mountlet`)
 - Optional GitHub report labels: `REPORT_GITHUB_LABELS`
 - Stripe secret key: `STRIPE_SECRET_KEY`
 - Stripe webhook secret: `STRIPE_WEBHOOK_SECRET`
@@ -320,16 +321,17 @@ Then set these environment variables:
 - `REPORT_GITHUB_TOKEN`: required fine-grained GitHub token for creating app
   bug and crash issues; grant Issues read/write only on the report repository.
 - `REPORT_GITHUB_REPO`: required GitHub repository target in `owner/repo`
-  format for app bug and crash reports.
+  format for app bug and crash reports: `1100soft/1100-shared-feedback`.
+- `REPORT_GITHUB_PROJECT_LABEL`: project queue label, `Mountlet` (the default).
 - `REPORT_GITHUB_LABELS`: optional comma-separated issue labels. If set, create
   those labels in GitHub first. Mountlet adds `bug`, `crash`, or `support` as
-  appropriate and retries without labels if GitHub rejects the labels.
+  appropriate. A label-validation retry drops optional labels only, never `Mountlet`.
 
 The report endpoint creates GitHub issues directly. A bug or crash submission
 returns an error unless GitHub accepted the issue; successful email delivery
 cannot mask GitHub failure. Email through Resend is only an optional secondary
-notification path. For GitHub reporting, create a private
-support repository, create a fine-grained personal access token limited to that
+notification path. For GitHub reporting, use the private
+`1100soft/1100-shared-feedback` repository and a fine-grained personal access token limited to that
 repository with Issues read/write permission, then set `REPORT_GITHUB_TOKEN` as
 a Pages secret and `REPORT_GITHUB_REPO` as an environment variable. The Function
 redacts obvious tokens and secrets, but app reports can still include paths and
@@ -482,10 +484,19 @@ shown in the app:
 ### Shared feedback repository
 
 The report endpoint can share a private GitHub issue repository with other apps.
-`REPORT_GITHUB_PROJECT_LABEL` identifies this project (default `mountlet-report`,
-preserving existing production reports). Create that label in the target repo and
-use the same label in Cerberus project feedback settings. `REPORT_GITHUB_LABELS`
+Set `REPORT_GITHUB_REPO=1100soft/1100-shared-feedback` and
+`REPORT_GITHUB_PROJECT_LABEL=Mountlet` in both **Production and Preview** under
+Cloudflare Pages → Mountlet → Settings → Variables and Secrets, then redeploy.
+The project label defaults to `Mountlet`; use that exact case in Cerberus
+Feedback → settings too. Ensure the label exists in the shared repository.
+Remove the former `mountlet-report` value from `REPORT_GITHUB_LABELS`.
+`REPORT_GITHUB_LABELS`
 adds optional classification labels; a validation retry retains the mandatory
 project label and never silently creates an unscoped report. Keep the report token
 on the server with access only to the feedback repository. Browser/desktop clients
 continue using the existing report endpoint and never receive GitHub credentials.
+Update the report token's repository access to the renamed shared repository
+with Issues read/write permission; do not rely on redirects for API writes.
+This change does not relabel existing issues. Any future listing or issue update
+must verify the `Mountlet` project label first; an issue number alone is not scope.
+See the [shared queue instructions](https://github.com/1100soft/1100-shared-feedback#project-queues).

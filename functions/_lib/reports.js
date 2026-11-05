@@ -210,7 +210,7 @@ function issueBody(report) {
 }
 
 function reportProjectLabel(env) {
-  const value = String(env.REPORT_GITHUB_PROJECT_LABEL || "mountlet-report").trim();
+  const value = String(env.REPORT_GITHUB_PROJECT_LABEL || "Mountlet").trim();
   if (!value || value.length > 50 || /[\x00-\x1f\x7f,]/.test(value)) {
     throw new HttpError(409, "REPORT_GITHUB_PROJECT_LABEL must be one valid project label.");
   }

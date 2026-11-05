@@ -18,6 +18,7 @@ export const PUBLIC_VARS = {
     reportTo: "REPORT_TO",
     reportGithubToken: "REPORT_GITHUB_TOKEN",
     reportGithubRepo: "REPORT_GITHUB_REPO",
+    reportGithubProjectLabel: "REPORT_GITHUB_PROJECT_LABEL",
     reportGithubLabels: "REPORT_GITHUB_LABELS",
     stripeSecretKey: "STRIPE_SECRET_KEY",
     stripeWebhookSecret: "STRIPE_WEBHOOK_SECRET",
