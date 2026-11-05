@@ -143,8 +143,9 @@ releases/v0.7.0/linux/x64/standard/mountlet-v0.7.0-linux-x64-standard.deb
 
 It publishes `releases/index.json` only after every installer succeeds. The
 index keeps the latest five app versions. Objects belonging only to retired
-versions are deleted after the new index becomes active. Re-publishing the same
-app version replaces that version instead of consuming another history slot.
+versions are deleted after the new index becomes active. The upload tool can
+replace an existing version entry without consuming another history slot, but
+that capability must not be used to overwrite a published release.
 The first versioned publication also removes the former flat installer objects
 after the new index is live.
 Omit `--remote` only when intentionally seeding Wrangler's local R2 simulator.
@@ -254,8 +255,11 @@ access. Wrangler's Cloudflare REST upload path requires broader account-level
 R2 permissions, so Mountlet uploads release artifacts through the
 S3-compatible API instead.
 
-The `wip` branch uploads to the preview bucket. `main` and version tags upload
-to the production bucket.
+The `wip` branch uploads to the preview bucket. Only `vX.Y.Z` version tags
+upload native installers to the production bucket; `main` validates packages
+without uploading them. Follow `app/docs/RELEASE.md` for reviewed preparation
+and publication. Existing release tags and published installer bytes must not
+be replaced.
 
 Packaged preview and production applications currently default to the
 production license and report APIs under `https://mountlet.app`. Build channel

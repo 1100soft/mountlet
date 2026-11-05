@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.5
+
+- Renew beta licenses before showing the launch UI, retaining saved keys when
+  renewal fails or the device is offline.
+- Group Google Drive and Photos under one account card with separate service
+  authorization, shared settings, and preserved per-service locations.
+- Reuse configured OAuth clients without prompting for client credentials; keep
+  custom service overrides available in advanced settings.
+- Route feedback using the configured GitHub label and require issue creation
+  before reporting success.
+- Allow tested Linux APT packages to publish even when other platform jobs fail.
+- Fix grouped-card startup probe timing and blocking reads in the macOS license
+  renewal fixture.
+- Upgrade with the normal installer or the same APT package identity. Existing
+  Google remotes are linked by their saved account emails and missing companion
+  services are provisioned at launch without OAuth. Retain configuration, license,
+  trial, rclone, metadata, and offline/cache data; no manual reset is required.
+
 ## 0.7.4
 
 - Align desktop manifests and lockfiles with the `v0.7.4` release tag.
