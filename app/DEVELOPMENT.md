@@ -16,11 +16,22 @@ Refactoring is not a reason to weaken a behavior reproduced by the current app.
   Settings actions are Delete/Cancel/Save icons with accessible names, not Open
   actions. Keep additional options collapsed rather than replacing provider UI
   with a generic field dump.
-- Google cards use explicit `mountlet_google_group` links in rclone config.
+- Google cards persist `mountlet_google_group` links in rclone config.
   Preserve both remote IDs, authentication, mount state, indexes, and browser
-  memory; do not copy OAuth tokens between Drive and Photos or infer identity
-  from a name/email hint. The detached browser requests service changes through
-  the main window so active selection and window anchoring stay consistent.
+  memory; do not copy OAuth tokens between Drive and Photos. Reconcile at launch
+  using saved account emails (trimmed and case-normalized), never card names.
+  Provision missing services without launching OAuth or waiting for configuration.
+  Preserve existing links and keep repeated launches idempotent. Unknown accounts
+  get separate pairs rather than guessed merges. The detached browser requests
+  service changes through the main window so active selection and window
+  anchoring stay consistent.
+- Google configuration is a single account form, not service pages. Persist the
+  shared client category separately from advanced service overrides. Reuse maps
+  each service to its matching registration and never copies OAuth tokens.
+  Preserve reuse provenance without rotating registrations on unrelated edits.
+- Handle rclone's shared-client confirmation and saved client-ID/secret answers
+  internally. OAuth must not fall into manual registration prompts after a
+  default client was selected; report an unavailable registration in settings.
 - Renew a saved expired token before deciding startup is unlicensed. Status
   responses must not overwrite a newer activation/renewal; focus in the License
   form must not defer background renewal to the next minute.
@@ -118,9 +129,10 @@ The Tauri desktop covers the Python 0.6.8 desktop behaviors. The retired
 CLI/TUI and Qt-only test harness remain in the archived source:
 
 - Startup checks rclone (required) and FUSE/WinFsp/macFUSE (optional) in a
-  graphical wizard. Incomplete rclone remotes stay out of the list.
+  graphical wizard. Incomplete non-Google remotes stay out of the list; linked
+  Google services remain visible before authentication.
 - Add Remote collects provider-specific fields before `rclone config create`,
-  including Drive client reuse without sending stored secrets into the WebView,
+  including Google-account client reuse without sending stored secrets into the WebView,
   local-or-paste OAuth, shared drives, S3/R2/MinIO/Wasabi, WebDAV/Nextcloud,
   iCloud, MEGA, Proton Drive, Google Photos limits, OAuth port 53682 conflict
   handling, and opening `rclone config` in a terminal for other providers.

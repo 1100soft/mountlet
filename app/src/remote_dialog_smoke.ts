@@ -1,4 +1,5 @@
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
+import { openGoogleAccountDialog } from "./google_account_dialog.ts";
 import type { RemoteConfigData, SaveRemoteConfigRequest } from "./backend.ts";
 
 /** Shared form regression probe. Callbacks never mutate actual remote configs. */
@@ -52,4 +53,47 @@ export async function checkRemoteSettingsForm(): Promise<void> {
     ensure(captured!.mountFlags.split(/\s+/).sort().join(" ") === config.mountFlags.split(/\s+/).sort().join(" "), `${provider}: saved mount flags changed`);
     ensure(captured!.remotePath === config.remotePath && captured!.mountPath === config.mountPath && captured!.autoMount === null, `${provider}: saved mount options changed`);
   }
+  const configs: RemoteConfigData[] = ["drive", "gphotos"].map(provider => ({
+    id: `fixture-${provider}`, alias: "Google", provider, providerLabel: provider,
+    mountPath: provider, remotePath: `${provider}-folder`, mountFlags: "--read-only", autoMount: null,
+    fields: { client_id: `${provider}-id`, client_secret: "••••••", config_is_local: "false", mountlet_google_account: "fixture@gmail.com", ...(provider === "drive" ? { scope: "drive.readonly" } : { read_only: "false" }) },
+    oauthClient: "custom", secretFields: ["client_secret"],
+  }));
+  let captured: SaveRemoteConfigRequest[] = [];
+  const closed = openGoogleAccountDialog(configs, { save: async requests => { captured = requests; return configs[0].id; }, remove: async () => false });
+  let dialog: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 200 && !dialog; attempt += 1) { await new Promise(resolve => window.setTimeout(resolve, 10)); dialog = document.querySelector<HTMLElement>(".google-account-dialog"); }
+  ensure(Boolean(dialog), "Google account form did not open");
+  ensure(dialog!.querySelector(".google-service-toggle") === null, "Google settings must not use service pages");
+  ensure(!dialog!.querySelector<HTMLDetailsElement>("details")!.open, "Service overrides must be advanced");
+  ensure(dialog!.querySelectorAll("[data-google-service-client]").length === 2, "Both service overrides must be available");
+  const alias = dialog!.querySelector<HTMLInputElement>("input")!;
+  alias.value = "Renamed Google"; alias.dispatchEvent(new Event("input", { bubbles: true }));
+  dialog!.querySelector<HTMLButtonElement>('button[aria-label="Save"]')!.click(); await closed;
+  ensure(captured.length === 2 && captured.every(request => request.alias === "Renamed Google"), "Shared alias did not reach both services");
+  for (const request of captured) {
+    const original = configs.find(config => config.id === request.remoteId)!;
+    ensure(Object.entries(original.fields).every(([key, value]) => request.fields[key] === value), "Google rename changed authentication or service fields");
+    ensure(request.remotePath === original.remotePath && request.mountPath === original.mountPath, "Google rename changed independent paths");
+  }
+  const second = openGoogleAccountDialog(configs, { save: async requests => { captured = requests; return configs[0].id; }, remove: async () => false });
+  dialog = null;
+  for (let attempt = 0; attempt < 200 && !dialog; attempt += 1) { await new Promise(resolve => window.setTimeout(resolve, 10)); dialog = document.querySelector<HTMLElement>(".google-account-dialog"); }
+  const shared = dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!;
+  shared.add(new Option("Other Google account", "reuse:fixture-other"));
+  shared.value = "reuse:fixture-other"; shared.dispatchEvent(new Event("change", { bubbles: true }));
+  ensure(!dialog!.querySelector<HTMLDetailsElement>("details")!.open, "Selecting a shared client exposed advanced overrides");
+  const photos = dialog!.querySelector<HTMLSelectElement>('[data-google-service-client="gphotos"]')!;
+  photos.value = "custom"; photos.dispatchEvent(new Event("change", { bubbles: true }));
+  dialog!.querySelector<HTMLButtonElement>('button[aria-label="Save"]')!.click(); await second;
+  ensure(captured.find(request => request.remoteId === "fixture-drive")!.oauthClient === "reuse:fixture-other", "Drive did not inherit the shared Google account");
+  ensure(captured.find(request => request.remoteId === "fixture-gphotos")!.oauthClient === "custom", "Photos override did not remain independent");
+  ensure(captured.every(request => request.googleSharedClient === "reuse:fixture-other"), "The shared category was not persisted separately from overrides");
+  const reloaded = configs.map(config => { const request = captured.find(request => request.remoteId === config.id)!; return { ...config, oauthClient: request.oauthClient!, googleSharedClient: request.googleSharedClient, fields: request.fields }; });
+  const third = openGoogleAccountDialog(reloaded, { save: async () => null, remove: async () => false });
+  dialog = null;
+  for (let attempt = 0; attempt < 200 && !dialog; attempt += 1) { await new Promise(resolve => window.setTimeout(resolve, 10)); dialog = document.querySelector<HTMLElement>(".google-account-dialog"); }
+  ensure(dialog!.querySelector<HTMLSelectElement>("[data-google-shared-client]")!.value === "reuse:fixture-other", "Reload lost the shared category");
+  ensure(dialog!.querySelector<HTMLSelectElement>('[data-google-service-client="gphotos"]')!.value === "custom", "Reload lost the Photos override");
+  dialog!.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')!.click(); await third;
 }

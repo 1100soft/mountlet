@@ -19,7 +19,7 @@ for (const provider of OAUTH_REMOTE_TYPES) {
   updateOAuthClientOptions(select, provider, {});
   assert.equal(select.options[0].disabled, true);
   assert.equal(select.options[1].disabled, false);
-  assert.equal(select.options[3].disabled, provider !== "drive");
+  assert.equal(select.options[3].disabled, provider !== "drive" && provider !== "gphotos");
   updateOAuthClientOptions(select, provider, { [provider]: true });
   assert.equal(select.options[0].disabled, false);
 }

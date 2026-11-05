@@ -319,6 +319,7 @@ struct ConfigWizardRequest {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteConfigData {
+    google_shared_client: Option<String>,
     oauth_client: Option<String>,
     id: String,
     alias: String,
@@ -335,6 +336,8 @@ struct RemoteConfigData {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveRemoteConfigRequest {
+    #[serde(default)]
+    google_shared_client: Option<String>,
     #[serde(default)]
     oauth_client: Option<String>,
     remote_id: String,
@@ -1954,8 +1957,20 @@ fn write_rclone_section(
         return Err("Remote section is missing from rclone.conf".into());
     }
     output.push(String::new());
+    write_rclone_config_atomic(config, &output.join("\n"))
+}
+
+fn write_rclone_config_atomic(config: &Path, text: &str) -> Result<(), String> {
+    let permissions = fs::metadata(config)
+        .map_err(|error| error.to_string())?
+        .permissions();
     let temporary = config.with_extension("conf.tmp");
-    fs::write(&temporary, output.join("\n")).map_err(|error| error.to_string())?;
+    let mut file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
+    // Set permissions before writing credentials, not after exposing the data.
+    file.set_permissions(permissions)
+        .map_err(|error| error.to_string())?;
+    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(|error| error.to_string())?;
+    drop(file);
     fs::rename(temporary, config).map_err(|error| error.to_string())
 }
 
@@ -3284,8 +3299,14 @@ fn load_remote_config(
     }
     let mount = mount_settings().remove(&remote.id).unwrap_or_default();
     Ok(RemoteConfigData {
+        google_shared_client: raw.get("mountlet_google_shared_client").cloned(),
         oauth_client: is_oauth_provider(&remote.provider).then(|| {
-            oauth_client_source(&raw, embedded_oauth_credentials(&remote.provider)).into()
+            raw.get("mountlet_oauth_reuse_from")
+                .filter(|value| !value.is_empty())
+                .map(|id| format!("reuse:{id}"))
+                .unwrap_or_else(|| {
+                    oauth_client_source(&raw, embedded_oauth_credentials(&remote.provider)).into()
+                })
         }),
         id: remote.id,
         alias: remote.name,
@@ -4188,6 +4209,11 @@ fn save_remote_config(
     }
     let old_values = read_rclone_section(config, &remote.id)?;
     let mut updates = HashMap::new();
+    if matches!(remote.provider.as_str(), "drive" | "gphotos") {
+        if let Some(source) = request.google_shared_client.as_ref() {
+            updates.insert("mountlet_google_shared_client".into(), source.clone());
+        }
+    }
     for key in safe_rclone_keys(&remote.provider) {
         if is_oauth_provider(&remote.provider) && matches!(*key, "client_id" | "client_secret") {
             continue;
@@ -4217,16 +4243,32 @@ fn save_remote_config(
             updates.insert("mountlet_oauth_local".into(), local.clone());
         }
         let source = request.oauth_client.as_deref().unwrap_or("custom");
-        let mut submitted = request.fields.clone();
-        let reused = source.starts_with("reuse:");
-        let source = resolve_oauth_reuse(&remote.provider, source, config, &mut submitted)?;
-        let new_client = HashMap::new();
-        updates.extend(oauth_client_updates(
-            &source,
-            if reused { &new_client } else { &old_values },
-            &submitted,
-            embedded_oauth_credentials(&remote.provider),
-        )?);
+        let reference = source.strip_prefix("reuse:");
+        let unchanged_reuse = reference.is_some()
+            && reference
+                == old_values
+                    .get("mountlet_oauth_reuse_from")
+                    .map(String::as_str);
+        updates.insert(
+            "mountlet_oauth_reuse_from".into(),
+            reference.unwrap_or_default().into(),
+        );
+        if !unchanged_reuse {
+            let mut submitted = request.fields.clone();
+            let reused = source.starts_with("reuse:");
+            let source = resolve_oauth_reuse(&remote.provider, source, config, &mut submitted)?;
+            let new_client = HashMap::new();
+            updates.extend(oauth_client_updates(
+                &source,
+                if reused && source == "custom" {
+                    &new_client
+                } else {
+                    &old_values
+                },
+                &submitted,
+                embedded_oauth_credentials(&remote.provider),
+            )?);
+        }
     }
     if matches!(remote.provider.as_str(), "drive" | "gphotos") {
         let account = updates
@@ -4267,6 +4309,66 @@ fn save_remote_config(
 }
 
 #[tauri::command]
+fn reconcile_google_remotes(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let ids: Vec<String> = state
+        .remotes
+        .read()
+        .map_err(|_| "Remote state is unavailable")?
+        .iter()
+        .filter(|remote| matches!(remote.provider.as_str(), "drive" | "gphotos"))
+        .map(|remote| remote.id.clone())
+        .collect();
+    // Use all discovered entries, including incomplete ones. No OAuth/network
+    // operation belongs in this launch-time configuration migration.
+    let mut processed = std::collections::HashSet::new();
+    for id in ids {
+        if processed.contains(&id) {
+            continue;
+        }
+        processed.extend(ensure_google_pair(id, None, state.clone())?);
+    }
+    Ok(())
+}
+
+fn google_account(values: &HashMap<String, String>) -> Option<String> {
+    [
+        "mountlet_google_account",
+        "account",
+        "email",
+        "user",
+        "username",
+    ]
+    .iter()
+    .filter_map(|key| values.get(*key))
+    .map(|value| value.trim().to_ascii_lowercase())
+    .find(|value| value.contains('@') && !value.chars().any(char::is_whitespace))
+}
+
+fn matching_google_companion(
+    config: &Path,
+    source: &HashMap<String, String>,
+    candidates: &[Remote],
+) -> Option<String> {
+    let account = google_account(source)?;
+    let other = if source.get("type").map(String::as_str) == Some("drive") {
+        "gphotos"
+    } else {
+        "drive"
+    };
+    candidates
+        .iter()
+        .filter(|remote| remote.provider == other && remote.google_group.is_none())
+        .find(|remote| {
+            read_rclone_section(config, &remote.id)
+                .ok()
+                .and_then(|values| google_account(&values))
+                .as_ref()
+                == Some(&account)
+        })
+        .map(|remote| remote.id.clone())
+}
+
+#[tauri::command]
 fn ensure_google_pair(
     remote_id: String,
     companion_id: Option<String>,
@@ -4276,6 +4378,34 @@ fn ensure_google_pair(
         .rclone_config
         .as_ref()
         .ok_or("rclone configuration is unavailable")?;
+    let candidates = state
+        .remotes
+        .read()
+        .map_err(|_| "Remote state is unavailable")?
+        .clone();
+    let (ids, created) =
+        ensure_google_pair_in_config(config, remote_id, companion_id, &candidates)?;
+    if created {
+        let id = &ids[1];
+        update_mount_section(
+            id,
+            id,
+            &RemoteMountSettings {
+                auto_mount: Some(false),
+                ..RemoteMountSettings::default()
+            },
+        )?;
+    }
+    refresh_remote_state(&state)?;
+    Ok(ids)
+}
+
+fn ensure_google_pair_in_config(
+    config: &Path,
+    remote_id: String,
+    companion_id: Option<String>,
+    candidates: &[Remote],
+) -> Result<(Vec<String>, bool), String> {
     let source = read_rclone_section(config, &remote_id)?;
     let provider = source.get("type").map(String::as_str).unwrap_or_default();
     let other = match provider {
@@ -4287,16 +4417,17 @@ fn ensure_google_pair(
         .get("mountlet_google_group")
         .cloned()
         .unwrap_or_else(|| format!("google-{}-{}", std::process::id(), rand::random::<u64>()));
-    let existing = state
-        .remotes
-        .read()
-        .map_err(|_| "Remote state is unavailable")?
+    let existing = candidates
         .iter()
         .find(|remote| remote.provider == other && remote.google_group.as_deref() == Some(&group))
         .map(|remote| remote.id.clone());
-    let companion = if let Some(id) = existing {
-        id
-    } else if let Some(id) = companion_id {
+    if let Some(id) = existing {
+        return Ok((vec![remote_id, id], false));
+    }
+    let mut created = false;
+    let companion = if let Some(id) =
+        companion_id.or_else(|| matching_google_companion(config, &source, candidates))
+    {
         if id == remote_id {
             return Err("Choose the other Google service.".into());
         }
@@ -4326,7 +4457,13 @@ fn ensure_google_pair(
             suffix = format!("{label} {number}");
             number += 1;
         }
-        let client = if embedded_oauth_credentials(other)
+        let inherited = source
+            .get("mountlet_google_shared_client")
+            .or_else(|| source.get("mountlet_oauth_client"))
+            .map(String::as_str);
+        let client = if matches!(inherited, Some("mountlet" | "rclone")) {
+            inherited.unwrap()
+        } else if embedded_oauth_credentials(other)
             .0
             .is_some_and(|id| !id.trim().is_empty())
         {
@@ -4334,34 +4471,78 @@ fn ensure_google_pair(
         } else {
             "rclone"
         };
-        create_remote(
-            CreateRemoteRequest {
-                alias,
-                provider: other.into(),
-                provider_label: suffix,
-                fields: HashMap::from([
-                    ("mountlet_oauth_client".into(), client.into()),
-                    (
-                        "config_is_local".into(),
-                        source
-                            .get("mountlet_oauth_local")
-                            .cloned()
-                            .unwrap_or_else(|| "true".into()),
-                    ),
-                ]),
-                google_account: source
-                    .get("mountlet_google_account")
+        let id = format!("{alias}__{suffix}");
+        let mut fields = HashMap::from([
+            ("type".into(), other.into()),
+            ("mountlet_oauth_client".into(), client.into()),
+            (
+                "mountlet_oauth_local".into(),
+                source
+                    .get("mountlet_oauth_local")
                     .cloned()
-                    .unwrap_or_default(),
-                mount_after: false,
-                remote_path: String::new(),
-            },
-            state.clone(),
-        )?
+                    .unwrap_or_else(|| "true".into()),
+            ),
+        ]);
+        if let Some(account) = google_account(&source) {
+            fields.insert(
+                "auth_url".into(),
+                format!(
+                    "https://accounts.google.com/o/oauth2/auth?login_hint={}",
+                    url_query_value(&account)
+                ),
+            );
+            fields.insert("mountlet_google_account".into(), account);
+        }
+        if client == "mountlet" {
+            let (id, secret) = embedded_oauth_credentials(other);
+            fields.insert("client_id".into(), id.unwrap_or_default().into());
+            fields.insert("client_secret".into(), secret.unwrap_or_default().into());
+        }
+        if let Some(reference) = source
+            .get("mountlet_google_shared_client")
+            .and_then(|value| value.strip_prefix("reuse:"))
+            .or_else(|| source.get("mountlet_oauth_reuse_from").map(String::as_str))
+        {
+            let choice =
+                resolve_oauth_reuse(other, &format!("reuse:{reference}"), config, &mut fields)?;
+            fields.insert("mountlet_oauth_client".into(), choice);
+            fields.insert("mountlet_oauth_reuse_from".into(), reference.into());
+        }
+        if let Some(shared) = source.get("mountlet_google_shared_client") {
+            fields.insert("mountlet_google_shared_client".into(), shared.clone());
+        }
+        // Provision an unauthenticated entry without invoking rclone's wizard.
+        append_google_section(config, &id, &fields)?;
+        created = true;
+        id
     };
     link_google_sections(config, &remote_id, &companion, &group)?;
-    refresh_remote_state(&state)?;
-    Ok(vec![remote_id, companion])
+    Ok((vec![remote_id, companion], created))
+}
+
+fn append_google_section(
+    config: &Path,
+    id: &str,
+    fields: &HashMap<String, String>,
+) -> Result<(), String> {
+    if id.contains(['[', ']', '\n', '\r'])
+        || fields
+            .iter()
+            .any(|(key, value)| key.contains(['=', '\n', '\r']) || value.contains(['\n', '\r']))
+    {
+        return Err("Invalid Google remote configuration.".into());
+    }
+    if !read_rclone_section(config, id)?.is_empty() {
+        return Err("Google remote already exists.".into());
+    }
+    let mut text = fs::read_to_string(config).map_err(|error| error.to_string())?;
+    text.push_str(&format!("\n[{id}]\n"));
+    for (key, value) in fields.iter().collect::<std::collections::BTreeMap<_, _>>() {
+        if !value.is_empty() {
+            text.push_str(&format!("{key} = {value}\n"));
+        }
+    }
+    write_rclone_config_atomic(config, &text)
 }
 
 fn link_google_sections(
@@ -4390,7 +4571,7 @@ fn link_google_sections(
     {
         return Err("A Google service is already linked to another card.".into());
     }
-    // Pairing never infers identity from labels or copies tokens/registrations.
+    // Matching uses saved account emails, never labels or OAuth tokens.
     for id in [source, companion] {
         write_rclone_section(
             config,
@@ -4436,6 +4617,10 @@ fn create_remote(
     }
     let rclone = state.rclone.as_deref().ok_or("rclone is unavailable")?;
     let mut fields = request.fields.clone();
+    let reuse_reference = fields
+        .get("mountlet_oauth_client")
+        .and_then(|source| source.strip_prefix("reuse:"))
+        .map(str::to_string);
     let local_auth = fields.get("config_is_local").cloned();
     let source = fields.remove("mountlet_oauth_client");
     let mut selected_source = None;
@@ -4504,6 +4689,9 @@ fn create_remote(
     }
     if let Some(source) = selected_source {
         let mut metadata = HashMap::from([("mountlet_oauth_client".into(), source)]);
+        if let Some(reference) = reuse_reference {
+            metadata.insert("mountlet_oauth_reuse_from".into(), reference);
+        }
         if let Some(local) = local_auth {
             metadata.insert("mountlet_oauth_local".into(), local);
         }
@@ -4625,19 +4813,41 @@ fn resolve_oauth_reuse(
     let Some(remote_id) = source.strip_prefix("reuse:") else {
         return Ok(source.into());
     };
-    if provider != "drive" {
-        return Err("Client reuse is only supported for Google Drive.".into());
+    if !matches!(provider, "drive" | "gphotos") {
+        return Err("Client reuse is only supported for Google services.".into());
     }
-    let saved = read_rclone_section(config, remote_id)?;
-    if saved.get("type").map(String::as_str) != Some("drive")
-        || saved.get("client_id").is_none_or(|id| id.trim().is_empty())
-    {
-        return Err("The source Drive remote has no client credentials.".into());
+    let mut saved = read_rclone_section(config, remote_id)?;
+    if saved.get("type").map(String::as_str) != Some(provider) {
+        let group = saved.get("mountlet_google_group").cloned();
+        let account = google_account(&saved);
+        saved = parse_rclone_config(config)?
+            .into_iter()
+            .map(|(_, values)| values)
+            .find(|values| {
+                values.get("type").map(String::as_str) == Some(provider)
+                    && group
+                        .as_ref()
+                        .map(|group| values.get("mountlet_google_group") == Some(group))
+                        .unwrap_or_else(|| {
+                            account.as_ref().is_some_and(|account| {
+                                google_account(values).as_ref() == Some(account)
+                            })
+                        })
+            })
+            .ok_or("The selected Google account has no matching service configuration.")?;
     }
     for key in ["client_id", "client_secret"] {
         fields.insert(key.into(), saved.get(key).cloned().unwrap_or_default());
     }
-    Ok("custom".into())
+    Ok(if saved
+        .get("client_id")
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        "custom"
+    } else {
+        "rclone"
+    }
+    .into())
 }
 
 fn oauth_client_updates(
@@ -6181,7 +6391,7 @@ async fn run_rclone_mutation(
     };
     append_rclone_log(state, format!("$ rclone {operation} {source}"));
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut command = Command::new(rclone);
+        let mut command = Command::new(&rclone);
         command
             .args(["--config"])
             .arg(config)
@@ -7149,24 +7359,8 @@ async fn config_wizard_step(
         .rclone_config
         .clone()
         .ok_or("rclone configuration is unavailable")?;
-    let remote_id = request.remote_id;
-    let wizard_state = request.state;
-    let result = request.result;
-    let config_is_local = request.config_is_local;
     let output = tauri::async_runtime::spawn_blocking(move || {
-        let mut command = Command::new(rclone);
-        command.args(["--config"]).arg(config).args([
-            "config",
-            "update",
-            &remote_id,
-            "--non-interactive",
-        ]);
-        if !wizard_state.is_empty() {
-            command.args(["--continue", "--state", &wizard_state, "--result", &result]);
-        } else if let Some(local) = config_is_local {
-            command.args(["config_is_local", if local { "true" } else { "false" }]);
-        }
-        command.output().map_err(|error| error.to_string())
+        config_wizard_output(&rclone, &config, request)
     })
     .await
     .map_err(|error| error.to_string())??;
@@ -7188,6 +7382,82 @@ async fn config_wizard_step(
         });
     }
     parse_wizard_step(&combined)
+}
+
+fn config_wizard_output(
+    rclone: &str,
+    config: &Path,
+    request: ConfigWizardRequest,
+) -> Result<std::process::Output, String> {
+    let ConfigWizardRequest {
+        remote_id,
+        state: mut wizard_state,
+        mut result,
+        config_is_local,
+    } = request;
+    let raw = read_rclone_section(config, &remote_id)?;
+    let provider = raw.get("type").map(String::as_str).unwrap_or_default();
+    let local = config_is_local.unwrap_or_else(|| {
+        raw.get("mountlet_oauth_local")
+            .is_none_or(|value| value != "false")
+    });
+    if is_oauth_provider(provider)
+        && raw
+            .get("mountlet_oauth_client")
+            .is_some_and(|source| source == "mountlet")
+        && raw.get("client_id").is_none_or(|id| id.trim().is_empty())
+    {
+        return Err("This build has no Mountlet client for this service. Choose an available client in settings.".into());
+    }
+    for _ in 0..16 {
+        let mut command = Command::new(rclone);
+        command.args(["--config"]).arg(config).args([
+            "config",
+            "update",
+            &remote_id,
+            "--non-interactive",
+        ]);
+        if !wizard_state.is_empty() {
+            command.args(["--continue", "--state", &wizard_state, "--result", &result]);
+        }
+        command.args(["config_is_local", if local { "true" } else { "false" }]);
+        let output = command.output().map_err(|error| error.to_string())?;
+        if !output.status.success() || !is_oauth_provider(provider) {
+            return Ok(output);
+        }
+        let step = parse_wizard_step(&String::from_utf8_lossy(&output.stdout))?;
+        if step.state.is_empty() {
+            return Ok(output);
+        }
+        match automatic_oauth_answer(&raw, &step)? {
+            Some(answer) => {
+                wizard_state = step.state;
+                result = answer;
+            }
+            None => return Ok(output),
+        }
+    }
+    Err("OAuth setup did not advance. Review the selected client in settings.".into())
+}
+
+fn automatic_oauth_answer(
+    raw: &HashMap<String, String>,
+    step: &ConfigWizardStep,
+) -> Result<Option<String>, String> {
+    let name = step.option["Name"].as_str().unwrap_or_default();
+    if matches!(name, "config_shared_client_id" | "config_refresh_token") {
+        return Ok(Some("true".into()));
+    }
+    let key = match name {
+        "client_id" | "config_client_id" => "client_id",
+        "client_secret" | "config_client_secret" => "client_secret",
+        _ => return Ok(None),
+    };
+    let value = raw.get(key).cloned().unwrap_or_default();
+    if value.is_empty() && step.option["Required"].as_bool() == Some(true) {
+        return Err("The selected client is unavailable. Choose Mountlet or configure a client in settings.".into());
+    }
+    Ok(Some(value))
 }
 
 #[tauri::command]
@@ -7607,6 +7877,8 @@ fn drag_preview_icon() -> Result<String, String> {
 struct DriveOauthSource {
     remote_id: String,
     label: String,
+    drive_custom: bool,
+    photos_custom: bool,
 }
 
 #[tauri::command]
@@ -7644,39 +7916,34 @@ fn drive_oauth_sources(state: tauri::State<'_, AppState>) -> Vec<DriveOauthSourc
     let Ok(sections) = parse_rclone_config(config) else {
         return Vec::new();
     };
-    let mut groups: HashMap<(String, String), Vec<String>> = HashMap::new();
-    for (name, values) in sections {
-        if values.get("type").map(String::as_str) != Some("drive") {
+    let mut sources = Vec::new();
+    for (name, values) in &sections {
+        if values.get("type").map(String::as_str) != Some("drive")
+            || !platform::remote_section_is_configured("drive", &values)
+        {
             continue;
         }
-        let client_id = values
-            .get("client_id")
-            .map(|value| value.trim().to_string())
-            .unwrap_or_default();
-        let client_secret = values
-            .get("client_secret")
-            .map(|value| value.trim().to_string())
-            .unwrap_or_default();
-        if client_id.is_empty() || client_secret.is_empty() {
-            continue;
-        }
-        groups
-            .entry((client_id, client_secret))
-            .or_default()
-            .push(name);
+        let label = google_account(&values).unwrap_or_else(|| name.clone());
+        let custom = |provider: &str, fields: &HashMap<String, String>| {
+            oauth_client_source(fields, embedded_oauth_client(provider)) == "custom"
+                && fields.get("client_id").is_some_and(|id| !id.trim().is_empty())
+        };
+        let photos_custom = sections.iter().any(|(_, photos)| {
+            photos.get("type").map(String::as_str) == Some("gphotos")
+                && values.get("mountlet_google_group").map_or_else(
+                    || google_account(values).is_some_and(|account| google_account(photos) == Some(account)),
+                    |group| photos.get("mountlet_google_group") == Some(group),
+                )
+                && custom("gphotos", photos)
+        });
+        sources.push(DriveOauthSource {
+            remote_id: name.clone(),
+            label,
+            drive_custom: custom("drive", values),
+            photos_custom,
+        });
     }
-    groups
-        .into_values()
-        .map(|names| {
-            let remote_id = names[0].clone();
-            let label = if names.len() == 1 {
-                names[0].clone()
-            } else {
-                format!("{}, +{}", names[0], names.len() - 1)
-            };
-            DriveOauthSource { remote_id, label }
-        })
-        .collect()
+    sources
 }
 
 #[tauri::command]
@@ -8122,6 +8389,7 @@ pub fn run() {
             save_remote_config,
             create_remote,
             ensure_google_pair,
+            reconcile_google_remotes,
             oauth_client_availability,
             delete_remote,
             rclone_output,
@@ -8210,6 +8478,239 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires a local rclone executable; uses isolated paste-mode fixtures only"]
+    fn installed_rclone_oauth_skips_client_questions() {
+        let path = env::temp_dir().join(format!(
+            "mountlet-rclone-oauth-{}-{}.conf",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::write(&path, "[drive]\ntype = drive\nmountlet_oauth_client = rclone\nmountlet_oauth_local = false\n\n[photos]\ntype = gphotos\nmountlet_oauth_client = mountlet\nclient_id = fixture-client\nclient_secret = fixture-secret\nmountlet_oauth_local = false\n").unwrap();
+        for id in ["drive", "photos"] {
+            let output = config_wizard_output(
+                &find_rclone(),
+                &path,
+                ConfigWizardRequest {
+                    remote_id: id.into(),
+                    state: String::new(),
+                    result: String::new(),
+                    config_is_local: None,
+                },
+            )
+            .unwrap();
+            assert!(output.status.success(), "rclone fixture failed");
+            let step = parse_wizard_step(&String::from_utf8_lossy(&output.stdout)).unwrap();
+            assert_eq!(step.option["Name"], "config_token", "paste-mode authentication should proceed directly to its token, not client questions");
+        }
+        assert!(!read_rclone_section(&path, "drive")
+            .unwrap()
+            .contains_key("client_id"));
+        assert_eq!(
+            read_rclone_section(&path, "photos").unwrap()["client_secret"],
+            "fixture-secret"
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn oauth_wizard_uses_selected_clients_without_manual_credential_prompts() {
+        let raw = HashMap::from([
+            ("client_id".into(), "fixture-id".into()),
+            ("client_secret".into(), "fixture-secret".into()),
+        ]);
+        let step = |name: &str, required: bool| ConfigWizardStep {
+            state: "fixture".into(),
+            option: serde_json::json!({"Name":name,"Required":required}),
+            error: String::new(),
+            result: String::new(),
+        };
+        assert_eq!(
+            automatic_oauth_answer(&raw, &step("config_shared_client_id", false))
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            automatic_oauth_answer(&raw, &step("config_refresh_token", false))
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            automatic_oauth_answer(&raw, &step("client_id", true))
+                .unwrap()
+                .as_deref(),
+            Some("fixture-id")
+        );
+        assert_eq!(
+            automatic_oauth_answer(&raw, &step("client_secret", false))
+                .unwrap()
+                .as_deref(),
+            Some("fixture-secret")
+        );
+        assert_eq!(
+            automatic_oauth_answer(&HashMap::new(), &step("client_secret", false))
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+        assert!(automatic_oauth_answer(&HashMap::new(), &step("client_id", true)).is_err());
+        assert!(automatic_oauth_answer(&raw, &step("config_token", true))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn google_account_client_reuse_resolves_each_service_independently() {
+        let path = env::temp_dir().join(format!(
+            "mountlet-google-reuse-{}-{}.conf",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::write(&path, "[drive]\ntype = drive\nmountlet_google_group = pair\nmountlet_google_account = fixture@example.com\nclient_id = drive-id\nclient_secret = drive-secret\ntoken = drive-token\n\n[unrelated-photos]\ntype = gphotos\nmountlet_google_group = other-pair\nmountlet_google_account = fixture@example.com\nclient_id = unrelated-id\n\n[photos]\ntype = gphotos\nmountlet_google_group = pair\nclient_id = photos-id\nclient_secret = photos-secret\ntoken = photos-token\n\n[default]\ntype = drive\n").unwrap();
+        for (provider, id, secret) in [
+            ("drive", "drive-id", "drive-secret"),
+            ("gphotos", "photos-id", "photos-secret"),
+        ] {
+            let mut fields = HashMap::new();
+            assert_eq!(
+                resolve_oauth_reuse(provider, "reuse:drive", &path, &mut fields).unwrap(),
+                "custom"
+            );
+            assert_eq!(fields["client_id"], id);
+            assert_eq!(fields["client_secret"], secret);
+            assert!(!fields.contains_key("token"));
+        }
+        let mut fields = HashMap::new();
+        assert_eq!(
+            resolve_oauth_reuse("drive", "reuse:default", &path, &mut fields).unwrap(),
+            "rclone"
+        );
+        assert!(fields["client_id"].is_empty());
+        assert!(resolve_oauth_reuse("dropbox", "reuse:drive", &path, &mut fields).is_err());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn automatic_google_pairing_matches_accounts_and_provisions_without_oauth() {
+        let path = env::temp_dir().join(format!(
+            "mountlet-google-auto-{}-{}.conf",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let candidates = || -> Vec<Remote> {
+            fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix('[')
+                        .and_then(|line| line.strip_suffix(']'))
+                })
+                .map(|id| {
+                    let raw = read_rclone_section(&path, id).unwrap();
+                    Remote {
+                        id: id.into(),
+                        name: id.into(),
+                        provider: raw["type"].clone(),
+                        provider_label: String::new(),
+                        google_group: raw.get("mountlet_google_group").cloned(),
+                        configured: raw.contains_key("token"),
+                        mounted: false,
+                        used_bytes: None,
+                        total_bytes: None,
+                    }
+                })
+                .collect()
+        };
+        fs::write(&path, "[drive-a]\ntype = drive\nmountlet_google_account = User@Example.com\nclient_id = original-drive-client\ntoken = drive-token\n\n[photos-b]\ntype = gphotos\nemail = other@example.com\ntoken = unrelated-token\n\n[photos-a]\ntype = gphotos\naccount = user@example.com\nclient_id = original-photos-client\ntoken = photos-token\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let (ids, created) =
+            ensure_google_pair_in_config(&path, "drive-a".into(), None, &candidates()).unwrap();
+        assert_eq!(ids, ["drive-a", "photos-a"]);
+        assert!(!created);
+        for (id, client, token) in [
+            ("drive-a", "original-drive-client", "drive-token"),
+            ("photos-a", "original-photos-client", "photos-token"),
+        ] {
+            let raw = read_rclone_section(&path, id).unwrap();
+            assert_eq!(raw["client_id"], client);
+            assert_eq!(raw["token"], token);
+        }
+        assert!(!read_rclone_section(&path, "photos-b")
+            .unwrap()
+            .contains_key("mountlet_google_group"));
+        let linked = fs::read_to_string(&path).unwrap();
+        assert!(
+            !ensure_google_pair_in_config(&path, "photos-a".into(), None, &candidates())
+                .unwrap()
+                .1
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            linked,
+            "repeat launches must not rewrite linked config"
+        );
+
+        let (other_ids, created) =
+            ensure_google_pair_in_config(&path, "photos-b".into(), None, &candidates()).unwrap();
+        assert!(created);
+        let added = read_rclone_section(&path, &other_ids[1]).unwrap();
+        assert_eq!(added["type"], "drive");
+        assert_eq!(added["mountlet_google_account"], "other@example.com");
+        assert!(!added.contains_key("token"));
+        assert!(matches!(
+            added["mountlet_oauth_client"].as_str(),
+            "mountlet" | "rclone"
+        ));
+        assert_ne!(
+            added.get("client_id").map(String::as_str),
+            Some("original-photos-client")
+        );
+        let provisioned = fs::read_to_string(&path).unwrap();
+        assert!(
+            !ensure_google_pair_in_config(&path, "photos-b".into(), None, &candidates())
+                .unwrap()
+                .1
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), provisioned);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        // Unknown accounts, even with similar card names, must not be merged.
+        fs::write(
+            &path,
+            "[same__Drive]\ntype = drive\ntoken = saved\n\n[same__Photos]\ntype = gphotos\n",
+        )
+        .unwrap();
+        assert_eq!(
+            google_account(&HashMap::from([("email".into(), " U@Example.com ".into())])).as_deref(),
+            Some("u@example.com")
+        );
+        let (first, _) =
+            ensure_google_pair_in_config(&path, "same__Drive".into(), None, &candidates()).unwrap();
+        assert_ne!(first[1], "same__Photos");
+        let (second, _) =
+            ensure_google_pair_in_config(&path, "same__Photos".into(), None, &candidates())
+                .unwrap();
+        assert_ne!(second[1], "same__Drive");
+        assert_ne!(
+            read_rclone_section(&path, &first[0]).unwrap()["mountlet_google_group"],
+            read_rclone_section(&path, &second[0]).unwrap()["mountlet_google_group"]
+        );
+        fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn google_pairing_preserves_service_credentials_and_rejects_regrouping() {
         let path = env::temp_dir().join(format!(

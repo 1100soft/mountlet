@@ -47,10 +47,17 @@ Existing remotes keep their saved client until changed and reauthenticated.
 Google setup includes Drive and Photos under one card, with independent sign-in
 for each service. Each card icon opens that service on the web; the browser's
 icon toggle switches content while retaining each service's folder, selection,
-and cached tree. Settings has the same service switch. Opening settings for an
-older Google remote offers to link an existing counterpart explicitly or create
-one; matching names or account hints alone never merge remotes. Save pending
-settings before switching tabs. Failed or cancelled sign-in does not remove the
+and cached tree. Settings uses one Google account form with shared name, account,
+sign-in method, and client category. Drive/Photos client overrides, manual IDs
+and secrets, and service-specific fields are under Options. Reusing another
+Google account resolves that account's own client registration for each service.
+At launch, existing
+Drive and Photos remotes with the same saved Google account email are linked
+automatically. A missing service is provisioned with Mountlet's embedded client,
+or rclone's default where available, without waiting for sign-in or settings.
+If no email is saved, Mountlet adds a companion but does not merge unknown-account
+cards based on their names. Duplicate service remotes remain separate pairs.
+Failed or cancelled sign-in does not remove the
 working service; select the other service to retry. Photos remains restricted
 by Google's API and is not recursively indexed.
 Deleting a linked Google card removes both service configurations after
@@ -59,6 +66,10 @@ unmounting them; it does not delete cloud files.
 Daily beta tokens renew during startup before an expired-license dialog is
 shown. While renewal runs, access stays locked with a checking indicator. A
 failed renewal retains the key for retry without resetting the trial.
+OAuth sign-in uses the selected registration without prompting again for client
+IDs/secrets. A selected rclone client automatically continues past its shared
+client warning; unavailable registrations require a change in settings instead
+of dropping into manual credential questions.
 
 Integrated edits are disabled by default because cloud copy, move, upload,
 rename, and delete operations are direct and cannot be undone by Mountlet.

@@ -10,7 +10,8 @@ import { dragPreviewIcon, materializeEntriesForDrag } from "./backend.ts";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { activateLicense, clipboardText, deactivateLicenseDevice, oauthClientAvailability, licenseDefaultDeviceLabel, licenseDevices, licenseStatus, refreshLicense, type LicenseStatus } from "./backend.ts";
 import { openAddRemoteDialog } from "./add_remote_dialog.ts";
-import { ensureGooglePair, listenGoogleService, requestGoogleService } from "./backend.ts";
+import { openGoogleAccountDialog } from "./google_account_dialog.ts";
+import { ensureGooglePair, reconcileGoogleRemotes, listenGoogleService, requestGoogleService } from "./backend.ts";
 import { googleCards, isGoogle, sameRemoteCard } from "./google_remotes.ts";
 import { resolveStartupLicense } from "./license_startup.ts";
 import { checkRemoteSettingsForm } from "./remote_dialog_smoke.ts";
@@ -935,7 +936,8 @@ async function runRemoteConfigWizard(remoteId: string, localAuth?: boolean): Pro
     const help = String(option.Help ?? "").trim();
     const defaultValue = String(option.DefaultStr ?? option.Default ?? step.result ?? "");
     const searchText = `${name} ${help}`.toLocaleLowerCase();
-    if (name === "config_is_local") result = "true";
+    if (name === "config_is_local") result = localAuth === false ? "false" : "true";
+    else if (name === "config_shared_client_id") result = "true";
     else if (["config_edit_advanced", "edit_advanced"].includes(name)) result = "false";
     else if (type === "bool" && (name.toLocaleLowerCase().includes("warning") || searchText.startsWith("warning") || searchText.includes(" important "))) result = "true";
     else {
@@ -1208,21 +1210,11 @@ const REMOTE_AUTH_FIELDS: Record<string, readonly string[]> = {
   mega: ["user", "pass", "2fa"],
 };
 
-async function prepareGoogleAccount(remoteId: string): Promise<void> {
-  const source = remotes.find(remote => remote.id === remoteId);
-  const config = await loadRemoteConfig(remoteId);
-  const other = config.provider === "drive" ? "gphotos" : "drive";
-  const candidates = remotes.filter(remote => remote.provider === other && !remote.googleGroup);
-  let companionId: string | undefined;
-  if (!source?.googleGroup && candidates.length) {
-    const chosen = await promptWizardOption("Google account", "Choose the other service for the same Google account. Existing remotes are linked only with your confirmation.", "new", false,
-      [{ value: "new", label: "Set up the other service" }, ...candidates.map(remote => ({ value: remote.id, label: remote.name }))]);
-    if (chosen === null) return;
-    if (chosen !== "new") companionId = chosen;
-  }
-  const ids = await ensureGooglePair(remoteId, companionId);
+async function prepareGoogleAccount(remoteId: string, authenticate = false): Promise<void> {
+  const ids = await ensureGooglePair(remoteId);
   remotes = await listRemotes();
   renderRemoteList();
+  if (!authenticate) return;
   for (const id of ids) {
     const service = remotes.find(remote => remote.id === id);
     if (service?.configured !== false) continue;
@@ -1254,10 +1246,50 @@ async function showRemoteConfig(remote: Remote): Promise<void> {
   }
   let config;
   try { config = await loadRemoteConfig(remote.id); } catch (error) { await showError("Remote settings", error); return; }
+  if (remote.googleGroup && googleServices(remote).length > 1) {
+    try {
+      const services = googleServices(remote);
+      const configs = await Promise.all(services.map(service => loadRemoteConfig(service.id)));
+      const result = await openGoogleAccountDialog(configs, {
+        save: async requests => {
+          const changes = requests.map(request => {
+            const previous = configs.find(config => config.id === request.remoteId)!;
+            const authFields = new Set([...(REMOTE_AUTH_FIELDS[previous.provider] ?? []), "client_id", "client_secret", "config_is_local", "mountlet_google_account", "team_drive"]);
+            const authChanged = request.oauthClient !== previous.oauthClient || Object.entries(request.fields).some(([key, value]) => authFields.has(key)
+              && (!["client_id", "client_secret"].includes(key) || request.oauthClient === "custom")
+              && authenticationFieldChanged(value, previous.fields[key] ?? "", previous.secretFields.includes(key)));
+            const changed = authChanged || request.alias !== previous.alias || request.mountPath !== previous.mountPath
+              || request.remotePath !== previous.remotePath || request.mountFlags !== previous.mountFlags
+              || Object.entries(request.fields).some(([key, value]) => value !== previous.fields[key]);
+            return { request, previous, authChanged, remount: changed && (services.find(service => service.id === request.remoteId)?.mounted ?? false) };
+          });
+          if (changes.some(change => change.authChanged) && !await confirmOwned("Authentication changed", "Save and sign in to the changed Google services?", "Continue")) return null;
+          if (changes.some(change => change.remount) && !await confirmOwned("Remount remote?", "Unmount, save, and mount the changed Google services again?", "Continue")) return null;
+          for (const change of changes) if (change.remount) await toggleRemoteMount(change.request.remoteId);
+          let selected = remote.id;
+          for (const change of changes) {
+            const id = await saveRemoteConfig(change.request);
+            if (change.previous.id === remote.id) selected = id;
+            if (change.authChanged) await runRemoteConfigWizard(id, change.request.fields.config_is_local !== "false");
+            if (change.remount) await toggleRemoteMount(id);
+          }
+          remotes = await listRemotes(); renderRemoteList(); return selected;
+        },
+        remove: async () => {
+          if (!await confirmOwned("Delete remote?", "Remove this Google account's Drive and Photos from Mountlet? Cloud files are not deleted.", "Delete")) return false;
+          for (const service of services) if (service.mounted) await toggleRemoteMount(service.id);
+          for (const service of services) await deleteRemote(service.id);
+          remotes = await listRemotes(); activeRemote = selectedRemote = remoteSelectionTarget = "";
+          ++selectionGeneration; ++requestGeneration; currentPath = ""; snapshot = null; render();
+          if (remotes[0]) await selectRemote(remotes[0].id); return true;
+        },
+      });
+      if (result) await selectRemote(result);
+    } catch (error) { await showError("Google settings", error); }
+    return;
+  }
   const result = await openAddRemoteDialog({ edit: {
     config,
-    services: remote.googleGroup ? googleServices(remote) : undefined,
-    switchService: id => { const service = remotes.find(item => item.id === id); if (service) void showRemoteConfig(service); },
     save: async request => {
       const hasOAuth = OAUTH_REMOTE_TYPES.has(config.provider);
       if (hasOAuth && request.oauthClient === "custom" && !request.fields.client_id?.trim()) throw new Error("Enter a custom client ID.");
@@ -1337,7 +1369,7 @@ async function showAddRemote(tutorial = addRemoteTutorialActive): Promise<void> 
   const created = remotes.find(remote => remote.id === result.remoteId);
   if (OAUTH_REMOTE_TYPES.has(result.provider)) {
     if (result.provider === "drive" || result.provider === "gphotos") {
-      await prepareGoogleAccount(result.remoteId).catch(error => showError("Google setup", error));
+      await prepareGoogleAccount(result.remoteId, true).catch(error => showError("Google setup", error));
     } else await runRemoteConfigWizard(result.remoteId, result.localAuth).catch(error => showError("Authenticate remote", error));
   } else if (created) {
     await showRemoteConfig(created);
@@ -2805,7 +2837,7 @@ async function start(): Promise<void> {
     const reuseOption = new Option("Smoke test Drive credentials", "reuse:smoke-drive-source");
     const availability = await oauthClientAvailability();
     credentialField.add(reuseOption);
-    for (const type of ["gphotos", "dropbox", "onedrive", "box", "pcloud"]) {
+    for (const type of ["dropbox", "onedrive", "box", "pcloud"]) {
       credentialField.value = reuseOption.value;
       providerField.value = type; providerField.dispatchEvent(new Event("change"));
       if (credentialField.value !== defaultOAuthClient(type, availability) || !reuseOption.disabled || !reuseOption.hidden) throw new Error(`${type} offered Drive credential reuse`);
@@ -2955,6 +2987,9 @@ async function start(): Promise<void> {
         })();
       }
     });
+  }
+  if (!isBrowserWindow) {
+    await reconcileGoogleRemotes().catch(error => showError("Google setup", error));
   }
   remotes = await listRemotes();
   activeRemote = selectedRemote = remotes[0] ? googleCardService(remotes[0]).id : "";

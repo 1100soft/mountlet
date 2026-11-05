@@ -11,8 +11,7 @@ import {
   type RemoteConfigData,
   type SaveRemoteConfigRequest,
 } from "./backend.ts";
-import { actionIcon, providerIcon } from "./icons.ts";
-import type { Provider } from "./model.ts";
+import { actionIcon } from "./icons.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
 import { defaultOAuthClient, googleAccountValue, OAUTH_CLIENT_OPTIONS, OAUTH_REMOTE_TYPES as OAUTH_TYPES, updateOAuthClientOptions } from "./remote_auth.ts";
 
@@ -69,8 +68,6 @@ export interface AddRemoteDialogOptions {
     config: RemoteConfigData;
     save: (request: SaveRemoteConfigRequest) => Promise<string | null>;
     remove: () => Promise<boolean>;
-    services?: readonly { id: string; provider: Provider; providerLabel: string }[];
-    switchService?: (id: string) => void;
   };
 }
 
@@ -584,23 +581,6 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   }
   actions.append(cancel, create);
   dialog.append(form, actions);
-  if (editing?.services && editing.switchService) {
-    const tabs = node("div", "google-service-toggle");
-    tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Google service settings");
-    for (const service of editing.services) {
-      const tab = node("button", "icon-button"); tab.type = "button";
-      tab.title = service.providerLabel; tab.setAttribute("aria-label", service.providerLabel);
-      tab.setAttribute("aria-pressed", String(service.id === saved?.id));
-      tab.append(providerIcon(service.provider, service.providerLabel));
-      tab.addEventListener("click", () => {
-        if (service.id === saved?.id) return;
-        if (saving || !create.disabled) { create.focus(); return; }
-        close(null); editing.switchService?.(service.id);
-      });
-      tabs.append(tab);
-    }
-    dialog.insertBefore(tabs, form);
-  }
   layer.append(dialog);
   document.body.append(layer);
 
