@@ -11,7 +11,8 @@ import {
   type RemoteConfigData,
   type SaveRemoteConfigRequest,
 } from "./backend.ts";
-import { actionIcon } from "./icons.ts";
+import { actionIcon, providerIcon } from "./icons.ts";
+import type { Provider } from "./model.ts";
 import { bindScaledSelect, showError, trapModalFocus } from "./dialogs.ts";
 import { defaultOAuthClient, googleAccountValue, OAUTH_CLIENT_OPTIONS, OAUTH_REMOTE_TYPES as OAUTH_TYPES, updateOAuthClientOptions } from "./remote_auth.ts";
 
@@ -32,8 +33,8 @@ const WEBDAV_VENDORS = [
   { label: "Other WebDAV", vendor: "other", suffix: "WebDAV", url: "https://cloud.example.com/webdav" },
 ] as const;
 const PROVIDERS = [
-  ["Google Drive", "drive", "Drive"],
-  ["Google Photos (limited)", "gphotos", "Google Photos"],
+  ["Google Drive / Photos", "drive", "Drive"],
+  ["Google Photos / Drive (limited)", "gphotos", "Google Photos"],
   ["Dropbox", "dropbox", "Dropbox"],
   ["Microsoft OneDrive", "onedrive", "OneDrive"],
   ["Box", "box", "Box"],
@@ -68,6 +69,8 @@ export interface AddRemoteDialogOptions {
     config: RemoteConfigData;
     save: (request: SaveRemoteConfigRequest) => Promise<string | null>;
     remove: () => Promise<boolean>;
+    services?: readonly { id: string; provider: Provider; providerLabel: string }[];
+    switchService?: (id: string) => void;
   };
 }
 
@@ -373,8 +376,9 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     setVisible([rows.credentials], OAUTH_TYPES.has(type));
     setVisible([rows.driveClientHelp], isDrive || isGphotos);
     setVisible([rows.account], isDrive || isGphotos);
-    setVisible([rows.gphotosReadOnly, rows.gphotosHelp], isGphotos);
-    if (saved) { rows.driveClientHelp.hidden = true; rows.gphotosHelp.hidden = true; }
+    setVisible([rows.gphotosReadOnly], isGphotos);
+    rows.gphotosHelp.hidden = !(isGphotos || isDrive);
+    if (saved) rows.driveClientHelp.hidden = true;
     setVisible([rows.driveKind, rows.sharedDriveId], isDrive);
     setVisible([rows.auth, rows.port], OAUTH_TYPES.has(type));
     setVisible([rows.s3Provider, rows.s3Region, rows.s3Access, rows.s3Secret, rows.s3Path], isS3);
@@ -419,6 +423,7 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   portTimer = window.setInterval(() => void refreshPort(), 1500);
 
   const actions = node("div", "dialog-actions");
+  let saving = false;
   const cancel = actionIcon("", "Cancel");
   const create = actionIcon("", saved ? "Save" : "Add remote");
   create.classList.add("primary");
@@ -525,6 +530,8 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     }
     const alias = name.value.trim();
     if (!alias) { name.focus(); return; }
+    if (saving) return;
+    saving = true;
     create.disabled = true;
     try {
       if (/[:@/\\\r\n]/.test(alias)) throw new Error("Use a name without ':', '@', line breaks, or path separators.");
@@ -562,11 +569,12 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
     } catch (error) {
       await showError(saved ? "Remote settings" : "Add remote", error);
       create.disabled = false;
-    }
+    } finally { saving = false; }
   });
   if (editing) {
     const remove = actionIcon("", "Delete"); remove.classList.add("danger");
     remove.addEventListener("click", async () => {
+      if (saving) return;
       remove.disabled = true;
       try { if (await editing.remove()) close(null); }
       catch (error) { await showError("Delete remote", error); }
@@ -576,6 +584,23 @@ export async function openAddRemoteDialog(options: AddRemoteDialogOptions = {}):
   }
   actions.append(cancel, create);
   dialog.append(form, actions);
+  if (editing?.services && editing.switchService) {
+    const tabs = node("div", "google-service-toggle");
+    tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Google service settings");
+    for (const service of editing.services) {
+      const tab = node("button", "icon-button"); tab.type = "button";
+      tab.title = service.providerLabel; tab.setAttribute("aria-label", service.providerLabel);
+      tab.setAttribute("aria-pressed", String(service.id === saved?.id));
+      tab.append(providerIcon(service.provider, service.providerLabel));
+      tab.addEventListener("click", () => {
+        if (service.id === saved?.id) return;
+        if (saving || !create.disabled) { create.focus(); return; }
+        close(null); editing.switchService?.(service.id);
+      });
+      tabs.append(tab);
+    }
+    dialog.insertBefore(tabs, form);
+  }
   layer.append(dialog);
   document.body.append(layer);
 

@@ -116,6 +116,10 @@ upgrade tests:
   clipboard read must show an error and allow retry without erasing the key.
   An activated license remains read-only until this device is deactivated.
 - Activate, quit, and restart: the saved key and valid activation must remain.
+  Delay beta renewal: only a neutral checking indicator should appear until the
+  response, with no premature expired-license dialog or purchase prompt. Test
+  failure/offline startup and a late dialog status response; retain the saved
+  key, stay locked on failed renewal, and never overwrite a newer activation.
   Repeat with a token requiring a cached signing key. An expired daily beta
   token must renew in the background; offline renewal failure must retain the
   key and remain locked, not reset the trial or erase activation state.
@@ -123,6 +127,13 @@ upgrade tests:
   actions, and icon-only Save/Delete/Cancel. Rename each provider and confirm
   unchanged authentication and mount fields are preserved. The startup probe
   exercises all 12 provider forms using in-memory save callbacks only.
+- Set up either Google service and confirm both are provisioned under one card
+  with separate authorization. Cancel one sign-in and confirm the other still
+  works. Explicitly link older Drive/Photos remotes without changing their IDs,
+  credentials, cached trees, or locations. Test both web icons, settings tabs,
+  and repeated browser service switches in both window modes. The hover startup
+  probe also checks grouped rows and independent service locations. Photos API
+  limitations remain visible; no shared-storage explanatory badge is needed.
 
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.
