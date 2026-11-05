@@ -107,7 +107,7 @@ upgrade tests:
   missing system rclone cleanly and work after one is provided.
 - For each OAuth provider, confirm creation defaults to Mountlet only when its
   client ID was included in the build. Verify separate rclone and Custom choices
-  in creation and settings, Drive-only reuse, masked custom secrets, and source
+  in creation and settings, per-service Google-account reuse, masked custom secrets, and source
   persistence. Changing source must clear the previous token and reauthenticate;
   unrelated edits must preserve the saved credentials. Never log client secrets.
 - With an expired trial or deactivated license, open License and paste a key
@@ -129,11 +129,29 @@ upgrade tests:
   exercises all 12 provider forms using in-memory save callbacks only.
 - Set up either Google service and confirm both are provisioned under one card
   with separate authorization. Cancel one sign-in and confirm the other still
-  works. Explicitly link older Drive/Photos remotes without changing their IDs,
-  credentials, cached trees, or locations. Test both web icons, settings tabs,
+  works. At launch, link older Drive/Photos remotes by their saved Google account
+  emails without a confirmation dialog; provision a missing service immediately,
+  without opening OAuth. Repeat launch and confirm no duplicate companions or
+  config rewrites. Unknown accounts must not merge by card name. Preserve IDs,
+  credentials, cached trees, and locations. Test both web icons, the unified
+  account settings form, shared client categories, and advanced service overrides,
+  keeping ordinary fields visible. Custom must list only cards with custom
+  registrations and direct missing Drive/Photos clients to Advanced options.
+  Verify one shared auto-mount control saves to both services, service groups
+  use Drive/Photos icons, and long dropdowns near the bottom open upward with
+  every option reachable by scrolling and keyboard.
+  Verify partially configured custom registrations without requiring OAuth first
   and repeated browser service switches in both window modes. The hover startup
   probe also checks grouped rows and independent service locations. Photos API
   limitations remain visible; no shared-storage explanatory badge is needed.
+- First-time OAuth with Mountlet/rclone/reused registrations must not prompt for
+  client IDs/secrets. Confirm the rclone shared-client warning advances using the
+  selected default, saved credentials stay unchanged, browser mode opens OAuth,
+  and paste mode stays in paste mode. Missing registrations show a settings error.
+  Verify the shared category and Photos-only override survive reopening settings,
+  and that renaming preserves both services' fields, locations, and credentials.
+  With rclone installed, the isolated no-browser fixture can be run with
+  `cargo test --locked --manifest-path app/src-tauri/Cargo.toml installed_rclone_oauth_skips_client_questions -- --ignored`.
 
 Submit one Windows report and verify its issue number in the configured private
 GitHub repository. Delete or close the test issue according to support policy.

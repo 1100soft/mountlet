@@ -8,7 +8,7 @@ export function sameRemoteCard(a: Remote | undefined, b: Remote | undefined): bo
   return Boolean(a && b && (a.id === b.id || (isGoogle(a) && isGoogle(b) && a.googleGroup && a.googleGroup === b.googleGroup)));
 }
 
-/** Only explicit links collapse rows; account hints/aliases are not identities. */
+/** Only persisted links collapse rows; account matching belongs to the backend. */
 export function googleCards(remotes: readonly Remote[]): readonly Remote[] {
   const cards: Remote[] = [];
   for (const remote of remotes) {

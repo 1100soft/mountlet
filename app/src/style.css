@@ -173,6 +173,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: calc(
 .remote-advanced { border-top: 1px solid var(--border); padding-top: calc(6px * var(--zoom)); }
 .remote-advanced summary { cursor: pointer; color: var(--muted); }
 .remote-advanced > .settings-row { margin-top: calc(6px * var(--zoom)); }
+.google-account-dialog fieldset { min-width: 0; display: grid; gap: calc(6px * var(--zoom)); margin: calc(8px * var(--zoom)) 0 0; padding: calc(8px * var(--zoom)); border: 1px solid var(--border); }
 .add-remote-help, .add-remote-status { margin: 0; color: var(--muted); }
 .add-remote-port { display: grid; gap: calc(6px * var(--zoom)); }
 .tutorial-highlight { position: relative; z-index: 1401; border-radius: calc(6px * var(--zoom)); animation: tutorial-pulse 1.25s ease-in-out infinite; }
