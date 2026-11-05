@@ -487,8 +487,11 @@ The report endpoint can share a private GitHub issue repository with other apps.
 Set `REPORT_GITHUB_REPO=1100soft/1100-shared-feedback` and
 `REPORT_GITHUB_PROJECT_LABEL=Mountlet` in both **Production and Preview** under
 Cloudflare Pages → Mountlet → Settings → Variables and Secrets, then redeploy.
-The project label defaults to `Mountlet`; use that exact case in Cerberus
-Feedback → settings too. Ensure the label exists in the shared repository.
+`Mountlet` is the currently resolved GitHub label in Cerberus's project
+configuration, not a label derived from its friendly feedback name. After a
+feedback-name change, read the saved mapping again and update server intake;
+legacy routing prefixes may remain part of the actual GitHub label. Do not
+construct or strip prefixes. Ensure the resolved label exists in the repository.
 Remove the former `mountlet-report` value from `REPORT_GITHUB_LABELS`.
 `REPORT_GITHUB_LABELS`
 adds optional classification labels; a validation retry retains the mandatory
@@ -500,3 +503,15 @@ with Issues read/write permission; do not rely on redirects for API writes.
 This change does not relabel existing issues. Any future listing or issue update
 must verify the `Mountlet` project label first; an issue number alone is not scope.
 See the [shared queue instructions](https://github.com/1100soft/1100-shared-feedback#project-queues).
+
+Troubleshooting a missing report:
+
+- `/api/health` checks configuration presence, not token validity or queue delivery.
+- Verify the deployed Pages variables, not just `.dev.vars`; local changes do not
+  update Production or Preview. Reauthenticate Wrangler if its login has expired.
+- A successful submission must return an `issueUrl`. Inspect that issue's labels:
+  an issue labeled only `mountlet-report` is invisible to the current `Mountlet`
+  queue even though GitHub accepted it. Correct the intake configuration before
+  retrying; check for the original issue first to avoid duplicates.
+- Keep the project label on optional-label retries. Verify a live submission's
+  repository and exact resolved label after redeployment, not just its HTTP status.
