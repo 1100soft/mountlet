@@ -35,12 +35,13 @@ release and remains frozen under `legacy/python-0.6.8/`.
 ## 1. Freeze and validate the candidate
 
 1. Update the version, lockfiles, changelog, and affected release/upgrade notes.
-   For `v0.7.4`, the captured source matches the `v0.7.3` application tree;
-   the preparation corrects version metadata without introducing a data migration.
+   For `v0.7.5`, review the beta renewal and Google account upgrade checks
+   below, including automatic linking of existing Drive/Photos remotes. Preserve
+   existing user data; no manual configuration reset is required.
    Run the project version check with the exact requested tag, then validate:
 
    ```bash
-   RELEASE_TAG=v0.7.4 node app/scripts/check-version.mjs
+   RELEASE_TAG=v0.7.5 node app/scripts/check-version.mjs
    ```
 
    Run the remaining checks from the repository root:
@@ -183,7 +184,7 @@ workflow's `environment-json` input. The verification composite action reads the
 resulting environment values because the `vars` context is unavailable there.
 
 A tagged build deliberately fails its bundled Windows job if any identity value
-is absent. Mountlet `0.7.4` maps to Store package version `1.7.4.0`: the major
+is absent. Mountlet `0.7.5` maps to Store package version `1.7.5.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth
 component remains zero because Microsoft reserves it. Application-visible
 versions remain normal SemVer.
