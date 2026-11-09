@@ -11,18 +11,22 @@ release and remains frozen under `legacy/python-0.6.8/`.
   compatibility. Native packaging and installer uploads do not depend on its
   integration tests. Website changes must pass that workflow before deployment.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
-  `app/src-tauri/tauri.conf.json` identical to the release tag. Update the
+  `app/src-tauri/tauri.conf.json` identical to the stable release tag. Preview
+  tags may have arbitrary names and do not change the app's version. Update the
   corresponding npm and Cargo lockfile entries together.
 - A `wip` build is a preview build and uploads to preview R2. Production
   installers are uploaded to production R2 only by a `vX.Y.Z` tag. Pushes and
   manual workflow runs on `main` validate packages but must never publish them.
   Do not publish production installers by manually reusing preview artifacts.
-- Only a `vX.Y.Z` tag publishes to the 1100 Software APT repository. APT carries
-  the standard Linux package with bundled rclone; the lean package remains a
-  direct download because both variants have the same Debian package identity.
-- A manually dispatched Native package CI run on `wip` may publish the bundled
-  build as `mountlet-preview`. Preview publication is opt-in and must never be
-  enabled for an automatic branch or pull-request run.
+- A `vX.Y.Z` tag on `main` publishes stable APT packages (`mountlet` and
+  `mountlet-lean`). A pushed tag on an unreleased `wip` commit automatically
+  publishes preview APT packages (`mountlet-preview` and `mountlet-lean-preview`)
+  and uses preview R2, never production storage.
+- Tags do not record their originating branch. CI resolves the tagged commit's
+  ancestry: reachable from `wip` but not `main` means preview; an exact `vX.Y.Z`
+  tag reachable from `main` means stable. Other tags are rejected before packaging.
+  Ordinary branch pushes and pull requests do not publish APT previews. Manual
+  Native package CI on `wip` still supports the `publish_apt_preview` opt-in.
 - Packaged applications use `https://mountlet.app` for license and report APIs
   unless `MOUNTLET_LICENSE_API_URL` or `MOUNTLET_REPORT_API_URL` is set in the
   process environment. The build-channel marker does not change these URLs.
@@ -35,13 +39,14 @@ release and remains frozen under `legacy/python-0.6.8/`.
 ## 1. Freeze and validate the candidate
 
 1. Update the version, lockfiles, changelog, and affected release/upgrade notes.
-   For `v0.7.5`, review the beta renewal and Google account upgrade checks
-   below, including automatic linking of existing Drive/Photos remotes. Preserve
-   existing user data; no manual configuration reset is required.
+   For `v0.7.6`, verify tagged preview versus stable publication routing
+   and the retained beta renewal and Google account upgrade checks below.
+   This release adds no application data migration; preserve existing user
+   data without a manual configuration reset.
    Run the project version check with the exact requested tag, then validate:
 
    ```bash
-   RELEASE_TAG=v0.7.5 node app/scripts/check-version.mjs
+   RELEASE_TAG=v0.7.6 node app/scripts/check-version.mjs
    ```
 
    Run the remaining checks from the repository root:
@@ -184,7 +189,7 @@ workflow's `environment-json` input. The verification composite action reads the
 resulting environment values because the `vars` context is unavailable there.
 
 A tagged build deliberately fails its bundled Windows job if any identity value
-is absent. Mountlet `0.7.5` maps to Store package version `1.7.5.0`: the major
+is absent. Mountlet `0.7.6` maps to Store package version `1.7.6.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth
 component remains zero because Microsoft reserves it. Application-visible
 versions remain normal SemVer.
@@ -261,13 +266,24 @@ from preview:
 
 ## Preview APT package
 
-For a deliberately selected preview, run **Native package CI** manually on the
-`wip` branch and enable `publish_apt_preview`. After the native matrix finishes,
+Push a tag on an unreleased `wip` commit to publish a preview automatically.
+For example, after committing and pushing the intended `wip` changes:
+
+```bash
+git tag wip/preview-2026-11-09 wip
+git push origin refs/tags/wip/preview-2026-11-09
+```
+
+Lightweight and annotated tags both work. The workflow must already be present
+in the tagged commit. Tag names do not set the application version, and tagging
+a commit already reachable from `main` does not make it a preview. To publish
+without a tag, run **Native package CI** manually on `wip` and enable
+`publish_apt_preview`. After the native matrix finishes,
 the publisher requires both tested Linux artifacts (bundled and system-rclone),
 but Windows or macOS failures do not block APT publication. Cancelled runs do
 not publish, and missing Linux artifacts fail before any publication dispatch.
-The workflow rebuilds the bundled Linux package metadata as
-`mountlet-preview`, gives it a unique version based on the workflow run number
+The workflow rebuilds both Linux package identities as
+`mountlet-preview` and `mountlet-lean-preview`, with unique versions based on the workflow run number
 and commit, and sends it to the central APT publisher.
 
 `mountlet-preview` and `mountlet-lean-preview` are the preview counterparts of

@@ -21,7 +21,7 @@ const useRemote = takeFlag("--remote") || process.env.MOUNTLET_R2_REMOTE === "1"
 const dryRun = takeFlag("--dry-run");
 const requestedVersion = takeOption("--version") || process.env.MOUNTLET_RELEASE_VERSION || readProjectVersion();
 const requestedQualifier = takeOption("--qualifier") || process.env.MOUNTLET_RELEASE_QUALIFIER
-  || (process.env.GITHUB_REF_NAME === "wip" && process.env.GITHUB_SHA ? `preview-${process.env.GITHUB_SHA.slice(0, 7)}` : "");
+  || ((process.env.MOUNTLET_BUILD_CHANNEL === "preview" || process.env.GITHUB_REF_NAME === "wip") && process.env.GITHUB_SHA ? `preview-${process.env.GITHUB_SHA.slice(0, 7)}` : "");
 const requestedRetention = takeOption("--retain") || process.env.MOUNTLET_RELEASE_RETENTION || "";
 const positionalArgs = cliArgs.filter((arg) => !arg.startsWith("--"));
 const bucket = positionalArgs[0] || process.env.MOUNTLET_R2_BUCKET || "";

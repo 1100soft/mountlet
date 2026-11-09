@@ -16,8 +16,8 @@ if (unique.size !== 1 || unique.has(undefined)) {
 }
 
 const releaseTag = process.env.RELEASE_TAG || "";
-if (releaseTag && releaseTag !== `v${packageJson.version}`) {
+if (releaseTag && process.env.MOUNTLET_BUILD_CHANNEL !== "preview" && releaseTag !== `v${packageJson.version}`) {
   throw new Error(`Release tag ${releaseTag} does not match Mountlet version ${packageJson.version}.`);
 }
 
-console.log(`Mountlet version ${packageJson.version} is consistent${releaseTag ? ` with ${releaseTag}` : ""}.`);
+console.log(`Mountlet version ${packageJson.version} is consistent${releaseTag ? ` (${process.env.MOUNTLET_BUILD_CHANNEL === "preview" ? "preview tag" : "release tag"}: ${releaseTag})` : ""}.`);

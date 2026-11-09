@@ -13,13 +13,15 @@ import {
 } from "./release-layout.mjs";
 
 const artifact = {platform: "windows", architecture: "x64", variant: "standard", suffix: "-setup.exe"};
-assert.equal(readProjectVersion(), "0.7.5");
+assert.equal(readProjectVersion(), "0.7.6");
 assert.equal(normalizeVersion("v0.6.3"), "0.6.3");
 assert.equal(normalizeFileQualifier("preview-abcdef1"), "preview-abcdef1");
 assert.throws(() => normalizeFileQualifier("preview/bad"), /Invalid release filename qualifier/);
 assert.ok(compareVersions("0.7.0", "0.6.9") > 0);
 assert.ok(compareVersions("0.7.0", "0.7.0-beta.2") > 0);
 assert.doesNotThrow(() => validateReleaseRef("0.6.4", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.6.4"}));
+assert.doesNotThrow(() => validateReleaseRef("0.7.5", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "wip/preview-1", MOUNTLET_BUILD_CHANNEL: "preview"}));
+assert.throws(() => validateReleaseRef("0.7.5", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "wip/preview-1", MOUNTLET_BUILD_CHANNEL: "production"}));
 assert.throws(
   () => validateReleaseRef("0.6.4", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.6.3"}),
   /does not match project version/
