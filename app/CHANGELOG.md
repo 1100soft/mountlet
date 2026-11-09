@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.6
+
+- Route tags on unreleased `wip` commits to preview R2 and automatic preview
+  APT publication, while stable `vX.Y.Z` tags on `main` publish production
+  packages. Reject unrelated tags on released commits before packaging.
+- Allow preview tag names to differ from the checked-in application version;
+  stable release tags still require matching version metadata.
+- Keep website integration checks independent from native packaging and retain
+  the requirement for both tested Linux variants before APT publication.
+- Upgrade using the normal installer or the same APT package identity. This
+  release changes publication tooling and introduces no application data
+  migration; retain configuration, license, trial, rclone, metadata, and
+  offline/cache data.
+
 ## 0.7.5
 
 - Renew beta licenses before showing the launch UI, retaining saved keys when
