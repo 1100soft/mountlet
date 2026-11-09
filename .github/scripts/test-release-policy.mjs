@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import {execFileSync} from "node:child_process";
+import {execFile} from "node:child_process";
 import {mkdtempSync, rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {fileURLToPath} from "node:url";
-import {releasePolicy} from "./release-policy.mjs";
+import {promisify} from "node:util";
+import {releasePolicy, resolveReleasePolicy} from "./release-policy.mjs";
 
 const preview = {channel: "preview", upload: true, publishApt: true};
 const stable = {channel: "production", upload: true, publishApt: true};
@@ -27,21 +27,24 @@ for (const input of [
 
 // Exercise real ancestry and annotated-tag peeling without touching the worktree.
 const directory = mkdtempSync(join(tmpdir(), "mountlet-release-policy-"));
-const script = fileURLToPath(new URL("./release-policy.mjs", import.meta.url));
-const git = (...args) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {cwd: directory, encoding: "utf8", stdio: "pipe"}).trim();
+const exec = promisify(execFile);
+const git = async (...args) => (await exec("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], {cwd: directory})).stdout.trim();
 try {
-  git("init");
-  git("commit", "--allow-empty", "-m", "Stable fixture");
-  const main = git("rev-parse", "HEAD");
-  git("update-ref", "refs/remotes/origin/main", main);
-  git("commit", "--allow-empty", "-m", "Wip fixture");
-  git("update-ref", "refs/remotes/origin/wip", "HEAD");
-  git("tag", "-a", "wip/test", "-m", "Preview fixture");
-  git("checkout", "--detach", "wip/test");
-  const run = ref => execFileSync(process.execPath, [script], {cwd: directory, encoding: "utf8", env: {...process.env, GITHUB_OUTPUT: "", GITHUB_REF: ref, GITHUB_EVENT_NAME: "push", PUBLISH_APT_PREVIEW: "false"}});
-  assert.match(run("refs/tags/wip/test"), /channel=preview\nupload=true\npublish-apt=true/);
-  git("checkout", "--detach", main);
-  assert.match(run("refs/tags/v0.7.6"), /channel=production\nupload=true\npublish-apt=true/);
+  await git("init");
+  await git("commit", "--allow-empty", "-m", "Stable fixture");
+  const main = await git("rev-parse", "HEAD");
+  await git("update-ref", "refs/remotes/origin/main", main);
+  await git("commit", "--allow-empty", "-m", "Wip fixture");
+  await git("update-ref", "refs/remotes/origin/wip", "HEAD");
+  await git("tag", "-a", "wip/test", "-m", "Preview fixture");
+  await git("checkout", "--detach", "wip/test");
+  const run = ref => resolveReleasePolicy({GITHUB_REF: ref, GITHUB_EVENT_NAME: "push"}, directory);
+  assert.deepEqual(await run("refs/tags/wip/test"), preview);
+  await git("checkout", "--detach", main);
+  assert.deepEqual(await run("refs/tags/v0.7.6"), stable);
+  await assert.rejects(run("refs/tags/provenance"), /neither an unreleased wip commit/);
+  await git("update-ref", "-d", "refs/remotes/origin/wip");
+  await assert.rejects(run("refs/tags/v0.7.6"), /Command failed/);
 } finally {
   rmSync(directory, {recursive: true, force: true});
 }
