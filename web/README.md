@@ -255,7 +255,9 @@ access. Wrangler's Cloudflare REST upload path requires broader account-level
 R2 permissions, so Mountlet uploads release artifacts through the
 S3-compatible API instead.
 
-The `wip` branch uploads to the preview bucket. Only `vX.Y.Z` version tags
+The `wip` branch and tags on unreleased `wip` commits upload to the preview
+bucket. Tagged previews use commit-qualified installer names and automatically
+publish both preview APT identities. Only `vX.Y.Z` version tags on `main`
 upload native installers to the production bucket; `main` validates packages
 without uploading them. Follow `app/docs/RELEASE.md` for reviewed preparation
 and publication. Existing release tags and published installer bytes must not

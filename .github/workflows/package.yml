@@ -11,6 +11,7 @@ name: Native package CI
     paths:
     - .github/workflows/package.yml
     - .github/scripts/prepare-apt-packages.sh
+    - .github/scripts/*release-policy.mjs
     - .github/actions/**
     - app/**
     - '!app/**/*.md'
@@ -20,10 +21,11 @@ name: Native package CI
     - main
     - wip
     tags:
-    - v*.*.*
+    - '**'
     paths:
     - .github/workflows/package.yml
     - .github/scripts/prepare-apt-packages.sh
+    - .github/scripts/*release-policy.mjs
     - .github/actions/**
     - app/**
     - '!app/**/*.md'
@@ -34,7 +36,27 @@ concurrency:
   group: native-package-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  release-policy:
+    name: Resolve preview or stable release
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.policy.outputs.channel }}
+      upload: ${{ steps.policy.outputs.upload }}
+      publish-apt: ${{ steps.policy.outputs.publish-apt }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-node@v5
+      with:
+        node-version: '22'
+    - run: node .github/scripts/test-release-policy.mjs
+    - id: policy
+      env:
+        PUBLISH_APT_PREVIEW: ${{ inputs.publish_apt_preview }}
+      run: node .github/scripts/release-policy.mjs
   package:
+    needs: release-policy
     uses: 1100soft/CI/.github/workflows/tauri-package.yml@31cd08b2a9314c358ce2589a095b5cbeb8dcadf7
     with:
       app-directory: app
@@ -165,7 +187,7 @@ jobs:
       retention-days: 14
       environment-json: >-
         ${{ format('{{"MOUNTLET_BUILD_CHANNEL":{0},"MOUNTLET_STORE_IDENTITY_NAME":{1},"MOUNTLET_STORE_PUBLISHER":{2},"MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME":{3}}}',
-        toJSON(github.ref_name == 'wip' && 'preview' || 'production'),
+        toJSON(needs.release-policy.outputs.channel),
         toJSON(format('{0}', vars.MOUNTLET_STORE_IDENTITY_NAME)),
         toJSON(format('{0}', vars.MOUNTLET_STORE_PUBLISHER)),
         toJSON(format('{0}', vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME))) }}
@@ -178,15 +200,15 @@ jobs:
         }}
   upload-installers:
     name: Upload installers to R2
-    needs: package
+    needs: [release-policy, package]
     runs-on: ubuntu-24.04
-    if: github.ref_name == 'wip' || startsWith(github.ref, 'refs/tags/v')
+    if: needs.release-policy.outputs.upload == 'true'
     env:
+      MOUNTLET_BUILD_CHANNEL: ${{ needs.release-policy.outputs.channel }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
       CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-      MOUNTLET_R2_BUCKET: ${{ github.ref_name == 'wip' && vars.MOUNTLET_PREVIEW_R2_BUCKET || vars.MOUNTLET_PRODUCTION_R2_BUCKET
-        }}
+      MOUNTLET_R2_BUCKET: ${{ vars[needs.release-policy.outputs.channel == 'preview' && 'MOUNTLET_PREVIEW_R2_BUCKET' || 'MOUNTLET_PRODUCTION_R2_BUCKET'] }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/download-artifact@v4
@@ -210,11 +232,10 @@ jobs:
         npm run web:r2:upload -- "$MOUNTLET_R2_BUCKET" release-artifacts --remote
   publish-apt:
     name: Publish Linux package to APT
-    needs: package
+    needs: [release-policy, package]
     # A failed Windows/macOS matrix leg must not suppress tested Linux packages.
     # The reusable publisher requires both named Linux artifacts before dispatch.
-    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/wip'
-      && inputs.publish_apt_preview)) }}
+    if: ${{ !cancelled() && needs.release-policy.result == 'success' && needs.release-policy.outputs.publish-apt == 'true' }}
     permissions:
       contents: read
       actions: read
@@ -223,7 +244,7 @@ jobs:
       artifact-inputs: '{"mountlet-linux-x64-standard": "apt-input/standard", "mountlet-linux-x64-lean": "apt-input/lean"}'
       prepare-command: |
         set -euo pipefail
-        if [ "${{ github.event_name == 'workflow_dispatch' && inputs.publish_apt_preview }}" = "true" ]; then
+        if [ "${{ needs.release-policy.outputs.channel }}" = "preview" ]; then
           channel=preview
           release_id="${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}"
         else

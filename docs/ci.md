@@ -12,7 +12,8 @@ preparation. `.github/actions/tauri-prepare` stages rclone;
 creates/certifies MSIX packages, and smoke-tests installed apps on each platform.
 The eight-entry package matrix and existing artifact names remain the contract
 used by website downloads and APT backfills. Hook changes trigger package CI.
-The shared pre-build version check rejects tags that differ from the app version.
+The pre-build version check requires stable tags to match the app version;
+preview tags keep the checked-in app version and may use arbitrary names.
 The MSIX hook bounds its startup probe to five minutes explicitly because
 composite action steps cannot specify `timeout-minutes`.
 
@@ -27,7 +28,15 @@ transport; the maintenance workflow still publishes only the missing lean packag
 identity.
 
 Website checks remain independent from app packaging. Production R2 publication
-remains tag-only, with previews from `wip`; APT previews require manual opt-in.
+remains tag-only. A release-policy job checks tagged commit ancestry before
+packaging: unreleased `wip` commits publish tagged previews to preview R2 and
+APT automatically; exact `vX.Y.Z` tags on `main` publish stable packages.
+Ordinary `wip` pushes still upload preview installers but do not publish APT.
+Manual `wip` runs retain the APT preview opt-in. Provenance or unrelated tags
+on released commits do not publish. Both tested Linux artifacts remain required;
+Windows/macOS failures do not block APT, and website checks stay independent.
+Run `node .github/scripts/test-release-policy.mjs` to check routing and real Git
+ancestry in an isolated fixture, including annotated tags.
 Keep these policies in Mountlet when updating shared workflow pins. Before
 rolling out a new pin, lint both repositories' workflows and run actual GitHub
 CI/package jobs, including installed-app probes and Windows Store checks.
