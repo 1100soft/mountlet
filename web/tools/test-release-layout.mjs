@@ -1,5 +1,6 @@
 import {strict as assert} from "node:assert";
 import {readFileSync} from "node:fs";
+import {assertImmutableRelease} from "./immutable-release.mjs";
 import {
   compareVersions,
   normalizeFileQualifier,
@@ -20,8 +21,11 @@ assert.throws(() => normalizeFileQualifier("preview/bad"), /Invalid release file
 assert.ok(compareVersions("0.7.0", "0.6.9") > 0);
 assert.ok(compareVersions("0.7.0", "0.7.0-beta.2") > 0);
 assert.doesNotThrow(() => validateReleaseRef("0.6.4", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.6.4"}));
-assert.doesNotThrow(() => validateReleaseRef("0.7.5", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "wip/preview-1", MOUNTLET_BUILD_CHANNEL: "preview"}));
+assert.doesNotThrow(() => validateReleaseRef("0.7.7-preview.1", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.7.7-preview.1", MOUNTLET_BUILD_CHANNEL: "preview"}));
 assert.throws(() => validateReleaseRef("0.7.5", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "wip/preview-1", MOUNTLET_BUILD_CHANNEL: "production"}));
+const immutable = {version:'0.7.7-preview.1',files:{linux:{objectKey:'v0.7.7-preview.1/linux.deb',sha256:'original'}}};
+assert.doesNotThrow(() => assertImmutableRelease({releases:[immutable]},immutable));
+assert.throws(() => assertImmutableRelease({releases:[immutable]}, {...immutable,files:{linux:{...immutable.files.linux,sha256:'different'}}}), /different contents/);
 assert.throws(
   () => validateReleaseRef("0.6.4", {GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "v0.6.3"}),
   /does not match project version/
@@ -58,6 +62,11 @@ const rebuiltOld = updatedReleaseIndex(index, {
   files: {windows: {objectKey: "releases/v0.6.2/rebuilt-windows.exe"}},
 }, 5);
 assert.equal(rebuiltOld.latest, "0.6.5");
+const laterFinishedFirst = updatedReleaseIndex({releases:[{
+  version:'0.7.6-preview.471',publishedAt:'2026-11-09T10:00:00Z',files:{},
+}]}, {version:'0.7.6-preview.470',publishedAt:'2026-11-09T11:00:00Z',files:{}},5);
+assert.equal(laterFinishedFirst.latest,'0.7.6-preview.471');
+assert.deepEqual(laterFinishedFirst.releases.map(release=>release.version),['0.7.6-preview.471','0.7.6-preview.470'], 'Retain both releases even when builds finish in reverse order');
 assert.deepEqual(rebuiltOld.releases.map((release) => release.version), ["0.6.5", "0.6.4", "0.6.3", "0.6.2", "0.6.1"]);
 
 const downloadPage = readFileSync(new URL("../index.html", import.meta.url), "utf8");

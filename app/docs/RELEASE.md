@@ -11,22 +11,25 @@ release and remains frozen under `legacy/python-0.6.8/`.
   compatibility. Native packaging and installer uploads do not depend on its
   integration tests. Website changes must pass that workflow before deployment.
 - Keep the versions in `app/package.json`, `app/src-tauri/Cargo.toml`, and
-  `app/src-tauri/tauri.conf.json` identical to the stable release tag. Preview
-  tags may have arbitrary names and do not change the app's version. Update the
+  `app/src-tauri/tauri.conf.json` identical to the release tag's `X.Y.Z` core.
+  Preview tags add `-preview.N` without changing the app's version. Update the
   corresponding npm and Cargo lockfile entries together.
-- A `wip` build is a preview build and uploads to preview R2. Production
-  installers are uploaded to production R2 only by a `vX.Y.Z` tag. Pushes and
-  manual workflow runs on `main` validate packages but must never publish them.
+- Branch pushes and manual branch runs validate packages without publishing.
+  Branch pushes use App CI and policy/identity checks rather than duplicating a
+  tagged eight-way package build; use a manual branch run for pre-tag native tests.
+  Production installers are uploaded only by a `vX.Y.Z` tag on `main`;
+  preview installers only by `vX.Y.Z-preview.N` on unreleased `wip`.
   Do not publish production installers by manually reusing preview artifacts.
 - A `vX.Y.Z` tag on `main` publishes stable APT packages (`mountlet` and
-  `mountlet-lean`). A pushed tag on an unreleased `wip` commit automatically
+  `mountlet-lean`). A `vX.Y.Z-preview.N` tag on an unreleased `wip` commit
   publishes preview APT packages (`mountlet-preview` and `mountlet-lean-preview`)
   and uses preview R2, never production storage.
 - Tags do not record their originating branch. CI resolves the tagged commit's
-  ancestry: reachable from `wip` but not `main` means preview; an exact `vX.Y.Z`
-  tag reachable from `main` means stable. Other tags are rejected before packaging.
-  Ordinary branch pushes and pull requests do not publish APT previews. Manual
-  Native package CI on `wip` still supports the `publish_apt_preview` opt-in.
+  ancestry: previews must be reachable from `wip` but not `main`; stable tags
+  must be reachable from `main`. A stable tag on wip alone, a preview tag on main,
+  a mismatched app version, or a changed/mischecked-out tag fails before building.
+  `N` is a positive decimal integer without leading zeroes. Other tag formats
+  are not releases. `cerberus/source/*` tags never publish, even on unreleased wip.
 - Packaged applications use `https://mountlet.app` for license and report APIs
   unless `MOUNTLET_LICENSE_API_URL` or `MOUNTLET_REPORT_API_URL` is set in the
   process environment. The build-channel marker does not change these URLs.
@@ -257,8 +260,13 @@ from preview:
    wait for **Publish Linux package to APT** in the tagged Native
    package CI run, followed by **Publish APT repository** in `1100soft/1100`.
    Only the tested Linux artifacts are required for APT; Windows/macOS failures
-   do not block it. The publishing job waits for the matrix to finish, but does
-   not require the entire matrix to pass. Cancelled runs do not publish.
+   do not block it. Publication starts immediately after both verified Linux
+   builds finish, independently of Windows/macOS. A failed Linux verification
+   cannot publish. The job remains pending until the public APT index and package
+   downloads contain the exact expected SHA256 hashes and InRelease advertises
+   the same Packages checksum (ten-minute confirmation
+   bound). Dispatch acceptance is not success. Any failure makes the tagged run
+   fail for Cerberus CI-fix automation, not merely appear cancelled.
    The source workflow validates and uploads one `apt-packages` artifact
    containing both `mountlet` and `mountlet-lean`, while the central workflow
    signs and publishes them. The lean package declares `rclone` as an APT
@@ -266,25 +274,58 @@ from preview:
 
 ## Preview APT package
 
-Push a tag on an unreleased `wip` commit to publish a preview automatically.
-For example, after committing and pushing the intended `wip` changes:
+After reviewing, committing and pushing an unreleased `wip` change with application
+version `0.7.6`, the next compatible tag is at least `v0.7.6-preview.470`:
 
 ```bash
-git tag wip/preview-2026-11-09 wip
-git push origin refs/tags/wip/preview-2026-11-09
+git tag -a v0.7.6-preview.470 origin/wip -m "Mountlet 0.7.6 preview 470"
+git push origin refs/tags/v0.7.6-preview.470
 ```
 
-Lightweight and annotated tags both work. The workflow must already be present
-in the tagged commit. Tag names do not set the application version, and tagging
-a commit already reachable from `main` does not make it a preview. To publish
-without a tag, run **Native package CI** manually on `wip` and enable
-`publish_apt_preview`. After the native matrix finishes,
-the publisher requires both tested Linux artifacts (bundled and system-rclone),
-but Windows or macOS failures do not block APT publication. Cancelled runs do
-not publish, and missing Linux artifacts fail before any publication dispatch.
-The workflow rebuilds both Linux package identities as
-`mountlet-preview` and `mountlet-lean-preview`, with unique versions based on the workflow run number
-and commit, and sends it to the central APT publisher.
+Lightweight and annotated release tags use the same policy and pipeline. The
+workflow must already exist in the tagged commit. Manual runs never create a
+release. Both tested Linux variants must pass; other platforms need not finish
+before APT publication. Installer publication waits for all eight variants.
+
+The public index inspected on 2026-11-09 contains stable `0.7.6` and preview
+`0.7.6~preview.469+ge3ff340` for both package variants. The ordered sequence is:
+
+```
+0.7.6~preview.469+ge3ff340 < 0.7.6~preview.470 < 0.7.6~preview.471
+                       < 0.7.7~preview.1 < 0.7.7
+```
+
+`v0.7.7-preview.1` requires app version `0.7.7`. When the reviewed 0.7.7 release
+commit has been promoted to `main`, stable publication is:
+
+```bash
+git tag -a v0.7.7 origin/main -m "Mountlet 0.7.7"
+git push origin refs/tags/v0.7.7
+```
+
+Do not recreate or move `v0.7.6`, or any published tag. Preview tags map directly
+to Debian `X.Y.Z~preview.N`, stable tags to `X.Y.Z`; run numbers and attempts never
+change identity. Classification checks new preview ordering against the live
+index once, before builds. Already accepted releases can finish/publish out of
+order without losing an earlier release; Debian version ordering keeps the
+newest candidate selected. Preflight rejects reused versions with different bytes.
+Re-running an identical artifact is
+idempotent; a rebuild with different bytes requires a new tag. If a downstream
+publication failed, **Resume tested APT publication** validates the original run
+and downloads its retained `apt-packages` artifact unchanged. It does not rebuild
+or repack. If the artifact expired, do not rebuild the same version; make a new
+reviewed release instead.
+
+Tagged runs never auto-cancel each other. APT and R2 publishers serialize using
+`queue: max` (100 pending-job limit); they do not replace pending releases as a
+single-slot concurrency queue would. Reaching that GitHub limit is an operational
+blocker requiring inspection before retrying, not permission to overwrite bytes.
+
+macOS installed-DMG checks bound attach, version, readiness, process exit, and
+detach. Failure retains `artifacts/diagnostics` (marker, log, process sample and
+process list). Shared check/build/hook timeouts fail steps before the outer job
+deadline; the final release-result job propagates failure for CI-fix automation.
+Actual macOS GUI verification still requires hosted macOS runners.
 
 `mountlet-preview` and `mountlet-lean-preview` are the preview counterparts of
 `mountlet` and `mountlet-lean`. All four identities conflict because they

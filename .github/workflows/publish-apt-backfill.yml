@@ -1,26 +1,28 @@
-name: Publish tested Linux packages to APT
+name: Resume tested APT publication
 'on':
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: Successful Native package CI run containing the tested Linux artifacts
+        description: Tagged Native package CI run retaining an apt-packages artifact
         required: true
         type: string
       channel:
-        description: APT channel to publish
+        description: Expected source channel (never transforms package versions)
         required: true
         type: choice
-        options:
-        - stable
-        - preview
+        options: [stable, preview]
 permissions:
   actions: read
   contents: read
+concurrency:
+  group: mountlet-apt-publication
+  queue: max
+  cancel-in-progress: false
 jobs:
   source:
     runs-on: ubuntu-24.04
     outputs:
-      release-id: ${{ steps.source.outputs.release_id }}
+      debian-version: ${{ steps.source.outputs.debian-version }}
     steps:
     - name: Validate trusted source run
       id: source
@@ -32,40 +34,42 @@ jobs:
         set -euo pipefail
         [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
         run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")
-        test "$(jq -r .conclusion <<<"$run")" = success
         test "$(jq -r .name <<<"$run")" = "Native package CI"
+        test "$(jq -r .path <<<"$run")" = ".github/workflows/package.yml"
+        test "$(jq -r .event <<<"$run")" = push
         branch=$(jq -r .head_branch <<<"$run")
-        event=$(jq -r .event <<<"$run")
-        run_number=$(jq -r .run_number <<<"$run")
-        sha=$(jq -r .head_sha <<<"$run")
         if [ "$CHANNEL" = stable ]; then
-          test "$event" = push
           [[ "$branch" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          release_id="$branch"
+          version="${branch#v}"
         else
-          test "$event" = workflow_dispatch
-          test "$branch" = wip
-          release_id="${run_number}+g${sha:0:7}"
+          [[ "$branch" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[1-9][0-9]*$ ]]
+          version="${branch#v}"
+          version="${version/-preview./~preview.}"
         fi
-        echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+        jobs=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100" --jq '.jobs[]')
+        test "$(jq -s '[.[] | select(.name == "Resolve preview or stable release" and .conclusion == "success")] | length' <<<"$jobs")" = 1
+        test "$(jq -s '[.[] | select(.name | test("Package \\(linux-x64 / (lean|standard)\\)$")) | select(.conclusion == "success")] | length' <<<"$jobs")" = 2
+        echo "debian-version=$version" >> "$GITHUB_OUTPUT"
   publish:
     needs: source
-    uses: 1100soft/CI/.github/workflows/apt-publish.yml@859fc753347512c1e64d50f487251d41b0778925
+    uses: 1100soft/CI/.github/workflows/apt-publish.yml@7ac17c500e9b30cdcddeefcd5232ff937c76946d
     with:
+      shared-ci-ref: 7ac17c500e9b30cdcddeefcd5232ff937c76946d
+      repository-url: https://apt.1100soft.com
       source-run-id: ${{ inputs.source_run_id }}
-      artifact-inputs: '{"mountlet-linux-x64-standard": "apt-input/standard", "mountlet-linux-x64-lean": "apt-input/lean"}'
+      artifact-inputs: '{"apt-packages": "apt-packages"}'
       prepare-command: |
-        bash .github/scripts/prepare-apt-packages.sh \
-          apt-input/standard/*.deb apt-input/lean/*.deb apt-packages \
-          "${{ inputs.channel }}" "${{ needs.source.outputs.release-id }}"
-        # This maintenance workflow adds only the missing lean identity. The
-        # bundled identity from the source run is already immutable in APT;
-        # repacking preview metadata would produce different archive bytes.
-        if [ "${{ inputs.channel }}" = stable ]; then
-          rm apt-packages/mountlet_*.deb
-        else
-          rm apt-packages/mountlet-preview_*.deb
-        fi
-        test "$(find apt-packages -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 1
+        set -euo pipefail
+        packages=(apt-packages/*.deb)
+        test "${#packages[@]}" -eq 2
+        for package in "${packages[@]}"; do
+          test "$(dpkg-deb --field "$package" Version)" = "${{ needs.source.outputs.debian-version }}"
+          name=$(dpkg-deb --field "$package" Package)
+          if [ "${{ inputs.channel }}" = stable ]; then
+            [[ "$name" = mountlet || "$name" = mountlet-lean ]]
+          else
+            [[ "$name" = mountlet-preview || "$name" = mountlet-lean-preview ]]
+          fi
+        done
     secrets:
       APT_DISPATCH_TOKEN: ${{ secrets.APT_DISPATCH_TOKEN }}

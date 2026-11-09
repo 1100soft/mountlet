@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Use one classified release pipeline for stable `vX.Y.Z` and preview
+  `vX.Y.Z-preview.N` tags; ordinary pushes only validate and provenance tags
+  never publish. Preserve Debian preview upgrade ordering with explicit sequences.
+- Publish verified Linux packages without waiting for Windows/macOS. Bound
+  macOS startup and exit checks, retain diagnostics, and report genuine release
+  failures to CI-fix automation rather than cancelling them.
+- Preserve queued releases and immutable package bytes. Confirm APT publication
+  using InRelease/Packages consistency and the actual downloadable checksums;
+  resume from retained prepared artifacts instead of repacking old versions.
+- Keep installed package identities and application/user data unchanged.
+
 ## 0.7.6
 
 - Route tags on unreleased `wip` commits to preview R2 and automatic preview

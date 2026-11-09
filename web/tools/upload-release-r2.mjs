@@ -3,6 +3,7 @@ import {createHash, createHmac} from "node:crypto";
 import {existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {basename, join, resolve} from "node:path";
+import {assertImmutableRelease} from "./immutable-release.mjs";
 import {
   RELEASE_INDEX_KEY,
   normalizeFileQualifier,
@@ -21,7 +22,7 @@ const useRemote = takeFlag("--remote") || process.env.MOUNTLET_R2_REMOTE === "1"
 const dryRun = takeFlag("--dry-run");
 const requestedVersion = takeOption("--version") || process.env.MOUNTLET_RELEASE_VERSION || readProjectVersion();
 const requestedQualifier = takeOption("--qualifier") || process.env.MOUNTLET_RELEASE_QUALIFIER
-  || ((process.env.MOUNTLET_BUILD_CHANNEL === "preview" || process.env.GITHUB_REF_NAME === "wip") && process.env.GITHUB_SHA ? `preview-${process.env.GITHUB_SHA.slice(0, 7)}` : "");
+  || "";
 const requestedRetention = takeOption("--retain") || process.env.MOUNTLET_RELEASE_RETENTION || "";
 const positionalArgs = cliArgs.filter((arg) => !arg.startsWith("--"));
 const bucket = positionalArgs[0] || process.env.MOUNTLET_R2_BUCKET || "";
@@ -67,6 +68,15 @@ for (const [logicalKey, artifact] of Object.entries(config.artifacts)) {
 }
 
 const existing = dryRun ? null : await readReleaseIndex(bucket);
+assertImmutableRelease(existing, release);
+// Check orphaned/retired object identities too, not just the retained manifest.
+if (!dryRun) for (const upload of uploads) {
+  const response = useRemote ? await s3Request("GET", bucket, upload.objectKey) : wranglerGet(bucket, upload.objectKey);
+  if (response.status === 404) continue;
+  if (!response.ok) fail(`Could not verify immutable object ${upload.objectKey}: ${response.status}`);
+  const body = response.arrayBuffer ? Buffer.from(await response.arrayBuffer()) : Buffer.from(await response.text());
+  if (sha256Hex(body) !== sha256Hex(readFileSync(upload.filePath))) fail(`Existing object differs: ${upload.objectKey}. Use a new release tag.`);
+}
 const index = updatedReleaseIndex(existing, release, retention);
 const legacyObjectKeys = Object.values(config.legacyDownloads || {}).map(String).filter(Boolean);
 const removals = [...new Set([
@@ -80,7 +90,7 @@ for (const upload of uploads) {
   if (dryRun) {
     console.log(`Would upload ${upload.filePath} to ${bucket}/${upload.objectKey}.`);
   } else {
-    await putObject(bucket, upload.objectKey, readFileSync(upload.filePath), upload.contentType);
+    await putObject(bucket, upload.objectKey, readFileSync(upload.filePath), upload.contentType, true);
   }
 }
 
@@ -155,9 +165,15 @@ async function readReleaseIndex(bucketName) {
   }
 }
 
-async function putObject(bucketName, key, body, contentType) {
+async function putObject(bucketName, key, body, contentType, immutable = false) {
   if (useRemote) {
-    const response = await s3Request("PUT", bucketName, key, {body, contentType});
+    const response = await s3Request("PUT", bucketName, key, {body, contentType, immutable});
+    if (immutable && response.status === 412) {
+      const current = await s3Request("GET", bucketName, key);
+      if (!current.ok || sha256Hex(Buffer.from(await current.arrayBuffer())) !== sha256Hex(body)) fail(`Immutable R2 object conflict: ${key}`);
+      console.log(`Already published identical object ${key}.`);
+      return;
+    }
     if (!response.ok) fail(`R2 upload failed for ${key}: ${response.status} ${await response.text()}`);
     console.log(`Uploaded ${bucketName}/${key}.`);
     return;
@@ -192,7 +208,7 @@ function wranglerGet(bucketName, key) {
   }
   const body = readFileSync(file);
   rmSync(temporary, {recursive: true, force: true});
-  return {ok: true, status: 200, text: async () => body.toString("utf8")};
+  return {ok: true, status: 200, text: async () => body.toString("utf8"), arrayBuffer: async () => body};
 }
 
 function runWrangler(args) {
@@ -201,7 +217,7 @@ function runWrangler(args) {
   if (result.status !== 0) process.exit(result.status || 1);
 }
 
-async function s3Request(method, bucketName, key, {body = null, contentType = ""} = {}) {
+async function s3Request(method, bucketName, key, {body = null, contentType = "", immutable = false} = {}) {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || "";
   const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || "";
   const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || "";
@@ -214,6 +230,7 @@ async function s3Request(method, bucketName, key, {body = null, contentType = ""
   const headers = {host, "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate};
   if (body !== null) headers["content-length"] = String(body.byteLength);
   if (contentType) headers["content-type"] = contentType;
+  if (immutable) headers["if-none-match"] = "*";
   const signedHeaders = Object.keys(headers).sort().join(";");
   const canonicalHeaders = Object.keys(headers).sort().map((name) => `${name}:${headers[name]}\n`).join("");
   const canonicalRequest = [method, path, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
@@ -221,7 +238,7 @@ async function s3Request(method, bucketName, key, {body = null, contentType = ""
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, credentialScope, sha256Hex(canonicalRequest)].join("\n");
   const signature = hmacHex(signingKey(secretAccessKey, dateStamp), stringToSign);
   headers.authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  return fetch(`https://${host}${path}`, {method, headers, body});
+  return fetch(`https://${host}${path}`, {method, headers, body, signal: AbortSignal.timeout(120_000)});
 }
 
 function hasS3Credentials() {
