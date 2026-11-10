@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.7
 
 - Use one classified release pipeline for stable `vX.Y.Z` and preview
   `vX.Y.Z-preview.N` tags; ordinary pushes only validate and provenance tags
@@ -11,7 +11,12 @@
 - Preserve queued releases and immutable package bytes. Confirm APT publication
   using InRelease/Packages consistency and the actual downloadable checksums;
   resume from retained prepared artifacts instead of repacking old versions.
-- Keep installed package identities and application/user data unchanged.
+- Track the shared installer package matrix so website validation can resolve
+  every supported installer variant.
+- Upgrade using the normal installer or the same APT package identity. This
+  release changes publication tooling and introduces no application data
+  migration; retain configuration, license, trial, rclone, metadata, and
+  offline/cache data.
 
 ## 0.7.6
 

@@ -42,14 +42,15 @@ release and remains frozen under `legacy/python-0.6.8/`.
 ## 1. Freeze and validate the candidate
 
 1. Update the version, lockfiles, changelog, and affected release/upgrade notes.
-   For `v0.7.6`, verify tagged preview versus stable publication routing
-   and the retained beta renewal and Google account upgrade checks below.
+   For `v0.7.7`, verify the unified stable/preview pipeline, independent Linux
+   publication, immutable artifacts, and bounded macOS package checks. Retain
+   the beta renewal and Google account upgrade checks below.
    This release adds no application data migration; preserve existing user
    data without a manual configuration reset.
    Run the project version check with the exact requested tag, then validate:
 
    ```bash
-   RELEASE_TAG=v0.7.6 node app/scripts/check-version.mjs
+   RELEASE_TAG=v0.7.7 node app/scripts/check-version.mjs
    ```
 
    Run the remaining checks from the repository root:
@@ -192,7 +193,7 @@ workflow's `environment-json` input. The verification composite action reads the
 resulting environment values because the `vars` context is unavailable there.
 
 A tagged build deliberately fails its bundled Windows job if any identity value
-is absent. Mountlet `0.7.6` maps to Store package version `1.7.6.0`: the major
+is absent. Mountlet `0.7.7` maps to Store package version `1.7.7.0`: the major
 component is offset because Store package majors cannot be zero, and the fourth
 component remains zero because Microsoft reserves it. Application-visible
 versions remain normal SemVer.
@@ -274,12 +275,13 @@ from preview:
 
 ## Preview APT package
 
-After reviewing, committing and pushing an unreleased `wip` change with application
-version `0.7.6`, the next compatible tag is at least `v0.7.6-preview.470`:
+For an unreleased `wip` change with application version `0.7.7`, an example
+preview tag is `v0.7.7-preview.1`. Verify that the tag is unused and that its
+sequence exceeds any published preview for this core version before tagging:
 
 ```bash
-git tag -a v0.7.6-preview.470 origin/wip -m "Mountlet 0.7.6 preview 470"
-git push origin refs/tags/v0.7.6-preview.470
+git tag -a v0.7.7-preview.1 origin/wip -m "Mountlet 0.7.7 preview 1"
+git push origin refs/tags/v0.7.7-preview.1
 ```
 
 Lightweight and annotated release tags use the same policy and pipeline. The
@@ -295,13 +297,10 @@ The public index inspected on 2026-11-09 contains stable `0.7.6` and preview
                        < 0.7.7~preview.1 < 0.7.7
 ```
 
-`v0.7.7-preview.1` requires app version `0.7.7`. When the reviewed 0.7.7 release
-commit has been promoted to `main`, stable publication is:
-
-```bash
-git tag -a v0.7.7 origin/main -m "Mountlet 0.7.7"
-git push origin refs/tags/v0.7.7
-```
+`v0.7.7-preview.1` requires app version `0.7.7`. Stable `v0.7.7` publication
+must follow section 4: Review, Integrate into `wip`, Publish the reviewed
+development commit, then let the authorized Release stage append the release
+commit and atomically publish both tags. Do not manually create the stable tag.
 
 Do not recreate or move `v0.7.6`, or any published tag. Preview tags map directly
 to Debian `X.Y.Z~preview.N`, stable tags to `X.Y.Z`; run numbers and attempts never
