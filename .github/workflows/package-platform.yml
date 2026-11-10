@@ -1,0 +1,40 @@
+name: Mountlet platform packages
+'on':
+  workflow_call:
+    inputs:
+      matrix:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+      release-version:
+        type: string
+        required: true
+      source-epoch:
+        type: string
+        required: true
+    secrets:
+      build-environment:
+        required: false
+permissions:
+  contents: read
+jobs:
+  package:
+    uses: 1100soft/CI/.github/workflows/tauri-package.yml@7ac17c500e9b30cdcddeefcd5232ff937c76946d
+    with:
+      app-directory: app
+      artifact-prefix: mountlet
+      version-check-command: node scripts/check-version.mjs
+      build-matrix: ${{ inputs.matrix }}
+      build-command: npm run tauri:build
+      check-command: python3 scripts/test-package-smoke.py && npm run build && cargo test --locked -j 2 --manifest-path src-tauri/Cargo.toml &&
+        cargo clippy --locked -j 2 --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      app-hooks: true
+      retention-days: 14
+      environment-json: ${{ format('{{"MOUNTLET_BUILD_CHANNEL":{0},"SOURCE_DATE_EPOCH":{4},"MOUNTLET_RELEASE_VERSION":{5},"MOUNTLET_STORE_IDENTITY_NAME":{1},"MOUNTLET_STORE_PUBLISHER":{2},"MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME":{3}}}',
+        toJSON((inputs.channel == 'production' || (inputs.channel == 'validation' && github.ref == 'refs/heads/main')) && 'production' || 'preview'),
+        toJSON(format('{0}', vars.MOUNTLET_STORE_IDENTITY_NAME)), toJSON(format('{0}', vars.MOUNTLET_STORE_PUBLISHER)),
+        toJSON(format('{0}', vars.MOUNTLET_STORE_PUBLISHER_DISPLAY_NAME)), toJSON(inputs.source-epoch), toJSON(inputs.release-version)) }}
+    secrets:
+      build-environment: ${{ secrets.build-environment }}

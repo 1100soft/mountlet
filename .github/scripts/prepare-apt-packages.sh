@@ -11,6 +11,8 @@ lean_deb=$2
 output_dir=$3
 channel=$4
 release_id=$5
+: "${SOURCE_DATE_EPOCH:?Set SOURCE_DATE_EPOCH from the classified source commit}"
+[[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]
 
 case "$channel" in stable|preview) ;; *) echo "invalid channel: $channel" >&2; exit 2 ;; esac
 for package in "$standard_deb" "$lean_deb"; do
@@ -44,7 +46,11 @@ repack() {
   if [ "$needs_rclone" = true ]; then
     dependencies=$(dpkg-deb --field "$source" Depends 2>/dev/null || true)
     if ! grep -Eq '(^|,)[[:space:]]*rclone([[:space:]]|,|$)' <<<"$dependencies"; then
-      sed -i "s/^Depends: /Depends: rclone, /" "$package_root/DEBIAN/control"
+      if grep -q '^Depends: ' "$package_root/DEBIAN/control"; then
+        sed -i "s/^Depends: /Depends: rclone, /" "$package_root/DEBIAN/control"
+      else
+        printf 'Depends: rclone\n' >> "$package_root/DEBIAN/control"
+      fi
     fi
   fi
   dpkg-deb --build --root-owner-group "$package_root" "$destination" >/dev/null
@@ -53,11 +59,16 @@ repack() {
 
 if [ "$channel" = stable ]; then
   test "$app_version" = "${release_id#v}"
-  cp "$standard_deb" "$output_dir/mountlet_${app_version}_amd64.deb"
+  repack "$standard_deb" mountlet "$app_version" false \
+    "$output_dir/mountlet_${app_version}_amd64.deb"
   repack "$lean_deb" mountlet-lean "$app_version" true \
     "$output_dir/mountlet-lean_${app_version}_amd64.deb"
 else
-  version="${app_version}~preview.${release_id}"
+  # Explicit tag sequence, not a workflow run number. Re-runs retain identity.
+  [[ "$release_id" = "$app_version~preview."* ]]
+  preview_number=${release_id#"$app_version~preview."}
+  [[ "$preview_number" =~ ^[1-9][0-9]*$ ]]
+  version="$release_id"
   repack "$standard_deb" mountlet-preview "$version" false \
     "$output_dir/mountlet-preview_${version}_amd64.deb"
   repack "$lean_deb" mountlet-lean-preview "$version" true \
