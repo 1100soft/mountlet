@@ -36,6 +36,7 @@ web/.local/
 node_modules/
 web/node_modules/
 *.json
+!.github/scripts/package-matrix.json
 !package.json
 !package-lock.json
 !web/package.json

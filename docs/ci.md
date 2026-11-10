@@ -84,3 +84,8 @@ Mountlet's caller update. The reviewed revision above is already available.
 Do not roll out a caller pointing to older CI code that lacks the confirmation
 helper/inputs. A local test is not a hosted release or a macOS GUI verification.
 Keep website integration independent of app packaging.
+
+The tracked `.github/scripts/package-matrix.json` preserves the eight installer
+configurations formerly embedded in the package workflow. Both release policy
+partitioning and the independent website release-file check read this file;
+matrix changes also trigger Website integration.

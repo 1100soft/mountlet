@@ -4,6 +4,7 @@ name: Website integration
     paths:
     - .github/workflows/web.yml
     - .github/workflows/package.yml
+    - .github/scripts/package-matrix.json
     - web/**
     - functions/**
     - package.json
@@ -17,6 +18,7 @@ name: Website integration
     paths:
     - .github/workflows/web.yml
     - .github/workflows/package.yml
+    - .github/scripts/package-matrix.json
     - web/**
     - functions/**
     - package.json
