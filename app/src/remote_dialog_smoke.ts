@@ -124,7 +124,11 @@ export async function checkRemoteSettingsForm(): Promise<void> {
   for (let index = 0; index < 40; index += 1) dropdown.add(new Option(`Option ${index}`, String(index)));
   document.body.append(dropdown);
   try {
-    dropdown.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true }));
+    // WebKit otherwise opens a native popup whose tracking loop blocks app exit.
+    // Match a real mouse event so bindScaledSelect can cancel its default action.
+    const mouseDown = new MouseEvent("mousedown", { button: 0, bubbles: true, cancelable: true });
+    dropdown.dispatchEvent(mouseDown);
+    ensure(mouseDown.defaultPrevented, "Custom dropdown must suppress the native popup");
     const menu = document.querySelector<HTMLElement>(".select-menu")!;
     const bounds = menu.getBoundingClientRect(), anchor = dropdown.getBoundingClientRect();
     ensure(bounds.top >= 0 && bounds.bottom <= window.innerHeight, "Dropdown must fit vertically in the viewport");

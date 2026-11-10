@@ -153,3 +153,8 @@ when the application is upgraded or uninstalled.
 On Windows, installing 0.7.0 or later removes the retired Python/Qt application
 before installing the Tauri application. Settings, trial history, rclone data,
 and managed cached files are preserved during this replacement.
+
+The installed startup probe exercises the custom select menu with a cancelable
+mouse event and checks that the native popup is suppressed. On macOS a native
+select popup can keep WebKit in menu tracking and prevent the app from exiting;
+the installed-DMG check continues to require a clean exit within ten seconds.
