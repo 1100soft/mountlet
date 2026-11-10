@@ -2,6 +2,7 @@ import {readFileSync} from "node:fs";
 
 const releaseFiles = JSON.parse(readFileSync("web/release-files.json", "utf8"));
 const packageWorkflow = readFileSync(".github/workflows/package.yml", "utf8");
+const packageMatrix = JSON.parse(readFileSync(".github/scripts/package-matrix.json", "utf8"));
 const website = readFileSync("web/index.html", "utf8");
 const artifacts = releaseFiles.artifacts || {};
 const expectedFiles = Object.values(artifacts)
@@ -22,9 +23,12 @@ if (duplicates.length) {
 }
 
 for (const fileName of expectedFiles) {
-  if (!packageWorkflow.includes(`"installer": ${JSON.stringify(fileName)}`)) {
+  if (!packageMatrix.include.some(row => row.installer === fileName)) {
     fail(`Package workflow does not build release file: ${fileName}`);
   }
+}
+if (!packageWorkflow.includes('steps.policy.outputs.linux-matrix') || !packageWorkflow.includes('steps.policy.outputs.other-matrix')) {
+  fail('Package workflow must use both classified package-matrix partitions.');
 }
 
 const selectorKeys = [...website.matchAll(/data-download-(?:standard|lean)="([^"]+)"/g)].map((match) => match[1]);

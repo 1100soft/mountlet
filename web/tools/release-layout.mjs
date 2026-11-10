@@ -37,7 +37,6 @@ export function normalizeFileQualifier(value) {
 }
 
 export function validateReleaseRef(version, environment = process.env) {
-  if (environment.MOUNTLET_BUILD_CHANNEL === "preview") return;
   if (environment.GITHUB_REF_TYPE !== "tag") return;
   const tagVersion = normalizeVersion(environment.GITHUB_REF_NAME || "");
   if (tagVersion !== normalizeVersion(version)) {

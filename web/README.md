@@ -255,13 +255,18 @@ access. Wrangler's Cloudflare REST upload path requires broader account-level
 R2 permissions, so Mountlet uploads release artifacts through the
 S3-compatible API instead.
 
-The `wip` branch and tags on unreleased `wip` commits upload to the preview
-bucket. Tagged previews use commit-qualified installer names and automatically
-publish both preview APT identities. Only `vX.Y.Z` version tags on `main`
+Branch pushes only validate. `vX.Y.Z-preview.N` tags on unreleased `wip` commits
+publish version-qualified installers to the preview bucket and both preview APT
+identities. Preview `N` must upgrade the existing Debian candidate. Only `vX.Y.Z` tags on `main`
 upload native installers to the production bucket; `main` validates packages
 without uploading them. Follow `app/docs/RELEASE.md` for reviewed preparation
 and publication. Existing release tags and published installer bytes must not
 be replaced.
+R2 publication preflights all installer hashes and uses atomic create-only writes;
+an existing object with different contents is a release failure. APT publication
+also checks immutability and confirms the public index and downloadable package
+hashes after dispatch. Publisher queues retain pending releases rather than
+cancelling them. Cerberus provenance tags never publish.
 
 Packaged preview and production applications currently default to the
 production license and report APIs under `https://mountlet.app`. Build channel

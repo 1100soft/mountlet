@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   desktop:
-    uses: 1100soft/CI/.github/workflows/tauri-check.yml@31cd08b2a9314c358ce2589a095b5cbeb8dcadf7
+    uses: 1100soft/CI/.github/workflows/tauri-check.yml@7ac17c500e9b30cdcddeefcd5232ff937c76946d
     with:
       app-directory: app
       runner-matrix: '["ubuntu-24.04"]'
